@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 import {
+	isLoomDownloadRateLimited,
+	LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE,
+} from "@/lib/loom-download-rate-limit";
+import {
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
@@ -170,6 +174,13 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
+	if (await isLoomDownloadRateLimited(request.headers)) {
+		return NextResponse.json(
+			{ error: LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE },
+			{ status: 429 },
+		);
+	}
+
 	const cdnUrl = await tryGetDirectMp4Url(videoId);
 
 	if (!cdnUrl) {
@@ -284,20 +295,20 @@ export async function GET(request: NextRequest) {
 			} catch {}
 
 			if (status === 503) {
+				console.warn("[loom-download] converter busy", { errorMessage });
 				const headers = retryAfter ? { "Retry-After": retryAfter } : undefined;
-				return NextResponse.json({ error: errorMessage }, { status, headers });
+				return NextResponse.json(
+					{ error: "Video conversion is busy. Please try again shortly." },
+					{ status, headers },
+				);
 			}
 
 			throw new Error(errorMessage);
 		} catch (error) {
 			if (!errorMessageShouldFallback(error)) {
+				console.error("[loom-download] conversion failed", { error });
 				return NextResponse.json(
-					{
-						error:
-							error instanceof Error
-								? error.message
-								: "Failed to convert streaming video",
-					},
+					{ error: "Failed to convert streaming video" },
 					{ status: 502 },
 				);
 			}
@@ -316,13 +327,9 @@ export async function GET(request: NextRequest) {
 			},
 		});
 	} catch (error) {
+		console.error("[loom-download] conversion failed", { error });
 		return NextResponse.json(
-			{
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to convert streaming video",
-			},
+			{ error: "Failed to convert streaming video" },
 			{ status: 502 },
 		);
 	}

@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
-import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
+import {
+	isEmailAllowedForSignup,
+	normalizeEmailAddress,
+} from "@cap/database/auth/domain-utils";
 import {
 	decrypt,
 	encrypt,
@@ -148,8 +151,6 @@ const domainPattern =
 	/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 const toIsoString = (value: Date) => value.toISOString();
-
-const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 const getMobileEmailVerificationIdentifier = (email: string) =>
 	`mobile:${crypto.createHash("sha256").update(email).digest("hex")}`;
@@ -404,7 +405,7 @@ const toMobileCapSummary = (
 						phase: row.uploadPhase ?? "uploading",
 						processingProgress: Number(row.processingProgress ?? 0),
 						processingMessage: row.processingMessage,
-						processingError: row.processingError,
+						processingError: row.processingError ? "Processing failed" : null,
 					}
 				: null,
 		ownedByCurrentUser: row.ownerId === currentUserId,
@@ -519,7 +520,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmail(rawEmail);
+	const email = normalizeEmailAddress(rawEmail);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -570,7 +571,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmail(rawEmail);
+	const email = normalizeEmailAddress(rawEmail);
 	const code = rawCode.trim();
 
 	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
@@ -652,6 +653,15 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 				await tx
 					.delete(Db.authApiKeys)
 					.where(eq(Db.authApiKeys.userId, user.id));
+				await tx
+					.update(Db.agentApiKeys)
+					.set({ revokedAt: new Date() })
+					.where(
+						and(
+							eq(Db.agentApiKeys.userId, user.id),
+							isNull(Db.agentApiKeys.revokedAt),
+						),
+					);
 			}),
 		);
 
@@ -1785,7 +1795,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 							phase: row.phase ?? "uploading",
 							processingProgress: Number(row.processingProgress ?? 0),
 							processingMessage: row.processingMessage,
-							processingError: row.processingError,
+							processingError: row.processingError ? "Processing failed" : null,
 						}
 					: null,
 		})),

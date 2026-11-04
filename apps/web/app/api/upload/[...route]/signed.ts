@@ -11,6 +11,10 @@ import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import {
+	isNonMediaRawUploadKey,
+	nonMediaUploadMessage,
+} from "@/lib/media-processing-policy";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
@@ -60,6 +64,13 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const { videoId, subpaths } = c.req.valid("json");
+		if (
+			subpaths.some((subpath) =>
+				isNonMediaRawUploadKey(`${user.id}/${videoId}/${subpath}`),
+			)
+		) {
+			return c.json({ error: nonMediaUploadMessage }, 400);
+		}
 
 		try {
 			const [video] = await db()
@@ -131,8 +142,14 @@ app.post(
 			c.req.valid("json");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, body);
+		if (fileKey.split("/").some((part) => part === ".." || part === ".")) {
+			return c.json({ error: "Invalid file path" }, 400);
+		}
 		if (isInternalRecordingKey(fileKey)) {
 			return c.json({ error: "Recording snapshots are immutable" }, 403);
+		}
+		if (isNonMediaRawUploadKey(fileKey)) {
+			return c.json({ error: nonMediaUploadMessage }, 400);
 		}
 		const videoIdFromKey = fileKey.split("/")[1];
 		const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;

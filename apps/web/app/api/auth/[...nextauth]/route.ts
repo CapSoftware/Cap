@@ -2,6 +2,7 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
@@ -9,14 +10,13 @@ import {
 	verifySsoLoginIntent,
 } from "@cap/database/auth/sso-state";
 import { serverEnv } from "@cap/env";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
 import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
-	normalizeSignInEmail,
 } from "@/lib/email-code-rate-limit";
 import { isRateLimited } from "@/lib/rate-limit";
 
@@ -115,6 +115,16 @@ async function emailCodeLimitResponse(
 	return null;
 }
 
+function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
+	if (nextauth[0] !== "callback" || nextauth[1] !== "email") return request;
+	const email = request.nextUrl.searchParams.get("email");
+	const identifier = normalizeSignInEmail(email);
+	if (!identifier || identifier === email) return request;
+	const url = request.nextUrl.clone();
+	url.searchParams.set("email", identifier);
+	return new NextRequest(url, request);
+}
+
 async function handler(
 	request: NextRequest,
 	context: { params: Promise<{ nextauth: string[] }> },
@@ -123,7 +133,11 @@ async function handler(
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
 	if (nextauth[1] !== "workos") {
-		return NextAuth(request, context, authOptions());
+		return NextAuth(
+			withSignInEmailIdentifier(request, nextauth),
+			context,
+			authOptions(),
+		);
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");

@@ -1,0 +1,39 @@
+[
+	[
+		{ "text": "So,", "start": 0.0, "end": 0.2 },
+		{ "text": "well,", "start": 0.31, "end": 0.5 },
+		{ "text": "how", "start": 0.5, "end": 0.65 },
+		{ "text": "would", "start": 0.65, "end": 0.89 },
+		{ "text": "you", "start": 0.9, "end": 1.05 },
+		{ "text": "do", "start": 1.05, "end": 1.14 },
+		{ "text": "that?", "start": 1.15, "end": 1.51 },
+		{ "text": "Well,", "start": 1.52, "end": 1.97 },
+		{ "text": "we", "start": 1.97, "end": 2.07 },
+		{ "text": "made", "start": 2.14, "end": 2.42 },
+		{ "text": "an", "start": 2.42, "end": 2.57 },
+		{ "text": "investigation", "start": 2.57, "end": 3.54 },
+		{ "text": "of", "start": 3.55, "end": 3.7 },
+		{ "text": "the", "start": 3.7, "end": 3.9 },
+		{ "text": "market", "start": 3.98, "end": 4.3 },
+		{ "text": "by", "start": 4.52, "end": 4.57 },
+		{ "text": "Twentwatchers.", "start": 4.57, "end": 5.76 }
+	],
+	[
+		{ "text": "They", "start": 6.0, "end": 6.21 },
+		{ "text": "watch", "start": 6.21, "end": 6.68 },
+		{ "text": "it", "start": 6.78, "end": 7.01 },
+		{ "text": "in", "start": 7.01, "end": 7.24 },
+		{ "text": "cities", "start": 7.24, "end": 7.88 },
+		{ "text": "like", "start": 8.02, "end": 8.37 },
+		{ "text": "Paris", "start": 8.37, "end": 8.51 },
+		{ "text": "and", "start": 8.97, "end": 9.2 },
+		{ "text": "Milan.", "start": 9.3, "end": 9.89 },
+		{ "text": "Of", "start": 10.21, "end": 10.41 },
+		{ "text": "course,", "start": 10.54, "end": 11.07 },
+		{ "text": "well", "start": 11.18, "end": 11.45 },
+		{ "text": "known", "start": 11.45, "end": 11.75 },
+		{ "text": "for", "start": 11.9, "end": 12.0 },
+		{ "text": "their", "start": 12.1, "end": 12.57 },
+		{ "text": "Twent-Twents.", "start": 12.57, "end": 13.82 }
+	]
+]

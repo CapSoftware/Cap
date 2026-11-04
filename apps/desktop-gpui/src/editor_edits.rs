@@ -189,6 +189,14 @@ impl ProjectHistory {
         self.count = 0;
     }
 
+    /// Applies `change` to every entry, for a result that belongs to the
+    /// whole history rather than being a step in it.
+    pub fn amend_all(&mut self, mut change: impl FnMut(&mut ProjectConfiguration)) {
+        for entry in &mut self.entries {
+            change(entry);
+        }
+    }
+
     /// `projectHistory.pause()`.
     pub fn pause(&mut self) {
         self.paused += 1;

@@ -454,16 +454,22 @@ async fn finalize_studio(
             .meta
             .camera_path()
             .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
+        let preset_applied = apply_default_preset_to_project_config(
+            &project_path,
+            &crate::presets::PresetsStore::load(),
+        );
         apply_camera_preview_to_project_config(
             &project_path,
             camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
             placement,
         );
-        let library = serde_json::from_value(serde_json::Value::Object(
-            crate::store::store_section("animated_gradients"),
-        ))
-        .unwrap_or_default();
-        apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
+        if !preset_applied {
+            let library = serde_json::from_value(serde_json::Value::Object(
+                crate::store::store_section("animated_gradients"),
+            ))
+            .unwrap_or_default();
+            apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
+        }
         if crate::store::studio_sound_by_default()
             && let Err(error) = enable_studio_sound(&project_path)
         {
@@ -1673,6 +1679,7 @@ pub(crate) fn preparing_presentation(
         project,
         camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
         &library,
+        &crate::presets::PresetsStore::load(),
     )?;
     if crate::store::studio_sound_by_default() {
         config.audio.improve = true;
@@ -1688,14 +1695,46 @@ fn preparing_presentation_for(
     project: &cap_project::ProjectConfiguration,
     blur: crate::store::BlurMode,
     library: &cap_project::AnimatedGradientLibrary,
+    presets: &crate::presets::PresetsStore,
 ) -> Result<cap_project::ProjectConfiguration, String> {
-    if blur != crate::store::BlurMode::Off || project.camera.background_blur.is_active() {
+    if blur != crate::store::BlurMode::Off {
         return Err("Camera blur requires ordinary editor loading".into());
     }
-    if library.selected && library.last_used.is_some() {
+    let preset = presets.apply_default(project);
+    if preset.is_none() && library.selected && library.last_used.is_some() {
         return Err("Animated-gradient preferences require ordinary editor loading".into());
     }
-    Ok(project.clone())
+    let mut project = preset.unwrap_or_else(|| project.clone());
+    // Finalization replaces any saved blur with the live toggle, which is off here.
+    project.camera.background_blur = cap_project::BackgroundBlurConfig::default();
+    Ok(project)
+}
+
+/// Style a new recording with the default preset, as the Tauri app's
+/// `project_config_from_recording` did. The file was just written by
+/// `cap-recording` with this build's types, so a typed round trip drops nothing.
+fn apply_default_preset_to_project_config(
+    project_dir: &std::path::Path,
+    presets: &crate::presets::PresetsStore,
+) -> bool {
+    if presets.default.is_none() {
+        return false;
+    }
+    let project = match cap_project::ProjectConfiguration::load(project_dir) {
+        Ok(project) => project,
+        Err(error) => {
+            tracing::warn!(path = %project_dir.display(), "could not read new project config: {error}");
+            return false;
+        }
+    };
+    let Some(project) = presets.apply_default(&project) else {
+        return false;
+    };
+    if let Err(error) = project.write(project_dir) {
+        tracing::warn!(path = %project_dir.display(), "could not apply the default preset: {error}");
+        return false;
+    }
+    true
 }
 
 /// The camera preview bubble's current blur mode.
@@ -2801,6 +2840,7 @@ pub fn recordings_dir() -> PathBuf {
 /// guarded recursive delete as the library with the active recordings folder
 /// as its only allowed root.
 pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     crate::library::delete_recording_directory_in(&[recordings_dir()], path)
 }
 
@@ -3824,6 +3864,73 @@ mod tests {
             ));
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    fn default_preset_store(config: serde_json::Value) -> crate::presets::PresetsStore {
+        crate::presets::PresetsStore {
+            presets: vec![
+                crate::presets::PresetEntry {
+                    name: "Other".into(),
+                    config: serde_json::json!({ "background": { "padding": 5.0 } }),
+                },
+                crate::presets::PresetEntry {
+                    name: "Mine".into(),
+                    config,
+                },
+            ],
+            default: Some(1),
+        }
+    }
+
+    #[test]
+    fn a_new_recording_opens_with_the_default_preset_and_keeps_its_timeline() {
+        let dir = temp_project("default-preset");
+        let recorded: cap_project::ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 1, "start": 0.5, "end": 3.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            },
+            "clips": [{ "index": 0, "offsets": { "mic": -0.125 } }]
+        }))
+        .unwrap();
+        recorded.write(&dir).unwrap();
+        let mut styled = cap_project::ProjectConfiguration::default();
+        styled.background.padding = 24.0;
+        styled.camera.size = 45.0;
+        let presets = default_preset_store(crate::presets::preset_config(&styled));
+
+        assert!(apply_default_preset_to_project_config(&dir, &presets));
+
+        let opened = cap_project::ProjectConfiguration::load(&dir).unwrap();
+        assert_eq!(opened.background.padding, 24.0);
+        assert_eq!(opened.camera.size, 45.0);
+        assert_eq!(
+            serde_json::to_value(&opened.timeline).unwrap(),
+            serde_json::to_value(&recorded.timeline).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&opened.clips).unwrap(),
+            serde_json::to_value(&recorded.clips).unwrap()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_usable_default_preset_leaves_a_new_recording_untouched() {
+        let dir = temp_project("no-default-preset");
+        cap_project::ProjectConfiguration::default()
+            .write(&dir)
+            .unwrap();
+        let original = std::fs::read(dir.join("project-config.json")).unwrap();
+        let mut presets = default_preset_store(serde_json::json!({ "background": 42 }));
+        assert!(!apply_default_preset_to_project_config(&dir, &presets));
+        presets.default = None;
+        assert!(!apply_default_preset_to_project_config(&dir, &presets));
+        assert_eq!(
+            std::fs::read(dir.join("project-config.json")).unwrap(),
+            original
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The bridge writes exactly `camera.backgroundBlur.mode` and nothing else
@@ -5094,6 +5201,7 @@ mod preparing_presentation_tests {
             &project,
             crate::store::BlurMode::Off,
             &cap_project::AnimatedGradientLibrary::default(),
+            &crate::presets::PresetsStore::default(),
         )
         .unwrap();
         assert_eq!(
@@ -5112,6 +5220,7 @@ mod preparing_presentation_tests {
                     &project,
                     blur,
                     &cap_project::AnimatedGradientLibrary::default(),
+                    &crate::presets::PresetsStore::default(),
                 )
                 .is_err()
             );
@@ -5122,8 +5231,68 @@ mod preparing_presentation_tests {
             ..Default::default()
         };
         assert!(
-            preparing_presentation_for(&project, crate::store::BlurMode::Off, &library).is_err()
+            preparing_presentation_for(
+                &project,
+                crate::store::BlurMode::Off,
+                &library,
+                &crate::presets::PresetsStore::default(),
+            )
+            .is_err()
         );
         assert_eq!(serde_json::to_value(project).unwrap(), original);
+    }
+
+    #[test]
+    fn a_default_preset_saved_with_blur_follows_the_live_blur_toggle() {
+        let mut blurred = cap_project::ProjectConfiguration::default();
+        blurred.camera.background_blur.mode = cap_project::BackgroundBlurMode::Heavy;
+        let presets = crate::presets::PresetsStore {
+            presets: vec![crate::presets::PresetEntry {
+                name: "Blurred".into(),
+                config: crate::presets::preset_config(&blurred),
+            }],
+            default: Some(0),
+        };
+        let shown = preparing_presentation_for(
+            &cap_project::ProjectConfiguration::default(),
+            crate::store::BlurMode::Off,
+            &cap_project::AnimatedGradientLibrary::default(),
+            &presets,
+        )
+        .unwrap();
+        assert!(!shown.camera.background_blur.is_active());
+    }
+
+    #[test]
+    fn the_preparing_preview_shows_the_default_preset_instead_of_the_gradient() {
+        let project: cap_project::ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 1, "start": 0.5, "end": 3.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        let mut styled = cap_project::ProjectConfiguration::default();
+        styled.background.padding = 24.0;
+        let presets = crate::presets::PresetsStore {
+            presets: vec![crate::presets::PresetEntry {
+                name: "Mine".into(),
+                config: crate::presets::preset_config(&styled),
+            }],
+            default: Some(0),
+        };
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        let shown =
+            preparing_presentation_for(&project, crate::store::BlurMode::Off, &library, &presets)
+                .unwrap();
+        assert_eq!(shown.background.padding, 24.0);
+        assert_eq!(
+            serde_json::to_value(&shown.timeline).unwrap(),
+            serde_json::to_value(&project.timeline).unwrap()
+        );
     }
 }

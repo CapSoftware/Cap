@@ -7,6 +7,7 @@ import {
 	type AiGenerationLanguage,
 	getAiGenerationLanguageName,
 	isAiGenerationLanguage,
+	type Organisation,
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -99,6 +100,22 @@ const mergeSettings = (
 });
 
 const CapSettingsCard = () => {
+	const { activeOrganization } = useDashboardContext();
+	const organizationId = activeOrganization?.organization.id;
+	if (!organizationId) return null;
+	return (
+		<OrganizationCapSettings
+			key={organizationId}
+			organizationId={organizationId}
+		/>
+	);
+};
+
+const OrganizationCapSettings = ({
+	organizationId,
+}: {
+	organizationId: Organisation.OrganisationId;
+}) => {
 	const { user, organizationSettings } = useDashboardContext();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
@@ -154,7 +171,10 @@ const CapSettingsCard = () => {
 				}
 
 				try {
-					await updateOrganizationSettings(debouncedUpdateSettings);
+					await updateOrganizationSettings(
+						debouncedUpdateSettings,
+						organizationId,
+					);
 
 					changedKeys.forEach((changedKey) => {
 						if (changedKey === "aiGenerationLanguage") {
@@ -204,7 +224,7 @@ const CapSettingsCard = () => {
 
 			handleUpdate();
 		}
-	}, [debouncedUpdateSettings, organizationSettings]);
+	}, [debouncedUpdateSettings, organizationSettings, organizationId]);
 
 	const handleToggle = (key: BooleanOrganizationSettingKey) => {
 		setSettings((prev) => {

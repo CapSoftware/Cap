@@ -2062,6 +2062,7 @@ impl EditorWindow {
                 return false;
             }
             let path = path.clone();
+            crate::transcription::cancel_refinement(&path);
             cx.defer(move |cx| crate::app_windows::editor_closed(&path, window_id, cx));
             true
         });
@@ -2759,6 +2760,35 @@ impl EditorWindow {
         self.transcript.dirty = true;
         self.publish_project();
         cx.notify();
+    }
+
+    /// Swaps refined word times into the project and into every undo entry
+    /// they apply to, so the refinement is not an undo step of its own and
+    /// undoing an earlier edit keeps the refined times.
+    pub(crate) fn land_caption_refinement(
+        &mut self,
+        refined: &crate::transcription::RefinedCaptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_ready() {
+            return;
+        }
+        let durations = self.clip_display_durations.clone();
+        let changed =
+            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
+        self.history.amend_all(|entry| {
+            crate::transcription::apply_refined_captions(entry, refined, &durations);
+        });
+        if !changed {
+            return;
+        }
+        self.caption_sync_signature = self.caption_projection_signature();
+        self.transcript.dirty = true;
+        self.publish_project();
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
     }
 
     fn synchronize_caption_track(&mut self, force: bool) {
@@ -3695,6 +3725,58 @@ impl EditorWindow {
         self.seek_to_time(time, cx);
     }
 
+    /// Harness only (`CAP_GPUI_AUTO_FRAME_STATS`): redraws every frame for
+    /// `seconds` and logs the intervals between frames, so background work
+    /// can be checked for jank in the editor.
+    pub fn measure_frame_times(
+        &mut self,
+        seconds: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let started = std::time::Instant::now();
+        let refining = crate::transcription::ui_snapshot(&self.project_path).refining;
+        tracing::info!(seconds, refining, "frame stats: start");
+        self.frame_stats_tick(started, started, seconds, Vec::new(), window, cx);
+    }
+
+    fn frame_stats_tick(
+        &mut self,
+        started: std::time::Instant,
+        last: std::time::Instant,
+        seconds: f64,
+        mut intervals: Vec<f64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let now = std::time::Instant::now();
+        if last != started {
+            intervals.push(now.duration_since(last).as_secs_f64() * 1000.0);
+        }
+        if now.duration_since(started).as_secs_f64() >= seconds {
+            intervals.sort_by(f64::total_cmp);
+            let at = |share: f64| {
+                intervals
+                    .get(((intervals.len() as f64 - 1.0) * share).round() as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            tracing::info!(
+                frames = intervals.len(),
+                p50_ms = format!("{:.2}", at(0.5)),
+                p99_ms = format!("{:.2}", at(0.99)),
+                max_ms = format!("{:.2}", at(1.0)),
+                refining = crate::transcription::ui_snapshot(&self.project_path).refining,
+                "frame stats"
+            );
+            return;
+        }
+        cx.on_next_frame(window, move |this, window, cx| {
+            this.frame_stats_tick(started, now, seconds, intervals, window, cx);
+        });
+        cx.notify();
+    }
+
     /// Harness only (`CAP_GPUI_AUTO_PLAYBACK`): stop and emit the run's
     /// numbers. Identical to pressing pause -- the report is emitted on every
     /// stop, this just guarantees one happens.
@@ -4579,6 +4661,10 @@ impl EditorWindow {
             });
             if selection.is_some() {
                 self.clear_marker_selection();
+                if self.audio_import_pending != Some(self.audio_picker_generation) {
+                    self.audio_picker = None;
+                    self.audio_picker_request = None;
+                }
             }
             self.selection = selection;
             self.refresh_image_asset_status();
@@ -14888,6 +14974,60 @@ mod tests {
             assert!(
                 (f64::from(word) - expected).abs() < 1e-3,
                 "first word at {word}, box at {start}"
+            );
+        }
+
+        #[gpui::test]
+        fn a_transition_drag_moves_transcript_words_with_their_clip(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            let word_output = |editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext| {
+                editor.update(cx, |editor, _| {
+                    editor.transcript_refresh();
+                    editor
+                        .transcript
+                        .edl
+                        .as_ref()
+                        .unwrap()
+                        .source_to_output(6.0)
+                })
+            };
+            editor.update(cx, |editor, _| {
+                editor.project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![cap_project::CaptionSegment {
+                        id: "said".into(),
+                        start: 6.0,
+                        end: 7.0,
+                        text: "hello".into(),
+                        words: vec![cap_project::CaptionWord {
+                            text: "hello".into(),
+                            start: 6.0,
+                            end: 7.0,
+                        }],
+                    }],
+                    settings: Default::default(),
+                    source_timed: true,
+                });
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+            });
+            assert_eq!(word_output(&editor, cx), Some(6.0));
+
+            let (x, secs_per_pixel) = x_of(&editor, cx, 7.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(
+                point(px(x), y),
+                MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            drag_to(&editor, cx, x - (0.6 / secs_per_pixel) as f32);
+            let made = transition(&editor, cx).expect("the drag made a transition");
+
+            let output = word_output(&editor, cx).unwrap();
+            let expected = 6.0 - made.duration;
+            assert!(
+                (output - expected).abs() < 1e-9,
+                "the word plays at {expected}, the transcript seeks to {output}"
             );
         }
 

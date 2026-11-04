@@ -142,6 +142,7 @@ export function ChatWindow({
 	const [conversation, setConversation] =
 		useState<ChatConversation>(initialConversation);
 	const [isPending, startTransition] = useTransition();
+	const [sendError, setSendError] = useState<string | null>(null);
 	const prevMessageCountRef = useRef(initialMessages.length);
 	const userScrolledRef = useRef(false);
 	const isSendingRef = useRef(false);
@@ -222,14 +223,22 @@ export function ChatWindow({
 			content: text,
 		};
 		setMessages((prev) => [...prev, optimistic]);
+		setSendError(null);
 		isSendingRef.current = true;
 		messageVersionRef.current++;
 
 		startTransition(async () => {
-			await sendMessengerUserMessage({
+			const result = await sendMessengerUserMessage({
 				conversationId: conversation.id,
 				content: text,
 			});
+			if ("error" in result) {
+				setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+				setInput(text);
+				setSendError(result.error);
+				isSendingRef.current = false;
+				return;
+			}
 			const data = await fetchMessengerConversation(conversation.id);
 			setMessages(data.messages);
 			setConversation(data.conversation);
@@ -372,6 +381,11 @@ export function ChatWindow({
 			</div>
 
 			<div className="border-t border-gray-3 bg-gray-1 px-4 py-3">
+				{sendError && (
+					<p role="alert" className="px-1 pb-2 text-[12px] text-gray-10">
+						{sendError}
+					</p>
+				)}
 				<form onSubmit={handleSubmit} className="flex items-end gap-2.5">
 					<textarea
 						ref={inputRef}

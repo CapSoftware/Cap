@@ -580,11 +580,16 @@ pub fn caption_at_default_center(settings: &CaptionSettings) -> bool {
 
 /// `STYLE_PRESET_KEYS` knocks the style preset to "custom"
 /// (`CaptionsTab.tsx:157-172, 326-336`). Turning captions on, the export
-/// toggle and placement are not style, so they keep the preset.
+/// toggle, placement and showing filler words are not style, so they keep
+/// the preset.
 fn caption_reason_customises_style(reason: &str) -> bool {
     !matches!(
         reason,
-        "caption-enabled" | "caption-export" | "caption-position" | "caption-placement"
+        "caption-enabled"
+            | "caption-export"
+            | "caption-position"
+            | "caption-placement"
+            | "caption-filler-words"
     )
 }
 
@@ -2966,6 +2971,16 @@ impl EditorWindow {
                         .text_color(error_color)
                         .child(error),
                 );
+            } else if snapshot.refining {
+                column = column.child(
+                    div()
+                        .id("caption-refining")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(
+                            tr::editor::tabs::captions::refining_word_timings(),
+                        )),
+                );
             }
             column
         } else {
@@ -3124,6 +3139,33 @@ impl EditorWindow {
                                         },
                                     )),
                                 ),
+                        )
+                        .children(
+                            (settings.filler_language.as_deref() == Some("en")).then(|| {
+                                ui::Subfield::plain(
+                                    &theme,
+                                    tr::editor::tabs::captions::show_filler_words(),
+                                )
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "caption-filler-words",
+                                        settings.show_filler_words,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !caption_settings(&this.project).show_filler_words;
+                                            this.set_caption_setting(
+                                                "caption-filler-words",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_filler_words = next,
+                                            );
+                                        },
+                                    )),
+                                )
+                            }),
                         )
                         .child(
                             div()
@@ -3655,7 +3697,7 @@ impl EditorWindow {
             };
 
             let result = match result {
-                Ok(segments) => this
+                Ok(transcript) => this
                     .update_in(cx, |this, window, cx| {
                         let current_ranges = transcription_source_ranges(
                             this.project.timeline.as_ref(),
@@ -3668,7 +3710,7 @@ impl EditorWindow {
                             );
                         }
                         this.apply_generated_captions(
-                            segments,
+                            transcript,
                             &recording_durations,
                             recording_duration,
                             show_captions,
@@ -3684,6 +3726,9 @@ impl EditorWindow {
             match result {
                 Ok(()) => {
                     transcription::finish_generation(&project_path, None);
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.refine_caption_timings(window, cx);
+                    });
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");
@@ -3700,12 +3745,105 @@ impl EditorWindow {
         .detach();
     }
 
+    /// Runs a pending word-timing refinement for this project in the
+    /// background, then swaps the refined times in. Started after a
+    /// transcript is shown and again whenever the project opens, so an
+    /// interrupted refinement resumes; a finished one leaves no request.
+    pub(crate) fn refine_caption_timings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
+        let project_path = self.project_path.clone();
+        let Some(request) = transcription::refinement_request(&project_path) else {
+            return;
+        };
+        let Some(input) = self
+            .project
+            .captions
+            .as_ref()
+            .filter(|captions| captions.source_timed && !captions.segments.is_empty())
+            .map(|captions| captions.segments.clone())
+        else {
+            transcription::clear_refinement_request(&project_path);
+            return;
+        };
+        let recording_durations = self.clip_display_durations.clone();
+        let Some(stop) = transcription::begin_refinement(&project_path) else {
+            return;
+        };
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let task_path = project_path.clone();
+            let task_request = request.clone();
+            let task_stop = stop.clone();
+            let task = gpui_tokio::Tokio::spawn(cx, async move {
+                let runtime = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    std::thread::Builder::new()
+                        .name("caption-refinement".to_string())
+                        .spawn(move || {
+                            transcription::lower_thread_priority();
+                            transcription::refine_blocking(
+                                &task_path,
+                                &task_request,
+                                &input,
+                                &recording_durations,
+                                Some(runtime),
+                                &task_stop,
+                            )
+                        })
+                        .map_err(|error| format!("Failed to start caption refinement: {error}"))?
+                        .join()
+                        .map_err(|_| "Caption refinement panicked".to_string())?
+                })
+                .await
+                .map_err(|error| format!("Caption refinement task failed: {error}"))?
+            });
+            let result = match task.await {
+                Ok(result) => result,
+                Err(error) => Err(format!("Caption refinement failed: {error}")),
+            };
+            let stopped = stop.load(std::sync::atomic::Ordering::Relaxed);
+            match result {
+                Ok(Some(refined)) if !stopped => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if transcription::refinement_request(&project_path).as_ref()
+                            == Some(&request)
+                        {
+                            this.land_caption_refinement(&refined, window, cx);
+                            match this.flush_pending_saves(cx) {
+                                Ok(()) => transcription::clear_refinement_request(&project_path),
+                                Err(error) => tracing::warn!(
+                                    "Keeping the caption refinement request until the project saves: {error}"
+                                ),
+                            }
+                        }
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!("{error}");
+                    if !stopped
+                        && transcription::refinement_request(&project_path).as_ref()
+                            == Some(&request)
+                    {
+                        transcription::clear_refinement_request(&project_path);
+                    }
+                }
+            }
+            transcription::finish_refinement(&project_path, &stop);
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
     /// The success half of `generateCaptions` (`CaptionsTab.tsx:730-744`):
     /// `applyCaptionResultToProject` inside the project-write fan-out, then
     /// the caption track lane switched on.
     fn apply_generated_captions(
         &mut self,
-        segments: Vec<CaptionSegment>,
+        transcript: transcription::Transcript,
         recording_durations: &[f64],
         recording_duration: f64,
         show_captions: bool,
@@ -3713,6 +3851,15 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let recording_durations = recording_durations.to_vec();
+        let transcription::Transcript {
+            segments,
+            refinement,
+        } = transcript;
+        if let Err(error) = transcription::save_refinement_request(&self.project_path, &refinement)
+        {
+            tracing::warn!("{error}");
+        }
+        let language = refinement.language;
         self.edit_project("caption-generate", window, cx, move |project| {
             let shown = project
                 .captions
@@ -3722,6 +3869,7 @@ impl EditorWindow {
             transcription::apply_caption_result(
                 project,
                 segments,
+                &language,
                 &recording_durations,
                 recording_duration,
             );

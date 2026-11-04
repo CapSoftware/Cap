@@ -65,7 +65,9 @@ beforeEach(() => {
 	actions.fetchMessengerConversations.mockResolvedValue([]);
 	actions.createMessengerConversation.mockResolvedValue(conversation.id);
 	actions.fetchMessengerConversation.mockReset().mockResolvedValue(data());
-	actions.sendMessengerUserMessage.mockReset().mockResolvedValue(undefined);
+	actions.sendMessengerUserMessage
+		.mockReset()
+		.mockResolvedValue({ mode: "agent" });
 	document.title = "Cap";
 	container = document.createElement("div");
 	document.body.append(container);
@@ -174,14 +176,43 @@ describe.each(["page", "widget"] as const)("%s polling ownership", (kind) => {
 
 	it("keeps polling paused while a send is still pending", async () => {
 		await mount(kind);
-		const sending = deferred<void>();
+		const sending = deferred<{ mode: "agent" }>();
 		actions.sendMessengerUserMessage.mockReturnValueOnce(sending.promise);
 		await send();
 		await tick();
 		expect(actions.fetchMessengerConversation).not.toHaveBeenCalled();
-		await act(async () => sending.resolve());
+		await act(async () => sending.resolve({ mode: "agent" }));
 		expect(actions.fetchMessengerConversation).toHaveBeenCalledOnce();
 	});
+
+	it("shows the wait message and restores the draft when a send is turned away", async () => {
+		await mount(kind);
+		const notice = "Please wait a minute and try again.";
+		actions.sendMessengerUserMessage.mockResolvedValueOnce({ error: notice });
+		await send();
+		expect(container.querySelector("[role='alert']")?.textContent).toBe(notice);
+		expect(container.querySelector("textarea")?.value).toBe(
+			MESSENGER_SUGGESTED_PROMPTS[0],
+		);
+		expect(actions.fetchMessengerConversation).not.toHaveBeenCalled();
+		await tick();
+		expect(actions.fetchMessengerConversation).toHaveBeenCalledOnce();
+		await send();
+		expect(container.querySelector("[role='alert']")).toBeNull();
+	});
+});
+
+it("shows the wait message on the widget home view when a new chat is turned away", async () => {
+	const notice = "Please wait a minute and try again.";
+	actions.createMessengerConversation.mockResolvedValue({ error: notice });
+	await act(async () => root?.render(createElement(MessengerWidget)));
+	const open = container.querySelector<HTMLButtonElement>(
+		"[aria-label='Open messenger']",
+	);
+	if (!open) throw new Error("Missing messenger button");
+	await act(async () => open.click());
+	expect(container.querySelector("[role='alert']")?.textContent).toBe(notice);
+	expect(actions.fetchMessengerConversation).not.toHaveBeenCalled();
 });
 
 it("does not replay a notification after a stale poll restores an older reply count", async () => {

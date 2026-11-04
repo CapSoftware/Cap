@@ -1,8 +1,10 @@
+import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import { guestReferralParams } from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { trackServerEvent } from "@/lib/server-analytics";
@@ -57,6 +59,7 @@ export async function POST(request: NextRequest) {
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
+			...guestReferralParams(request.cookies.get(DUB_CLICK_ID_COOKIE)?.value),
 			metadata: {
 				platform: checkoutPlatform,
 				guestCheckout: "true",

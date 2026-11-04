@@ -2500,6 +2500,19 @@ pub struct CaptionSettings {
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
     pub uppercase: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub show_filler_words: bool,
+    /// The language whose hesitation fillers these captions hide, set when
+    /// they are generated: only English is supported, and captions from
+    /// before it existed hide nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filler_language: Option<String>,
+}
+
+impl CaptionSettings {
+    pub fn hides_fillers(&self) -> bool {
+        !self.show_filler_words && self.filler_language.as_deref() == Some("en")
+    }
 }
 
 impl CaptionSettings {
@@ -2565,6 +2578,8 @@ impl Default for CaptionSettings {
             animation: Self::default_animation(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
+            show_filler_words: false,
+            filler_language: None,
         }
     }
 }
@@ -2981,11 +2996,18 @@ impl ProjectConfiguration {
         let settings = preset.captions.take().map(|captions| captions.settings);
         preset.captions = match (self.captions.clone(), settings) {
             (Some(mut captions), settings) => {
-                captions.settings = settings.unwrap_or_default();
+                let filler_language = captions.settings.filler_language.take();
+                captions.settings = CaptionSettings {
+                    filler_language,
+                    ..settings.unwrap_or_default()
+                };
                 Some(captions)
             }
             (None, Some(settings)) => Some(CaptionsData {
-                settings,
+                settings: CaptionSettings {
+                    filler_language: None,
+                    ..settings
+                },
                 ..Default::default()
             }),
             (None, None) => None,
@@ -3454,6 +3476,36 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
+        assert!(!legacy.show_filler_words);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("showFillerWords").is_none());
+
+        assert!(written.get("fillerLanguage").is_none());
+        assert!(!legacy.hides_fillers());
+
+        let english = CaptionSettings {
+            filler_language: Some("en".into()),
+            ..legacy.clone()
+        };
+        assert!(english.hides_fillers());
+        let shown = CaptionSettings {
+            show_filler_words: true,
+            ..english
+        };
+        assert!(!shown.hides_fillers());
+        let written = serde_json::to_value(&shown).unwrap();
+        assert_eq!(written["showFillerWords"], Value::Bool(true));
+        assert_eq!(written["fillerLanguage"], Value::from("en"));
+        let restored: CaptionSettings = serde_json::from_value(written).unwrap();
+        assert!(restored.show_filler_words);
+        assert_eq!(restored.filler_language.as_deref(), Some("en"));
+        assert!(restored.uppercase);
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
