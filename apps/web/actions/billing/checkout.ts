@@ -6,7 +6,6 @@ import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { isProSubscription, userIsPro } from "@cap/utils";
 import { cookies, headers } from "next/headers";
-import { after } from "next/server";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import {
@@ -85,35 +84,6 @@ async function hasLiveProSubscription(customerId: string) {
 		(subscription) =>
 			isProSubscription(subscription) &&
 			LIVE_SUBSCRIPTION_STATUSES.has(subscription.status),
-	);
-}
-
-const openedBefore = (
-	session: { id: string; created: number },
-	current: { id: string; created: number },
-) =>
-	session.created < current.created ||
-	(session.created === current.created && session.id < current.id);
-
-async function expireEarlierOpenCheckouts(
-	customerId: string,
-	userId: string,
-	current: { id: string; created: number },
-) {
-	const sessions = await checkoutStripe().checkout.sessions.list({
-		customer: customerId,
-		status: "open",
-		limit: 100,
-	});
-	await Promise.all(
-		sessions.data
-			.filter(
-				(session) =>
-					openedBefore(session, current) &&
-					session.metadata?.checkoutUi === "elements" &&
-					session.metadata?.dubCustomerId === userId,
-			)
-			.map((session) => checkoutStripe().checkout.sessions.expire(session.id)),
 	);
 }
 
@@ -215,15 +185,6 @@ export async function createProCheckout(input: {
 				sessionId: session.id,
 			});
 			return { ok: false, reason: "unavailable" };
-		}
-
-		if (user && customerId) {
-			after(() =>
-				expireEarlierOpenCheckouts(customerId, user.id, session).catch(
-					(error) =>
-						console.error("Failed to expire earlier Cap Pro checkouts:", error),
-				),
-			);
 		}
 
 		trackServerEvent(

@@ -4,12 +4,11 @@ const mocks = vi.hoisted(() => ({
 	getCurrentUser: vi.fn(),
 	ensureStripeCustomerId: vi.fn(),
 	trackServerEvent: vi.fn(),
-	deferred: [] as Array<() => unknown>,
 	stripe: {
 		prices: { retrieve: vi.fn() },
 		subscriptions: { list: vi.fn() },
 		checkout: {
-			sessions: { create: vi.fn(), list: vi.fn(), expire: vi.fn() },
+			sessions: { create: vi.fn() },
 		},
 	},
 }));
@@ -25,11 +24,6 @@ vi.mock("@cap/env", () => ({
 	}),
 }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
-vi.mock("next/server", () => ({
-	after: (task: () => unknown) => {
-		mocks.deferred.push(task);
-	},
-}));
 vi.mock("@/lib/checkout/customer", () => ({
 	ensureStripeCustomerId: mocks.ensureStripeCustomerId,
 }));
@@ -67,27 +61,12 @@ const subscription = (
 	items: { data: [{ price: { id: "price_pro" } }] },
 });
 
-const openSession = (
-	id: string,
-	created: number,
-	metadata: Record<string, string>,
-) => ({
-	id,
-	created,
-	status: "open",
-	metadata,
-});
-
-const runDeferred = () =>
-	Promise.all(mocks.deferred.splice(0).map((task) => task()));
-
 const checkout = () =>
 	createProCheckout({ plan: "monthly", seats: 2, onboarding: false });
 
 describe("createProCheckout", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mocks.deferred.length = 0;
 		mocks.getCurrentUser.mockResolvedValue(signedInUser);
 		mocks.ensureStripeCustomerId.mockResolvedValue("cus_1");
 		mocks.stripe.prices.retrieve.mockResolvedValue({
@@ -97,11 +76,8 @@ describe("createProCheckout", () => {
 		mocks.stripe.subscriptions.list.mockResolvedValue({ data: [] });
 		mocks.stripe.checkout.sessions.create.mockResolvedValue({
 			id: "cs_new",
-			created: 200,
 			client_secret: "cs_new_secret_x",
 		});
-		mocks.stripe.checkout.sessions.list.mockResolvedValue({ data: [] });
-		mocks.stripe.checkout.sessions.expire.mockResolvedValue({});
 	});
 
 	it.each(["active", "trialing", "past_due"])(
@@ -117,7 +93,6 @@ describe("createProCheckout", () => {
 				limit: 100,
 			});
 			expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
-			expect(mocks.deferred).toEqual([]);
 		},
 	);
 
@@ -142,91 +117,6 @@ describe("createProCheckout", () => {
 		);
 	});
 
-	it("expires the buyer's earlier open in-app checkouts once the new one exists", async () => {
-		const inApp = { checkoutUi: "elements", dubCustomerId: "user-1" };
-		mocks.stripe.checkout.sessions.list.mockResolvedValue({
-			data: [
-				openSession("cs_old", 100, inApp),
-				openSession("cs_new", 200, inApp),
-				openSession("cs_hosted", 100, { dubCustomerId: "user-1" }),
-				openSession("cs_other_user", 100, {
-					checkoutUi: "elements",
-					dubCustomerId: "user-2",
-				}),
-			],
-		});
-
-		expect(await checkout()).toEqual({
-			ok: true,
-			clientSecret: "cs_new_secret_x",
-		});
-		await runDeferred();
-
-		expect(mocks.stripe.checkout.sessions.list).toHaveBeenCalledWith({
-			customer: "cus_1",
-			status: "open",
-			limit: 100,
-		});
-		expect(mocks.stripe.checkout.sessions.expire).toHaveBeenCalledTimes(1);
-		expect(mocks.stripe.checkout.sessions.expire).toHaveBeenCalledWith(
-			"cs_old",
-		);
-	});
-
-	it("keeps exactly the newest checkout when two are opened at once", async () => {
-		const inApp = { checkoutUi: "elements", dubCustomerId: "user-1" };
-		const sessions = [
-			openSession("cs_first", 200, inApp),
-			openSession("cs_second", 200, inApp),
-			openSession("cs_third", 201, inApp),
-		];
-		mocks.stripe.checkout.sessions.list.mockResolvedValue({ data: sessions });
-		for (const session of sessions) {
-			mocks.stripe.checkout.sessions.create.mockResolvedValueOnce({
-				...session,
-				client_secret: `${session.id}_secret_x`,
-			});
-		}
-
-		await Promise.all([checkout(), checkout(), checkout()]);
-		await runDeferred();
-
-		const expired = mocks.stripe.checkout.sessions.expire.mock.calls.map(
-			([id]) => id,
-		);
-		expect(new Set(expired)).toEqual(new Set(["cs_first", "cs_second"]));
-		expect(expired).not.toContain("cs_third");
-	});
-
-	it("keeps the new checkout when an earlier one can no longer be expired", async () => {
-		const consoleError = vi
-			.spyOn(console, "error")
-			.mockImplementation(() => {});
-		mocks.stripe.checkout.sessions.list.mockResolvedValue({
-			data: [
-				openSession("cs_old", 100, {
-					checkoutUi: "elements",
-					dubCustomerId: "user-1",
-				}),
-			],
-		});
-		mocks.stripe.checkout.sessions.expire.mockRejectedValue(
-			new Error("session is complete"),
-		);
-
-		expect(await checkout()).toEqual({
-			ok: true,
-			clientSecret: "cs_new_secret_x",
-		});
-		await runDeferred();
-
-		expect(mocks.stripe.checkout.sessions.expire).toHaveBeenCalledWith(
-			"cs_old",
-		);
-		expect(consoleError).toHaveBeenCalled();
-		consoleError.mockRestore();
-	});
-
 	it("opens a guest checkout without looking up a customer", async () => {
 		mocks.getCurrentUser.mockResolvedValue(null);
 
@@ -234,11 +124,8 @@ describe("createProCheckout", () => {
 			ok: true,
 			clientSecret: "cs_new_secret_x",
 		});
-		await runDeferred();
-
 		expect(mocks.ensureStripeCustomerId).not.toHaveBeenCalled();
 		expect(mocks.stripe.subscriptions.list).not.toHaveBeenCalled();
-		expect(mocks.stripe.checkout.sessions.list).not.toHaveBeenCalled();
 		const params = mocks.stripe.checkout.sessions.create.mock.calls[0]?.[0];
 		expect(params).not.toHaveProperty("customer");
 		expect(params.metadata).toMatchObject({ guestCheckout: "true" });
