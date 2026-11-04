@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest, NextResponse } from "next/server";
 import {
+	isLoomDownloadRateLimited,
+	LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE,
+} from "@/lib/loom-download-rate-limit";
+import {
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
@@ -167,6 +171,13 @@ export async function GET(request: NextRequest) {
 		return NextResponse.json(
 			{ error: "Missing or invalid video ID" },
 			{ status: 400 },
+		);
+	}
+
+	if (await isLoomDownloadRateLimited(request.headers)) {
+		return NextResponse.json(
+			{ error: LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE },
+			{ status: 429 },
 		);
 	}
 
