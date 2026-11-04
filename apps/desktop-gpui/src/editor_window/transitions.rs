@@ -389,7 +389,7 @@ impl EditorWindow {
 
     pub(super) fn render_transition_overlays(
         &self,
-        model: &timeline::TimelineModel,
+        clips: &[timeline::Segment],
         viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -414,7 +414,7 @@ impl EditorWindow {
         let Some(project_timeline) = self.project.timeline.as_ref() else {
             return layer.into_any_element();
         };
-        for (index, clip) in model.clips.iter().enumerate().skip(1) {
+        for (index, clip) in clips.iter().enumerate().skip(1) {
             let timeline::SegmentDetail::Clip { transition_in, .. } = &clip.detail else {
                 continue;
             };
