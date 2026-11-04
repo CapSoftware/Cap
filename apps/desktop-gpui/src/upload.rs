@@ -286,7 +286,7 @@ pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
     organization_id: Option<String>,
-) -> Result<VideoUploadInfo, String> {
+) -> Result<(VideoUploadInfo, Option<String>), String> {
     if store_auth_missing() {
         return Err("Please sign in to use instant recording".to_string());
     }
@@ -315,11 +315,14 @@ pub async fn prepare_instant_upload(
 
     let link = created.link();
     let config = created.config;
-    Ok(VideoUploadInfo {
-        id: config.id.clone(),
-        link,
-        config,
-    })
+    Ok((
+        VideoUploadInfo {
+            id: config.id.clone(),
+            link,
+            config,
+        },
+        created.organization_id,
+    ))
 }
 
 pub(crate) fn start_instant_upload(
@@ -1638,6 +1641,7 @@ async fn create_or_get_video_with_mode(
 struct CreatedVideo {
     config: S3UploadMeta,
     share_url: Option<String>,
+    organization_id: Option<String>,
 }
 
 impl CreatedVideo {
@@ -1654,6 +1658,8 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
         id: String,
         #[serde(default)]
         share_url: Option<String>,
+        #[serde(default, rename = "organizationId")]
+        organization_id: Option<String>,
     }
 
     let response = serde_json::from_str::<CreateVideoResponse>(body)?;
@@ -1663,6 +1669,7 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
     Ok(CreatedVideo {
         config: S3UploadMeta { id: response.id },
         share_url,
+        organization_id: response.organization_id,
     })
 }
 
@@ -2734,6 +2741,19 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn created_video_accepts_legacy_and_organization_bound_responses() {
+        for organization in [None, Some("org-recording")] {
+            let mut response = json!({ "id": "video-recording" });
+            if let Some(id) = organization {
+                response["organizationId"] = json!(id);
+            }
+            let created = parse_created_video(&response.to_string()).unwrap();
+            assert_eq!(created.config.id, "video-recording");
+            assert_eq!(created.organization_id.as_deref(), organization);
+        }
+    }
 
     #[test]
     fn created_video_uses_a_custom_domain_share_link() {

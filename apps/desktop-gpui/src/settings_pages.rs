@@ -4510,6 +4510,7 @@ impl SettingsWindow {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
                         this.info_dialog(tr::settings::integrations::s3::saved(), window, cx);
+                        crate::network_health::invalidate();
                     }
                     _ => {
                         this.pages.s3.error =
@@ -4549,6 +4550,7 @@ impl SettingsWindow {
                     Ok((200, _)) => {
                         this.s3_fetch(window, cx);
                         this.info_dialog(tr::settings::integrations::s3::deleted(), window, cx);
+                        crate::network_health::invalidate();
                     }
                     _ => {
                         this.pages.s3.error =
@@ -4741,6 +4743,7 @@ impl SettingsWindow {
                                 this.pages.storage = Some(parsed);
                             }
                             if connected {
+                                crate::network_health::invalidate();
                                 this.pages.gdrive.waiting = false;
                                 this.gdrive_fetch_s3_presence(window, cx);
                             }
@@ -4856,7 +4859,10 @@ impl SettingsWindow {
             |this, result, window, cx| {
                 this.pages.gdrive.set_active_pending = false;
                 match result {
-                    Ok((200, _)) => this.gdrive_refresh(window, cx),
+                    Ok((200, _)) => {
+                        crate::network_health::invalidate();
+                        this.gdrive_refresh(window, cx);
+                    }
                     _ => {
                         this.pages.gdrive.error = Some(
                             tr::settings::integrations::gdrive::set_active_failed().to_string(),
@@ -4903,6 +4909,7 @@ impl SettingsWindow {
                             window,
                             cx,
                         );
+                        crate::network_health::invalidate();
                     }
                     _ => {
                         this.pages.gdrive.error = Some(
