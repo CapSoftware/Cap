@@ -88,10 +88,17 @@ async function hasLiveProSubscription(customerId: string) {
 	);
 }
 
-async function expireOtherOpenCheckouts(
+const openedBefore = (
+	session: { id: string; created: number },
+	current: { id: string; created: number },
+) =>
+	session.created < current.created ||
+	(session.created === current.created && session.id < current.id);
+
+async function expireEarlierOpenCheckouts(
 	customerId: string,
 	userId: string,
-	currentSessionId: string,
+	current: { id: string; created: number },
 ) {
 	const sessions = await checkoutStripe().checkout.sessions.list({
 		customer: customerId,
@@ -102,7 +109,7 @@ async function expireOtherOpenCheckouts(
 		sessions.data
 			.filter(
 				(session) =>
-					session.id !== currentSessionId &&
+					openedBefore(session, current) &&
 					session.metadata?.checkoutUi === "elements" &&
 					session.metadata?.dubCustomerId === userId,
 			)
@@ -212,7 +219,7 @@ export async function createProCheckout(input: {
 
 		if (user && customerId) {
 			after(() =>
-				expireOtherOpenCheckouts(customerId, user.id, session.id).catch(
+				expireEarlierOpenCheckouts(customerId, user.id, session).catch(
 					(error) =>
 						console.error("Failed to expire earlier Cap Pro checkouts:", error),
 				),

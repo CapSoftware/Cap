@@ -67,8 +67,13 @@ const subscription = (
 	items: { data: [{ price: { id: "price_pro" } }] },
 });
 
-const openSession = (id: string, metadata: Record<string, string>) => ({
+const openSession = (
+	id: string,
+	created: number,
+	metadata: Record<string, string>,
+) => ({
 	id,
+	created,
 	status: "open",
 	metadata,
 });
@@ -92,6 +97,7 @@ describe("createProCheckout", () => {
 		mocks.stripe.subscriptions.list.mockResolvedValue({ data: [] });
 		mocks.stripe.checkout.sessions.create.mockResolvedValue({
 			id: "cs_new",
+			created: 200,
 			client_secret: "cs_new_secret_x",
 		});
 		mocks.stripe.checkout.sessions.list.mockResolvedValue({ data: [] });
@@ -136,19 +142,14 @@ describe("createProCheckout", () => {
 		);
 	});
 
-	it("expires the buyer's other open in-app checkouts once the new one exists", async () => {
+	it("expires the buyer's earlier open in-app checkouts once the new one exists", async () => {
+		const inApp = { checkoutUi: "elements", dubCustomerId: "user-1" };
 		mocks.stripe.checkout.sessions.list.mockResolvedValue({
 			data: [
-				openSession("cs_old", {
-					checkoutUi: "elements",
-					dubCustomerId: "user-1",
-				}),
-				openSession("cs_new", {
-					checkoutUi: "elements",
-					dubCustomerId: "user-1",
-				}),
-				openSession("cs_hosted", { dubCustomerId: "user-1" }),
-				openSession("cs_other_user", {
+				openSession("cs_old", 100, inApp),
+				openSession("cs_new", 200, inApp),
+				openSession("cs_hosted", 100, { dubCustomerId: "user-1" }),
+				openSession("cs_other_user", 100, {
 					checkoutUi: "elements",
 					dubCustomerId: "user-2",
 				}),
@@ -172,13 +173,38 @@ describe("createProCheckout", () => {
 		);
 	});
 
+	it("keeps exactly the newest checkout when two are opened at once", async () => {
+		const inApp = { checkoutUi: "elements", dubCustomerId: "user-1" };
+		const sessions = [
+			openSession("cs_first", 200, inApp),
+			openSession("cs_second", 200, inApp),
+			openSession("cs_third", 201, inApp),
+		];
+		mocks.stripe.checkout.sessions.list.mockResolvedValue({ data: sessions });
+		for (const session of sessions) {
+			mocks.stripe.checkout.sessions.create.mockResolvedValueOnce({
+				...session,
+				client_secret: `${session.id}_secret_x`,
+			});
+		}
+
+		await Promise.all([checkout(), checkout(), checkout()]);
+		await runDeferred();
+
+		const expired = mocks.stripe.checkout.sessions.expire.mock.calls.map(
+			([id]) => id,
+		);
+		expect(new Set(expired)).toEqual(new Set(["cs_first", "cs_second"]));
+		expect(expired).not.toContain("cs_third");
+	});
+
 	it("keeps the new checkout when an earlier one can no longer be expired", async () => {
 		const consoleError = vi
 			.spyOn(console, "error")
 			.mockImplementation(() => {});
 		mocks.stripe.checkout.sessions.list.mockResolvedValue({
 			data: [
-				openSession("cs_old", {
+				openSession("cs_old", 100, {
 					checkoutUi: "elements",
 					dubCustomerId: "user-1",
 				}),
