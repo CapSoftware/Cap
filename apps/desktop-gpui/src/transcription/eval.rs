@@ -11,7 +11,11 @@
 //! ```
 //!
 //! `hyp:` re-scores the raw engine words a previous run wrote, so the
-//! finishing steps can be tuned without running a model again.
+//! finishing steps can be tuned without running a model again. The aligner
+//! hears each clip while the engine runs, as in the app;
+//! `CAP_EVAL_ALIGNER_SESSIONS` and `CAP_EVAL_ALIGNER_THREADS` override how
+//! many ONNX sessions it uses and their threads. `bench_word_aligner` times
+//! hearing alone on `CAP_BENCH_WAV`.
 
 use std::{
     collections::BTreeMap,
@@ -673,7 +677,7 @@ mod run {
         fn transcribe(
             &self,
             options: &VerbatimOptions,
-            aligner: Option<&mut dyn align::Emissions>,
+            aligner: Option<&mut align::AcousticPool>,
             dataset: &str,
             clip: &str,
             samples: &[f32],
@@ -684,31 +688,42 @@ mod run {
             normalize_audio_for_transcription(&mut normalized);
             write_wav_16k(&wav, &normalized)?;
             let input = read_wav_16k_mono(&wav)?;
-            let raw = match self {
-                Self::Whisper(model) => {
-                    let context = get_whisper_context(&model.to_string_lossy())?;
-                    process_with_whisper(
-                        &input,
-                        context,
-                        &language(),
-                        &default_transcription_hints(),
-                        options,
-                    )?
-                }
-                Self::Parakeet(dir) => {
-                    process_with_parakeet(&input, &dir.to_string_lossy(), options)?
-                }
-                Self::Hypotheses(dir) => {
-                    let path = dir.join(dataset).join(format!("{clip}.raw.json"));
-                    let text = std::fs::read_to_string(&path)
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
-                    serde_json::from_str(&text).map_err(|e| e.to_string())?
-                }
-            };
-            let finished = finish_words_tuned(raw.clone(), &input, options, aligner, &tuning())
-                .into_iter()
-                .flatten()
-                .collect();
+            let mut raw = Vec::new();
+            let finished = recognize_and_finish(
+                &input,
+                &language(),
+                options,
+                &tuning(),
+                || aligner,
+                || {
+                    let groups = match self {
+                        Self::Whisper(model) => {
+                            let context = get_whisper_context(&model.to_string_lossy())?;
+                            process_with_whisper(
+                                &input,
+                                context,
+                                &language(),
+                                &default_transcription_hints(),
+                                options,
+                            )?
+                        }
+                        Self::Parakeet(dir) => {
+                            process_with_parakeet(&input, &dir.to_string_lossy(), options)?
+                        }
+                        Self::Hypotheses(dir) => {
+                            let path = dir.join(dataset).join(format!("{clip}.raw.json"));
+                            let text = std::fs::read_to_string(&path)
+                                .map_err(|e| format!("{}: {e}", path.display()))?;
+                            serde_json::from_str(&text).map_err(|e| e.to_string())?
+                        }
+                    };
+                    raw.clone_from(&groups);
+                    Ok(groups)
+                },
+            )?
+            .into_iter()
+            .flatten()
+            .collect();
             Ok((raw, finished))
         }
     }
@@ -764,6 +779,48 @@ mod run {
     }
 
     #[test]
+    #[ignore = "needs CAP_BENCH_WAV and CAP_EVAL_ALIGNER"]
+    fn bench_word_aligner() {
+        let samples = read_wav_16k(Path::new(
+            &std::env::var("CAP_BENCH_WAV").expect("CAP_BENCH_WAV"),
+        ))
+        .expect("wav");
+        let started = Instant::now();
+        let mut pool = load_aligner(Path::new(
+            &std::env::var("CAP_EVAL_ALIGNER").expect("CAP_EVAL_ALIGNER"),
+        ));
+        let loaded = started.elapsed().as_secs_f64();
+        let heard = align::Heard::hear(&samples, &mut pool, &AtomicBool::new(false))
+            .expect("emissions")
+            .expect("not stopped");
+        let seconds = started.elapsed().as_secs_f64() - loaded;
+        let audio = samples.len() as f64 / 16_000.0;
+        println!(
+            "aligner load={loaded:.2}s rtf={:.4} frames={} peak_rss={} MiB",
+            seconds / audio,
+            heard.into_parts().0.len() / 32,
+            peak_rss_bytes() / (1024 * 1024)
+        );
+    }
+
+    fn load_aligner(path: &Path) -> align::AcousticPool {
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        if let Ok(sessions) = std::env::var("CAP_EVAL_ALIGNER_SESSIONS") {
+            let threads = std::env::var("CAP_EVAL_ALIGNER_THREADS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2);
+            return align::AcousticPool::load_sized(
+                path,
+                sessions.parse().expect("CAP_EVAL_ALIGNER_SESSIONS"),
+                threads,
+            )
+            .expect("word aligner loads");
+        }
+        align::AcousticPool::load(path).expect("word aligner loads")
+    }
+
+    #[test]
     #[ignore = "needs CAP_EVAL_DATA and CAP_EVAL_ENGINE"]
     fn transcription_eval() {
         let engine = Engine::from_env();
@@ -779,7 +836,7 @@ mod run {
         let mut aligner = std::env::var("CAP_EVAL_ALIGNER")
             .ok()
             .filter(|_| options.align_words)
-            .map(|path| align::Acoustic::load(Path::new(&path)).expect("word aligner loads"));
+            .map(|path| load_aligner(Path::new(&path)));
         let load_seconds = load_started.elapsed().as_secs_f64();
         let mut rows = Vec::new();
         let mut summaries = BTreeMap::new();
@@ -792,9 +849,7 @@ mod run {
                 let (raw, words) = engine
                     .transcribe(
                         &options,
-                        aligner
-                            .as_mut()
-                            .map(|aligner| aligner as &mut dyn align::Emissions),
+                        aligner.as_mut(),
                         &manifest.name,
                         &clip.id,
                         &samples,

@@ -3598,6 +3598,7 @@ impl EditorWindow {
                         }
                         this.apply_generated_captions(
                             segments,
+                            language,
                             &recording_durations,
                             recording_duration,
                             window,
@@ -3634,6 +3635,7 @@ impl EditorWindow {
     fn apply_generated_captions(
         &mut self,
         segments: Vec<CaptionSegment>,
+        language: &'static str,
         recording_durations: &[f64],
         recording_duration: f64,
         window: &mut Window,
@@ -3644,6 +3646,7 @@ impl EditorWindow {
             transcription::apply_caption_result(
                 project,
                 segments,
+                language,
                 &recording_durations,
                 recording_duration,
             );

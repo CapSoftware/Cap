@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, Mutex, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -910,7 +910,7 @@ async fn download_aligner(path: &Path) -> Result<(), String> {
 /// The aligner, downloaded on first use. `None` when it cannot be had now:
 /// offline, no async runtime to download on, or a platform without ONNX
 /// Runtime.
-fn load_word_aligner() -> Option<align::Acoustic> {
+fn load_word_aligner(runtime: Option<&tokio::runtime::Handle>) -> Option<align::AcousticPool> {
     if !supports_parakeet() {
         return None;
     }
@@ -920,34 +920,89 @@ fn load_word_aligner() -> Option<align::Acoustic> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if !aligner_installed(&path) {
-            let runtime = tokio::runtime::Handle::try_current().ok()?;
             tracing::info!("Downloading the word aligner");
-            if let Err(error) = runtime.block_on(download_aligner(&path)) {
+            if let Err(error) = runtime?.block_on(download_aligner(&path)) {
                 tracing::warn!("{error}");
                 return None;
             }
         }
     }
-    align::Acoustic::load(&path)
+    align::AcousticPool::load(&path)
         .inspect_err(|error| tracing::warn!("{error}"))
         .ok()
 }
 
-fn english_word_aligner(
-    language: &str,
-    groups: &[Vec<CaptionWord>],
-    options: &VerbatimOptions,
-) -> Option<align::Acoustic> {
-    if !options.align_words {
-        return None;
-    }
-    let words: Vec<CaptionWord> = groups.iter().flatten().cloned().collect();
-    let english = match language {
+fn aligns_words_in(language: &str, groups: &[Vec<CaptionWord>]) -> bool {
+    match language {
         "en" => true,
-        "auto" => cap_project::caption_words::reads_as_english(&words),
+        "auto" => {
+            let words: Vec<CaptionWord> = groups.iter().flatten().cloned().collect();
+            cap_project::caption_words::reads_as_english(&words)
+        }
         _ => false,
-    };
-    if english { load_word_aligner() } else { None }
+    }
+}
+
+/// Whether a transcript's hesitation fillers are English ones. A language
+/// picked as something else never is, however English its words look ("Er
+/// ist in Berlin").
+fn transcript_is_english<'a>(
+    language: &str,
+    words: impl IntoIterator<Item = &'a CaptionWord>,
+) -> bool {
+    matches!(language, "en" | "auto") && cap_project::caption_words::reads_as_english(words)
+}
+
+/// Runs `recognize` while the word aligner hears the recording on the cores
+/// it leaves free, then finishes the words with what the aligner heard.
+/// Hearing stops early once the words turn out not to be English.
+fn recognize_and_finish<A: align::Emissions + Send>(
+    samples: &[f32],
+    language: &str,
+    options: &VerbatimOptions,
+    tuning: &Tuning,
+    aligner: impl FnOnce() -> Option<A> + Send,
+    recognize: impl FnOnce() -> Result<Vec<Vec<CaptionWord>>, String>,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let stop = AtomicBool::new(false);
+    let may_align = options.align_words && matches!(language, "en" | "auto");
+    std::thread::scope(|scope| {
+        let stop = &stop;
+        let hearing = may_align.then(|| scope.spawn(move || hear_with(samples, aligner, stop)));
+        let groups = recognize();
+        let aligns = may_align
+            && groups
+                .as_ref()
+                .is_ok_and(|groups| aligns_words_in(language, groups));
+        if !aligns {
+            stop.store(true, Ordering::Relaxed);
+        }
+        let mut heard = hearing
+            .and_then(|hearing| hearing.join().ok())
+            .flatten()
+            .filter(|_| aligns);
+        Ok(finish_words_tuned(
+            groups?,
+            samples,
+            options,
+            heard
+                .as_mut()
+                .map(|heard| heard as &mut dyn align::Emissions),
+            tuning,
+        ))
+    })
+}
+
+fn hear_with<A: align::Emissions>(
+    samples: &[f32],
+    aligner: impl FnOnce() -> Option<A>,
+    stop: &AtomicBool,
+) -> Option<align::Heard> {
+    let mut acoustic = aligner()?;
+    align::Heard::hear(samples, &mut acoustic, stop)
+        .inspect_err(|error| tracing::warn!("Word alignment failed: {error}"))
+        .ok()
+        .flatten()
 }
 
 fn remove_word_aligner_if_unused() {
@@ -1807,12 +1862,15 @@ fn process_with_parakeet(
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
 ) -> Vec<CaptionSegment> {
-    caption_segments_from_groups(vec![tokens.into_iter().collect()])
+    caption_segments_from_groups(vec![tokens.into_iter().collect()], "auto")
 }
 
 /// Each group (a Whisper segment, or everything Parakeet heard) is
 /// normalized and chunked on its own, so a caption never spans two groups.
-fn caption_segments_from_groups(groups: Vec<Vec<CaptionWord>>) -> Vec<CaptionSegment> {
+fn caption_segments_from_groups(
+    groups: Vec<Vec<CaptionWord>>,
+    language: &str,
+) -> Vec<CaptionSegment> {
     let single = groups.len() == 1;
     let groups: Vec<Vec<CaptionWord>> = groups
         .into_iter()
@@ -1825,7 +1883,7 @@ fn caption_segments_from_groups(groups: Vec<Vec<CaptionWord>>) -> Vec<CaptionSeg
             )
         })
         .collect();
-    let english = cap_project::caption_words::reads_as_english(groups.iter().flatten());
+    let english = transcript_is_english(language, groups.iter().flatten());
     let mut segments = Vec::new();
     for (group_index, words) in groups.into_iter().enumerate() {
         let chunks = if english {
@@ -1850,6 +1908,7 @@ fn caption_segments_from_groups(groups: Vec<Vec<CaptionWord>>) -> Vec<CaptionSeg
     segments
 }
 
+#[cfg(test)]
 fn finish_words(
     groups: Vec<Vec<CaptionWord>>,
     samples: &[f32],
@@ -2027,24 +2086,30 @@ pub fn transcribe_blocking(
         transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
             let samples = read_wav_16k_mono(audio_path)?;
             let options = VerbatimOptions::default();
-            let groups = if is_parakeet_model(model) {
-                tracing::info!("Using Parakeet TDT engine");
-                process_with_parakeet(&samples, model_file.to_string_lossy().as_ref(), &options)?
-            } else {
-                tracing::info!("Using Whisper engine");
-                let hints = transcription_hints();
-                let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-                process_with_whisper(&samples, context, language, &hints, &options)?
-            };
-            let mut aligner = english_word_aligner(language, &groups, &options);
-            Ok(caption_segments_from_groups(finish_words(
-                groups,
+            let runtime = tokio::runtime::Handle::try_current().ok();
+            let groups = recognize_and_finish(
                 &samples,
+                language,
                 &options,
-                aligner
-                    .as_mut()
-                    .map(|aligner| aligner as &mut dyn align::Emissions),
-            )))
+                &TUNING,
+                || load_word_aligner(runtime.as_ref()),
+                || {
+                    if is_parakeet_model(model) {
+                        tracing::info!("Using Parakeet TDT engine");
+                        process_with_parakeet(
+                            &samples,
+                            model_file.to_string_lossy().as_ref(),
+                            &options,
+                        )
+                    } else {
+                        tracing::info!("Using Whisper engine");
+                        let hints = transcription_hints();
+                        let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+                        process_with_whisper(&samples, context, language, &hints, &options)
+                    }
+                },
+            )?;
+            Ok(caption_segments_from_groups(groups, language))
         });
     if is_parakeet_model(model) {
         schedule_parakeet_release();
@@ -2335,12 +2400,12 @@ pub fn write_caption_edit_to_source(
 pub fn apply_caption_result(
     project: &mut ProjectConfiguration,
     segments: Vec<CaptionSegment>,
+    language: &str,
     recording_durations: &[f64],
     recording_duration: f64,
 ) {
-    let english = cap_project::caption_words::reads_as_english(
-        segments.iter().flat_map(|segment| &segment.words),
-    );
+    let english =
+        transcript_is_english(language, segments.iter().flat_map(|segment| &segment.words));
     let settings = CaptionSettings {
         enabled: true,
         filler_language: english.then(|| "en".to_string()),
@@ -3003,6 +3068,7 @@ mod tests {
         apply_caption_result(
             &mut project,
             vec![caption("segment-0-0", 1.0, 2.0, &[("hello", 1.0, 2.0)])],
+            "auto",
             &[10.0],
             10.0,
         );
@@ -3021,12 +3087,37 @@ mod tests {
     }
 
     #[test]
+    fn fillers_count_as_english_only_when_the_language_allows_it() {
+        let words = [
+            ("Er", 0.0, 0.3),
+            ("ist", 0.3, 0.5),
+            ("in", 0.5, 0.7),
+            ("Berlin", 0.7, 1.2),
+        ];
+        let filler_language = |language: &str| {
+            let mut project = ProjectConfiguration::default();
+            apply_caption_result(
+                &mut project,
+                vec![caption("segment-0-0", 0.0, 1.2, &words)],
+                language,
+                &[10.0],
+                10.0,
+            );
+            project.captions.unwrap().settings.filler_language
+        };
+
+        assert_eq!(filler_language("de"), None);
+        assert_eq!(filler_language("en"), Some("en".to_string()));
+    }
+
+    #[test]
     fn apply_caption_result_synthesises_a_timeline_when_missing() {
         let mut project = ProjectConfiguration::default();
 
         apply_caption_result(
             &mut project,
             vec![caption("segment-0-0", 1.0, 2.0, &[("hello", 1.0, 2.0)])],
+            "auto",
             &[10.0],
             10.0,
         );
