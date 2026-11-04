@@ -149,6 +149,7 @@ fn verbatim_finish_keeps_fillers_and_tightens_every_engines_word_timing() {
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 #[test]
 #[ignore = "needs CAP_FIXTURE_MODELS (a transcription_models directory) and CAP_EVAL_ALIGNER"]
 fn record_verbatim_fixtures() {

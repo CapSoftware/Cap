@@ -413,14 +413,17 @@ pub fn refine_blocking(
 }
 
 /// Re-chunks each input caption's refined words on its own. The first chunk
-/// keeps the caption's id and any later one gets `<id>-<n>`, so per-caption
-/// overrides, which follow ids, stay on the caption they were set on.
+/// keeps the caption's id and any later one gets the first free `<id>-<n>`,
+/// so per-caption overrides, which follow ids, stay on the caption they were
+/// set on and a refinement run again over split captions mints no duplicate.
 fn keep_caption_identities(
     input: &[CaptionSegment],
     groups: Vec<Vec<CaptionWord>>,
     language: &str,
     offsets: &[TranscriptionAudioOffset],
 ) -> Vec<CaptionSegment> {
+    let mut used: std::collections::HashSet<String> =
+        input.iter().map(|segment| segment.id.clone()).collect();
     let mut groups = groups.into_iter();
     let mut refined = Vec::with_capacity(input.len());
     for segment in input {
@@ -439,7 +442,12 @@ fn keep_caption_identities(
                 restored.id = if chunk == 0 {
                     segment.id.clone()
                 } else {
-                    format!("{}-{chunk}", segment.id)
+                    let id = (chunk..)
+                        .map(|suffix| format!("{}-{suffix}", segment.id))
+                        .find(|id| !used.contains(id))
+                        .unwrap_or_default();
+                    used.insert(id.clone());
+                    id
                 };
                 refined.push(restored);
             }
@@ -518,6 +526,40 @@ mod tests {
         assert_eq!(ids[0], "segment-0");
         assert_eq!(ids[1], "segment-0-1");
         assert_eq!(*ids.last().unwrap(), "segment-1");
+    }
+
+    #[test]
+    fn refining_split_captions_again_mints_no_duplicate_ids() {
+        let caption = |id: &str, words: Vec<CaptionWord>| CaptionSegment {
+            id: id.to_string(),
+            start: words[0].start,
+            end: words[words.len() - 1].end,
+            text: String::new(),
+            words,
+        };
+        let input = vec![
+            caption("segment-0", vec![word("so", 0.0, 0.2)]),
+            caption("segment-0-1", vec![word("then", 6.0, 6.2)]),
+        ];
+        let grown: Vec<CaptionWord> = (0..14)
+            .map(|index| word("word", index as f32 * 0.4, index as f32 * 0.4 + 0.3))
+            .collect();
+        let offsets = [TranscriptionAudioOffset {
+            concatenated_start: 0.0,
+            source_start: 0.0,
+            length: 60.0,
+        }];
+        let refined = keep_caption_identities(
+            &input,
+            vec![grown, vec![word("then", 6.0, 6.2)]],
+            "en",
+            &offsets,
+        );
+        let mut ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "{ids:?}");
     }
 
     #[test]
