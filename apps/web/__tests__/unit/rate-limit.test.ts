@@ -134,6 +134,43 @@ describe("isRateLimited outside production", () => {
 		).toBe(false);
 	});
 
+	it("caps keyless requests from rotating addresses off Vercel", async () => {
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const fromAddress = (ip: string) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers({ "x-forwarded-for": ip }),
+			});
+
+		for (let index = 0; index < 100; index++) {
+			expect(await fromAddress(`198.51.100.${index}`)).toBe(false);
+		}
+		expect(await fromAddress("203.0.113.250")).toBe(true);
+	});
+
+	it("does not let one limited address use up the shared bucket", async () => {
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const fromAddress = (ip: string) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers({ "x-real-ip": ip }),
+			});
+
+		await callTimes(500, () => fromAddress("203.0.113.9"));
+		expect(await fromAddress("203.0.113.10")).toBe(false);
+	});
+
+	it("trusts client addresses on Vercel", async () => {
+		vi.stubEnv("VERCEL", "1");
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const fromAddress = (ip: string) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers({ "x-real-ip": ip }),
+			});
+
+		for (let index = 0; index < 150; index++) {
+			expect(await fromAddress(`198.51.100.${index}`)).toBe(false);
+		}
+	});
+
 	it("shares one larger bucket when there is no key and no client address", async () => {
 		mocks.headers.mockRejectedValue(new Error("outside a request scope"));
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();

@@ -52,10 +52,7 @@ export async function isRateLimited(
 		);
 		if (firewallDecision !== undefined) return firewallDecision;
 
-		return await isLocallyRateLimited(
-			ruleId,
-			opts?.key || clientAddress(headersList),
-		);
+		return await isLocallyRateLimited(ruleId, opts?.key, headersList);
 	} catch (error) {
 		console.warn(`Rate limit check failed for "${ruleId}":`, error);
 		return false;
@@ -166,28 +163,57 @@ const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
 	windowMs: MINUTE_MS,
 };
 
-// Without a key or client address every caller shares one bucket (a proxy
-// that forwards no client IP), so that bucket gets a multiple of the
-// per-client limit to avoid locking out a whole self-hosted deploy.
-const ANONYMOUS_LIMIT_MULTIPLIER = 10;
+// Keyless requests also count against one bucket per rule, sized as a multiple
+// of the per-client limit. It catches callers with no client address (a proxy
+// that forwards none) and, off Vercel, callers that rotate x-real-ip or
+// x-forwarded-for themselves, without letting one client lock out a whole
+// self-hosted deploy.
+const SHARED_LIMIT_MULTIPLIER = 10;
 const MAX_LOCAL_BUCKETS = 10_000;
+const LOCAL_BUCKET_SWEEP_INTERVAL_MS = 10_000;
 const MAX_PLAIN_BUCKET_KEY_LENGTH = 256;
 
 const localBuckets = new Map<string, { count: number; resetAt: number }>();
+let nextLocalBucketSweepAt = 0;
 
 async function isLocallyRateLimited(
 	ruleId: string,
-	clientKey: string | undefined,
+	key: string | undefined,
+	headersList: Headers,
 ): Promise<boolean> {
 	const rule = FALLBACK_RATE_LIMITS[ruleId] ?? DEFAULT_FALLBACK_RATE_LIMIT;
-	const limit = clientKey
-		? rule.limit
-		: rule.limit * ANONYMOUS_LIMIT_MULTIPLIER;
-	const bucketKey = clientKey
-		? `${ruleId}|key|${await compactBucketKey(clientKey)}`
-		: `${ruleId}|anonymous`;
-	const now = Date.now();
+	if (key) {
+		return countLocalRequest(
+			`${ruleId}|key|${await compactBucketKey(key)}`,
+			rule.limit,
+			rule.windowMs,
+		);
+	}
 
+	const address = clientAddress(headersList);
+	if (address) {
+		const addressLimited = countLocalRequest(
+			`${ruleId}|ip|${await compactBucketKey(address)}`,
+			rule.limit,
+			rule.windowMs,
+		);
+		if (addressLimited) return true;
+		if (process.env.VERCEL === "1") return false;
+	}
+
+	return countLocalRequest(
+		`${ruleId}|shared`,
+		rule.limit * SHARED_LIMIT_MULTIPLIER,
+		rule.windowMs,
+	);
+}
+
+function countLocalRequest(
+	bucketKey: string,
+	limit: number,
+	windowMs: number,
+): boolean {
+	const now = Date.now();
 	const bucket = localBuckets.get(bucketKey);
 	if (bucket && bucket.resetAt > now) {
 		bucket.count += 1;
@@ -196,14 +222,17 @@ async function isLocallyRateLimited(
 
 	localBuckets.delete(bucketKey);
 	reserveLocalBucket(now);
-	localBuckets.set(bucketKey, { count: 1, resetAt: now + rule.windowMs });
+	localBuckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
 	return limit < 1;
 }
 
 function reserveLocalBucket(now: number) {
 	if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
-	for (const [key, bucket] of localBuckets) {
-		if (bucket.resetAt <= now) localBuckets.delete(key);
+	if (now >= nextLocalBucketSweepAt) {
+		nextLocalBucketSweepAt = now + LOCAL_BUCKET_SWEEP_INTERVAL_MS;
+		for (const [key, bucket] of localBuckets) {
+			if (bucket.resetAt <= now) localBuckets.delete(key);
+		}
 	}
 	for (const key of localBuckets.keys()) {
 		if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
