@@ -73,7 +73,7 @@ export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 	}
 
 	if (
-		await isRateLimited(RATE_LIMIT_IDS.VIDEO_VIEWER_INVITE, {
+		await isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
 			key: `video-viewer-invite:user:${user.id}`,
 		})
 	) {

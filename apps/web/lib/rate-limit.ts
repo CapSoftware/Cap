@@ -138,13 +138,11 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD: "rl_collection_password",
 	/** Collection password attempts across all clients. Suggested: 200 / 10m per key (collection). */
 	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
-	/** Organization invite batches, checked per organization and per sender. Suggested: 30 / 1h per key. */
+	/** Invite emails: organization batches per organization and per sender, and video viewer invites per owner. Suggested: 30 / 1h per key. */
 	ORGANIZATION_INVITE: "rl_organization_invite",
 	CHECKOUT: "rl_checkout",
-	/** Comments, replies and reactions per author. Suggested: 30 / 1m per key (user). */
+	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
-	/** Video viewer invite emails per owner. Suggested: 30 / 1h per key (user). */
-	VIDEO_VIEWER_INVITE: "rl_video_viewer_invite",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };

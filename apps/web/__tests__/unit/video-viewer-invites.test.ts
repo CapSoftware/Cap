@@ -294,7 +294,7 @@ describe("recording viewer invitations", () => {
 		expect(fixtures.inserted).toHaveBeenCalledTimes(INVITE_LIMIT);
 		expect(fixtures.limitChecks).toEqual(
 			Array.from({ length: INVITE_LIMIT + 2 }, () => ({
-				ruleId: "rl_video_viewer_invite",
+				ruleId: "rl_organization_invite",
 				key: "video-viewer-invite:user:owner-1",
 			})),
 		);
