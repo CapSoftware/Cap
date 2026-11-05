@@ -1,6 +1,6 @@
 import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiModelSelection } from "@/lib/ai/provider";
 
 const getAiProviderChainMock = vi.hoisted(() => vi.fn());
@@ -93,6 +93,10 @@ describe("docs ask route", () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 	});
 
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	it("streams the model output as plain text", async () => {
 		const model = new MockLanguageModelV4({
 			doStream: { stream: streamFromDeltas(["Hello ", "world!"]) },
@@ -181,6 +185,7 @@ describe("docs ask route", () => {
 	});
 
 	it("limits questions per client behind an appending proxy", async () => {
+		vi.stubEnv("VERCEL", "");
 		getAiProviderChainMock.mockReturnValue([]);
 
 		const { POST } = await import("@/app/api/docs/ask/route");
