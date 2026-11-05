@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
 	cp,
 	mkdir,
@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "bun";
 import { createJob, generateJobId, getJob } from "../../lib/job-manager";
+import * as mediaVideo from "../../lib/media-video";
 import { Semaphore } from "../../loom-importer/fetch";
 import {
 	type ImporterSettings,
@@ -577,6 +578,53 @@ describe("runLoomImport", () => {
 		expect(job?.phase).toBe("error");
 		expect(job?.error).toContain("not allowed");
 	});
+
+	test.each([0, 20])(
+		"cleans up the preview GIF after thumbnail cancellation with a %i ms GIF delay",
+		async (delayMs) => {
+			const controller = new AbortController();
+			const gifPath = join(root, `cancelled-preview-${delayMs}.gif`);
+			await writeFile(gifPath, "rendered gif");
+			const thumbnail = spyOn(
+				mediaVideo,
+				"generateThumbnail",
+			).mockImplementation(async () => {
+				await Bun.sleep(10);
+				controller.abort(new Error("Shutting down"));
+				throw controller.signal.reason;
+			});
+			const gif = spyOn(mediaVideo, "generatePreviewGif").mockImplementation(
+				async () => {
+					if (delayMs) await Bun.sleep(delayMs);
+					return { path: gifPath, cleanup: () => rm(gifPath, { force: true }) };
+				},
+			);
+			const input = request(
+				`cancelled-preview-${delayMs}`,
+				`${base}/media/hls/master.m3u8?${SIGNATURE}`,
+			);
+			const job = createJob(generateJobId(), input.videoId, input.userId);
+			try {
+				await runLoomImport(
+					job,
+					input,
+					settings(),
+					new Semaphore(8),
+					controller.signal,
+				);
+				expect(gif).toHaveBeenCalledTimes(1);
+				expect(getJob(job.jobId)?.phase).toBe("cancelled");
+				expect(await Bun.file(gifPath).exists()).toBe(false);
+				expect(await readdir(join(root, "work"))).toEqual([]);
+			} finally {
+				thumbnail.mockRestore();
+				gif.mockRestore();
+				await Bun.sleep(delayMs);
+				await rm(gifPath, { force: true });
+			}
+		},
+		60_000,
+	);
 
 	test("leaves no working files behind", async () => {
 		expect(await readdir(join(root, "work"))).toEqual([]);
