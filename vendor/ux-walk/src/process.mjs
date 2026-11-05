@@ -8,7 +8,8 @@ import { PROVIDERS, transcribe, transcribeSplit } from './transcribe.mjs';
 import { guessVoices, readSplit, splitNames } from './speakers.mjs';
 import { callSpan, clipPath, readCalled, readClip, saveCalled, stripPrefix, writeClipInfo } from './rollcall.mjs';
 import { captionSpans, namesFromMeet, readMeet } from './meet.mjs';
-import { runBrief } from './brief.mjs';
+import { chapterKind, runBrief } from './brief.mjs';
+import { DIATRIBE_ASK } from './naming.mjs';
 import { glossaryTerms, nameFixer, readGlossaries, resolveGlossaries, screenNames } from './glossary.mjs';
 import { ROOT, expand } from './config.mjs';
 import { topicSections } from './sections.mjs';
@@ -338,9 +339,12 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
   // No transcript is not a failed chapter: the timeline is there without speech. The caller says so
   // (exit code 3 from "ux-walk process") and a rerun after setup adds the speech.
   if (transcriptError) return summary;
-  // A chapter of a few seconds (a stray pause or next) is not worth a Claude brief.
-  if ((brief ?? cfg.brief) && dur < 20) step('no brief: under 20 s');
-  else if (brief ?? cfg.brief) {
+  // A chapter of a few seconds (a stray pause or next) is not worth a Claude brief. A diatribe always gets one
+  // (its notes are the point), unless the caller says no.
+  const diatribe = chapterKind(dir, ch) === 'diatribe';
+  const wantBrief = brief ?? (diatribe || cfg.brief);
+  if (wantBrief && dur < 20 && !diatribe) step('no brief: under 20 s');
+  else if (wantBrief) {
     step('writing brief (Claude)');
     try { step(`brief: ${await runBrief(dir, cfg)}`); } catch (e) { step(`brief failed: ${e.message}`); }
   }
@@ -368,7 +372,7 @@ export function writeIndex(sessionDir) {
     return l.length > 1 ? [`- ${c.n} ${c.name}: ${l.map((x) => `${String(Math.floor(x.at / 60)).padStart(2, '0')}:${String(Math.floor(x.at % 60)).padStart(2, '0')} ${x.title}`).join(' · ')}`] : [];
   });
   const text = [`# ${s.topic || 'walkthrough'}`, '', `Started ${new Date(s.startedAt).toLocaleString()}.${s.url ? ` URL ${s.url}` : ''}${s.source ? ` Imported from ${s.source.file} (no click log).` : ''}`, '',
-    `For agents: \`/ux-walk ${sessionDir}${s.ask ? ` ${s.ask}` : ''}\``, '',
+    `For agents: \`/ux-walk ${sessionDir}${s.ask ? ` ${s.ask}` : s.kind === 'diatribe' ? ` ${DIATRIBE_ASK}` : ''}\``, '',
     '| # | Chapter | Length | Status | SAY / NAV / WRITE / RISK / ERROR | Timeline |', '|---|---|---|---|---|---|', ...rows, '',
     ...(secs.length ? ['Sections (also `## mm:ss` headers in each timeline):', '', ...secs, ''] : [])].join('\n');
   const tmp = path.join(sessionDir, `.index.${process.pid}.md`);

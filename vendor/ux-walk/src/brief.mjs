@@ -4,6 +4,7 @@
 // same items parsed, for `ux-walk link/status/search`. Uses the Claude Code CLI (claude -p) with
 // read-only tools, confined to the chapter folder. Long chapters are briefed per section and merged.
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { expand, ROOT } from './config.mjs';
@@ -16,19 +17,27 @@ const PARALLEL = 3;
 const pad = (n) => String(n).padStart(2, '0');
 const clock = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
 
+// A chapter's kind ('diatribe', 'import', 'call', 'video'), else its session's: an app that records natively may set either.
+export function chapterKind(dir, meta = readJson(path.join(dir, 'chapter.json'))) {
+  return meta.kind || readJson(path.join(path.dirname(dir), 'session.json')).kind || null;
+}
+// A diatribe (someone thinking out loud) gets organized notes and action items; everything else, the walkthrough brief.
+export const promptFile = (kind) => path.join(ROOT, 'prompts', kind === 'diatribe' ? 'notes.md' : 'brief.md');
+
 export async function runBrief(dir, cfg, { log = () => {} } = {}) {
   const timeline = path.join(dir, 'timeline-short.md');
   if (!fs.existsSync(timeline)) throw new Error(`no timeline in ${dir}; run: ux-walk process ${dir}`);
   const meta = readJson(path.join(dir, 'chapter.json'));
   const sum = readJson(path.join(dir, 'summary.json'));
   const n = meta.n || 1;
+  const kind = chapterKind(dir, meta);
   const title = [meta.topic, meta.name].filter(Boolean).join(' / ') || path.basename(dir);
   const speakers = [...new Set([].concat(meta.speakers || [], Object.values(meta.speakerMap || {})))];
   const first = speakers[0] || cfg.me || 'the speaker';
   // Project-specific notes (what the product is, its audiences, house rules) go in a local file.
   const notesFile = expand(cfg.briefNotes || '');
   const notes = notesFile && fs.existsSync(notesFile) ? `\n\nNotes about this product from the person recording:\n${fs.readFileSync(notesFile, 'utf8').trim()}\n` : '';
-  const base = fs.readFileSync(path.join(ROOT, 'prompts', 'brief.md'), 'utf8').replaceAll('{N}', String(n)).replaceAll('{FIRST_SPEAKER}', first) + notes + importNote(meta) +
+  const base = fs.readFileSync(promptFile(kind), 'utf8').replaceAll('{N}', String(n)).replaceAll('{FIRST_SPEAKER}', first) + notes + importNote(meta) +
     `\n\nChapter number: ${n}\nChapter title: ${title}\nSpeakers: ${speakers.join(', ') || 'unknown'}\n`;
   const run = (extra = '') => runClaude(base + extra, { cwd: dir, model: cfg.briefModel || 'sonnet', tools: 'Read,Glob,Grep', addDir: path.dirname(dir) }).then(cut);
 
@@ -52,17 +61,17 @@ export async function runBrief(dir, cfg, { log = () => {} } = {}) {
   } else {
     briefs = [parseBrief(await run())];
   }
-  let merged = mergeBriefs(briefs, { n, title, first });
+  let merged = mergeBriefs(briefs, { n, title, first, kind });
   // Parts cannot see each other: one cheap text-only pass finds items raised again in a later part.
   if (briefs.length > 1 && merged.items.length > 1) {
     const fold = await findRepeats(merged.items.filter((i) => i.type !== 'error'), cfg).catch((e) => { log(`repeat check skipped: ${e.message}`); return []; });
-    if (fold.length) { log(`folded ${fold.length} repeated item(s): ${fold.map(([k, d]) => `${d} into ${k}`).join(', ')}`); merged = mergeBriefs(briefs, { n, title, first, fold }); }
+    if (fold.length) { log(`folded ${fold.length} repeated item(s): ${fold.map(([k, d]) => `${d} into ${k}`).join(', ')}`); merged = mergeBriefs(briefs, { n, title, first, fold, kind }); }
   }
   const file = path.join(dir, 'brief.md');
   fs.writeFileSync(file, merged.text);
   let agentItems = [];
   try { agentItems = JSON.parse(fs.readFileSync(path.join(dir, 'items.json'), 'utf8')).items.filter((i) => i.source === 'agent'); } catch {}
-  fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ chapter: n, title, generatedAt: new Date().toISOString(), parts: briefs.length, items: [...merged.items, ...agentItems], decisions: merged.decisions, questions: merged.questions }, null, 2) + '\n');
+  fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ chapter: n, title, ...(kind === 'diatribe' ? { kind } : {}), generatedAt: new Date().toISOString(), parts: briefs.length, items: withKeys([...merged.items, ...agentItems], n), decisions: merged.decisions, questions: merged.questions }, null, 2) + '\n');
   if (merged.dropped) log(`dropped ${merged.dropped} "screenshot not opened" line(s)`);
   return file;
 }
@@ -140,7 +149,7 @@ const LEAK = /not (been )?opened|(did ?n[o']t|could ?n[o']t|cannot|can't|unable 
 
 // brief.md -> { title, summary, items, decisions, errors, questions }. Tolerant of missing ids.
 export function parseBrief(text) {
-  const out = { title: '', summary: '', items: [], decisions: [], errors: [], questions: [] };
+  const out = { title: '', summary: '', notes: '', items: [], decisions: [], errors: [], questions: [] };
   const blocks = text.split(/^(?=## )/m);
   const head = blocks.shift() || '';
   out.title = (/^# Brief:?\s*(.*)$/m.exec(head) || [])[1] || '';
@@ -150,6 +159,8 @@ export function parseBrief(text) {
     const body = b.slice(b.indexOf('\n') + 1);
     if (name.startsWith('items')) {
       for (const it of body.split(/^(?=### )/m).filter((x) => x.startsWith('### '))) out.items.push(parseItem(it));
+    } else if (name.startsWith('notes')) {
+      out.notes = body.trim();
     } else if (name.startsWith('decision')) {
       out.decisions.push(...listLines(body).filter((l) => !NONE.test(l)));
     } else if (name.startsWith('error')) {
@@ -194,11 +205,14 @@ function parseItem(block) {
 
 // Item fields agents and the ledger use, from the parsed block.
 const field = (it, k) => it.fields.find((f) => f.key.toLowerCase() === k)?.value || '';
-function itemFacts(it) {
+const TYPES = /\b(bug|ask|decision|question|error)\b/i, DIATRIBE_TYPES = /\b(action|decision|note|question)\b/i;
+function itemFacts(it, kind) {
   const g = (k) => field(it, k);
+  const diatribe = kind === 'diatribe';
   const when = g('when'), screen = g('screen'), said = g('said');
   const shot = (/`((?:notes|shots)\/[^`]+)`/.exec(g('note')) || /`((?:notes|shots)\/[^`]+)`/.exec(screen || g('shot')) || [])[1] || null;
-  const type = (/\b(bug|ask|decision|question|error)\b/i.exec(g('type')) || [])[1]?.toLowerCase() || 'bug';
+  const type = ((diatribe ? DIATRIBE_TYPES : TYPES).exec(g('type')) || [])[1]?.toLowerCase() || (diatribe ? 'note' : 'bug');
+  const owner = g('owner'), due = g('due');
   return {
     id: it.id, note: it.note, type, title: it.title,
     when: (/\b(\d+:\d\d)\b/.exec(when) || [])[1] || null,
@@ -209,15 +223,35 @@ function itemFacts(it) {
     shot,
     source: g('source') || null,
     said: said && !NONE.test(said) ? said : null,
+    // Only a diatribe's items carry these, so a walk's items.json is as it was.
+    ...(diatribe && owner && !NONE.test(owner) ? { owner } : {}),
+    ...(diatribe && due && !NONE.test(due) ? { due } : {}),
   };
 }
 
-// Order: notes (by number), spoken asks, decisions, spoken bugs, unspoken problems. Stable within a group.
-const rank = (f) => (f.note ? 0 : !f.said ? 4 : f.type === 'ask' ? 1 : f.type === 'decision' ? 2 : 3);
+// A short id for an item that survives a re-brief and renumbering: chapter, time and quote (else title).
+const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export const itemKey = (n, it) => crypto.createHash('sha1').update(`${n}|${it.when || ''}|${norm(it.said) || norm(it.title)}`).digest('hex').slice(0, 10);
+// Every item gets a key (an existing one is kept); two items with the same basis get -2, -3 in order.
+export function withKeys(items, n) {
+  const seen = new Set();
+  return items.map((i) => {
+    const base = i.key || itemKey(n, i);
+    let key = base;
+    for (let k = 2; seen.has(key); k++) key = `${base}-${k}`;
+    seen.add(key);
+    return i.key === key ? i : { ...i, key };
+  });
+}
+
+// Order: notes (by number), spoken asks (a diatribe's actions), decisions, spoken bugs (or questions and notes),
+// unspoken problems. Stable within a group.
+const rank = (f) => (f.note ? 0 : !f.said ? 4 : f.type === 'ask' || f.type === 'action' ? 1 : f.type === 'decision' ? 2 : 3);
 
 // Merge one or more parsed briefs into one brief.md with continuous ids, and the items.json lists.
 // fold: [[keep, drop], ...] in the ids an earlier call gave; the dropped item's speech joins the kept one.
-export function mergeBriefs(briefs, { n, title, first, fold = [] }) {
+export function mergeBriefs(briefs, { n, title, first, fold = [], kind = null }) {
+  const diatribe = kind === 'diatribe';
   let dropped = 0;
   const all = [];
   briefs.forEach((b, p) => b.items.forEach((it, k) => {
@@ -229,7 +263,7 @@ export function mergeBriefs(briefs, { n, title, first, fold = [] }) {
       const v = f.value.split(/(?<=[.;])\s+/).filter((x) => !LEAK.test(x)).join(' ').trim();
       return v ? [{ ...f, value: v }] : [];
     });
-    all.push({ it, p, k, f: itemFacts(it) });
+    all.push({ it, p, k, f: itemFacts(it, kind) });
   }));
   all.sort((a, b) => rank(a.f) - rank(b.f) || (a.f.note && b.f.note ? a.f.note - b.f.note : 0) || a.p - b.p || a.k - b.k);
   const maps = briefs.map(() => new Map());
@@ -258,7 +292,13 @@ export function mergeBriefs(briefs, { n, title, first, fold = [] }) {
 
   const summary = briefs.length === 1 ? re(0, briefs[0].summary)
     : briefs.map((b) => `- ${b.range} (${b.titles.join('; ')}): ${b.summary.replace(/\s+/g, ' ')}`).join('\n');
-  const L = [`# Brief: ${title}`, '', summary, '', '## Items', ''];
+  const L = [`# Brief: ${title}`, '', summary, ''];
+  // A diatribe's organized notes, by topic (per part when it was briefed in parts).
+  if (diatribe) {
+    const notes = briefs.map((b, p) => b.notes && (briefs.length > 1 ? `**${b.range}**\n\n` : '') + re(p, b.notes)).filter(Boolean);
+    L.push('## Notes', '', notes.length ? notes.join('\n\n') : 'None.', '');
+  }
+  L.push('## Items', '');
   if (!kept.length) L.push('None.', '');
   for (const a of kept) {
     L.push(`### ${a.id}${a.f.note ? ` (note #${a.f.note})` : ''} ${a.it.title}`);
@@ -266,11 +306,11 @@ export function mergeBriefs(briefs, { n, title, first, fold = [] }) {
     L.push('');
   }
   L.push('## Decisions', '', ...(decisions.length ? decisions.map((d) => `- ${d}`) : ['None.']), '');
-  L.push('## Errors', '', ...(errors.length ? errors.map((e) => `- ${e.id} · ${re(e.p, e.rest)}`) : ['None.']), '');
+  if (!diatribe || errors.length) L.push('## Errors', '', ...(errors.length ? errors.map((e) => `- ${e.id} · ${re(e.p, e.rest)}`) : ['None.']), '');
   L.push(`## Questions for ${first}`, '', ...(questions.length ? questions.map((x) => `${x.n}. ${x.id}${x.when ? ` (${x.when})` : ''} ${re(x.p, x.text).replace(/^\(\d+:\d\d\)\s*/, '')}`) : ['None.']), '');
 
   const items = [
-    ...kept.map((a) => ({ ...itemFacts(a.it), id: a.id })),
+    ...kept.map((a) => ({ ...itemFacts(a.it, kind), id: a.id })),
     ...errors.map((e) => ({ id: e.id, note: null, type: 'error', title: e.rest.replace(/^\d+:\d\d\s*·\s*/, '').replace(/^on `[^`]*`\s*·\s*/, '').slice(0, 160), when: (/\b(\d+:\d\d)\b/.exec(e.rest) || [])[1] || null, route: (/`([^`]+)`/.exec(e.rest) || [])[1] || null, priority: null, confidence: null, shot: null })),
   ];
   return {

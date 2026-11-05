@@ -21,7 +21,7 @@ import { createAsker } from './ask.mjs';
 import { emit, readCommands, createIpcAsker } from './ipc.mjs';
 import { transcriberProblem } from './transcribe.mjs';
 import { isRisky, label, writeKind, writeLabel } from './timeline.mjs';
-import { chapterName, handoffLine, pad, createSessionDir } from './naming.mjs';
+import { chapterName, handoffContext, handoffLine, pad, createSessionDir } from './naming.mjs';
 import { assertCompanionAvailable, CompanionSession, durableCompanionJson, startCompanionServer } from './companion.mjs';
 
 const tty = process.stdout.isTTY;
@@ -63,7 +63,7 @@ export function openInCmux(dir, line, cfg, name) {
   const bin = [process.env.UXW_CMUX, '/Applications/cmux.app/Contents/Resources/bin/cmux'].find((p) => p && fs.existsSync(p)) || 'cmux';
   const cwd = String(cfg.sourceRoot || '~').replace(/^~(?=\/|$)/, os.homedir());
   const prompt = path.join(dir, 'agent-prompt.txt');
-  fs.writeFileSync(prompt, line + '\n');
+  fs.writeFileSync(prompt, `${line}\n\n${handoffContext(dir)}\n`);
   const cmd = `claude --dangerously-skip-permissions --model ${shq(cfg.agentModel || 'opus')} "$(cat ${shq(prompt)})"`;
   const r = spawnSync(bin, ['new-workspace', '--name', `walk: ${name}`.slice(0, 60), '--cwd', cwd, '--command', cmd, '--focus', 'true'], { encoding: 'utf8', timeout: 15000 });
   if (r.error) return r.error.code === 'ENOENT' ? 'cmux is not installed' : r.error.message;
@@ -414,7 +414,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
     await processing;
     // No speaker popup: voices are named from the roll call. Fix a label any time with ux-walk speakers.
     if (speakers.length > 1) out(`Voices are named from the roll call; rename one any time with: ux-walk speakers ${dir}`);
-    const line = handoffLine(dir, session.ask);
+    const line = handoffLine(dir, session.ask, { kind: session.kind });
     writeHandoff(dir, line);
     // A --script run (the self-test) leaves the clipboard alone.
     const copied = !script && !process.env.UXW_NO_COPY && copy(line);
