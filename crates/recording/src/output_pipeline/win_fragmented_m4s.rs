@@ -17,7 +17,7 @@ use cap_enc_ffmpeg::segmented_stream::{
 };
 use cap_media_info::{AudioInfo, Pixel, VideoInfo};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -67,7 +67,6 @@ impl FrameDropTracker {
         self.check_drop_rate();
     }
 
-    #[allow(dead_code)]
     fn record_drop(&mut self) {
         self.drops_in_window += 1;
         self.total_drops += 1;
@@ -114,15 +113,20 @@ fn report_encode_result(
     encoder: &mut SegmentedVideoEncoder,
     result: Result<(), QueueFrameError>,
     failures: &Cell<u64>,
+    encode_drops: &RefCell<FrameDropTracker>,
     health_tx: &SharedHealthSender,
     track: &'static str,
-) {
+) -> bool {
+    let encoded = result.is_ok();
     if let Err(error) = result {
         let count = failures.get() + 1;
         failures.set(count);
         if count <= 3 || count.is_multiple_of(300) {
             warn!(track, failures = count, "Failed to encode frame: {error}");
         }
+        encode_drops.borrow_mut().record_drop();
+    } else {
+        encode_drops.borrow_mut().record_frame();
     }
     if let Some(fallback) = encoder.take_encoder_fallback() {
         warn!(
@@ -137,6 +141,7 @@ fn report_encode_result(
             attempt: 1,
         });
     }
+    encoded
 }
 
 fn finish_encoder_thread(
@@ -415,6 +420,10 @@ impl WindowsFragmentedM4SMuxer {
                 let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
                 let encode_failures = Cell::new(0u64);
+                let encode_drops = RefCell::new(FrameDropTracker::new(
+                    health_tx.clone(),
+                    "encoder:windows-fragmented",
+                ));
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -434,23 +443,24 @@ impl WindowsFragmentedM4SMuxer {
                  -> anyhow::Result<()> {
                     let encode_start = std::time::Instant::now();
 
-                    match encoder.lock() {
+                    let encoded = match encoder.lock() {
                         Ok(mut enc) => {
                             let result = enc.queue_frame(ffmpeg_frame, timestamp);
                             report_encode_result(
                                 &mut enc,
                                 result,
                                 &encode_failures,
+                                &encode_drops,
                                 &health_tx,
                                 "screen",
-                            );
+                            )
                         }
                         Err(_) => {
                             return Err(anyhow!(
                                 "Encoder mutex poisoned - all subsequent frames would be lost"
                             ));
                         }
-                    }
+                    };
 
                     let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
@@ -466,7 +476,9 @@ impl WindowsFragmentedM4SMuxer {
                         }
                     }
 
-                    *total_frames += 1;
+                    if encoded {
+                        *total_frames += 1;
+                    }
                     Ok(())
                 };
 
@@ -872,6 +884,10 @@ impl WindowsFragmentedM4SCameraMuxer {
                 let mut mjpeg_decoder = MjpegDecoder::default();
                 const SLOW_THRESHOLD_MS: u128 = 5;
                 let encode_failures = Cell::new(0u64);
+                let encode_drops = RefCell::new(FrameDropTracker::new(
+                    health_tx.clone(),
+                    "encoder:windows-fragmented-camera",
+                ));
 
                 let normalize_timestamp =
                     |ts: Duration, first: &mut Option<Duration>| -> Duration {
@@ -908,27 +924,28 @@ impl WindowsFragmentedM4SCameraMuxer {
                             }
                         }
 
-                        match ffmpeg_frame_result {
+                        let encoded = match ffmpeg_frame_result {
                             Ok(ffmpeg_frame) => {
                                 let encode_start = std::time::Instant::now();
 
-                                match encoder.lock() {
+                                let encoded = match encoder.lock() {
                                     Ok(mut enc) => {
                                         let result = enc.queue_frame(ffmpeg_frame, timestamp);
                                         report_encode_result(
                                             &mut enc,
                                             result,
                                             &encode_failures,
+                                            &encode_drops,
                                             &health_tx,
                                             "camera",
-                                        );
+                                        )
                                     }
                                     Err(_) => {
                                         return Err(anyhow!(
                                             "Camera encoder mutex poisoned - all subsequent frames would be lost"
                                         ));
                                     }
-                                }
+                                };
 
                                 let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
@@ -945,13 +962,17 @@ impl WindowsFragmentedM4SCameraMuxer {
                                         );
                                     }
                                 }
+                                encoded
                             }
                             Err(e) => {
                                 warn!("Failed to convert camera frame: {e:?}");
+                                false
                             }
-                        }
+                        };
 
-                        *total_frames += 1;
+                        if encoded {
+                            *total_frames += 1;
+                        }
                         Ok(())
                     };
 

@@ -69,6 +69,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { isCommentRateLimited } from "@/lib/comment-rate-limit";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
 	isEmailCodeSendLimited,
@@ -2517,6 +2518,9 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	type: "text" | "emoji";
 }) {
 	const user = yield* CurrentUser;
+	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
 	let parentCommentId = requestedParentCommentId;
 	yield* assertCanCreateFeedback(videoId);
 	const { settings } = yield* getMobileVideoRules(videoId);
