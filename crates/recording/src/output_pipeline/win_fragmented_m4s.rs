@@ -154,7 +154,34 @@ fn finish_encoder_thread(
 trait FinishableEncoderState {
     fn close_channel(&self, thread_label: &str);
     fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>>;
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()>;
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()>;
+}
+
+fn finish_and_report_flush_failure(
+    encoder: &mut SegmentedVideoEncoder,
+    timestamp: Duration,
+    finish_label: &str,
+    health_tx: &SharedHealthSender,
+) -> anyhow::Result<()> {
+    let result = encoder
+        .finish_with_timestamp(timestamp)
+        .map_err(|error| anyhow!("{finish_label}: {error:#}"));
+    if let Some(failure) = encoder.take_flush_failure() {
+        warn!(
+            encoder = %failure.encoder,
+            error = %failure.error,
+            "{finish_label}: frames the encoder held at stop were lost"
+        );
+        health_tx.emit(PipelineHealthEvent::EncoderTailLost {
+            encoder: failure.encoder,
+        });
+    }
+    result
 }
 
 impl FinishableEncoderState for EncoderState {
@@ -168,11 +195,16 @@ impl FinishableEncoderState for EncoderState {
         self.encoder_handle.take()
     }
 
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => encoder
-                .finish_with_timestamp(timestamp)
-                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Ok(mut encoder) => {
+                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
+            }
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -191,11 +223,16 @@ impl FinishableEncoderState for CameraEncoderState {
         self.encoder_handle.take()
     }
 
-    fn finish_encoder(&self, timestamp: Duration, finish_label: &str) -> anyhow::Result<()> {
+    fn finish_encoder(
+        &self,
+        timestamp: Duration,
+        finish_label: &str,
+        health_tx: &SharedHealthSender,
+    ) -> anyhow::Result<()> {
         match self.encoder.lock() {
-            Ok(mut encoder) => encoder
-                .finish_with_timestamp(timestamp)
-                .map_err(|error| anyhow!("{finish_label}: {error:#}")),
+            Ok(mut encoder) => {
+                finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
+            }
             Err(_) => Err(anyhow!(
                 "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
             )),
@@ -208,6 +245,7 @@ fn finish_segmented_encoder_impl(
     timestamp: Duration,
     thread_label: &str,
     finish_label: &str,
+    health_tx: &SharedHealthSender,
 ) -> anyhow::Result<()> {
     state.close_channel(thread_label);
 
@@ -222,7 +260,9 @@ fn finish_segmented_encoder_impl(
         BlockingThreadFinish::TimedOut(error) => return Err(error),
     };
 
-    let finalize_error = state.finish_encoder(timestamp, finish_label).err();
+    let finalize_error = state
+        .finish_encoder(timestamp, finish_label, health_tx)
+        .err();
 
     match (thread_error, finalize_error) {
         (None, None) => Ok(()),
@@ -346,6 +386,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 timestamp,
                 "Windows M4S encoder",
                 "Failed to finish segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));
@@ -768,6 +809,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 timestamp,
                 "Windows M4S camera encoder",
                 "Failed to finish camera segmented encoder",
+                &self.health_tx,
             )
         {
             return Ok(Err(error));

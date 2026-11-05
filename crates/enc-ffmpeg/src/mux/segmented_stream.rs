@@ -86,6 +86,14 @@ impl<S: PacketSink + ?Sized> PacketSink for SinkProbe<'_, S> {
     }
 }
 
+/// A hardware encoder that failed while flushing at stop. The recording keeps
+/// every frame it had already produced; the frames it still held are lost.
+#[derive(Debug, Clone)]
+pub struct EncoderFlushFailure {
+    pub encoder: String,
+    pub error: ffmpeg::Error,
+}
+
 #[derive(Debug, Clone)]
 pub struct EncoderFallback {
     pub failed_encoder: String,
@@ -182,6 +190,7 @@ pub struct SegmentedVideoEncoder {
     codec_failures: CodecFailureHistory,
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
+    flush_failure: Option<EncoderFlushFailure>,
 }
 
 struct SegmentMux {
@@ -199,6 +208,7 @@ struct SegmentMux {
     segment_tx: SegmentSender,
     init_notified: bool,
     initial_manifest_pending: bool,
+    encoder_tail_lost: bool,
 }
 
 impl MuxTarget for SegmentMux {
@@ -272,6 +282,8 @@ struct Manifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
     is_complete: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    encoder_tail_lost: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -498,6 +510,7 @@ impl SegmentedVideoEncoder {
             segment_tx: SegmentSender::default(),
             init_notified: false,
             initial_manifest_pending: true,
+            encoder_tail_lost: false,
         };
         let segment_tx = mux.segment_tx.clone();
 
@@ -512,6 +525,7 @@ impl SegmentedVideoEncoder {
             codec_failures: CodecFailureHistory::default(),
             pending_fallback: None,
             unrecovered_codec_failure: None,
+            flush_failure: None,
         };
 
         if write_behind {
@@ -660,36 +674,54 @@ impl SegmentedVideoEncoder {
         let encoder_name = self.encoder.codec_name();
         let unrecovered = self.unrecovered_codec_failure.clone();
         let encoder = &mut self.encoder;
-        self.mux
-            .finish(
-                |mux| {
-                    let mut sink = SinkProbe::new(mux);
-                    let result = encoder.flush_to(&mut sink);
-                    match result {
-                        Err(error) if tolerate_codec_flush_failure && !sink.failed => {
-                            tracing::warn!(
-                                encoder = %encoder_name,
-                                %error,
-                                "Hardware video encoder failed while flushing; keeping the frames it already produced"
-                            );
-                            Ok(())
-                        }
-                        result => result,
+        let mut tolerated_flush_error = None;
+        let tail_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finalize_tail_lost = tail_lost.clone();
+        let finished = self.mux.finish(
+            |mux| {
+                let mut sink = SinkProbe::new(mux);
+                let result = encoder.flush_to(&mut sink);
+                match result {
+                    Err(error) if tolerate_codec_flush_failure && !sink.failed => {
+                        tracing::warn!(
+                            encoder = %encoder_name,
+                            %error,
+                            "Hardware video encoder failed while flushing; keeping the frames it already produced"
+                        );
+                        tolerated_flush_error = Some(error);
+                        tail_lost.store(true, std::sync::atomic::Ordering::Release);
+                        Ok(())
                     }
-                },
-                move |mux: &mut SegmentMux, flush_result| {
-                    let flush_result = flush_result.inspect_err(|error| {
-                        tracing::warn!(%error, "Video encoder flush failed");
-                    });
-                    match (mux.finish(flush_result), unrecovered) {
-                        (Err(FinishError::FFmpeg(_)), Some((encoder, error))) => {
-                            Err(FinishError::EncoderStopped { encoder, error })
-                        }
-                        (result, _) => result,
+                    result => result,
+                }
+            },
+            move |mux: &mut SegmentMux, flush_result| {
+                mux.encoder_tail_lost =
+                    finalize_tail_lost.load(std::sync::atomic::Ordering::Acquire);
+                let flush_result = flush_result.inspect_err(|error| {
+                    tracing::warn!(%error, "Video encoder flush failed");
+                });
+                match (mux.finish(flush_result), unrecovered) {
+                    (Err(FinishError::FFmpeg(_)), Some((encoder, error))) => {
+                        Err(FinishError::EncoderStopped { encoder, error })
                     }
-                },
-            )
-            .map_err(std::io::Error::from)?
+                    (result, _) => result,
+                }
+            },
+        );
+        if let Some(error) = tolerated_flush_error {
+            self.flush_failure = Some(EncoderFlushFailure {
+                encoder: encoder_name,
+                error,
+            });
+        }
+        finished.map_err(std::io::Error::from)?
+    }
+
+    /// The flush failure a finished recording tolerated, if any. Its manifest
+    /// is marked `encoder_tail_lost` too.
+    pub fn take_flush_failure(&mut self) -> Option<EncoderFlushFailure> {
+        self.flush_failure.take()
     }
 
     #[cfg(test)]
@@ -893,6 +925,7 @@ impl SegmentMux {
             segments,
             total_duration: None,
             is_complete: false,
+            encoder_tail_lost: false,
         };
 
         let manifest_path = self.base_path.join("manifest.json");
@@ -1087,6 +1120,7 @@ impl SegmentMux {
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),
             is_complete: true,
+            encoder_tail_lost: self.encoder_tail_lost,
         };
 
         let manifest_path = self.base_path.join("manifest.json");
@@ -2201,6 +2235,101 @@ mod tests {
         let decoded = decode_every_packet(&recorded_track(&base_path));
         assert!(decoded.frames >= total_frames - 1);
         super::super::dash_output::verify_final_manifest(&base_path).unwrap();
+    }
+
+    fn encoder_failing_at_flush(base_path: &Path) -> SegmentedVideoEncoder {
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            base_path.to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        let total_frames = 90;
+        encoder.encoder.inject_codec_failure_after(
+            total_frames,
+            HARDWARE_FAILURE,
+            Some(H264Preset::Ultrafast),
+        );
+        for i in 0..total_frames as u64 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+        }
+        encoder
+    }
+
+    fn read_manifest(base_path: &Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn hardware_encoder_failure_while_flushing_marks_the_lost_tail() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = encoder_failing_at_flush(temp.path());
+
+        encoder.finish().unwrap();
+
+        let manifest = read_manifest(temp.path());
+        assert_eq!(manifest["is_complete"], true);
+        assert_eq!(manifest["encoder_tail_lost"], true);
+        let failure = encoder
+            .take_flush_failure()
+            .expect("the tolerated flush failure is reported");
+        assert_eq!(failure.error, HARDWARE_FAILURE);
+        assert_eq!(failure.encoder, "libx264");
+        assert!(encoder.take_flush_failure().is_none());
+        decode_every_packet(&recorded_track(temp.path()));
+    }
+
+    #[test]
+    fn hardware_encoder_failure_while_flushing_still_reports_a_trailer_failure() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = encoder_failing_at_flush(temp.path());
+        let dash_manifest = temp.path().join("dash_manifest.mpd");
+        if dash_manifest.exists() {
+            std::fs::remove_file(&dash_manifest).unwrap();
+        }
+        std::fs::create_dir(&dash_manifest).unwrap();
+
+        assert!(encoder.finish().is_err());
+
+        let manifest = read_manifest(temp.path());
+        assert_eq!(manifest["is_complete"], false);
+        assert!(manifest.get("encoder_tail_lost").is_none());
+    }
+
+    #[test]
+    fn clean_finish_leaves_the_manifest_unmarked() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        for i in 0..90u64 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_333),
+                )
+                .unwrap();
+        }
+
+        encoder.finish().unwrap();
+
+        let manifest = read_manifest(temp.path());
+        assert_eq!(manifest["is_complete"], true);
+        assert!(manifest.get("encoder_tail_lost").is_none());
+        assert!(encoder.take_flush_failure().is_none());
     }
 
     #[test]
