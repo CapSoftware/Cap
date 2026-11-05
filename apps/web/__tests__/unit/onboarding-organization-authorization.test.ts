@@ -218,6 +218,49 @@ describe("onboarding organization authorization", () => {
 		},
 	);
 
+	it.each([
+		{ name: "Jane", welcome: false, expectedOrgName: "Jane's organization" },
+		{ name: "Jane", welcome: true, expectedOrgName: "Jane's organization" },
+		{ name: null, welcome: false, expectedOrgName: "Your Organization" },
+		{ name: null, welcome: true, expectedOrgName: "Your Organization" },
+		{ name: "", welcome: true, expectedOrgName: "Your Organization" },
+		{ name: "   ", welcome: true, expectedOrgName: "Your Organization" },
+	])(
+		"names a new organization when skipping with name=$name and welcome=$welcome",
+		async ({ name, welcome, expectedOrgName }) => {
+			const fixture = makeFixture({
+				organizationExists: false,
+				user: {
+					name,
+					onboardingSteps: { welcome },
+					activeOrganizationId: Organisation.OrganisationId.make(""),
+					defaultOrgId: null,
+				},
+			});
+
+			await fixture.run((service) => service.skipToDashboard());
+
+			const organizationId = fixture.user.activeOrganizationId;
+			expect(organizationId).toEqual(expect.any(String));
+			expect(organizationId).not.toBe("");
+			expect(fixture.user.defaultOrgId).toBe(organizationId);
+			expect(fixture.organizations).toEqual([
+				expect.objectContaining({
+					id: organizationId,
+					name: expectedOrgName,
+					ownerId: USER_ID,
+				}),
+			]);
+			expect(fixture.memberships).toEqual([
+				expect.objectContaining({
+					organizationId,
+					userId: USER_ID,
+					role: "owner",
+				}),
+			]);
+		},
+	);
+
 	it("can skip to the dashboard after welcome saves an empty trimmed name", async () => {
 		const fixture = makeFixture({
 			user: { name: null, onboardingSteps: null },
