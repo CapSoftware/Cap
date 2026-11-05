@@ -150,6 +150,34 @@ fn stale_reports_do_not_hide_processing_or_failure_and_notes_remain_readable() {
     assert!(read_summary(&file).unwrap().report_ready());
 }
 
+#[cfg(unix)]
+#[test]
+fn item_editing_opens_only_for_processed_walks() {
+    let f = Fixture::new();
+    let source = f.source("source");
+    let file = f.journal("walk", &source, 100);
+    let folder = file.parent().unwrap();
+    assert!(!read_summary(&file).unwrap().items_editable());
+    fs::write(folder.join("report.html"), "report").unwrap();
+    fs::write(folder.join("processing.json"), r#"{"state":"ready"}"#).unwrap();
+    assert!(read_summary(&file).unwrap().items_editable());
+    fs::write(folder.join("processing.json"), r#"{"state":"processing"}"#).unwrap();
+    fs::create_dir(folder.join(".processing-lock")).unwrap();
+    fs::write(
+        folder.join(".processing-lock/owner.json"),
+        serde_json::to_vec(&serde_json::json!({"pid":std::process::id()})).unwrap(),
+    )
+    .unwrap();
+    assert!(!read_summary(&file).unwrap().items_editable());
+    fs::remove_dir_all(folder.join(".processing-lock")).unwrap();
+    fs::write(
+        folder.join("processing.json"),
+        r#"{"state":"failed","error":"Provider unavailable"}"#,
+    )
+    .unwrap();
+    assert!(!read_summary(&file).unwrap().items_editable());
+}
+
 #[test]
 fn choosing_another_walk_or_live_recording_rejects_stale_background_loads() {
     let mut selection = WalkSelection::default();

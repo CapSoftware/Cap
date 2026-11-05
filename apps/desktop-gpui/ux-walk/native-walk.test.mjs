@@ -1097,7 +1097,7 @@ test("a diatribe is processed as kind diatribe with a forced brief and no browse
 		),
 	);
 	assert.match(prompt, /preparation: ready/);
-	assert.match(prompt, /ux-walk items/);
+	assert.match(prompt, /ux-walk'? items .*--json/);
 	assert.doesNotMatch(prompt, /Browser coverage/);
 	assert.ok(!walkModeName.includes("Diatribe"));
 });
@@ -1201,4 +1201,176 @@ test("Instant export copies the finished video at Cap's default settings", async
 		),
 		/did not produce/,
 	);
+});
+
+function processedItems(f, kind = null) {
+	const chapter = path.join(f.directory, "01-intro");
+	fs.mkdirSync(chapter);
+	fs.writeFileSync(
+		path.join(f.directory, "session.json"),
+		JSON.stringify({
+			topic: "Checkout",
+			speakers: ["Tester"],
+			...(kind ? { kind } : {}),
+			chapters: [{ n: 1, name: "Intro", dir: "01-intro" }],
+		}),
+	);
+	fs.writeFileSync(
+		path.join(chapter, "chapter.json"),
+		JSON.stringify({ n: 1, name: "Intro" }),
+	);
+	fs.writeFileSync(
+		path.join(chapter, "items.json"),
+		JSON.stringify({
+			chapter: 1,
+			title: "Intro",
+			items: [
+				{
+					id: "C1-01",
+					key: "c1-clipped",
+					note: 1,
+					type: "bug",
+					title: "Pay button is clipped",
+					when: "0:01",
+					priority: "high",
+				},
+				{
+					id: "C1-02",
+					key: "c1-copy",
+					note: null,
+					type: "ask",
+					title: "Rename the total",
+					when: "0:05",
+				},
+			],
+			decisions: ["Keep the summary"],
+			questions: [{ id: "C1-Q1", when: null, text: "Who owns tax?" }],
+		}),
+	);
+	return chapter;
+}
+
+function engineCommand(args) {
+	const result = spawnSync(
+		process.execPath,
+		[fileURLToPath(new URL("./native-walk.mjs", import.meta.url)), ...args],
+		{ encoding: "utf8", timeout: 10000 },
+	);
+	return result;
+}
+
+test("items and save-items round-trip the owner's edits through the engine", (t) => {
+	const f = fixture(t);
+	processedItems(f);
+	const read = engineCommand(["items", f.file]);
+	assert.equal(read.status, 0, read.stderr);
+	const merged = JSON.parse(read.stdout);
+	assert.equal(merged.session, f.directory);
+	const [chapter] = merged.chapters;
+	assert.deepEqual(
+		chapter.items.map((item) => [item.key, item.origin, item.edited]),
+		[
+			["c1-clipped", "brief", false],
+			["c1-copy", "brief", false],
+		],
+	);
+	assert.deepEqual(chapter.items[0].original, {
+		title: "Pay button is clipped",
+		type: "bug",
+		priority: "high",
+		owner: null,
+		due: null,
+	});
+	assert.deepEqual(chapter.decisions, ["Keep the summary"]);
+	const request = path.join(f.directory, "save-request.json");
+	fs.writeFileSync(
+		request,
+		JSON.stringify({
+			journal: f.file,
+			edits: {
+				version: 1,
+				updatedAt: null,
+				items: {
+					"c1-clipped": { title: "Pay button clipped on mobile", owner: "Sam" },
+					"c1-copy": { deleted: true },
+				},
+				added: [
+					{
+						key: "uadded0001",
+						chapter: 1,
+						title: "Add a receipt",
+						note: "Ask Jo",
+					},
+				],
+				order: ["uadded0001", "c1-clipped", "c1-copy"],
+			},
+		}),
+	);
+	const saved = engineCommand(["save-items", request]);
+	assert.equal(saved.status, 0, saved.stderr);
+	const after = JSON.parse(saved.stdout);
+	const items = after.chapters[0].items;
+	assert.deepEqual(
+		items.map((item) => [item.key, item.origin, item.edited, item.deleted]),
+		[
+			["uadded0001", "user", false, false],
+			["c1-clipped", "brief", true, false],
+			["c1-copy", "brief", false, true],
+		],
+	);
+	assert.equal(items[1].title, "Pay button clipped on mobile");
+	assert.equal(items[1].owner, "Sam");
+	assert.equal(items[1].original.title, "Pay button is clipped");
+	assert.equal(items[0].userNote, "Ask Jo");
+	assert.equal(items[0].type, "ask");
+	assert.equal(items[0].original, undefined);
+	assert.ok(fs.existsSync(path.join(f.directory, "edits.json")));
+	const reread = JSON.parse(engineCommand(["items", f.file]).stdout);
+	assert.deepEqual(reread.chapters, after.chapters);
+});
+
+test("save-items refuses invalid edits and leaves the saved edits untouched", (t) => {
+	const f = fixture(t);
+	processedItems(f);
+	const request = path.join(f.directory, "save-request.json");
+	fs.writeFileSync(
+		request,
+		JSON.stringify({
+			journal: f.file,
+			edits: { version: 1, items: { "c1-copy": { title: "" } }, added: [] },
+		}),
+	);
+	const refused = engineCommand(["save-items", request]);
+	assert.equal(refused.status, 1);
+	assert.match(refused.stderr, /title: must be a non-empty string/);
+	assert.equal(fs.existsSync(path.join(f.directory, "edits.json")), false);
+	const unprocessed = fixture(t);
+	const missing = engineCommand(["items", unprocessed.file]);
+	assert.equal(missing.status, 1);
+	assert.match(missing.stderr, /Process this walk/);
+});
+
+test("the agent prompt points at the edited items for the walk folder", (t) => {
+	const f = fixture(t);
+	assert.doesNotMatch(nativeWalkPrompt(f.file), / items .*--json/);
+	processedItems(f);
+	const prompt = nativeWalkPrompt(f.file);
+	const cli = fileURLToPath(
+		new URL("../../../vendor/ux-walk/bin/ux-walk", import.meta.url),
+	);
+	assert.ok(
+		prompt.includes(
+			`'${process.execPath}' '${cli}' items '${f.directory}' --json`,
+		),
+		prompt,
+	);
+	assert.match(prompt, /"deleted": true/);
+	assert.match(prompt, /link '.*' <key> <ref>/);
+	const read = spawnSync(
+		process.execPath,
+		[cli, "items", f.directory, "--json"],
+		{ encoding: "utf8", timeout: 10000 },
+	);
+	assert.equal(read.status, 0, read.stderr);
+	assert.equal(JSON.parse(read.stdout).chapters[0].items.length, 2);
 });

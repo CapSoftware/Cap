@@ -30,6 +30,8 @@ pub mod ux_walk_browser;
 pub mod ux_walk_browser_target;
 #[path = "ux_walk_checkpoints.rs"]
 pub mod ux_walk_checkpoints;
+#[path = "ux_walk_items.rs"]
+pub mod ux_walk_items;
 #[path = "ux_walk_journal.rs"]
 pub mod ux_walk_journal;
 #[path = "ux_walk_library.rs"]

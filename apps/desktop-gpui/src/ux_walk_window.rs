@@ -1,3 +1,6 @@
+#[path = "ux_walk_window/items.rs"]
+mod items;
+
 use crate::{
     session::{Phase, RecordingSession},
     theme::Theme,
@@ -68,6 +71,14 @@ pub fn open_recovery(cx: &mut App) {
 }
 
 pub fn open_saved(file: std::path::PathBuf, cx: &mut App) {
+    open_saved_on(file, None, cx);
+}
+
+pub fn open_saved_items(file: std::path::PathBuf, cx: &mut App) {
+    open_saved_on(file, Some(items::Tab::Items), cx);
+}
+
+fn open_saved_on(file: std::path::PathBuf, tab: Option<items::Tab>, cx: &mut App) {
     if let Err(error) = ensure(true, cx) {
         tracing::error!(%error, "opening saved walk notes");
         return;
@@ -75,14 +86,19 @@ pub fn open_saved(file: std::path::PathBuf, cx: &mut App) {
     if let Some(handle) = cx.global::<WalkWindows>().0 {
         handle
             .update(cx, |view, window, cx| {
-                view.selection.choose(Some(file.clone()));
-                view.saved = None;
-                view.saved_notes = None;
-                view.summary = None;
-                view.error = None;
-                view.notice = None;
-                view.poll = None;
-                view.load_saved(file, window, cx);
+                if view.items.dirty() && !view.items.shows(&file) {
+                    view.settle_items(
+                        false,
+                        Box::new(move |this, window, cx| {
+                            this.items.forget();
+                            this.show_saved(file, tab, window, cx);
+                        }),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                view.show_saved(file, tab, window, cx);
             })
             .ok();
     }
@@ -196,12 +212,46 @@ struct WalkWindow {
     reprocessing: std::collections::BTreeSet<std::path::PathBuf>,
     notice: Option<String>,
     error: Option<String>,
+    items: items::ItemsState,
 }
 
 impl WalkWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::theme::bind_window(window, cx);
-        window.on_window_should_close(cx, |window, _| {
+        let view = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            if view
+                .upgrade()
+                .is_some_and(|view| view.read(cx).items.dirty())
+            {
+                let view = view.clone();
+                window.defer(cx, move |window, cx| {
+                    let confirm = items::confirm(
+                        "Discard unsaved item edits?",
+                        "Your changes to this walk's items have not been saved.",
+                        "Discard",
+                        "Keep editing",
+                        window,
+                        cx,
+                    );
+                    window
+                        .spawn(cx, async move |cx| {
+                            if !confirm.await {
+                                return;
+                            }
+                            view.update_in(cx, |this, window, cx| {
+                                this.items.discard();
+                                if let Some(native) = crate::platform::native_window(window) {
+                                    crate::platform::hide_native(&native);
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                        })
+                        .detach();
+                });
+                return false;
+            }
             if let Some(native) = crate::platform::native_window(window) {
                 crate::platform::hide_native(&native);
             }
@@ -230,6 +280,7 @@ impl WalkWindow {
             }
         })
         .detach();
+        let items = items::ItemsState::new(window, cx);
         Self {
             theme: Theme::for_window(window, cx, false),
             session,
@@ -249,7 +300,51 @@ impl WalkWindow {
             reprocessing: Default::default(),
             notice: None,
             error: None,
+            items,
         }
+    }
+
+    fn show_saved(
+        &mut self,
+        file: std::path::PathBuf,
+        tab: Option<items::Tab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.items.shows(&file) && !self.items.dirty() {
+            self.items.forget();
+        }
+        if let Some(tab) = tab {
+            self.items.tab = tab;
+        } else if !self.items.dirty() {
+            self.items.tab = items::Tab::Notes;
+        }
+        self.selection.choose(Some(file.clone()));
+        self.saved = None;
+        self.saved_notes = None;
+        self.summary = None;
+        self.error = None;
+        self.notice = None;
+        self.poll = None;
+        self.load_saved(file.clone(), window, cx);
+        if self.items.tab == items::Tab::Items {
+            self.ensure_items(file, window, cx);
+        }
+    }
+
+    fn handoff(
+        &mut self,
+        command: &'static str,
+        file: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_items_then(
+            file.clone(),
+            Box::new(move |this, _, cx| this.action(command, file, cx)),
+            window,
+            cx,
+        );
     }
 
     fn refresh_current_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -285,8 +380,12 @@ impl WalkWindow {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::ux_walk_library::read_walk(&file)
-                        .map(|(summary, journal)| LoadedNotes::for_walk(&summary, &journal))
+                    crate::ux_walk_library::read_walk(&file).map(|(summary, journal)| {
+                        (
+                            LoadedNotes::for_walk(&summary, &journal),
+                            summary.items_editable(),
+                        )
+                    })
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
@@ -303,7 +402,15 @@ impl WalkWindow {
                     return;
                 }
                 this.current_notes_loading = None;
-                this.current_notes = result.ok();
+                this.current_notes = match result {
+                    Ok((notes, editable)) => {
+                        if editable {
+                            this.ensure_items(requested.clone(), window, cx);
+                        }
+                        Some(notes)
+                    }
+                    Err(_) => None,
+                };
                 cx.notify();
                 window.refresh();
             })
@@ -337,6 +444,9 @@ impl WalkWindow {
                 }
                 match result {
                     Ok((summary, journal, notes)) => {
+                        if summary.items_editable() {
+                            this.ensure_items(requested.clone(), window, cx);
+                        }
                         this.saved_notes = Some(notes);
                         this.summary = Some(summary);
                         this.saved = Some(journal);
@@ -472,6 +582,17 @@ impl WalkWindow {
         {
             return;
         }
+        if self.items.dirty() && self.items.shows(&file) {
+            self.save_items_then(
+                file.clone(),
+                Box::new(move |this, window, cx| {
+                    this.reprocess_saved(file, full_transcription, window, cx)
+                }),
+                window,
+                cx,
+            );
+            return;
+        }
         if let Err(error) = crate::ux_walk_library::reprocess_allowed(&file) {
             self.error = Some(error);
             cx.notify();
@@ -523,6 +644,9 @@ impl WalkWindow {
                         "Recording and notes are saved. Could not reprocess this walk: {error}"
                     ),
                 });
+                if this.items.shows(&selected) {
+                    this.load_items(selected.clone(), window, cx);
+                }
                 this.load_saved(selected, window, cx);
                 cx.notify();
                 window.refresh();
@@ -625,6 +749,23 @@ impl Render for WalkWindow {
         } else {
             session.walk.processing || session.phase == Phase::Stopping
         };
+        let checkpoint_notice = session.walk.checkpoint_notice.clone();
+        let items_file = walk
+            .as_ref()
+            .filter(|walk| walk.state == "complete")
+            .filter(|walk| {
+                if saved_view {
+                    self.summary
+                        .as_ref()
+                        .is_some_and(crate::ux_walk_library::WalkSummary::items_editable)
+                } else {
+                    !processing
+                        && crate::ux_walk_library::processing_status(&walk.request.directory)
+                            == crate::ux_walk_library::WalkStatus::Ready
+                }
+            })
+            .map(|walk| walk.file());
+        let show_items = items_file.is_some() && self.items.tab == items::Tab::Items;
         let notice = self.notice.clone().unwrap_or_else(|| {
             if saved_view {
                 self.summary
@@ -641,6 +782,7 @@ impl Render for WalkWindow {
         });
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .gap(px(14.))
@@ -671,10 +813,13 @@ impl Render for WalkWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(theme.gray_10)
-                        .child(session.walk.checkpoint_notice.clone()),
+                        .child(checkpoint_notice),
                 )
             })
-            .when(!capture_active, |this| {
+            .when_some(items_file.clone(), |this, file| {
+                this.child(self.render_tabs(file, cx))
+            })
+            .when(!capture_active && !show_items, |this| {
                 this.child(
                     ui::Button::plain(
                         &theme,
@@ -740,7 +885,41 @@ impl Render for WalkWindow {
                         .child(error),
                 )
             })
-            .child(
+            .when_some(items_file.clone().filter(|_| show_items), |this, file| {
+                if self.items.shows(&file) || self.items.file.is_none() {
+                    let editable = !self.reprocessing.contains(&file);
+                    this.child(self.render_items(editable, cx))
+                } else {
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .flex_1()
+                            .min_h_0()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.amber_11)
+                                    .child("Another walk has unsaved item edits. Open it from Recordings to save them, or discard them here."),
+                            )
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "walk-items-discard-other",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Sm,
+                                )
+                                .label("Discard those edits")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.items.forget();
+                                    this.load_items(file.clone(), window, cx);
+                                })),
+                            ),
+                    )
+                }
+            })
+            .when(!show_items, |this| this.child(
                 div()
                     .id("walk-events")
                     .flex()
@@ -768,7 +947,7 @@ impl Render for WalkWindow {
                             ))
                             .child(div().text_size(px(13.)).child(event.text.clone()))
                     })),
-            )
+            ))
             .when_some(walk, |this, walk| {
                 let file = walk.file();
                 let folder = walk.request.directory.clone();
@@ -793,6 +972,7 @@ impl Render for WalkWindow {
                     || self.reprocessing.contains(&file);
                 let prompt_file = file.clone();
                 let handoff_file = file.clone();
+                let live_file = file.clone();
                 let cmux = crate::ux_walk::load()
                     .is_ok_and(|settings| crate::ux_walk::text(&settings, "agent") == "cmux");
                 this.child(
@@ -848,8 +1028,8 @@ impl Render for WalkWindow {
                             )
                             .label("Copy agent prompt")
                             .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.action("prompt", prompt_file.clone(), cx)
+                                move |this, _, window, cx| {
+                                    this.handoff("prompt", prompt_file.clone(), window, cx)
                                 },
                             )),
                         )
@@ -864,8 +1044,8 @@ impl Render for WalkWindow {
                                 .label("Open Claude in cmux")
                                 .disabled(!ready)
                                 .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.action("handoff", handoff_file.clone(), cx)
+                                    move |this, _, window, cx| {
+                                        this.handoff("handoff", handoff_file.clone(), window, cx)
                                     },
                                 )),
                             )
@@ -969,9 +1149,21 @@ impl Render for WalkWindow {
                                     .label("Reprocess")
                                     .disabled(capture_active)
                                     .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.session
-                                                .update(cx, |session, cx| session.process_walk(cx));
+                                        move |this, _, window, cx| {
+                                            let file = live_file.clone();
+                                            this.save_items_then(
+                                                file.clone(),
+                                                Box::new(move |this, _, cx| {
+                                                    if this.items.shows(&file) {
+                                                        this.items.forget();
+                                                    }
+                                                    this.session.update(cx, |session, cx| {
+                                                        session.process_walk(cx)
+                                                    });
+                                                }),
+                                                window,
+                                                cx,
+                                            );
                                         },
                                     )),
                                 )
@@ -979,5 +1171,6 @@ impl Render for WalkWindow {
                         ),
                 )
             })
+            .children(self.render_item_menu(cx))
     }
 }
