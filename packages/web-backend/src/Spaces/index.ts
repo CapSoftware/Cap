@@ -60,9 +60,12 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 			if (space)
 				return yield* Effect.succeed({ variant: "space" as const, space }).pipe(
 					Policy.withPolicy(
-						Policy.any(
-							spacesPolicy.isMember(space.id),
-							orgsPolicy.isAdminOrOwner(space.organizationId),
+						Policy.all(
+							orgsPolicy.isMember(space.organizationId),
+							Policy.any(
+								spacesPolicy.isMember(space.id),
+								orgsPolicy.isAdminOrOwner(space.organizationId),
+							),
 						),
 					),
 				);
