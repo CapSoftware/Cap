@@ -2610,33 +2610,41 @@ pub fn write_caption_edit_to_source(
             word.end = retime(word.end);
         }
     }
-    let mut words = sync_caption_words_with_text(&track_text, &words, start, end);
-    if let (Some(word), Some(original)) = (words.first_mut(), original.first())
-        && f64::from(original.start) < clip_start
-    {
-        word.start = original.start;
-        word.end = word.end.min(original.start + MAX_CAPTION_WORD_DURATION);
-    }
-    if let (Some(word), Some(original)) = (words.last_mut(), original.last())
-        && f64::from(original.end) > clip_end
-    {
-        word.end = original.end;
-        word.start = word.start.max(original.end - MAX_CAPTION_WORD_DURATION);
-    }
-
+    let words = sync_caption_words_with_text(&track_text, &words, start, end);
     let starts_caption = piece.source_words.first().is_none_or(|&index| index == 0);
     let ends_caption = piece
         .source_words
         .last()
         .is_none_or(|&index| index + 1 == source.words.len());
     if words.len() == piece.source_words.len() {
-        for (&index, word) in piece.source_words.iter().zip(words) {
+        for ((&index, mut word), original) in piece.source_words.iter().zip(words).zip(&original) {
+            if f64::from(original.start) < clip_start {
+                word.start = original.start;
+                word.end = word.end.min(original.start + MAX_CAPTION_WORD_DURATION);
+            }
+            if f64::from(original.end) > clip_end {
+                word.end = original.end;
+                word.start = word.start.max(original.end - MAX_CAPTION_WORD_DURATION);
+            }
             source.words[index] = word;
         }
     } else {
         let insert_at = piece.source_words.first().copied().unwrap_or(0);
-        for &index in piece.source_words.iter().rev() {
-            source.words.remove(index);
+        for (&index, original) in piece.source_words.iter().zip(&original).rev() {
+            let mut outside = Vec::new();
+            if f64::from(original.start) < clip_start {
+                outside.push(CaptionWord {
+                    end: clip_start as f32,
+                    ..original.clone()
+                });
+            }
+            if f64::from(original.end) > clip_end {
+                outside.push(CaptionWord {
+                    start: clip_end as f32,
+                    ..original.clone()
+                });
+            }
+            source.words.splice(index..=index, outside);
         }
         source.words.splice(insert_at..insert_at, words);
     }
@@ -3168,6 +3176,43 @@ mod tests {
         let after = shown_pieces(&project);
         assert_eq!(after[0].0, "one new shared");
         assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn editing_unsorted_shared_words_keeps_their_other_pieces() {
+        type Edit = fn(&mut CaptionTrackSegment);
+        let edits: [Edit; 5] = [
+            |piece| piece.text = "One shared last".into(),
+            |piece| piece.start += 0.25,
+            |piece| piece.end -= 0.25,
+            |piece| piece.text = "one new shared last".into(),
+            |piece| piece.text = "replacement".into(),
+        ];
+        for (clips, words, index) in [
+            (
+                [(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+                [("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("last", 3.0, 4.0)],
+                0,
+            ),
+            (
+                [(0.0, 4.0, 1.0), (5.0, 10.0, 1.0)],
+                [("one", 8.0, 9.0), ("shared", 3.5, 5.5), ("last", 6.0, 7.0)],
+                1,
+            ),
+        ] {
+            for edit in edits {
+                let mut project = cut_caption_project(&clips, &words);
+                let before = shown_pieces(&project);
+                assert_eq!(before[index].0, "one shared last");
+                assert_eq!(before[1 - index].0, "shared");
+
+                edit_caption_piece(&mut project, index, edit);
+
+                let after = shown_pieces(&project);
+                assert_eq!(after.len(), before.len());
+                assert_eq!(after[1 - index], before[1 - index]);
+            }
+        }
     }
 
     #[test]
