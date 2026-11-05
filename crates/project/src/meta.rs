@@ -253,8 +253,18 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
+        self.with_legacy_captions(
+            ProjectConfiguration::load(&self.project_path).unwrap_or_default(),
+        )
+    }
 
+    /// [`Self::project_config`] for the editor: see
+    /// [`ProjectConfiguration::load_for_editing`].
+    pub fn project_config_for_editing(&self) -> std::io::Result<ProjectConfiguration> {
+        Ok(self.with_legacy_captions(ProjectConfiguration::load_for_editing(&self.project_path)?))
+    }
+
+    fn with_legacy_captions(&self, mut config: ProjectConfiguration) -> ProjectConfiguration {
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
 
@@ -895,6 +905,120 @@ mod metadata_save_tests {
                 }
             }
         }
+    }
+
+    fn one_clip_config() -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0}],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap()
+    }
+
+    fn write_unreadable_config(project: &Path) -> Vec<u8> {
+        let mut config = one_clip_config();
+        config.timeline.as_mut().unwrap().segments[0].timescale = f64::NAN;
+        config.write(project).unwrap();
+        std::fs::read(project.join("project-config.json")).unwrap()
+    }
+
+    fn project_files(project: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn editing_an_unreadable_config_keeps_it_beside_the_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        let first = write_unreadable_config(directory.path());
+
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
+        assert_eq!(
+            project_files(directory.path()),
+            ["project-config.unreadable.json"]
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.unreadable.json")).unwrap(),
+            first
+        );
+
+        let mut second = write_unreadable_config(directory.path());
+        second.push(b'\n');
+        std::fs::write(directory.path().join("project-config.json"), &second).unwrap();
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.unreadable.json")).unwrap(),
+            first
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.unreadable-2.json")).unwrap(),
+            second
+        );
+    }
+
+    // A backup name that is a symlink loop makes the move fail while the
+    // folder stays writable, so a save after it would still have landed.
+    #[cfg(unix)]
+    #[test]
+    fn editing_never_saves_over_a_config_it_could_not_keep() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        let original = write_unreadable_config(directory.path());
+        let backup = directory.path().join("project-config.unreadable.json");
+        std::os::unix::fs::symlink(&backup, &backup).unwrap();
+
+        assert!(meta.project_config_for_editing().is_err());
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.json")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn editing_a_missing_or_readable_config_moves_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        assert!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .is_none()
+        );
+        assert!(project_files(directory.path()).is_empty());
+
+        one_clip_config().write(directory.path()).unwrap();
+        let saved = std::fs::read(directory.path().join("project-config.json")).unwrap();
+        assert_eq!(
+            meta.project_config_for_editing()
+                .unwrap()
+                .timeline
+                .unwrap()
+                .segments
+                .len(),
+            1
+        );
+        assert_eq!(project_files(directory.path()), ["project-config.json"]);
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.json")).unwrap(),
+            saved
+        );
     }
 
     #[test]

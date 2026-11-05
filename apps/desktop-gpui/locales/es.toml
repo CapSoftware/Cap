@@ -1660,6 +1660,7 @@ position = "Posición"
 
 [screenshot_editor.error]
 encode = "No se pudo codificar la captura de pantalla exportada: {error}"
+load_config = "No se pudieron cargar los ajustes de la captura: {error}"
 load_meta = "No se pudieron cargar los metadatos de la captura de pantalla: {error}"
 load_metadata = "No se pudieron cargar los metadatos de la captura de pantalla: {error}"
 no_image = "No se encontró ningún PNG en {path}"

@@ -43,6 +43,7 @@ const FORMATTED: &[&str] = &[
     "overlay.area.minimum_size",
     "overlay.area.too_small",
     "screenshot_editor.error.encode",
+    "screenshot_editor.error.load_config",
     "screenshot_editor.error.load_meta",
     "screenshot_editor.error.load_metadata",
     "screenshot_editor.error.no_image",
@@ -1034,6 +1035,10 @@ fn dialog_messages_format_like_the_code_they_replaced() {
         (
             tr::screenshot_editor::error::encode(error),
             format!("Failed to encode screenshot export: {error}"),
+        ),
+        (
+            tr::screenshot_editor::error::load_config(error),
+            format!("Failed to load screenshot settings: {error}"),
         ),
         (
             tr::screenshot_editor::error::load_meta(error),

@@ -1662,6 +1662,7 @@ position = "Position"
 
 [screenshot_editor.error]
 encode = { text = "Failed to encode screenshot export: {error}", context = "{error} is a technical error message, usually in English." }
+load_config = { text = "Failed to load screenshot settings: {error}", context = "{error} is a technical error message, usually in English." }
 load_meta = { text = "Failed to load screenshot meta: {error}", context = "{error} is a technical error message, usually in English." }
 load_metadata = { text = "Failed to load screenshot metadata: {error}", context = "{error} is a technical error message, usually in English." }
 no_image = { text = "No PNG found in {path}", context = "{path} is a folder path." }

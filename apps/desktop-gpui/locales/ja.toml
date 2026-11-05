@@ -1660,6 +1660,7 @@ position = "位置"
 
 [screenshot_editor.error]
 encode = "スクリーンショットの書き出しをエンコードできませんでした：{error}"
+load_config = "スクリーンショットの設定を読み込めませんでした：{error}"
 load_meta = "スクリーンショットのメタデータを読み込めませんでした：{error}"
 load_metadata = "スクリーンショットのメタデータを読み込めませんでした：{error}"
 no_image = "{path}にPNGが見つかりません"
