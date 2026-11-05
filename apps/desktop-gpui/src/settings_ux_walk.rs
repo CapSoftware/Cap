@@ -236,6 +236,36 @@ impl SettingsWindow {
     }
 
     pub(crate) fn render_ux_walk_general(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // The notes switch is its own section beside the walk defaults; the page spaces
+        // sections 28px apart and this keeps the same rhythm.
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(28.))
+            .child(self.render_ux_walk_defaults(cx))
+            .child(self.render_recording_notes(cx))
+            .into_any_element()
+    }
+
+    fn render_recording_notes(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.section(
+            ux_walk::notes::NAME,
+            Some("For ordinary Studio and Instant recordings. Walks and diatribes always have notes."),
+            None,
+            vec![
+                self.rows(vec![self.ux_walk_toggle(
+                    ux_walk::RECORDING_NOTES,
+                    "Make notes for new recordings",
+                    "After a recording stops, transcribe it in the background and list its notes, decisions and action items in your walk recordings folder. The recording opens, shares and saves as usual. Turn it on or off for one recording in the recorder.",
+                    cx,
+                )])
+                .into_any_element(),
+            ],
+        )
+        .into_any_element()
+    }
+
+    fn render_ux_walk_defaults(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let handoff = ux_walk::HANDOFFS
             .iter()
             .find(|(value, _)| *value == ux_walk::text(&self.ux_walk.values, "agent"))

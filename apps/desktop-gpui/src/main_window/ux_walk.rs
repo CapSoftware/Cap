@@ -7,7 +7,7 @@ use gpui::{
 
 use super::{MainWindow, Mode, TargetType};
 use crate::{
-    app_windows, mode_choice::ModeChoice, session::Phase, theme::Theme, ui,
+    app_windows, mode_choice::ModeChoice, session::Phase, theme::Theme, ui, ux_walk::notes,
     ux_walk_journal::Request,
 };
 
@@ -19,6 +19,10 @@ pub(super) struct RecorderWalk {
     generation: u64,
     notice: Option<String>,
     key_warning: Option<String>,
+    /// The "Notes & action items" default from Settings, refreshed while idle.
+    notes_default: bool,
+    /// The recorder's own flip of that default, for the next recording only.
+    notes_choice: Option<bool>,
     topic: Entity<ui::TextInputState>,
     speakers: Entity<ui::TextInputState>,
     _topic_events: gpui::Subscription,
@@ -29,23 +33,37 @@ pub(super) struct RecorderWalk {
 fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
     cx.spawn(async move |this, cx| {
         loop {
-            let Ok(ready) = this.update(cx, |this, cx| {
-                this.walk.selected && this.session.read(cx).phase == Phase::Idle
+            let Ok((idle, transcribes)) = this.update(cx, |this, cx| {
+                (
+                    this.session.read(cx).phase == Phase::Idle,
+                    this.walk.selected || this.notes_on(cx),
+                )
             }) else {
                 return;
             };
-            if ready {
-                let warning = cx
+            if idle {
+                let (warning, notes_default) = cx
                     .background_executor()
-                    .spawn(async {
-                        crate::ux_walk::load()
-                            .ok()
-                            .and_then(|settings| crate::ux_walk::missing_key_warning(&settings))
+                    .spawn(async move {
+                        let settings = crate::ux_walk::load().ok();
+                        (
+                            settings
+                                .as_ref()
+                                .filter(|_| transcribes)
+                                .and_then(crate::ux_walk::missing_key_warning),
+                            settings.as_ref().is_some_and(|settings| {
+                                crate::ux_walk::enabled(settings, crate::ux_walk::RECORDING_NOTES)
+                            }),
+                        )
                     })
                     .await;
                 let updated = this.update(cx, |this, cx| {
-                    if this.walk.key_warning != warning {
+                    if transcribes && this.walk.key_warning != warning {
                         this.walk.key_warning = warning;
+                        cx.notify();
+                    }
+                    if this.walk.notes_default != notes_default {
+                        this.walk.notes_default = notes_default;
                         cx.notify();
                     }
                 });
@@ -115,6 +133,9 @@ impl RecorderWalk {
             }
             cx.notify();
         });
+        let notes_default = crate::ux_walk::load().is_ok_and(|settings| {
+            crate::ux_walk::enabled(&settings, crate::ux_walk::RECORDING_NOTES)
+        });
         Self {
             selected: crate::store::ux_walk_selected(),
             opening: false,
@@ -123,6 +144,8 @@ impl RecorderWalk {
             generation: 0,
             notice: None,
             key_warning: None,
+            notes_default,
+            notes_choice: None,
             topic,
             speakers,
             _topic_events: topic_events,
@@ -419,13 +442,47 @@ impl MainWindow {
         }
     }
 
+    /// Whether the recorder offers "Notes & action items" for its next recording.
+    fn notes_offered(&self, cx: &gpui::App) -> bool {
+        cfg!(all(target_os = "macos", feature = "ux-walk"))
+            && notes::applies(
+                self.mode_choice(cx),
+                self.session.read(cx).editor_recording_target().is_some(),
+            )
+    }
+
+    fn notes_on(&self, cx: &gpui::App) -> bool {
+        self.notes_offered(cx) && notes::wanted(self.walk.notes_default, self.walk.notes_choice)
+    }
+
+    /// The notes request riding on an ordinary recording, when its switch is on. A notes
+    /// folder that cannot be prepared never stops the recording; it records without notes.
+    fn notes_start_request(
+        &mut self,
+        editor_flow: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Request> {
+        if editor_flow || !self.notes_on(cx) {
+            return None;
+        }
+        // The flip covers this one recording; the next one starts from the default again.
+        self.walk.notes_choice = None;
+        match notes::start_request() {
+            Ok(request) => Some(request),
+            Err(error) => {
+                self.walk.notice = Some(format!("Recording without notes: {error}"));
+                None
+            }
+        }
+    }
+
     pub(super) fn ux_walk_start_request(
         &mut self,
         editor_flow: bool,
         cx: &mut Context<Self>,
     ) -> Result<Option<Request>, ()> {
         if self.mode_choice(cx) != ModeChoice::UxWalk || editor_flow {
-            return Ok(None);
+            return Ok(self.notes_start_request(editor_flow, cx));
         }
         match crate::ux_walk::request(self.walk.topic.read(cx).text()) {
             Ok(mut request) => {
@@ -454,8 +511,120 @@ impl MainWindow {
         }
     }
 
+    /// The "Notes & action items" switch for an ordinary recording, and how the latest
+    /// recording's notes are coming along.
+    fn notes_setup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let offered = self.notes_offered(cx);
+        let status = self.session.read(cx).walk.notes_status.clone();
+        if !offered && status.is_none() {
+            return None;
+        }
+        let theme = self.theme;
+        let on = notes::wanted(self.walk.notes_default, self.walk.notes_choice);
+        let muted = |text: String| {
+            div()
+                .text_size(px(11.))
+                .text_color(theme.gray_10)
+                .child(text)
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .when(offered, |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .min_w_0()
+                                    .gap(px(2.))
+                                    .child(div().text_size(px(12.)).child(notes::NAME))
+                                    .child(muted(
+                                        "After you stop, transcribe this recording and list its decisions and action items. The recording itself is unchanged."
+                                            .into(),
+                                    )),
+                            )
+                            .child(
+                                ui::Toggle::glass(&theme, "recording-notes-toggle", on)
+                                    .label(notes::NAME)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.walk.notes_choice = Some(!on);
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                })
+                .when_some(
+                    self.walk.key_warning.clone().filter(|_| offered && on),
+                    |this, warning| {
+                        this.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.amber_11)
+                                .child(warning),
+                        )
+                    },
+                )
+                .when_some(status, |this, status| {
+                    let file = status.file.clone();
+                    let viewable = status.viewable();
+                    this.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(div().flex_1().min_w_0().child(muted(status.message())))
+                            .when(viewable, |this| {
+                                this.child(
+                                    ui::Button::body(
+                                        &theme,
+                                        "recording-notes-view",
+                                        ui::ButtonVariant::Gray,
+                                        ui::ButtonSize::Sm,
+                                    )
+                                    .label("View notes")
+                                    .on_click(move |_, _, cx| {
+                                        let file = file.clone();
+                                        cx.defer(move |cx| {
+                                            crate::ux_walk_window::open_saved(file, cx)
+                                        });
+                                    }),
+                                )
+                            }),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn ux_walk_setup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let selected = self.mode_choice(cx) == ModeChoice::UxWalk;
+        if !selected && let Some(notes) = self.notes_setup(cx) {
+            return Some(match self.walk.notice.clone() {
+                Some(notice) => div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(notes)
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(self.theme.gray_10)
+                            .child(notice),
+                    )
+                    .into_any_element(),
+                None => notes,
+            });
+        }
         let has_recent = selected && self.session.read(cx).walk.journal.is_some();
         if !selected && self.walk.notice.is_none() {
             return None;

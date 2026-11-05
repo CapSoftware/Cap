@@ -124,3 +124,77 @@ fn journals_written_before_diatribes_read_as_walks() {
     assert_eq!(old.kind, Kind::Walk);
     assert!(old.uses_browser());
 }
+
+#[test]
+fn notes_ride_on_an_ordinary_recording_without_browser_or_walk_window() {
+    let req = Request {
+        url: String::new(),
+        topic: "Standup".into(),
+        kind: Kind::Notes,
+        ..request()
+    };
+    assert!(req.is_notes());
+    assert!(!req.is_diatribe());
+    assert!(!req.uses_browser());
+    assert!(!req.opens_walk_window());
+    assert!(request().opens_walk_window());
+    assert!(!journal::opens_walk_window(Some(&req)));
+    assert!(journal::opens_walk_window(Some(&request())));
+    assert!(!journal::opens_walk_window(None));
+    assert!(
+        Request {
+            kind: Kind::Diatribe,
+            ..request()
+        }
+        .opens_walk_window()
+    );
+    let mut notes = Journal::begin(
+        req.clone(),
+        PathBuf::from("/recordings/standup.cap"),
+        100_000,
+    )
+    .unwrap();
+    notes.complete(9_000).unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(notes.file()).unwrap()).unwrap();
+    assert_eq!(saved["request"]["kind"], "notes");
+    let reopened: Journal = serde_json::from_slice(&fs::read(notes.file()).unwrap()).unwrap();
+    assert!(reopened.request.is_notes());
+    let next = req.for_restart("again");
+    assert!(next.is_notes());
+    assert_eq!(next.directory.file_name().unwrap(), "notes-again");
+    fs::remove_dir_all(req.directory).unwrap();
+}
+
+#[test]
+fn notes_for_an_earlier_recording_are_written_complete() {
+    let req = Request {
+        kind: Kind::Notes,
+        ..request()
+    };
+    assert!(
+        Journal::finished(
+            req.clone(),
+            PathBuf::from("/recordings/old.cap"),
+            100_000,
+            0
+        )
+        .is_err()
+    );
+    assert!(!req.directory.exists());
+    let notes = Journal::finished(
+        req.clone(),
+        PathBuf::from("/recordings/old.cap"),
+        100_000,
+        42_000,
+    )
+    .unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(notes.file()).unwrap()).unwrap();
+    assert_eq!(saved["state"], "complete");
+    assert_eq!(saved["durationMs"], 42_000);
+    assert_eq!(saved["sourceProject"], "/recordings/old.cap");
+    assert_eq!(saved["request"]["kind"], "notes");
+    assert!(Journal::finished(req.clone(), PathBuf::from("/recordings/old.cap"), 1, 1).is_err());
+    fs::remove_dir_all(req.directory).unwrap();
+}

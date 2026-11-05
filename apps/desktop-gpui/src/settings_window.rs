@@ -2988,7 +2988,8 @@ impl SettingsWindow {
                             .text_size(px(14.))
                             .child(fork::row_title(item)),
                     )
-                    .child(self.render_recording_badges(item)),
+                    .child(self.render_recording_badges(item))
+                    .children(self.notes_row(item, cx)),
             );
 
         div()

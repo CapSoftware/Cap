@@ -4,6 +4,8 @@ pub use crate::ux_walk_preferences::*;
 
 #[path = "ux_walk/assets.rs"]
 pub(crate) mod assets;
+#[path = "ux_walk/notes.rs"]
+pub(crate) mod notes;
 
 pub fn start(cx: &mut gpui::App) {
     let main = cx.global::<crate::app_windows::AppWindows>().main;

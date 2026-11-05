@@ -1102,6 +1102,68 @@ test("a diatribe is processed as kind diatribe with a forced brief and no browse
 	assert.ok(!walkModeName.includes("Diatribe"));
 });
 
+test("an ordinary recording's notes are processed like a diatribe under its own name", async (t) => {
+	const f = fixture(t);
+	// A Studio recording: the notes pass takes the ordinary export and no browser evidence.
+	f.journal.request.kind = "notes";
+	f.journal.request.topic = "Standup";
+	f.journal.request.url = "";
+	f.journal.events = [];
+	f.save();
+	fs.writeFileSync(
+		path.join(f.directory, "browser-evidence.json"),
+		JSON.stringify({ schemaVersion: 1, state: "unavailable", reason: "x" }),
+	);
+	const briefs = [];
+	await finishNativeWalk(
+		f.file,
+		{ transcriber: "none", brief: false },
+		{
+			client: {
+				export: async (_project, output) => {
+					fs.writeFileSync(output, "studio export");
+					return { durationS: 10 };
+				},
+			},
+			exportInstant: async () => {
+				throw new Error("A Studio project must not take the Instant export");
+			},
+			clip: async (_input, output) => fs.writeFileSync(output, "clip"),
+			prepareAudio: async () => null,
+			processChapter: async (directory, _cfg, options) => {
+				const chapter = JSON.parse(
+					fs.readFileSync(path.join(directory, "chapter.json"), "utf8"),
+				);
+				assert.equal(chapter.kind, "diatribe");
+				if (!options.transcriptOnly) briefs.push(options.brief);
+				return {};
+			},
+			writeIndex: () => {},
+			writeReport: () => {},
+		},
+	);
+	assert.deepEqual(briefs, [true]);
+	const session = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "session.json"), "utf8"),
+	);
+	assert.equal(session.kind, "diatribe");
+	assert.equal(session.url, null);
+	assert.deepEqual(Object.keys(session.coverage), ["window"]);
+	assert.deepEqual(
+		session.chapters.map((chapter) => chapter.dir),
+		["01-notes"],
+	);
+	const report = fs.readFileSync(path.join(f.directory, "report.html"), "utf8");
+	assert.ok(report.includes("<title>Standup · Notes</title>"));
+	assert.ok(!report.includes("Browser evidence"));
+	const prompt = fs.readFileSync(
+		path.join(f.directory, "agent-prompt.txt"),
+		"utf8",
+	);
+	assert.match(prompt, /from the notes of this recording: /);
+	assert.doesNotMatch(prompt, /Browser coverage/);
+});
+
 test("a walk keeps its brief setting and browser coverage", async (t) => {
 	const f = fixture(t);
 	const briefs = [];

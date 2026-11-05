@@ -29,6 +29,18 @@ impl WalkStatus {
         }
     }
 
+    /// The row pill for an ordinary recording's notes, which is not a walk.
+    pub fn notes_label(&self) -> &'static str {
+        match self {
+            Self::Recording => "Recording",
+            Self::Saved => "Notes pending",
+            Self::Processing => "Making notes",
+            Self::Ready => "Notes ready",
+            Self::Failed(_) | Self::OwnerUnknown(_) => "Notes need attention",
+            Self::Interrupted => "Notes interrupted",
+        }
+    }
+
     pub fn notice(&self) -> String {
         match self {
             Self::Recording => "Recording and notes are being saved.".into(),
@@ -61,6 +73,8 @@ pub struct WalkSummary {
     pub status: WalkStatus,
     /// A diatribe: notes and action items from someone talking, with no browser evidence.
     pub diatribe: bool,
+    /// Notes & action items for an ordinary recording, which stays a Studio or Instant row.
+    pub notes: bool,
 }
 
 #[derive(Default)]
@@ -102,6 +116,14 @@ impl WalkSummary {
 
     pub fn items_editable(&self) -> bool {
         self.report_ready()
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        if self.notes {
+            self.status.notes_label()
+        } else {
+            self.status.label()
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -161,6 +183,7 @@ pub fn read_walk(file: &Path) -> Result<(WalkSummary, crate::ux_walk_journal::Jo
         started_at_ms: journal.started_at_ms,
         status,
         diatribe: journal.request.is_diatribe(),
+        notes: journal.request.is_notes(),
     };
     Ok((summary, journal))
 }

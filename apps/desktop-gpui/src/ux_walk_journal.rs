@@ -4,12 +4,15 @@ use std::{fs, io::Write, path::PathBuf};
 /// What a native recording is. A walk records a fresh browser window with its evidence; a
 /// diatribe is the owner talking a topic through (screen and microphone, no browser), which
 /// the engine turns into notes and action items (`kind: "diatribe"` in its session files).
+/// Notes is an ordinary Studio or Instant recording with "Notes & action items" on: it
+/// finishes like any recording and is then processed in the background like a diatribe.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     #[default]
     Walk,
     Diatribe,
+    Notes,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,6 +32,7 @@ impl Request {
         let prefix = match self.kind {
             Kind::Walk => "walk",
             Kind::Diatribe => "diatribe",
+            Kind::Notes => "notes",
         };
         Self {
             directory: self.directory.with_file_name(format!("{prefix}-{unique}")),
@@ -40,10 +44,25 @@ impl Request {
         self.kind == Kind::Diatribe
     }
 
+    /// Notes ride along with an ordinary recording, which finishes the normal way.
+    pub fn is_notes(&self) -> bool {
+        self.kind == Kind::Notes
+    }
+
+    /// Walks and diatribes open the walk window while recording; notes never do.
+    pub fn opens_walk_window(&self) -> bool {
+        self.kind != Kind::Notes
+    }
+
     /// Only a walk owns a browser window, its evidence collector and their health checks.
     pub fn uses_browser(&self) -> bool {
         self.kind == Kind::Walk
     }
+}
+
+/// Whether a recording start opens the walk window: walks and diatribes do, notes do not.
+pub fn opens_walk_window(request: Option<&Request>) -> bool {
+    request.is_some_and(Request::opens_walk_window)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,6 +143,25 @@ impl Journal {
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    /// A completed journal for a recording that already exists, so notes can be made from
+    /// it after the fact. The recording's length is its capture clock.
+    pub fn finished(
+        request: Request,
+        source_project: PathBuf,
+        started_at_ms: u64,
+        duration_ms: u64,
+    ) -> Result<Self, String> {
+        if duration_ms == 0 {
+            return Err("This recording has no length to take notes from.".into());
+        }
+        let mut journal = Self::begin(request, source_project, started_at_ms)?;
+        if let Err(error) = journal.complete(duration_ms) {
+            let _ = journal.abort();
+            return Err(error);
+        }
+        Ok(journal)
     }
 
     pub fn add(&mut self, kind: &str, text: &str, offset_ms: u64) -> Result<(), String> {
