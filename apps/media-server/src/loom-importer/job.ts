@@ -7,6 +7,7 @@ import {
 	updateJob,
 	type VideoMetadata,
 } from "../lib/job-manager";
+import { trustLocalPlaylist } from "../lib/media-input-policy";
 import {
 	abortStorageUploadTarget,
 	generatePreviewGif,
@@ -27,6 +28,7 @@ import {
 	type Semaphore,
 } from "./fetch";
 import {
+	buildAudioOnlyArgs,
 	buildRemuxArgs,
 	chooseContainer,
 	PLAYLIST_INPUT_ARGS,
@@ -89,6 +91,7 @@ export const importRequestSchema = z.object({
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
+	importPriority: z.enum(["customer", "bulk"]).optional(),
 });
 
 export type ImportRequest = z.infer<typeof importRequestSchema>;
@@ -140,6 +143,26 @@ async function deliverTerminalWebhook(job: Job, attempts: number) {
 	);
 }
 
+export class ProgressWebhookThrottle {
+	private readonly last = new Map<string, { at: number; phase: string }>();
+
+	constructor(private readonly intervalMs: number) {}
+
+	shouldSend(jobId: string, phase: string, now: number) {
+		const last = this.last.get(jobId);
+		if (last && last.phase === phase && now - last.at < this.intervalMs)
+			return false;
+		this.last.set(jobId, { at: now, phase });
+		return true;
+	}
+
+	forget(jobId: string) {
+		this.last.delete(jobId);
+	}
+}
+
+const progressWebhooks = new ProgressWebhookThrottle(15_000);
+
 function progressUpdate(
 	jobId: string,
 	phase: Job["phase"],
@@ -147,12 +170,14 @@ function progressUpdate(
 	message: string,
 ) {
 	const job = updateJob(jobId, { phase, progress, message });
-	if (job) void sendWebhook(job);
+	if (job && progressWebhooks.shouldSend(jobId, phase, Date.now()))
+		void sendWebhook(job);
 }
 
 interface PreparedSource {
 	input: string;
 	inputArgs: string[];
+	skippedSeconds: number;
 }
 
 async function prepareSource(
@@ -180,7 +205,7 @@ async function prepareSource(
 		);
 		if (result.bytes > maxBytes)
 			throw new Error("Loom imports are limited to 10 GB");
-		return { input: sourcePath, inputArgs: [] };
+		return { input: sourcePath, inputArgs: [], skippedSeconds: 0 };
 	}
 	const manifestDir = join(workDir, "manifest");
 	const segmentDir = join(workDir, "segments");
@@ -190,6 +215,7 @@ async function prepareSource(
 		request.videoUrl,
 		manifestDir,
 		signal,
+		settings.allowedHosts,
 	);
 	if (!master.endsWith(".m3u8"))
 		throw new UnsupportedStreamError("This Loom DASH layout is not supported");
@@ -200,6 +226,7 @@ async function prepareSource(
 		requestTimeoutMs: settings.segmentTimeoutMs,
 		jobSemaphore,
 		globalSemaphore: settings.globalSemaphore,
+		priority: request.importPriority === "customer",
 		maxBytes,
 		onProgress: (progress) => {
 			if (
@@ -216,9 +243,11 @@ async function prepareSource(
 				);
 		},
 	});
+	trustLocalPlaylist(prefetched.masterPath);
 	return {
 		input: prefetched.masterPath,
 		inputArgs: PLAYLIST_INPUT_ARGS(await getFfmpegHlsCapabilities()),
+		skippedSeconds: prefetched.skippedSeconds,
 	};
 }
 
@@ -322,7 +351,10 @@ export async function runLoomImport(
 				signal,
 			);
 			const codecs = await probeCodecs(source.inputArgs, source.input, signal);
-			const container = chooseContainer(codecs);
+			const container =
+				codecs.video === null && codecs.audio !== null
+					? "audio-only"
+					: chooseContainer(codecs);
 			if (!container)
 				throw new UnsupportedStreamError(
 					`Loom source codecs are not supported (${codecs.video ?? "none"}/${codecs.audio ?? "none"})`,
@@ -334,16 +366,26 @@ export async function runLoomImport(
 			progressUpdate(job.jobId, "processing", 65, "Packaging video...");
 			outputPath = join(
 				workDir,
-				container === "mp4" ? "result.mp4" : "original.webm",
+				container === "webm" ? "original.webm" : "result.mp4",
 			);
 			await runCommand(
-				buildRemuxArgs(
-					source.inputArgs,
-					source.input,
-					outputPath,
-					container,
-					codecs.audio !== null,
-				),
+				container === "audio-only" && codecs.audio
+					? buildAudioOnlyArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							codecs.audio,
+							codecs.duration === null
+								? null
+								: codecs.duration + source.skippedSeconds,
+						)
+					: buildRemuxArgs(
+							source.inputArgs,
+							source.input,
+							outputPath,
+							container === "webm" ? "webm" : "mp4",
+							codecs.audio !== null,
+						),
 				settings.remuxTimeoutMs,
 				signal,
 			);
@@ -429,6 +471,7 @@ export async function runLoomImport(
 		if (failed)
 			await deliverTerminalWebhook(failed, settings.terminalWebhookAttempts);
 	} finally {
+		progressWebhooks.forget(job.jobId);
 		if (workDir)
 			await rm(workDir, { recursive: true, force: true }).catch(() => {});
 	}

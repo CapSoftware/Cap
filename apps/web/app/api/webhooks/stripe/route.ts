@@ -124,6 +124,50 @@ function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
 	);
 }
 
+const isMissingStripeResource = (error: unknown) =>
+	typeof error === "object" &&
+	error !== null &&
+	"code" in error &&
+	error.code === "resource_missing";
+
+async function tracksOtherLiveProSubscription(
+	user: Pick<typeof users.$inferSelect, "stripeSubscriptionId">,
+	subscriptionId: string,
+) {
+	const currentSubscriptionId = user.stripeSubscriptionId;
+	if (!currentSubscriptionId || currentSubscriptionId === subscriptionId) {
+		return false;
+	}
+	const current = await stripe()
+		.subscriptions.retrieve(currentSubscriptionId)
+		.catch((error: unknown) => {
+			if (isMissingStripeResource(error)) return null;
+			throw error;
+		});
+	return Boolean(
+		current &&
+			isProSubscription(current) &&
+			ENTITLED_SUBSCRIPTION_STATUSES.has(current.status),
+	);
+}
+
+function skipUnlinkedProSubscription(
+	eventType: string,
+	user: Pick<typeof users.$inferSelect, "id" | "stripeSubscriptionId">,
+	subscriptionId: string,
+) {
+	console.error(
+		"Cap Pro subscription needs reconciliation: the account already has a different live subscription",
+		{
+			eventType,
+			userId: user.id,
+			currentSubscriptionId: user.stripeSubscriptionId,
+			subscriptionId,
+		},
+	);
+	return NextResponse.json({ received: true });
+}
+
 async function cancelEntitledBaaSubscriptions(
 	subscriptions: Stripe.Subscription[],
 	customerId: string,
@@ -520,15 +564,27 @@ export const POST = async (req: Request) => {
 					customerEmail = customer.email;
 				}
 
+				// Signed-in checkouts record the buyer on the session itself, which
+				// still finds them when the Stripe customer has no userId metadata
+				// and its email no longer matches their account.
+				const sessionUserId = session.metadata?.dubCustomerId
+					? User.UserId.make(session.metadata.dubCustomerId)
+					: undefined;
+
 				console.log("Starting user lookup with:", {
 					foundUserId,
+					sessionUserId,
 					customerEmail,
 				});
 
 				let dbUser = await findUserWithRetry(
 					customerEmail as string,
-					foundUserId,
+					foundUserId ?? sessionUserId,
 				);
+
+				if (!dbUser && sessionUserId && sessionUserId !== foundUserId) {
+					dbUser = await findUserWithRetry("", sessionUserId, 1);
+				}
 
 				if (!dbUser && session.metadata?.guestCheckout === "true") {
 					const guestEmail = customerEmail || session.customer_details?.email;
@@ -546,13 +602,6 @@ export const POST = async (req: Request) => {
 					);
 					try {
 						dbUser = await createGuestUser(guestEmail);
-
-						await stripe().customers.update(customer.id, {
-							metadata: {
-								...("metadata" in customer ? customer.metadata : {}),
-								userId: dbUser.id,
-							},
-						});
 					} catch (error) {
 						console.error("Failed to create guest user:", error);
 						return new Response("Failed to create user", { status: 500 });
@@ -583,6 +632,23 @@ export const POST = async (req: Request) => {
 					id: subscription.id,
 					status: subscription.status,
 				});
+
+				if (await tracksOtherLiveProSubscription(dbUser, subscription.id)) {
+					return skipUnlinkedProSubscription(
+						event.type,
+						dbUser,
+						subscription.id,
+					);
+				}
+
+				// Later subscription events (renewals, seat changes, cancellation)
+				// find the user through this metadata, so link it while the
+				// session still says who paid.
+				if ("metadata" in customer && customer.metadata.userId !== dbUser.id) {
+					await stripe().customers.update(customer.id, {
+						metadata: { ...customer.metadata, userId: dbUser.id },
+					});
+				}
 
 				const inviteQuota = subscription.items.data.reduce(
 					(total, item) => total + (item.quantity || 1),
@@ -733,6 +799,14 @@ export const POST = async (req: Request) => {
 					email: dbUser.email,
 					name: dbUser.name,
 				});
+
+				if (await tracksOtherLiveProSubscription(dbUser, subscription.id)) {
+					return skipUnlinkedProSubscription(
+						event.type,
+						dbUser,
+						subscription.id,
+					);
+				}
 
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
@@ -893,6 +967,7 @@ export const POST = async (req: Request) => {
 				}
 
 				let foundUserId: User.UserId | undefined;
+				let linkCustomerToUser = false;
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId
 						? User.UserId.make(customer.metadata.userId)
@@ -909,10 +984,8 @@ export const POST = async (req: Request) => {
 
 						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
 							foundUserId = userByEmail[0].id;
+							linkCustomerToUser = true;
 							console.log(`User found by email: ${foundUserId}`);
-							await stripe().customers.update(customer.id, {
-								metadata: { userId: foundUserId },
-							});
 						} else {
 							console.log("No user found by email");
 							return new Response("No user found", {
@@ -932,9 +1005,29 @@ export const POST = async (req: Request) => {
 					.from(users)
 					.where(eq(users.id, foundUserId));
 
-				if (!userResult || userResult.length === 0) {
+				const [subscriptionUser] = userResult;
+				if (!subscriptionUser) {
 					console.log("No user found in database");
 					return new Response("No user found", { status: 400 });
+				}
+
+				if (
+					await tracksOtherLiveProSubscription(
+						subscriptionUser,
+						subscription.id,
+					)
+				) {
+					return skipUnlinkedProSubscription(
+						event.type,
+						subscriptionUser,
+						subscription.id,
+					);
+				}
+
+				if (linkCustomerToUser) {
+					await stripe().customers.update(customer.id, {
+						metadata: { userId: foundUserId },
+					});
 				}
 
 				await db()

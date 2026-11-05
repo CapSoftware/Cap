@@ -296,7 +296,29 @@ impl AudioStream {
         }
         let max_samples = max_frames * usize::from(self.channels);
         let mut output = Vec::with_capacity(max_samples);
-        while output.len() < max_samples {
+        let source_start_sample = self.position;
+        let samples =
+            self.read_chunk_samples(max_samples, |samples| output.extend_from_slice(samples))?;
+        if samples > 0 {
+            Ok(ChunkRead::Chunk(AudioChunk {
+                source_start_sample,
+                channels: self.channels,
+                samples: output,
+            }))
+        } else {
+            Ok(ChunkRead::Eof {
+                next_sample: self.position,
+            })
+        }
+    }
+
+    fn read_chunk_samples(
+        &mut self,
+        max_samples: usize,
+        mut consume: impl FnMut(&[f32]),
+    ) -> Result<usize, AudioStreamError> {
+        let mut samples = 0;
+        while samples < max_samples {
             if self.failure.is_none() && self.cancellation.is_cancelled() {
                 self.failure = Some(Failure {
                     stage: "cancelled",
@@ -316,9 +338,9 @@ impl AudioStream {
                 next_sample: self.position,
             })?;
             if self.pending_offset < pending.len() {
-                let count = (max_samples - output.len()).min(pending.len() - self.pending_offset);
-                output
-                    .extend_from_slice(&pending[self.pending_offset..self.pending_offset + count]);
+                let count = (max_samples - samples).min(pending.len() - self.pending_offset);
+                consume(&pending[self.pending_offset..self.pending_offset + count]);
+                samples += count;
                 self.pending_offset += count;
                 continue;
             }
@@ -332,14 +354,9 @@ impl AudioStream {
                 self.failure = Some(error);
             }
         }
-        if !output.is_empty() {
-            let source_start_sample = self.position;
-            self.position += (output.len() / self.channels as usize) as u64;
-            return Ok(ChunkRead::Chunk(AudioChunk {
-                source_start_sample,
-                channels: self.channels,
-                samples: output,
-            }));
+        if samples > 0 {
+            self.position += (samples / self.channels as usize) as u64;
+            return Ok(samples);
         }
         if let Some(error) = &self.failure {
             return Err(AudioStreamError {
@@ -348,18 +365,13 @@ impl AudioStream {
                 next_sample: self.position,
             });
         }
-        Ok(ChunkRead::Eof {
-            next_sample: self.position,
-        })
+        Ok(0)
     }
 
     pub fn validate_to_end(&mut self) -> Result<u64, AudioStreamError> {
-        loop {
-            match self.read_chunk(MAX_CHUNK_FRAMES)? {
-                ChunkRead::Chunk(_) => {}
-                ChunkRead::Eof { next_sample } => return Ok(next_sample),
-            }
-        }
+        let max_samples = MAX_CHUNK_FRAMES * usize::from(self.channels);
+        while self.read_chunk_samples(max_samples, |_| {})? != 0 {}
+        Ok(self.position)
     }
 
     fn produce_pcm(&mut self) -> Result<(), Failure> {
@@ -630,6 +642,80 @@ mod tests {
             reference.sample_count() as u64
         );
         assert_eq!(stream.position(), reference.sample_count() as u64);
+    }
+
+    #[test]
+    fn validation_matches_chunk_drain_after_partial_reads_and_resampling() {
+        for (rate, channels, frames) in [
+            (48_000, 1, 0),
+            (48_000, 1, 1),
+            (48_000, 2, 96_017),
+            (44_100, 2, 10_001),
+            (96_000, 6, 12_345),
+        ] {
+            let file = pcm_wav(rate, channels, frames);
+            let expected = crate::AudioData::from_file(file.path())
+                .unwrap()
+                .sample_count() as u64;
+            for prefix in [0, 1, 7, 479, 997, 48_000] {
+                let open = || {
+                    let mut stream =
+                        AudioStream::open(file.path(), Arc::new(AtomicBool::new(false))).unwrap();
+                    if prefix > 0 {
+                        stream.read_chunk(prefix).unwrap();
+                    }
+                    stream
+                };
+                let mut reference = open();
+                loop {
+                    match reference.read_chunk(48_000).unwrap() {
+                        ChunkRead::Chunk(_) => {}
+                        ChunkRead::Eof { next_sample } => {
+                            assert_eq!(next_sample, expected);
+                            break;
+                        }
+                    }
+                }
+                let mut actual = open();
+                assert_eq!(actual.validate_to_end().unwrap(), expected);
+                assert_eq!(actual.position(), reference.position());
+                assert_eq!(actual.validate_to_end().unwrap(), expected);
+                assert!(
+                    matches!(actual.read_chunk(1).unwrap(), ChunkRead::Eof { next_sample } if next_sample == expected)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validation_reports_pending_failure_after_the_same_frame_boundary() {
+        let file = pcm_wav(48_000, 2, 1);
+        for frames in [0, 1, 47_999, 48_000, 48_007, 96_001] {
+            let open = || {
+                let mut stream =
+                    AudioStream::open(file.path(), Arc::new(AtomicBool::new(false))).unwrap();
+                stream.pending = vec![0.25; frames * 2];
+                stream.failure = Some(Failure {
+                    stage: "send-packet",
+                    detail: "injected failure".into(),
+                });
+                stream
+            };
+            let mut reference = open();
+            let expected = loop {
+                match reference.read_chunk(48_000) {
+                    Ok(ChunkRead::Chunk(_)) => {}
+                    Ok(ChunkRead::Eof { .. }) => panic!("failure became EOF"),
+                    Err(error) => break error,
+                }
+            };
+            assert_eq!(expected.next_sample, frames as u64);
+            let mut actual = open();
+            assert_eq!(actual.validate_to_end().unwrap_err(), expected);
+            assert_eq!(actual.position(), reference.position());
+            assert_eq!(actual.validate_to_end().unwrap_err(), expected);
+            assert_eq!(actual.read_chunk(1).unwrap_err(), expected);
+        }
     }
 
     #[test]

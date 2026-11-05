@@ -15,6 +15,12 @@ import {
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
+import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
+import {
+	MEDIA_INPUT_POLICY_ERROR_CODE,
+	MEDIA_INPUT_REJECTED_ERROR_PREFIX,
+} from "@/lib/media-processing-policy";
 import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
@@ -44,6 +50,7 @@ interface ProgressWebhookPayload {
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: string;
 	metadata?: {
 		duration: number;
 		width: number;
@@ -114,6 +121,21 @@ export async function POST(request: NextRequest) {
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
 		const payload = body as ProgressWebhookPayload;
+		const isInputPolicyViolation =
+			payload.phase === "error" &&
+			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
+		if (isInputPolicyViolation && typeof payload.videoId === "string") {
+			try {
+				await recordMediaInputPolicyStrike({
+					videoId: payload.videoId as Video.VideoId,
+				});
+			} catch (error) {
+				console.error("[media-server-webhook] Failed to record input policy", {
+					videoId: payload.videoId,
+					error,
+				});
+			}
+		}
 		if (
 			await applyEditProgress(
 				payload,
@@ -235,6 +257,8 @@ export async function POST(request: NextRequest) {
 
 			const transcribeOnView =
 				request.nextUrl.searchParams.get("transcription") === "on-view";
+			const previewOnView =
+				request.nextUrl.searchParams.get("preview") === "on-view";
 			const deferredSourceKey =
 				currentVideo &&
 				typeof payload.deferredSourceKey === "string" &&
@@ -247,6 +271,11 @@ export async function POST(request: NextRequest) {
 			const metadataUpdates = [
 				...(transcribeOnView
 					? [sql`'$.transcribeOnView', JSON_EXTRACT('true', '$')`]
+					: []),
+				...(previewOnView && !payload.deferredSourceKey
+					? [
+							sql`'$.loomPreviewGif', COALESCE(JSON_EXTRACT(${videos.metadata}, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))`,
+						]
 					: []),
 				...(currentVideo?.metadata?.loomDeferredProcessing &&
 				currentUpload?.rawFileKey ===
@@ -337,9 +366,11 @@ export async function POST(request: NextRequest) {
 				}
 			}
 		} else if (dbPhase === "error") {
-			const processingError =
-				payload.error || payload.message || "Unknown error";
-			if (isRetryableWorkflowError) {
+			const detail = payload.error || payload.message || "Unknown error";
+			const processingError = isInputPolicyViolation
+				? `${MEDIA_INPUT_REJECTED_ERROR_PREFIX}: ${detail}`
+				: detail;
+			if (isRetryableWorkflowError && !isInputPolicyViolation) {
 				await db()
 					.update(videoUploads)
 					.set({
@@ -373,6 +404,13 @@ export async function POST(request: NextRequest) {
 				})
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 		}
+
+		if (dbPhase === "complete" || dbPhase === "error")
+			await signalLoomImportFinished(
+				request.nextUrl.searchParams.get("signal"),
+				payload.videoId,
+				payload.phase,
+			);
 
 		return NextResponse.json({ success: true });
 	} catch (error) {

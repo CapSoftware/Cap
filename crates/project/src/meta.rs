@@ -276,13 +276,12 @@ impl RecordingMeta {
         }
 
         if let Some(ref captions) = config.captions {
-            let timeline_has_captions = config
+            let timeline_needs_captions = config
                 .timeline
                 .as_ref()
-                .map(|t| !t.caption_segments.is_empty())
-                .unwrap_or(false);
+                .is_some_and(|timeline| timeline.caption_segments.is_empty());
 
-            if !timeline_has_captions && !captions.segments.is_empty() {
+            if timeline_needs_captions && !captions.segments.is_empty() {
                 let caption_track_segments: Vec<crate::CaptionTrackSegment> = captions
                     .segments
                     .iter()
@@ -822,6 +821,80 @@ mod metadata_save_tests {
                 .to_string_lossy()
                 .starts_with(".recording-meta-")
         }));
+    }
+
+    #[test]
+    fn caption_loading_preserves_missing_empty_and_populated_timelines() {
+        let captions = CaptionsData {
+            source_timed: true,
+            segments: vec![crate::CaptionSegment {
+                id: "source-caption".into(),
+                start: 1.25,
+                end: 2.75,
+                text: "Café 字".into(),
+                words: vec![crate::CaptionWord {
+                    text: "Café".into(),
+                    start: 1.25,
+                    end: 2.0,
+                }],
+            }],
+            ..Default::default()
+        };
+        let saved: crate::CaptionTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "saved", "start": 5.0, "end": 6.0, "text": "Saved", "words": [],
+            "colorOverride": "#123456", "fadeDurationOverride": 0.75,
+        }))
+        .unwrap();
+        let generated = serde_json::json!([{
+            "id": "source-caption", "start": 1.25, "end": 2.75, "text": "Café 字",
+            "words": [{"text": "Café", "start": 1.25, "end": 2.0}],
+            "fadeDurationOverride": null, "lingerDurationOverride": null,
+            "positionOverride": null, "colorOverride": null,
+            "backgroundColorOverride": null, "fontSizeOverride": null,
+        }]);
+        for sidecar in [false, true] {
+            for timeline in 0..3 {
+                let directory = tempfile::tempdir().unwrap();
+                let meta = recording(directory.path());
+                let mut config = ProjectConfiguration {
+                    captions: (!sidecar).then(|| captions.clone()),
+                    ..Default::default()
+                };
+                if timeline > 0 {
+                    config.timeline = Some(serde_json::from_value(serde_json::json!({
+                        "segments": [], "zoomSegments": [],
+                        "captionSegments": if timeline == 2 { serde_json::to_value([&saved]).unwrap() } else { serde_json::json!([]) },
+                    })).unwrap());
+                }
+                if !sidecar || timeline > 0 {
+                    config.write(directory.path()).unwrap();
+                }
+                if sidecar {
+                    std::fs::write(
+                        directory.path().join("captions.json"),
+                        serde_json::to_vec(&captions).unwrap(),
+                    )
+                    .unwrap();
+                }
+                let loaded = meta.project_config();
+                assert_eq!(
+                    serde_json::to_value(loaded.captions.unwrap()).unwrap(),
+                    serde_json::to_value(&captions).unwrap()
+                );
+                if timeline == 0 {
+                    assert!(loaded.timeline.is_none());
+                } else {
+                    assert_eq!(
+                        serde_json::to_value(loaded.timeline.unwrap().caption_segments).unwrap(),
+                        if timeline == 1 {
+                            generated.clone()
+                        } else {
+                            serde_json::to_value([&saved]).unwrap()
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[test]

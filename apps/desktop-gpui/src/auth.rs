@@ -246,7 +246,7 @@ pub fn sign_out() -> bool {
 pub fn apply_desktop_headers(mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     request = request
         .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
-        .header("X-Cap-Desktop-Features", "googleDriveUpload");
+        .header("X-Cap-Desktop-Features", "googleDriveUpload,gpui");
     if let Ok(secret) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET")
         && !secret.is_empty()
     {

@@ -209,11 +209,12 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 	const processJobRef = useRef<(id: string) => Promise<void>>(async () => {});
 	const hydrationResolve = useRef<(() => void) | null>(null);
 	const hydrationStarted = useRef(false);
-	const hydration = useRef(
-		new Promise<void>((resolve) => {
+	const hydration = useRef<Promise<void> | null>(null);
+	if (hydration.current === null) {
+		hydration.current = new Promise<void>((resolve) => {
 			hydrationResolve.current = resolve;
-		}),
-	);
+		});
+	}
 
 	const pendingPersistQueue = useRef<RecordingUploadQueue | null>(null);
 	const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -652,7 +653,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 					);
 				}
 
-				apply({ type: "processing", id: job.id });
+				flushPersist();
 				await authClient.completeRecording(job.id, {
 					durationSeconds: job.durationSeconds,
 					totalBytes: job.totalBytes,
@@ -665,6 +666,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 						duration: segment.durationSeconds,
 					})),
 				});
+				apply({ type: "processing", id: job.id });
 				notifyLibraryChanged();
 				await refreshAuth().catch(() => undefined);
 				const directory = recordingDirectoryFromSegment(job.segments[0]);

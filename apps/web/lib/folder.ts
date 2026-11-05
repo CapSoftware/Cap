@@ -72,50 +72,52 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	if (videoIds.length === 0) return {};
 	const db = yield* Database;
 
-	// Fetch space-level sharing
-	const spaceSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: spaceVideos.videoId,
-				id: spaces.id,
-				name: spaces.name,
-				organizationId: spaces.organizationId,
-				iconUrl: spaces.iconUrl,
-				settings: spaces.settings,
-				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-			})
-			.from(spaceVideos)
-			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-			.where(
-				sql`${spaceVideos.videoId} IN (${sql.join(
-					videoIds.map((id) => sql`${id}`),
-					sql`, `,
-				)})`,
+	const [spaceSharing, orgSharing] = yield* Effect.all(
+		[
+			db.use((db) =>
+				db
+					.select({
+						videoId: spaceVideos.videoId,
+						id: spaces.id,
+						name: spaces.name,
+						organizationId: spaces.organizationId,
+						iconUrl: spaces.iconUrl,
+						settings: spaces.settings,
+						hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+					})
+					.from(spaceVideos)
+					.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+					.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+					.where(
+						sql`${spaceVideos.videoId} IN (${sql.join(
+							videoIds.map((id) => sql`${id}`),
+							sql`, `,
+						)})`,
+					),
 			),
-	);
-
-	// Fetch organization-level sharing
-	const orgSharing = yield* db.use((db) =>
-		db
-			.select({
-				videoId: sharedVideos.videoId,
-				id: organizations.id,
-				name: organizations.name,
-				organizationId: organizations.id,
-				iconUrl: organizations.iconUrl,
-			})
-			.from(sharedVideos)
-			.innerJoin(
-				organizations,
-				eq(sharedVideos.organizationId, organizations.id),
-			)
-			.where(
-				sql`${sharedVideos.videoId} IN (${sql.join(
-					videoIds.map((id) => sql`${id}`),
-					sql`, `,
-				)})`,
+			db.use((db) =>
+				db
+					.select({
+						videoId: sharedVideos.videoId,
+						id: organizations.id,
+						name: organizations.name,
+						organizationId: organizations.id,
+						iconUrl: organizations.iconUrl,
+					})
+					.from(sharedVideos)
+					.innerJoin(
+						organizations,
+						eq(sharedVideos.organizationId, organizations.id),
+					)
+					.where(
+						sql`${sharedVideos.videoId} IN (${sql.join(
+							videoIds.map((id) => sql`${id}`),
+							sql`, `,
+						)})`,
+					),
 			),
+		],
+		{ concurrency: "unbounded" },
 	);
 
 	// Combine and group by videoId
@@ -177,8 +179,53 @@ export const getVideosByFolderId = Effect.fn(function* (
 	const db = yield* Database;
 	const imageUploads = yield* ImageUploads;
 
-	const videoData = yield* db.use((db) =>
-		db
+	const videoData = yield* db.use((db) => {
+		const folderVideosPage =
+			root.variant === "space"
+				? db
+						.selectDistinct({
+							id: videos.id,
+							effectiveCreatedAt: videos.effectiveCreatedAt,
+						})
+						.from(spaceVideos)
+						.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+						.leftJoin(organizations, eq(videos.orgId, organizations.id))
+						.where(
+							and(
+								eq(spaceVideos.folderId, folderId),
+								isNull(organizations.tombstoneAt),
+							),
+						)
+						.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
+						.as("folder_videos_page")
+				: root.variant === "org"
+					? db
+							.selectDistinct({
+								id: videos.id,
+								effectiveCreatedAt: videos.effectiveCreatedAt,
+							})
+							.from(sharedVideos)
+							.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
+							.leftJoin(
+								organizations,
+								eq(sharedVideos.organizationId, organizations.id),
+							)
+							.where(
+								and(
+									eq(sharedVideos.folderId, folderId),
+									isNull(organizations.tombstoneAt),
+								),
+							)
+							.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
+							.as("folder_videos_page")
+					: db
+							.select({ id: videos.id })
+							.from(videos)
+							.where(eq(videos.folderId, folderId))
+							.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
+							.as("folder_videos_page");
+
+		return db
 			.select({
 				id: videos.id,
 				ownerId: videos.ownerId,
@@ -221,28 +268,15 @@ export const getVideosByFolderId = Effect.fn(function* (
 					),
 			})
 			.from(videos)
+			.innerJoin(folderVideosPage, eq(videos.id, folderVideosPage.id))
 			.leftJoin(comments, eq(videos.id, comments.videoId))
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-			.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 			.leftJoin(
 				organizations,
 				eq(sharedVideos.organizationId, organizations.id),
 			)
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-			.where(
-				root.variant === "space"
-					? and(
-							eq(spaceVideos.folderId, folderId),
-							isNull(organizations.tombstoneAt),
-						)
-					: root.variant === "org"
-						? and(
-								eq(sharedVideos.folderId, folderId),
-								isNull(organizations.tombstoneAt),
-							)
-						: eq(videos.folderId, folderId),
-			)
 			.groupBy(
 				videos.id,
 				videos.ownerId,
@@ -258,25 +292,28 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.password,
 				users.name,
 			)
-			.orderBy(desc(videos.effectiveCreatedAt)),
-	);
+			.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id));
+	});
 
-	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = yield* getSharedSpacesForVideos(videoIds);
 	const orgIds = Array.from(new Set(videoData.map((video) => video.orgId)));
-	const organizationSettingsRows =
-		orgIds.length > 0
-			? yield* db.use((db) =>
-					db
-						.select({
-							id: organizations.id,
-							settings: organizations.settings,
-						})
-						.from(organizations)
-						.where(inArray(organizations.id, orgIds)),
-				)
-			: [];
+	const [sharedSpacesMap, organizationSettingsRows] = yield* Effect.all(
+		[
+			getSharedSpacesForVideos(videoIds),
+			orgIds.length > 0
+				? db.use((db) =>
+						db
+							.select({
+								id: organizations.id,
+								settings: organizations.settings,
+							})
+							.from(organizations)
+							.where(inArray(organizations.id, orgIds)),
+					)
+				: Effect.succeed([]),
+		],
+		{ concurrency: "unbounded" },
+	);
 	const organizationSettingsById = Object.fromEntries(
 		organizationSettingsRows.map((organization) => [
 			organization.id,

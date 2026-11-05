@@ -1,19 +1,24 @@
-import { db } from "@cap/database";
 import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { users } from "@cap/database/schema";
+import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
-import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import type Stripe from "stripe";
+import { ensureStripeCustomerId } from "@/lib/checkout/customer";
+import { customCheckoutEnabled } from "@/lib/checkout/enabled";
+import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import {
+	createWithReferralDiscount,
+	referralDiscountForCheckout,
+	referralDiscountMetadata,
+	referralDiscountParams,
+} from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
-	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const { priceId, quantity, isOnBoarding, hosted } = await request.json();
 
 	const environment =
 		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
@@ -44,63 +49,64 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: true, auth: false }, { status: 401 });
 	}
 
+	const plan = planForPriceId(priceId, environment);
+	const inAppCheckout = plan && hosted !== true && customCheckoutEnabled();
+
 	if (userIsPro(user)) {
+		if (plan && inAppCheckout) {
+			return Response.json(
+				{ url: checkoutPath({ plan, seats: safeQuantity }) },
+				{ status: 200 },
+			);
+		}
 		console.error("User already has pro plan");
 		return Response.json({ error: true, subscription: true }, { status: 400 });
 	}
 
-	try {
-		if (!user.stripeCustomerId) {
-			const existingCustomers = await stripe().customers.list({
-				email: user.email,
-				limit: 1,
-			});
-
-			let customer: Stripe.Customer;
-			if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-				customer = existingCustomers.data[0];
-
-				customer = await stripe().customers.update(customer.id, {
-					metadata: {
-						...customer.metadata,
-						userId: user.id,
-					},
-				});
-			} else {
-				customer = await stripe().customers.create({
-					email: user.email,
-					metadata: {
-						userId: user.id,
-					},
-				});
-			}
-
-			await db()
-				.update(users)
-				.set({
-					stripeCustomerId: customer.id,
-				})
-				.where(eq(users.id, user.id));
-			customerId = customer.id;
-		}
-
-		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: safeQuantity }],
-			mode: "subscription",
-			success_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/onboarding`
-				: `${serverEnv().WEB_URL}/pricing`,
-			allow_promotion_codes: true,
-			metadata: {
-				platform: "web",
-				dubCustomerId: user.id,
-				isOnBoarding: isOnBoarding ? "true" : "false",
+	if (plan && inAppCheckout) {
+		return Response.json(
+			{
+				url: checkoutPath({
+					plan,
+					seats: safeQuantity,
+					onboarding: Boolean(isOnBoarding),
+				}),
 			},
-		});
+			{ status: 200 },
+		);
+	}
+
+	try {
+		const [customerId, referralDiscount] = await Promise.all([
+			ensureStripeCustomerId(user),
+			referralDiscountForCheckout(
+				user,
+				request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
+			),
+		]);
+
+		const checkoutSession = await createWithReferralDiscount(
+			referralDiscount,
+			(discount) =>
+				stripe().checkout.sessions.create({
+					customer: customerId,
+					line_items: [{ price: priceId, quantity: safeQuantity }],
+					mode: "subscription",
+					success_url: isOnBoarding
+						? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+						: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+					cancel_url: isOnBoarding
+						? `${serverEnv().WEB_URL}/onboarding`
+						: `${serverEnv().WEB_URL}/pricing`,
+					...referralDiscountParams(discount),
+					metadata: {
+						platform: "web",
+						dubCustomerId: user.id,
+						isOnBoarding: isOnBoarding ? "true" : "false",
+						...referralDiscountMetadata(discount),
+					},
+				}),
+		);
 
 		if (checkoutSession.url) {
 			trackServerEvent(user.id, "checkout_started", {

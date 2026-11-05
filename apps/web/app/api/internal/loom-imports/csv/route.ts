@@ -115,6 +115,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							orgId: organizationId,
 							actorId: organization.ownerId,
 							allowFolders: true,
+							importPriority: "bulk",
 						}),
 					);
 					return {

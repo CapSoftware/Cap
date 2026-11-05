@@ -22,6 +22,8 @@ import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { parsePageParam } from "@/lib/page-param";
+import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
@@ -132,8 +134,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		redirect("/login");
 	}
 
-	const page = Number(searchParams.page) || 1;
-	const limit = Number(searchParams.limit) || 15;
+	const page = parsePageParam(searchParams.page);
+	const limit = parsePageParam(searchParams.limit, 15);
 
 	const userId = user.id;
 	const offset = (page - 1) * limit;
@@ -150,6 +152,23 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				isNull(organizations.tombstoneAt),
 			),
 		);
+
+	const capsPage = db()
+		.select({ id: videos.id })
+		.from(videos)
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(videos.orgId, user.activeOrganizationId),
+				isNull(videos.folderId),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
+		.limit(limit)
+		.offset(offset)
+		.as("caps_page");
 
 	const videoDataPromise = db()
 		.select({
@@ -192,18 +211,11 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			settings: videos.settings,
 		})
 		.from(videos)
+		.innerJoin(capsPage, eq(videos.id, capsPage.id))
 		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(
-			and(
-				eq(videos.ownerId, userId),
-				eq(videos.orgId, user.activeOrganizationId),
-				isNull(videos.folderId),
-				isNull(organizations.tombstoneAt),
-			),
-		)
 		.groupBy(
 			videos.id,
 			videos.ownerId,
@@ -219,9 +231,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.orgId,
 			users.name,
 		)
-		.orderBy(desc(videos.effectiveCreatedAt))
-		.limit(limit)
-		.offset(offset);
+		.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id));
 
 	const foldersDataPromise = db()
 		.select({
@@ -264,6 +274,12 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const organizationSettings = organizationSettingsRow?.settings ?? null;
 
 	const videoIds = videoData.map((video) => video.id);
+	const thumbnails = seedThumbnailUrls(
+		user,
+		videoData
+			.filter((video) => !video.hasActiveUpload)
+			.map((video) => Video.VideoId.make(video.id)),
+	);
 	const sharedSpacesMap =
 		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
@@ -332,6 +348,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			data={processedVideoData}
 			folders={foldersData}
 			count={totalCount}
+			thumbnails={thumbnails}
 			analyticsEnabled={Boolean(
 				serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
 			)}

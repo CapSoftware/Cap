@@ -1,0 +1,21 @@
+{
+	"version": 2,
+	"video_init_uploaded": true,
+	"audio_init_uploaded": false,
+	"video_segments": [
+		{
+			"index": 1,
+			"duration": 2.0
+		},
+		{
+			"index": 2,
+			"duration": 2.0
+		},
+		{
+			"index": 3,
+			"duration": 1.25
+		}
+	],
+	"audio_segments": [],
+	"is_complete": true
+}

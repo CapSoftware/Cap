@@ -22,6 +22,7 @@ import {
 	importRequestSchema,
 	runLoomImport,
 } from "./job";
+import { previewRequestSchema, renderPreviewGif } from "./preview";
 
 function positiveInt(value: string | undefined, fallback: number): number {
 	const parsed = Number.parseInt(value ?? "", 10);
@@ -52,17 +53,25 @@ export function loadImporterSettings(
 	return {
 		settings,
 		maxActiveJobs: positiveInt(env.LOOM_IMPORTER_MAX_JOBS, 16),
+		maxCustomerJobs: positiveInt(env.LOOM_IMPORTER_CUSTOMER_JOBS, 16),
 		maxQueuedJobs: positiveInt(env.LOOM_IMPORTER_MAX_QUEUED, 400),
+		maxPreviewJobs: positiveInt(env.LOOM_IMPORTER_PREVIEW_JOBS, 4),
 	};
 }
 
 const JOB_LIFETIME_MS = 4 * 60 * 60 * 1000;
+const PREVIEW_TIMEOUT_MS = 120_000;
 const JOB_HEARTBEAT_MS = 60_000;
 
 interface QueuedImport {
 	jobId: string;
 	request: ImportRequest;
 }
+
+type ImportLane = "customer" | "bulk";
+
+const laneOf = (request: ImportRequest): ImportLane =>
+	request.importPriority === "customer" ? "customer" : "bulk";
 
 function isActive(job: Job) {
 	return (
@@ -75,9 +84,17 @@ function isActive(job: Job) {
 export function createLoomImporter(
 	config: ReturnType<typeof loadImporterSettings> = loadImporterSettings(),
 ) {
-	const queue: QueuedImport[] = [];
+	const queues: Record<ImportLane, QueuedImport[]> = {
+		customer: [],
+		bulk: [],
+	};
+	const queuedCount = () => queues.customer.length + queues.bulk.length;
+	const queuedEntries = () => [...queues.customer, ...queues.bulk];
 	const running = new Map<string, AbortController>();
+	let runningCustomer = 0;
 	let draining = false;
+	const previewSemaphore = new Semaphore(config.maxPreviewJobs);
+	const previews = new Set<AbortController>();
 
 	const startJob = ({ jobId, request }: QueuedImport) =>
 		createJob(
@@ -88,10 +105,46 @@ export function createLoomImporter(
 			request.webhookSecret,
 		);
 
+	const canStart = (lane: ImportLane) =>
+		running.size <
+		config.maxActiveJobs +
+			(lane === "customer"
+				? config.maxCustomerJobs
+				: Math.min(runningCustomer, config.maxCustomerJobs));
+
+	const nextImport = () => {
+		if (queues.customer.length > 0 && canStart("customer"))
+			return queues.customer.shift();
+		if (queues.bulk.length > 0 && canStart("bulk")) return queues.bulk.shift();
+		return undefined;
+	};
+
+	const recordUnexpectedFailure = (
+		jobId: string,
+		controller: AbortController,
+		error: unknown,
+	) => {
+		console.error(`[loom-importer] ${jobId} import ended unexpectedly`, error);
+		const job = getJob(jobId);
+		if (!job || !isActive(job)) return;
+		const cancelled = controller.signal.aborted;
+		const failed = updateJob(jobId, {
+			phase: cancelled ? "cancelled" : "error",
+			progress: 0,
+			error: cancelled
+				? undefined
+				: error instanceof Error
+					? error.message
+					: String(error),
+			message: cancelled ? "Server shutting down" : "Loom import failed",
+		});
+		if (failed) void sendWebhook(failed);
+	};
+
 	const pump = () => {
-		while (running.size < config.maxActiveJobs && queue.length > 0) {
-			const next = queue.shift();
-			if (!next) break;
+		for (let next = nextImport(); next; next = nextImport()) {
+			const customer = laneOf(next.request) === "customer";
+			if (customer) runningCustomer++;
 			const job = startJob(next);
 			const controller = new AbortController();
 			updateJob(job.jobId, { abortController: controller });
@@ -107,11 +160,14 @@ export function createLoomImporter(
 				config.settings,
 				new Semaphore(config.settings.jobConnections),
 				controller.signal,
-			).finally(() => {
-				clearInterval(heartbeat);
-				running.delete(job.jobId);
-				pump();
-			});
+			)
+				.catch((error) => recordUnexpectedFailure(job.jobId, controller, error))
+				.finally(() => {
+					clearInterval(heartbeat);
+					if (customer) runningCustomer--;
+					running.delete(job.jobId);
+					pump();
+				});
 		}
 	};
 
@@ -121,7 +177,7 @@ export function createLoomImporter(
 		c.json({
 			status: draining ? "draining" : "ok",
 			running: running.size,
-			queued: queue.length,
+			queued: queuedCount(),
 		}),
 	);
 
@@ -135,8 +191,11 @@ export function createLoomImporter(
 			loomDeferredOriginals: true,
 			draining,
 			running: running.size,
-			queued: queue.length,
+			queued: queuedCount(),
+			runningCustomer,
+			queuedCustomer: queues.customer.length,
 			maxActiveJobs: config.maxActiveJobs,
+			maxCustomerJobs: config.maxCustomerJobs,
 			maxQueuedJobs: config.maxQueuedJobs,
 			jobs: getAllJobs()
 				.filter(isActive)
@@ -146,7 +205,16 @@ export function createLoomImporter(
 					phase: job.phase,
 					progress: job.progress,
 					ageSeconds: Math.round((Date.now() - job.createdAt) / 1000),
-				})),
+				}))
+				.concat(
+					queuedEntries().map((entry) => ({
+						jobId: entry.jobId,
+						videoId: entry.request.videoId,
+						phase: "queued" as Job["phase"],
+						progress: 0,
+						ageSeconds: 0,
+					})),
+				),
 		});
 	});
 
@@ -165,7 +233,8 @@ export function createLoomImporter(
 				},
 				400,
 			);
-		if (draining || queue.length >= config.maxQueuedJobs) {
+		const lane = laneOf(parsed.data);
+		if (draining || queues[lane].length >= config.maxQueuedJobs) {
 			c.header("Retry-After", "30");
 			return c.json(
 				{
@@ -179,7 +248,7 @@ export function createLoomImporter(
 			);
 		}
 		const jobId = generateJobId();
-		queue.push({ jobId, request: parsed.data });
+		queues[lane].push({ jobId, request: parsed.data });
 		pump();
 		return c.json({
 			jobId,
@@ -188,13 +257,51 @@ export function createLoomImporter(
 		});
 	});
 
+	app.post("/video/preview-gif", async (c) => {
+		if (!validateMediaServerSecret(c))
+			return c.json({ error: "Unauthorized" }, 401);
+		if (draining)
+			return c.json(
+				{ error: "Importer is draining", code: "SERVER_BUSY" },
+				503,
+			);
+		const parsed = previewRequestSchema.safeParse(
+			await c.req.json().catch(() => null),
+		);
+		if (!parsed.success)
+			return c.json({ error: "Invalid request", code: "INVALID_REQUEST" }, 400);
+		if (previews.size >= config.maxPreviewJobs * 2)
+			return c.json(
+				{ error: "Preview queue is full", code: "SERVER_BUSY" },
+				503,
+			);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), PREVIEW_TIMEOUT_MS);
+		previews.add(controller);
+		try {
+			await previewSemaphore.run(() =>
+				renderPreviewGif(parsed.data, controller.signal),
+			);
+			return c.json({ ok: true });
+		} catch (error) {
+			console.warn("[loom-importer] Preview GIF failed", error);
+			return c.json(
+				{ error: "Preview GIF failed", code: "PREVIEW_FAILED" },
+				502,
+			);
+		} finally {
+			clearTimeout(timeout);
+			previews.delete(controller);
+		}
+	});
+
 	app.get("/video/process/:jobId/status", (c) => {
 		if (!validateMediaServerSecret(c))
 			return c.json({ error: "Unauthorized" }, 401);
 		const jobId = c.req.param("jobId");
 		const job = getJob(jobId);
 		if (job) return c.json(getJobProgress(job));
-		const queued = queue.find((entry) => entry.jobId === jobId);
+		const queued = queuedEntries().find((entry) => entry.jobId === jobId);
 		if (queued)
 			return c.json({
 				jobId,
@@ -218,19 +325,25 @@ export function createLoomImporter(
 	const drain = async (timeoutMs: number) => {
 		draining = true;
 		const deadline = Date.now() + timeoutMs;
-		while ((queue.length > 0 || running.size > 0) && Date.now() < deadline)
+		while (
+			(queuedCount() > 0 || running.size > 0 || previews.size > 0) &&
+			Date.now() < deadline
+		)
 			await new Promise((resolve) => setTimeout(resolve, 500));
+		for (const controller of previews) controller.abort();
 		await Promise.all(
-			queue.splice(0).map((entry) => cancelJob(startJob(entry))),
+			[...queues.customer.splice(0), ...queues.bulk.splice(0)].map((entry) =>
+				cancelJob(startJob(entry)),
+			),
 		);
 		for (const controller of running.values()) controller.abort();
-		while (running.size > 0)
+		while (running.size > 0 || previews.size > 0)
 			await new Promise((resolve) => setTimeout(resolve, 250));
 	};
 
 	return {
 		app,
 		drain,
-		stats: () => ({ running: running.size, queued: queue.length }),
+		stats: () => ({ running: running.size, queued: queuedCount() }),
 	};
 }

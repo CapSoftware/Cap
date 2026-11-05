@@ -362,8 +362,16 @@ export default function UploadScreen() {
 				await new Promise((resolve) => setTimeout(resolve, delayMs));
 				if (!isActive()) return;
 
-				const detail = await auth.client.getCap(capId);
+				const detail = await auth.client.getCap(capId).catch(() => null);
 				if (!isActive()) return;
+				if (!detail) {
+					dispatchIfMounted({
+						type: "processing",
+						id: queueItemId,
+						message: "Unable to check processing. Retrying...",
+					});
+					continue;
+				}
 				const action = uploadQueueActionFromCapUpload(
 					queueItemId,
 					detail.cap.upload,

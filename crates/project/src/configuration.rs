@@ -5,7 +5,7 @@ use std::{
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
 
 use cap_cursor_info::CursorFamily;
@@ -15,7 +15,12 @@ use specta::Type;
 use crate::DisplayNotch;
 
 #[cfg(test)]
+mod clip_transition_tests;
+mod markers;
+#[cfg(test)]
 mod style_resolution_tests;
+
+pub use markers::{PlacedMarker, TimelineMarker};
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1799,21 +1804,139 @@ pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
 /// (and to fade back in before leaving the hidden run).
 pub const CLIP_CURSOR_FADE_SECS: f64 = 0.3;
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClipTransitionType {
     #[default]
     CrossFade,
     FadeThroughBlack,
+    FadeThroughWhite,
+    PushLeft,
+    PushRight,
+    PushUp,
+    PushDown,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    Zoom,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
-#[serde(rename_all = "camelCase")]
+impl ClipTransitionType {
+    pub const ALL: [Self; 12] = [
+        Self::CrossFade,
+        Self::FadeThroughBlack,
+        Self::FadeThroughWhite,
+        Self::PushLeft,
+        Self::PushRight,
+        Self::PushUp,
+        Self::PushDown,
+        Self::WipeLeft,
+        Self::WipeRight,
+        Self::WipeUp,
+        Self::WipeDown,
+        Self::Zoom,
+    ];
+
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::CrossFade => "cross-fade",
+            Self::FadeThroughBlack => "fade-through-black",
+            Self::FadeThroughWhite => "fade-through-white",
+            Self::PushLeft => "push-left",
+            Self::PushRight => "push-right",
+            Self::PushUp => "push-up",
+            Self::PushDown => "push-down",
+            Self::WipeLeft => "wipe-left",
+            Self::WipeRight => "wipe-right",
+            Self::WipeUp => "wipe-up",
+            Self::WipeDown => "wipe-down",
+            Self::Zoom => "zoom",
+        }
+    }
+
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.wire_name() == name)
+    }
+
+    /// The kind written to the `type` field, which 0.6.2 and earlier read
+    /// and reject anything but these two. A dip keeps dipping there so its
+    /// audio matches; every other kind plays as a crossfade.
+    pub fn legacy_fallback(self) -> Self {
+        match self {
+            Self::FadeThroughBlack | Self::FadeThroughWhite => Self::FadeThroughBlack,
+            _ => Self::CrossFade,
+        }
+    }
+
+    /// Dips pass through silence (and a solid colour); every other kind
+    /// blends the two clips' audio with an equal-power crossfade.
+    pub fn dips(self) -> bool {
+        matches!(self, Self::FadeThroughBlack | Self::FadeThroughWhite)
+    }
+}
+
+/// A transition on the boundary between `segments[segment_index - 1]` and
+/// `segments[segment_index]`. The two clips overlap by `duration` output
+/// seconds, so every transition shortens the timeline by its duration.
+///
+/// On disk, `type` only ever holds a kind 0.6.2 understands and `effect`
+/// carries the real kind when it differs, so projects stay loadable there.
+#[derive(Type, Clone, Copy, Debug, PartialEq)]
 pub struct ClipTransition {
     pub segment_index: u32,
-    #[serde(rename = "type")]
     pub kind: ClipTransitionType,
     pub duration: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionOut {
+    segment_index: u32,
+    #[serde(rename = "type")]
+    legacy_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect: Option<&'static str>,
+    duration: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipTransitionIn {
+    segment_index: u32,
+    #[serde(rename = "type", default)]
+    legacy_kind: Option<String>,
+    #[serde(default)]
+    effect: Option<String>,
+    duration: f64,
+}
+
+impl Serialize for ClipTransition {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let legacy = self.kind.legacy_fallback();
+        ClipTransitionOut {
+            segment_index: self.segment_index,
+            legacy_kind: legacy.wire_name(),
+            effect: (legacy != self.kind).then(|| self.kind.wire_name()),
+            duration: self.duration,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClipTransition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ClipTransitionIn::deserialize(deserializer)?;
+        let parse = |name: Option<&str>| name.and_then(ClipTransitionType::from_wire_name);
+        let kind = parse(wire.effect.as_deref())
+            .or_else(|| parse(wire.legacy_kind.as_deref()))
+            .unwrap_or_default();
+        Ok(Self {
+            segment_index: wire.segment_index,
+            kind,
+            duration: wire.duration,
+        })
+    }
 }
 
 fn deserialize_clip_transitions<'de, D>(deserializer: D) -> Result<Vec<ClipTransition>, D::Error>
@@ -1864,6 +1987,8 @@ pub struct TimelineConfiguration {
     pub style_segments: Vec<StyleSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_segments: Vec<ImageSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shape_segments: Vec<crate::ShapeSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -1970,7 +2095,11 @@ impl TimelineConfiguration {
     /// Output-time windows where a fullscreen text segment pauses the
     /// recording clock, sorted and merged. Empty for every project without
     /// fullscreen text — the mapping below then short-circuits to the exact
-    /// pre-hold arithmetic.
+    /// pre-hold arithmetic. A hold that starts after the clips have ended
+    /// (a text card left there by a clip trim or delete, which do not ripple
+    /// text) has no frame to hold and is never reached, so it is left out
+    /// and adds nothing to `duration()`; one starting exactly at the end is
+    /// a closing title and stays.
     pub fn hold_windows(&self) -> Vec<(f64, f64)> {
         let mut windows: Vec<(f64, f64)> = self
             .text_segments
@@ -1989,6 +2118,15 @@ impl TimelineConfiguration {
             } else {
                 false
             }
+        });
+        let clips_end = self.clips_duration();
+        let mut held = 0.0;
+        windows.retain(|(start, end)| {
+            if start - held > clips_end + CLOSING_HOLD_TOLERANCE {
+                return false;
+            }
+            held += end - start;
+            true
         });
         windows
     }
@@ -2089,9 +2227,9 @@ impl TimelineConfiguration {
         }
 
         let mut segment_start = 0.0;
+        let mut incoming: Option<ClipTransition> = None;
 
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let incoming = self.effective_transition(segment_index);
             let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
 
             if let Some(transition) = incoming {
@@ -2141,6 +2279,7 @@ impl TimelineConfiguration {
             }
 
             segment_start += segment.duration() - next_duration;
+            incoming = next_transition;
         }
 
         None
@@ -2361,6 +2500,19 @@ pub struct CaptionSettings {
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
     pub uppercase: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub show_filler_words: bool,
+    /// The language whose hesitation fillers these captions hide, set when
+    /// they are generated: only English is supported, and captions from
+    /// before it existed hide nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filler_language: Option<String>,
+}
+
+impl CaptionSettings {
+    pub fn hides_fillers(&self) -> bool {
+        !self.show_filler_words && self.filler_language.as_deref() == Some("en")
+    }
 }
 
 impl CaptionSettings {
@@ -2426,6 +2578,8 @@ impl Default for CaptionSettings {
             animation: Self::default_animation(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
+            show_filler_words: false,
+            filler_language: None,
         }
     }
 }
@@ -2643,6 +2797,16 @@ pub enum OverlayTrackKind {
     Mask,
     Image,
     Text,
+    Shape,
+}
+
+impl OverlayTrackKind {
+    /// Kinds every shipped build can parse. 0.6.2 and earlier fail to load a
+    /// project whose `overlayOrder` names any other kind, so newer kinds are
+    /// kept out of that field.
+    pub fn is_legacy(self) -> bool {
+        !matches!(self, Self::Shape)
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2662,8 +2826,17 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    /// The saved stacking order, restricted to [`OverlayTrackKind::is_legacy`]
+    /// kinds so older builds can still open the project. Read and write the
+    /// order through [`ProjectConfiguration::overlay_order`] and
+    /// [`ProjectConfiguration::set_overlay_order`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_order: Vec<OverlayTrack>,
+    /// The full saved stacking order whenever it includes a newer track kind.
+    /// Builds that do not know this field drop it, and fall back to
+    /// `overlay_order`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order_with_shapes: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2693,6 +2866,12 @@ pub struct ProjectConfiguration {
     /// durations from `fade_duration`.
     #[serde(default)]
     pub text_anim_version: u32,
+    #[serde(
+        default,
+        deserialize_with = "markers::deserialize_markers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub markers: Vec<TimelineMarker>,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
@@ -2734,6 +2913,7 @@ impl Default for ProjectConfiguration {
             hotkeys: Default::default(),
             timeline: Default::default(),
             overlay_order: Vec::new(),
+            overlay_order_with_shapes: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2744,19 +2924,142 @@ impl Default for ProjectConfiguration {
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
+            markers: Vec::new(),
         }
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ProjectStyleCache {
+    cached: Mutex<Option<CachedStyle>>,
+}
+
+#[derive(Debug)]
+struct CachedStyle {
+    source: Weak<ProjectConfiguration>,
+    styles: [Option<usize>; 3],
+    project: Arc<ProjectConfiguration>,
+}
+
+impl CachedStyle {
+    fn matches(&self, source: &Weak<ProjectConfiguration>, styles: [Option<usize>; 3]) -> bool {
+        self.source.ptr_eq(source) && self.styles == styles
+    }
+}
+
+impl ProjectStyleCache {
+    pub fn resolve(
+        &self,
+        project: &Arc<ProjectConfiguration>,
+        time: f64,
+    ) -> Arc<ProjectConfiguration> {
+        let styles = project.style_indices_at(time);
+        if styles == [None; 3] {
+            return Arc::clone(project);
+        }
+
+        // A Weak keeps the allocation identity alive and makes Arc::make_mut
+        // detach before editing, even when the source has only one strong owner.
+        let source = Arc::downgrade(project);
+        {
+            let cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+        }
+
+        let resolved = Arc::new(project.style_at(time).into_owned());
+        let previous = {
+            let mut cached = self.cached.lock().unwrap();
+            if let Some(cached) = cached
+                .as_ref()
+                .filter(|cached| cached.matches(&source, styles))
+            {
+                return Arc::clone(&cached.project);
+            }
+            cached.replace(CachedStyle {
+                source,
+                styles,
+                project: Arc::clone(&resolved),
+            })
+        };
+        drop(previous);
+        resolved
+    }
+}
+
 impl ProjectConfiguration {
+    pub fn with_preset(&self, mut preset: Self) -> Self {
+        let settings = preset.captions.take().map(|captions| captions.settings);
+        preset.captions = match (self.captions.clone(), settings) {
+            (Some(mut captions), settings) => {
+                let filler_language = captions.settings.filler_language.take();
+                captions.settings = CaptionSettings {
+                    filler_language,
+                    ..settings.unwrap_or_default()
+                };
+                Some(captions)
+            }
+            (None, Some(settings)) => Some(CaptionsData {
+                settings: CaptionSettings {
+                    filler_language: None,
+                    ..settings
+                },
+                ..Default::default()
+            }),
+            (None, None) => None,
+        };
+        preset.timeline = self.timeline.clone();
+        preset.text_size_version = self.text_size_version;
+        preset.text_anim_version = self.text_anim_version;
+        preset.overlay_order = self.overlay_order.clone();
+        preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
+        preset.clips = self.clips.clone();
+        preset.markers = self.markers.clone();
+        preset
+    }
+
+    /// The saved overlay stacking order, top first.
+    pub fn overlay_order(&self) -> &[OverlayTrack] {
+        if self.overlay_order_with_shapes.is_empty() {
+            &self.overlay_order
+        } else {
+            &self.overlay_order_with_shapes
+        }
+    }
+
+    pub fn has_overlay_order(&self) -> bool {
+        !self.overlay_order().is_empty()
+    }
+
+    /// Saves `order`, writing the newer kinds only to the field older builds
+    /// ignore.
+    pub fn set_overlay_order(&mut self, order: Vec<OverlayTrack>) {
+        if order.iter().all(|track| track.kind.is_legacy()) {
+            self.overlay_order = order;
+            self.overlay_order_with_shapes.clear();
+        } else {
+            self.overlay_order = order
+                .iter()
+                .copied()
+                .filter(|track| track.kind.is_legacy())
+                .collect();
+            self.overlay_order_with_shapes = order;
+        }
+    }
+
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
         for track in available {
-            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+            if !saved.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
         }
-        for track in &self.overlay_order {
+        for track in saved {
             if available.contains(track) && !ordered.contains(track) {
                 ordered.push(*track);
             }
@@ -2774,6 +3077,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Text,
                 timeline
                     .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Shape,
+                timeline
+                    .shape_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -2839,12 +3150,12 @@ impl ProjectConfiguration {
             .unwrap_or(&self.cursor)
     }
 
-    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+    fn style_indices_at(&self, time: f64) -> [Option<usize>; 3] {
+        let mut selected: [Option<usize>; 3] = [None; 3];
         let Some(timeline) = &self.timeline else {
-            return Cow::Borrowed(self);
+            return selected;
         };
-        let mut selected: [Option<&StyleSegment>; 3] = [None; 3];
-        for segment in &timeline.style_segments {
+        for (index, segment) in timeline.style_segments.iter().enumerate() {
             if !segment.is_active_at(time) {
                 continue;
             }
@@ -2855,25 +3166,37 @@ impl ProjectConfiguration {
             ]) {
                 if present
                     && current.is_none_or(|previous| {
+                        let previous = &timeline.style_segments[previous];
                         segment.track > previous.track
                             || (segment.track == previous.track && segment.start >= previous.start)
                     })
                 {
-                    *current = Some(segment);
+                    *current = Some(index);
                 }
             }
         }
-        let [background, camera, cursor] = selected;
+        selected
+    }
+
+    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let Some(timeline) = &self.timeline else {
+            return Cow::Borrowed(self);
+        };
+        let [background, camera, cursor] = self.style_indices_at(time);
         let mut configuration = Cow::Borrowed(self);
-        if let Some(background) =
-            background.and_then(|segment| segment.overrides.background.as_ref())
+        if let Some(background) = background
+            .and_then(|index| timeline.style_segments[index].overrides.background.as_ref())
         {
             configuration.to_mut().background = background.clone();
         }
-        if let Some(camera) = camera.and_then(|segment| segment.overrides.camera.as_ref()) {
+        if let Some(camera) =
+            camera.and_then(|index| timeline.style_segments[index].overrides.camera.as_ref())
+        {
             configuration.to_mut().camera = camera.clone();
         }
-        if let Some(cursor) = cursor.and_then(|segment| segment.overrides.cursor.as_ref()) {
+        if let Some(cursor) =
+            cursor.and_then(|index| timeline.style_segments[index].overrides.cursor.as_ref())
+        {
             configuration.to_mut().cursor = cursor.clone();
         }
         configuration
@@ -3155,6 +3478,36 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn filler_settings_are_off_for_old_projects_and_only_written_when_set() {
+        let legacy: CaptionSettings =
+            serde_json::from_str(r#"{"enabled":true,"uppercase":true}"#).unwrap();
+        assert!(!legacy.show_filler_words);
+        let written = serde_json::to_value(&legacy).unwrap();
+        assert!(written.get("showFillerWords").is_none());
+
+        assert!(written.get("fillerLanguage").is_none());
+        assert!(!legacy.hides_fillers());
+
+        let english = CaptionSettings {
+            filler_language: Some("en".into()),
+            ..legacy.clone()
+        };
+        assert!(english.hides_fillers());
+        let shown = CaptionSettings {
+            show_filler_words: true,
+            ..english
+        };
+        assert!(!shown.hides_fillers());
+        let written = serde_json::to_value(&shown).unwrap();
+        assert_eq!(written["showFillerWords"], Value::Bool(true));
+        assert_eq!(written["fillerLanguage"], Value::from("en"));
+        let restored: CaptionSettings = serde_json::from_value(written).unwrap();
+        assert!(restored.show_filler_words);
+        assert_eq!(restored.filler_language.as_deref(), Some("en"));
+        assert!(restored.uppercase);
+    }
+
+    #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
         let legacy: AudioConfiguration =
             serde_json::from_str(r#"{"improve":true,"micVolumeDb":-3.0}"#).unwrap();
@@ -3233,6 +3586,7 @@ mod tests {
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
     }
@@ -3859,6 +4213,34 @@ mod tests {
     }
 
     #[test]
+    fn holds_left_past_the_end_of_the_clips_are_not_counted() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 3.2;
+        timeline.text_segments = vec![
+            fullscreen_text(1.0, 2.0),
+            fullscreen_text(4.2, 5.0),
+            fullscreen_text(6.4, 7.4),
+            fullscreen_text(9.0, 9.5),
+        ];
+
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0), (4.2, 5.0)]);
+        assert_eq!(timeline.duration(), 5.0);
+        for frame in 0..150 {
+            let time = f64::from(frame) / 30.0;
+            assert!(
+                timeline.get_frame_mapping(time).is_some(),
+                "no source at output time {time}"
+            );
+        }
+        assert!(timeline.get_frame_mapping(5.0).is_none());
+
+        timeline.segments[0].end = 2.0;
+        assert_eq!(timeline.hold_windows(), vec![(1.0, 2.0)]);
+        assert_eq!(timeline.duration(), 3.0);
+    }
+
+    #[test]
     fn fullscreen_title_does_not_create_a_source_for_an_empty_timeline() {
         let mut timeline = timeline_with_transitions(Vec::new());
         timeline.text_segments = vec![fullscreen_text(0.0, 3.0)];
@@ -3982,6 +4364,103 @@ mod tests {
                 && incoming.source_time == 10.5
                 && progress == 0.5
         ));
+    }
+
+    #[test]
+    fn adjacent_transition_mapping_matches_independent_clip_offsets() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let template = timeline.segments[0].clone();
+        timeline.segments = (0..8)
+            .map(|index| {
+                let timescale = [0.5, 1.0, 2.0][index % 3];
+                TimelineSegment {
+                    recording_clip: index as u32,
+                    start: index as f64 * 10.0,
+                    end: index as f64 * 10.0 + 4.0 * timescale,
+                    timescale,
+                    ..template.clone()
+                }
+            })
+            .collect();
+        timeline.transitions = [1.0, 0.5, 999.0, f64::NAN, 0.0, 1.0, f64::INFINITY, 1.5, 1.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, duration)| ClipTransition {
+                segment_index: index as u32,
+                duration,
+                kind: if index % 2 == 0 {
+                    ClipTransitionType::CrossFade
+                } else {
+                    ClipTransitionType::FadeThroughBlack
+                },
+            })
+            .collect();
+        let offsets = crate::caption_timing::clip_timeline_offsets(&timeline);
+        for (index, segment) in timeline.segments.iter().enumerate() {
+            let start = offsets[index];
+            let incoming = timeline.effective_transition(index);
+            let next = timeline.effective_transition(index + 1);
+            let single_start = start + incoming.map_or(0.0, |transition| transition.duration);
+            let end =
+                start + segment.duration() - next.map_or(0.0, |transition| transition.duration);
+            for time in [single_start, (single_start + end) / 2.0, end.next_down()] {
+                let Some(TimelineFrameMapping::Single { source, output_end }) =
+                    timeline.get_frame_mapping(time)
+                else {
+                    panic!("expected single source at {time}");
+                };
+                assert_eq!(source.segment_index, index);
+                assert!(std::ptr::eq(source.segment, segment));
+                assert_eq!(
+                    source.source_time.to_bits(),
+                    (segment.start + (time - start) * segment.timescale).to_bits()
+                );
+                assert_eq!(output_end.to_bits(), end.to_bits());
+            }
+            if let Some(expected) = incoming {
+                for elapsed in [0.0, expected.duration / 2.0, expected.duration.next_down()] {
+                    let time = start + elapsed;
+                    if time >= start + expected.duration {
+                        continue;
+                    }
+                    let Some(TimelineFrameMapping::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                        duration,
+                        output_end,
+                    }) = timeline.get_frame_mapping(time)
+                    else {
+                        panic!("expected transition at {time}");
+                    };
+                    let previous = &timeline.segments[index - 1];
+                    let elapsed = time - start;
+                    assert_eq!(
+                        (outgoing.segment_index, incoming.segment_index),
+                        (index - 1, index)
+                    );
+                    assert!(std::ptr::eq(outgoing.segment, previous));
+                    assert!(std::ptr::eq(incoming.segment, segment));
+                    assert_eq!(
+                        outgoing.source_time.to_bits(),
+                        (previous.end - (expected.duration - elapsed) * previous.timescale)
+                            .to_bits()
+                    );
+                    assert_eq!(
+                        incoming.source_time.to_bits(),
+                        (segment.start + elapsed * segment.timescale).to_bits()
+                    );
+                    assert_eq!(kind, expected.kind);
+                    assert_eq!(duration.to_bits(), expected.duration.to_bits());
+                    assert_eq!(progress.to_bits(), (elapsed / duration).to_bits());
+                    assert_eq!(output_end.to_bits(), (start + duration).to_bits());
+                }
+            }
+        }
+        for time in [-1.0, timeline.duration(), f64::INFINITY, f64::NAN] {
+            assert!(timeline.get_frame_mapping(time).is_none());
+        }
     }
 
     #[test]
@@ -4569,6 +5048,57 @@ mod tests {
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
     }
 
+    #[test]
+    fn manual_caption_position_loads_from_old_projects_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        value["captions"] = serde_json::json!({
+            "segments": [],
+            "settings": { "enabled": true, "position": "manual" },
+        });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let old = ProjectConfiguration::load(dir.path()).unwrap();
+        let settings = &old.captions.as_ref().unwrap().settings;
+        assert_eq!(settings.position, "manual");
+        assert_eq!(settings.manual_position, None);
+
+        value["captions"]["settings"]["manualPosition"] = serde_json::json!({ "x": 0.3, "y": 0.2 });
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let tauri = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            tauri.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.3, 0.2))
+        );
+
+        let mut config = tauri;
+        config.captions.as_mut().unwrap().settings.manual_position =
+            Some(XY::new(0.423_7, 0.123_4));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            saved["captions"]["settings"]["manualPosition"],
+            serde_json::json!({ "x": 0.423_7_f32, "y": 0.123_4_f32 })
+        );
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = ProjectConfiguration::load(dir.path()).unwrap();
+        assert_eq!(
+            reopened.captions.as_ref().unwrap().settings.manual_position,
+            Some(XY::new(0.423_7, 0.123_4))
+        );
+    }
+
     fn write_config_with_text_segment(
         project_path: &std::path::Path,
         font_size: f32,
@@ -4620,6 +5150,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -4729,6 +5260,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -5051,6 +5583,124 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum ShippedKind {
+        Mask,
+        Image,
+        Text,
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct ShippedTrack {
+        kind: ShippedKind,
+        track: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ShippedProject {
+        #[serde(default)]
+        overlay_order: Vec<ShippedTrack>,
+    }
+
+    #[test]
+    fn shape_layers_stay_out_of_the_field_shipped_builds_parse() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text, image]);
+        assert_eq!(project.overlay_order, [text, image]);
+        assert_eq!(project.overlay_order(), [shape, text, image]);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let shipped: ShippedProject = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            shipped.overlay_order,
+            [
+                ShippedTrack {
+                    kind: ShippedKind::Text,
+                    track: 0
+                },
+                ShippedTrack {
+                    kind: ShippedKind::Image,
+                    track: 0
+                }
+            ]
+        );
+
+        let restored: ProjectConfiguration = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, shape, image]),
+            [shape, text, image]
+        );
+    }
+
+    #[test]
+    fn an_order_without_shapes_clears_the_shape_aware_copy() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let mut project = ProjectConfiguration::default();
+        project.set_overlay_order(vec![shape, text]);
+        project.set_overlay_order(vec![image, text]);
+        assert!(project.overlay_order_with_shapes.is_empty());
+        assert_eq!(project.overlay_order(), [image, text]);
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json.get("overlayOrderWithShapes").is_none());
+        project.set_overlay_order(Vec::new());
+        assert!(!project.has_overlay_order());
+    }
+
+    #[test]
+    fn shape_tracks_default_between_text_and_images() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "textSegments": [{"start": 0.0, "end": 1.0}],
+                "maskSegments": [{
+                    "start": 0.0, "end": 1.0, "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5}, "size": {"x": 0.2, "y": 0.2}
+                }],
+                "shapeSegments": [{"start": 0.0, "end": 1.0}, {"start": 0.0, "end": 1.0, "track": 1}]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            project.overlay_tracks(),
+            [
+                layer(OverlayTrackKind::Text, 0),
+                layer(OverlayTrackKind::Shape, 1),
+                layer(OverlayTrackKind::Shape, 0),
+                layer(OverlayTrackKind::Mask, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn projects_without_shapes_serialize_without_shape_fields() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {"segments": [], "zoomSegments": []}
+        }))
+        .unwrap();
+        assert!(project.timeline.as_ref().unwrap().shape_segments.is_empty());
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json["timeline"].get("shapeSegments").is_none());
+        assert!(json.get("overlayOrderWithShapes").is_none());
+    }
+
+    #[test]
+    fn preset_application_keeps_the_shape_aware_order() {
+        let shape = layer(OverlayTrackKind::Shape, 0);
+        let text = layer(OverlayTrackKind::Text, 0);
+        let mut current = ProjectConfiguration::default();
+        current.set_overlay_order(vec![text, shape]);
+        let applied = current.with_preset(ProjectConfiguration::default());
+        assert_eq!(applied.overlay_order(), [text, shape]);
     }
 }
 

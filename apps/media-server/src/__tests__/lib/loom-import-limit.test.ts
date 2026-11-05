@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	spyOn,
+	test,
+} from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +15,16 @@ import {
 	downloadVideoToTemp,
 	LOOM_IMPORT_MAX_BYTES,
 } from "../../lib/media-video";
+
+const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_STREAMING_HOSTS = "127.0.0.1,localhost";
+});
+afterAll(() => {
+	if (previousStreamingHosts === undefined)
+		delete process.env.MEDIA_SERVER_STREAMING_HOSTS;
+	else process.env.MEDIA_SERVER_STREAMING_HOSTS = previousStreamingHosts;
+});
 
 const originalFetch = globalThis.fetch;
 const originalDownloadConcurrency =

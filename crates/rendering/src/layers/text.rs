@@ -10,7 +10,7 @@ use glyphon::{
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
-use crate::text::{PreparedText, StaggerEdge, stagger_alpha};
+use crate::text::{PreparedText, REFERENCE_HEIGHT, StaggerEdge, stagger_alpha};
 
 #[derive(PartialEq)]
 struct ShapeKey {
@@ -507,7 +507,7 @@ impl TextLayer {
             // the editor genuinely wrapped too.
             let output_width = output_px[0];
             let wrap_width = if width < output_width * 0.98 {
-                (width * 1.05 + 4.0).min(output_width.max(width))
+                (width * 1.05 + 4.0 * output_px[1] / REFERENCE_HEIGHT).min(output_width.max(width))
             } else {
                 width
             };
@@ -1013,6 +1013,26 @@ mod gpu_tests {
     fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
         let index = ((y * OUTPUT + x) * 4) as usize;
         pixels[index..index + 4].try_into().unwrap()
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn text_wrap_width_scales_with_output_resolution() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut layer = TextLayer::new(&device, &queue);
+        let mut overlay = text([100.0, 100.0, 600.0, 300.0], [0.0; 4]);
+        overlay.background_color = None;
+        overlay.content = "A line of text near the wrap boundary".to_string();
+
+        layer.prepare(&device, &queue, (1920, 1080), &[overlay.clone()]);
+        let width_1080 = layer.buffers[0].size().0.unwrap();
+
+        overlay.bounds = [200.0, 200.0, 1200.0, 600.0];
+        overlay.font_size *= 2.0;
+        layer.prepare(&device, &queue, (3840, 2160), &[overlay]);
+        let width_2160 = layer.buffers[0].size().0.unwrap();
+
+        assert_eq!(width_2160, width_1080 * 2.0);
     }
 
     #[test]

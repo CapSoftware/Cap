@@ -106,6 +106,10 @@ export function SignupForm() {
 				return;
 			} else if (error === "SignupBlocked") {
 				return;
+			} else if (error === "DisposableEmail") {
+				return toast.error(
+					"Temporary email addresses can't be used with Cap. Please use your work or personal email.",
+				);
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(

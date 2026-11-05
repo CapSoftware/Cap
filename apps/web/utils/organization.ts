@@ -72,13 +72,15 @@ export function calculateSeats(organization: {
 	inviteQuota?: number;
 	ownerId?: string | null;
 	ownerIsPro?: boolean;
+	memberCount?: number;
 	members?: { id: string; userId?: string | null; hasProSeat?: boolean }[];
 	invites?: { id: string }[];
 }) {
 	const { proSeatsTotal, proSeatsUsed, proSeatsRemaining } =
 		calculateProSeats(organization);
 
-	const memberCount = organization?.members?.length ?? 0;
+	const memberCount =
+		organization?.memberCount ?? organization?.members?.length ?? 0;
 	const pendingInvitesCount = organization?.invites?.length ?? 0;
 
 	return {

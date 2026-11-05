@@ -1,4 +1,10 @@
-import { CurrentUser, Organisation, User, Video } from "@cap/web-domain";
+import {
+	CurrentUser,
+	Organisation,
+	Policy,
+	User,
+	Video,
+} from "@cap/web-domain";
 import { Effect, Exit, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,18 +61,24 @@ const { VideosRepo } = await import("@cap/web-backend/src/Videos/VideosRepo");
 const { Database } = await import("@cap/web-backend/src/Database");
 const { Storage } = await import("@cap/web-backend/src/Storage/index");
 const { Tinybird } = await import("@cap/web-backend/src/Tinybird/index");
-const { Policy } = await import("@cap/web-domain");
-const check = vi.fn((video: { id: string }) =>
-	video.id === "denied"
-		? Effect.fail(new Policy.PolicyDeniedError())
-		: video.id === "protected"
-			? Effect.fail(
-					new Video.VerifyVideoPasswordError({
-						id: Video.VideoId.make(video.id),
-						cause: "not-provided",
-					}),
-				)
-			: Effect.void,
+const check = vi.fn(
+	(
+		video: { id: string },
+		_password: Option.Option<string>,
+	): Effect.Effect<
+		void,
+		Policy.PolicyDeniedError | Video.VerifyVideoPasswordError
+	> =>
+		video.id === "denied"
+			? Effect.fail(new Policy.PolicyDeniedError())
+			: video.id === "protected"
+				? Effect.fail(
+						new Video.VerifyVideoPasswordError({
+							id: Video.VideoId.make(video.id),
+							cause: "not-provided",
+						}),
+					)
+				: Effect.void,
 );
 const user: CurrentUser["Type"] = {
 	id: User.UserId.make("owner"),
@@ -85,6 +97,10 @@ function run(ids: string[]) {
 				VideosPolicy,
 				VideosPolicy.make({
 					canViewLoaded: check,
+					canViewLoadedBulk: (loaded) =>
+						Effect.forEach(loaded, ([video, password]) =>
+							check(video, password).pipe(Effect.exit),
+						),
 					canView: vi.fn(),
 					isOwner: vi.fn(),
 					isOwnerLoaded: vi.fn(),

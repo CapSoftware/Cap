@@ -11,7 +11,7 @@ import {
 	Space,
 	SpaceMemberId,
 	type SpaceMemberRole,
-	type User,
+	User,
 } from "@cap/web-domain";
 import { eq, type SQL, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -19,6 +19,7 @@ import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { normalizeSpaceRole } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
+import { filterUsersInOrganization } from "./organization-member-ids";
 import { getSpaceAccess } from "./space-authorization";
 import {
 	getSpaceSettingsFromFormData,
@@ -32,7 +33,10 @@ export async function updateSpace(formData: FormData) {
 
 	const id = Space.SpaceId.make(formData.get("id") as string);
 	const name = formData.get("name") as string;
-	const members = formData.getAll("members[]") as User.UserId[];
+	const members = formData
+		.getAll("members[]")
+		.filter((entry): entry is string => typeof entry === "string")
+		.map((entry) => User.UserId.make(entry));
 	const iconFile = formData.get("icon") as File | null;
 	const passwordAction = formData.get("passwordAction") as
 		| "keep"
@@ -119,7 +123,14 @@ export async function updateSpace(formData: FormData) {
 
 	await db().update(spaces).set(spaceUpdate).where(eq(spaces.id, id));
 
-	const memberIds = Array.from(new Set([...members, space.createdById]));
+	const organizationMemberIds = await filterUsersInOrganization(
+		access.organizationId,
+		access.organizationOwnerId,
+		members,
+	);
+	const memberIds = Array.from(
+		new Set([...organizationMemberIds, space.createdById]),
+	);
 	const existingMembers = await db()
 		.select({ userId: spaceMembers.userId, role: spaceMembers.role })
 		.from(spaceMembers)

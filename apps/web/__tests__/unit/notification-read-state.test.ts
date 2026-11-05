@@ -19,7 +19,10 @@ vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 
 beforeEach(() => {
-	mocks.getCurrentUser.mockResolvedValue({ id: "user-1" });
+	mocks.getCurrentUser.mockResolvedValue({
+		id: "user-1",
+		activeOrganizationId: "org-1",
+	});
 	mocks.query.mockResolvedValue({ rows: [{ affectedRows: 1, insertId: 0 }] });
 });
 
@@ -40,12 +43,14 @@ describe("notification read state", () => {
 		},
 	);
 
-	it("marks all notifications for the current recipient when no ID is supplied", async () => {
+	it("marks all notifications for the current recipient in the active organization", async () => {
 		await markAsRead();
 
 		expect(mocks.query).toHaveBeenCalledExactlyOnceWith(
-			"update `notifications` set `readAt` = ? where `notifications`.`recipientId` = ?",
-			[expect.any(String), "user-1"],
+			expect.stringMatching(
+				/where .*`notifications`\.`recipientId` = \?.*`notifications`\.`orgId` = \?/,
+			),
+			[expect.any(String), "user-1", "org-1"],
 			"execute",
 		);
 		expect(mocks.revalidatePath).toHaveBeenCalledWith("/dashboard");

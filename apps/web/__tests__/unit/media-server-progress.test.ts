@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 	transcribe: vi.fn(),
 	invalidateQuota: vi.fn(),
 	audio: vi.fn(),
+	signal: vi.fn(),
+	strike: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -73,6 +75,13 @@ vi.mock("@/lib/google-drive-storage-quota-cache", () => ({
 vi.mock("@/lib/queue-video-transcription", () => ({
 	queueVideoTranscription: mocks.transcribe,
 	shouldQueueTranscriptionAfterMediaComplete: () => true,
+}));
+
+vi.mock("@/lib/loom-import-signal", () => ({
+	signalLoomImportFinished: mocks.signal,
+}));
+vi.mock("@/lib/media-input-policy-strikes", () => ({
+	recordMediaInputPolicyStrike: mocks.strike,
 }));
 
 import { POST } from "@/app/api/webhooks/media-server/progress/route";
@@ -292,6 +301,7 @@ describe("media-server recording progress webhook", () => {
 		mocks.invalidateQuota.mockResolvedValue(undefined);
 		mocks.retry.mockResolvedValue(true);
 		mocks.blocked.mockResolvedValue(true);
+		mocks.strike.mockReset().mockResolvedValue(null);
 		vi.spyOn(console, "log").mockImplementation(() => undefined);
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -920,6 +930,148 @@ describe("Loom importer completions", () => {
 			"'$.loomDeferredProcessing.status', 'complete'",
 		);
 		expect(mocks.transcribe).toHaveBeenCalledWith(videoId);
+	});
+
+	it("leaves the preview GIF for the first view of importer completions", async () => {
+		const database = loomVideo();
+		await request(
+			complete(),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		const [write] = metadataWrites(database.mutations);
+		expect(write?.sql).toContain(
+			"'$.loomPreviewGif', COALESCE(JSON_EXTRACT(?, '$.loomPreviewGif'), JSON_OBJECT('status', 'pending'))",
+		);
+	});
+
+	it("does not wait for a preview view when the original still needs processing", async () => {
+		const database = loomVideo();
+		await request(
+			complete({ deferredSourceKey: `${ownerId}/${videoId}/raw-upload.webm` }),
+			"media-secret",
+			"?retryable=true&transcription=on-view&preview=on-view",
+		);
+		for (const write of metadataWrites(database.mutations))
+			expect(write.sql).not.toContain("loomPreviewGif");
+	});
+
+	it("wakes the waiting import once the finished state is saved", async () => {
+		const database = loomVideo();
+		mocks.signal.mockReset().mockImplementation(async () => {
+			expect(database.mutations).toContainEqual({
+				operation: "delete",
+				table: mocks.tables.uploads,
+			});
+		});
+		const token = `loom-import:${videoId}:run-1:0`;
+		const response = await request(
+			complete(),
+			"media-secret",
+			`?retryable=true&signal=${encodeURIComponent(token)}`,
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.signal).toHaveBeenCalledWith(token, videoId, "complete");
+	});
+
+	it("wakes the waiting import when the worker fails", async () => {
+		loomVideo();
+		mocks.signal.mockReset().mockResolvedValue(undefined);
+		await request(
+			{
+				jobId: "importer-1",
+				videoId,
+				phase: "error",
+				progress: 40,
+				error: "Loom 404",
+			},
+			"media-secret",
+			"?retryable=true&signal=loom-import%3Aowned-video%3Arun-1%3A0",
+		);
+		expect(mocks.signal).toHaveBeenCalledWith(
+			"loom-import:owned-video:run-1:0",
+			videoId,
+			"error",
+		);
+	});
+
+	it("records a strike and stops retrying when the input is rejected", async () => {
+		const database = loomVideo();
+		const response = await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 0,
+				error: "Input is a playlist",
+				errorCode: "input-policy-violation",
+			},
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.strike).toHaveBeenCalledWith({ videoId });
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.uploads,
+			values: expect.objectContaining({
+				phase: "error",
+				processingError: "media-input-rejected: Input is a playlist",
+			}),
+		});
+	});
+
+	it("keeps ordinary worker errors retryable without recording a strike", async () => {
+		const database = loomVideo();
+		await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 10,
+				error: "Server busy",
+				errorCode: "processing-unavailable",
+			},
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(mocks.strike).not.toHaveBeenCalled();
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.uploads,
+			values: expect.objectContaining({
+				phase: "processing",
+				processingError: "Server busy",
+			}),
+		});
+	});
+
+	it("still processes the update when a strike cannot be recorded", async () => {
+		loomVideo();
+		mocks.strike.mockRejectedValue(new Error("database unavailable"));
+		const response = await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 0,
+				error: "Input is a playlist",
+				errorCode: "input-policy-violation",
+			},
+			"media-secret",
+		);
+		expect(response.status).toBe(200);
+	});
+
+	it("does not wake the import for progress updates", async () => {
+		loomVideo();
+		mocks.signal.mockReset().mockResolvedValue(undefined);
+		await request(
+			{ jobId: "importer-1", videoId, phase: "downloading", progress: 40 },
+			"media-secret",
+			"?retryable=true&signal=loom-import%3Aowned-video%3Arun-1%3A0",
+		);
+		expect(mocks.signal).not.toHaveBeenCalled();
 	});
 
 	it("keeps queueing transcription for media server completions", async () => {

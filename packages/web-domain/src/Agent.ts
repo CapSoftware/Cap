@@ -695,7 +695,7 @@ export const AgentInvite = Schema.Struct({
 export const AgentOrganizationInviteResponse = Schema.Struct({
 	invite: AgentInvite,
 	inviteUrl: Schema.String,
-	emailDelivery: Schema.Literal("not_requested", "accepted"),
+	emailDelivery: Schema.Literal("not_requested", "accepted", "not_configured"),
 	requestId: Schema.String,
 });
 

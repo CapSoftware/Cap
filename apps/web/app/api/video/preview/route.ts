@@ -2,9 +2,11 @@ import { provideOptionalAuth, Storage, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { type NextRequest, NextResponse } from "next/server";
+import { ensureLoomPreviewGif } from "@/lib/loom-preview-gif";
 import { runPromise } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 const PREVIEW_GIF_EXPIRES_SECONDS = 60 * 60;
 
@@ -46,7 +48,14 @@ export async function GET(request: NextRequest) {
 				Effect.catchAll(() => Effect.succeed(false)),
 			);
 
-			if (!hasPreview) return null;
+			if (
+				!hasPreview &&
+				!(
+					request.nextUrl.searchParams.get("fallback") !== "og" &&
+					(yield* ensureLoomPreviewGif(video, bucket, previewKey))
+				)
+			)
+				return null;
 
 			return yield* bucket.getSignedObjectUrl(previewKey, {
 				expiresIn: PREVIEW_GIF_EXPIRES_SECONDS,

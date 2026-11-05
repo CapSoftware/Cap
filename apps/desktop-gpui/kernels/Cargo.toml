@@ -48,6 +48,10 @@ name = "frame_unpad"
 harness = false
 
 [[bench]]
+name = "frame_copy_rows"
+harness = false
+
+[[bench]]
 name = "screenshot_mask"
 harness = false
 

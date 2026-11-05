@@ -114,13 +114,18 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 			);
 		},
 		onSuccess: (result) => {
+			if (result.skippedEmails.length > 0) {
+				toast.warning(
+					`Invites created but not emailed because email is not configured. Share the invite links with: ${result.skippedEmails.join(", ")}`,
+				);
+			}
 			if (result.failedEmails.length > 0) {
 				toast.warning(
 					sendEmailNotifications
-						? `Invites sent, but delivery failed for: ${result.failedEmails.join(", ")}`
+						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
 						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
 				);
-			} else {
+			} else if (result.skippedEmails.length === 0) {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"

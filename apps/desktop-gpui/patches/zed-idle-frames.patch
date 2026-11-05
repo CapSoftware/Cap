@@ -35,7 +35,7 @@ index 0294b7d..09adcdd 100644
      fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
      fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 393e517..de95b7d 100644
+index 393e517..bb20879 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -9,7 +9,8 @@ use crate::{
@@ -48,7 +48,7 @@ index 393e517..de95b7d 100644
      Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
      RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
      SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, BackdropBlur, ScaledPixels, Scene, Shadow, SharedString, Size,
-@@ -120,6 +121,69 @@ struct WindowInvalidatorInner {
+@@ -120,6 +121,109 @@ struct WindowInvalidatorInner {
      pub dirty_views: FxHashSet<EntityId>,
      pub update_count: usize,
      pub frame_dirty: FrameDirtyAccumulator,
@@ -92,6 +92,18 @@ index 393e517..de95b7d 100644
 +        }
 +    }
 +
++    /// A frame request that arrived while the app was mid-update and could not
++    /// run. While requests are stopped nothing else would draw what woke the
++    /// window, so ask for another single frame.
++    fn missed_frame(&self) {
++        if let Some(toggle) = &self.toggle
++            && self.paused.get()
++        {
++            self.once_pending.set(true);
++            toggle(FrameRequests::Once);
++        }
++    }
++
 +    /// `busy`: the frame did work. `pending`: work is left for the next frame.
 +    fn frame_finished(&self, busy: bool, pending: bool, now: Instant) {
 +        let Some(toggle) = &self.toggle else {
@@ -115,10 +127,38 @@ index 393e517..de95b7d 100644
 +            toggle(FrameRequests::Stop);
 +        }
 +    }
++}
++
++/// Applies a platform notification to the window now, or on the next turn of
++/// the run loop when it arrived while the app was already being updated. AppKit
++/// delivers moves, resizes and appearance changes synchronously from inside the
++/// `setFrame:`/`orderFront:` calls an update makes (opening or positioning a
++/// window), and dropping them leaves the window's bounds or appearance stale.
++fn update_window_or_defer(
++    handle: AnyWindowHandle,
++    cx: &mut crate::AsyncApp,
++    update: fn(&mut Window, &mut App),
++) {
++    let Err(error) = handle.update(cx, |_, window, cx| update(window, cx)) else {
++        return;
++    };
++    if !error.is::<std::cell::BorrowMutError>() {
++        Result::<(), _>::Err(error).log_err();
++        return;
++    }
++    let executor = cx.foreground_executor().clone();
++    let mut cx = cx.clone();
++    executor
++        .spawn(async move {
++            handle
++                .update(&mut cx, |_, window, cx| update(window, cx))
++                .log_err();
++        })
++        .detach();
  }
  
  /// Per-frame invalidation bookkeeping, drained at draw time and emitted to the
-@@ -138,7 +202,7 @@ pub(crate) struct WindowInvalidator {
+@@ -138,7 +242,7 @@ pub(crate) struct WindowInvalidator {
  }
  
  impl WindowInvalidator {
@@ -127,7 +167,7 @@ index 393e517..de95b7d 100644
          WindowInvalidator {
              inner: Rc::new(RefCell::new(WindowInvalidatorInner {
                  dirty: true,
-@@ -146,6 +210,7 @@ impl WindowInvalidator {
+@@ -146,6 +250,7 @@ impl WindowInvalidator {
                  dirty_views: FxHashSet::default(),
                  update_count: 0,
                  frame_dirty: FrameDirtyAccumulator::default(),
@@ -135,7 +175,7 @@ index 393e517..de95b7d 100644
              })),
          }
      }
-@@ -157,6 +222,9 @@ impl WindowInvalidator {
+@@ -157,6 +262,9 @@ impl WindowInvalidator {
          if inner.draw_phase == DrawPhase::None {
              Self::record_frame_dirty(&mut inner);
              inner.dirty = true;
@@ -145,7 +185,7 @@ index 393e517..de95b7d 100644
              cx.push_effect(Effect::Notify { emitter: entity });
              true
          } else {
-@@ -174,6 +242,9 @@ impl WindowInvalidator {
+@@ -174,6 +282,9 @@ impl WindowInvalidator {
          if dirty {
              inner.update_count += 1;
              Self::record_frame_dirty(&mut inner);
@@ -155,7 +195,7 @@ index 393e517..de95b7d 100644
          }
      }
  
-@@ -1390,7 +1461,8 @@ impl Window {
+@@ -1390,7 +1501,8 @@ impl Window {
          let scale_factor = platform_window.scale_factor();
          let appearance = platform_window.appearance();
          let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
@@ -165,7 +205,7 @@ index 393e517..de95b7d 100644
          let active = Rc::new(Cell::new(platform_window.is_active()));
          let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
          let needs_present = Rc::new(Cell::new(false));
-@@ -1507,12 +1579,17 @@ impl Window {
+@@ -1507,12 +1619,24 @@ impl Window {
              let invalidator = invalidator.clone();
              let active = active.clone();
              let needs_present = needs_present.clone();
@@ -177,17 +217,24 @@ index 393e517..de95b7d 100644
 -                    .update(&mut cx, |_, _, cx| cx.thermal_state())
 -                    .log_err();
 +                let next_frame_callbacks = &pending_frame_callbacks;
-+                // A frame can still arrive for a window that was just closed
-+                // (its display link or a pending wake); there is nothing to draw.
-+                let Ok(thermal_state) = handle.update(&mut cx, |_, _, cx| cx.thermal_state())
-+                else {
-+                    return;
++                let thermal = handle.update(&mut cx, |_, _, cx| cx.thermal_state());
++                let thermal_state = match thermal {
++                    Ok(thermal_state) => Some(thermal_state),
++                    // AppKit can ask for a frame from inside an update
++                    // (`displayLayer:` while a window is shown); draw it once
++                    // the update returns.
++                    Err(error) if error.is::<std::cell::BorrowMutError>() => {
++                        frame_pacer.missed_frame();
++                        return;
++                    }
++                    // A frame can still arrive for a window that was just closed
++                    // (its display link or a pending wake); there is nothing to draw.
++                    Err(_) => return,
 +                };
-+                let thermal_state = Some(thermal_state);
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
-@@ -1546,13 +1623,17 @@ impl Window {
+@@ -1546,13 +1670,17 @@ impl Window {
                          handle
                              .update(&mut cx, |_, window, _| window.complete_frame())
                              .log_err();
@@ -205,7 +252,7 @@ index 393e517..de95b7d 100644
                      handle
                          .update(&mut cx, |_, window, cx| {
                              for callback in next_frame_callbacks {
-@@ -1570,6 +1651,7 @@ impl Window {
+@@ -1570,6 +1698,7 @@ impl Window {
                      || (active.get() && input_rate_tracker.borrow_mut().is_high_rate());
  
                  if invalidator.is_dirty() || request_frame_options.force_render {
@@ -213,7 +260,7 @@ index 393e517..de95b7d 100644
                      measure("frame duration", || {
                          handle
                              .update(&mut cx, |_, window, cx| {
-@@ -1585,6 +1667,7 @@ impl Window {
+@@ -1585,6 +1714,7 @@ impl Window {
                              .log_err();
                      })
                  } else if needs_present {
@@ -221,7 +268,7 @@ index 393e517..de95b7d 100644
                      handle
                          .update(&mut cx, |_, window, _| window.present())
                          .log_err();
-@@ -1595,6 +1678,9 @@ impl Window {
+@@ -1595,38 +1725,41 @@ impl Window {
                          window.complete_frame();
                      })
                      .log_err();
@@ -231,7 +278,51 @@ index 393e517..de95b7d 100644
              }
          }));
          platform_window.on_resize(Box::new({
-@@ -2263,6 +2349,8 @@ impl Window {
+             let mut cx = cx.to_async();
+             move |_, _| {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
++                update_window_or_defer(handle, &mut cx, |window, cx| {
++                    window.bounds_changed(cx)
++                });
+             }
+         }));
+         platform_window.on_moved(Box::new({
+             let mut cx = cx.to_async();
+             move || {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
++                update_window_or_defer(handle, &mut cx, |window, cx| {
++                    window.bounds_changed(cx)
++                });
+             }
+         }));
+         platform_window.on_appearance_changed(Box::new({
+             let mut cx = cx.to_async();
+             move || {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.appearance_changed(cx))
+-                    .log_err();
++                update_window_or_defer(handle, &mut cx, |window, cx| {
++                    window.appearance_changed(cx)
++                });
+             }
+         }));
+         platform_window.on_button_layout_changed(Box::new({
+             let mut cx = cx.to_async();
+             move || {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.button_layout_changed(cx))
+-                    .log_err();
++                update_window_or_defer(handle, &mut cx, |window, cx| {
++                    window.button_layout_changed(cx)
++                });
+             }
+         }));
+         platform_window.on_active_status_change(Box::new({
+@@ -2263,6 +2396,8 @@ impl Window {
      /// Schedule the given closure to be run directly after the current frame is rendered.
      pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
          RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
@@ -240,7 +331,7 @@ index 393e517..de95b7d 100644
      }
  
      /// Schedule a frame to be drawn on the next animation frame.
-@@ -6807,6 +6895,98 @@ pub fn outline(
+@@ -6807,6 +6942,114 @@ pub fn outline(
      }
  }
  
@@ -323,6 +414,22 @@ index 393e517..de95b7d 100644
 +        let (pacer, calls, now) = stopped_pacer();
 +        pacer.frame_finished(false, false, now + Duration::from_millis(8));
 +        assert_eq!(*calls.borrow(), [FrameRequests::Stop]);
++    }
++
++    #[test]
++    fn a_frame_missed_while_stopped_asks_for_another() {
++        let (pacer, calls, _) = stopped_pacer();
++        pacer.missed_frame();
++        assert_eq!(*calls.borrow(), [FrameRequests::Once]);
++        pacer.wake();
++        assert_eq!(*calls.borrow(), [FrameRequests::Once]);
++    }
++
++    #[test]
++    fn a_frame_missed_while_running_asks_for_nothing() {
++        let (pacer, calls, _) = recording_pacer();
++        pacer.missed_frame();
++        assert!(calls.borrow().is_empty());
 +    }
 +
 +    #[test]

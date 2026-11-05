@@ -61,9 +61,13 @@ export interface LoomDownloadResult {
 	height?: number;
 	requiresProxy?: boolean;
 	error?: string;
+	errorCode?: LoomImportErrorCode;
+	retryAfterMs?: number;
 }
 
-export type LoomImportErrorCode = "loom_temporarily_unavailable";
+export type LoomImportErrorCode =
+	| "loom_temporarily_unavailable"
+	| "loom_import_start_failed";
 
 export interface LoomImportResult {
 	success: boolean;
@@ -185,6 +189,68 @@ export async function fetchLoomOEmbed(
 	}
 }
 
+export async function resolveLoomDownload(
+	url: string,
+): Promise<LoomDownloadResult> {
+	if (!url || typeof url !== "string") {
+		return { success: false, error: "Please provide a valid URL." };
+	}
+
+	const videoId = extractLoomVideoId(url.trim());
+
+	if (!videoId) {
+		return {
+			success: false,
+			error:
+				"Invalid Loom URL. Please paste a valid Loom video link (e.g. https://www.loom.com/share/abc123).",
+		};
+	}
+
+	try {
+		const downloadUrl = await getLoomDownloadUrl(videoId);
+
+		if (!downloadUrl) {
+			return {
+				success: false,
+				error:
+					"Could not retrieve a download URL. The video may be private, password-protected, or the link may have expired.",
+			};
+		}
+
+		const [videoName, oembedMeta] = await Promise.all([
+			fetchVideoName(videoId),
+			fetchLoomOEmbed(videoId),
+		]);
+		return {
+			success: true,
+			videoId,
+			videoName: videoName ?? undefined,
+			downloadUrl,
+			downloadMode: isDirectMp4Url(downloadUrl)
+				? "direct-download"
+				: "browser-conversion",
+			durationSeconds: oembedMeta?.duration,
+			width: oembedMeta?.width,
+			height: oembedMeta?.height,
+			requiresProxy: false,
+		};
+	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			return {
+				success: false,
+				error: error.message,
+				errorCode: "loom_temporarily_unavailable",
+				retryAfterMs: error.retryAfterMs,
+			};
+		}
+		return {
+			success: false,
+			error:
+				"An unexpected error occurred. Please try again or check your internet connection.",
+		};
+	}
+}
+
 export type LoomImportTransaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
 >[0];
@@ -239,6 +305,7 @@ export async function importLoomVideoForOwner({
 	destination = {},
 	migrationRequestId,
 	migrationLeaseToken,
+	importPriority,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
@@ -246,6 +313,7 @@ export async function importLoomVideoForOwner({
 	destination?: LoomImportDestination;
 	migrationRequestId?: string;
 	migrationLeaseToken?: string;
+	importPriority?: "customer" | "bulk";
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -372,6 +440,7 @@ export async function importLoomVideoForOwner({
 					bucketId: existingVideo.bucketId,
 					loomVideoId,
 					reuseExistingRawUpload: true,
+					importPriority,
 				});
 			} catch (error) {
 				if (error instanceof LoomImportStartError && error.canRetry) {
@@ -388,6 +457,7 @@ export async function importLoomVideoForOwner({
 						error instanceof Error
 							? error.message
 							: "Loom import could not restart.",
+					errorCode: "loom_import_start_failed",
 				};
 			}
 			revalidatePath("/dashboard/caps");
@@ -453,6 +523,7 @@ export async function importLoomVideoForOwner({
 			success: false,
 			error:
 				"Could not prepare storage for this import. Please try again or contact support.",
+			errorCode: "loom_import_start_failed",
 		};
 	}
 
@@ -543,6 +614,7 @@ export async function importLoomVideoForOwner({
 			bucketId: Option.getOrNull(writable.bucketId),
 			loomVideoId,
 			loomDownloadUrl: downloadUrl,
+			importPriority,
 		});
 	} catch (error) {
 		if (error instanceof LoomImportStartError && error.canRetry) {
@@ -558,6 +630,7 @@ export async function importLoomVideoForOwner({
 			videoId,
 			error:
 				error instanceof Error ? error.message : "Loom import could not start.",
+			errorCode: "loom_import_start_failed",
 		};
 	}
 
@@ -780,6 +853,7 @@ export async function processLoomCsvRows({
 	migrationRequestId,
 	migrationLeaseToken,
 	allowFolders = false,
+	importPriority,
 }: {
 	rows: LoomCsvImportRow[];
 	orgId: Organisation.OrganisationId;
@@ -787,6 +861,7 @@ export async function processLoomCsvRows({
 	migrationRequestId?: string;
 	migrationLeaseToken?: string;
 	allowFolders?: boolean;
+	importPriority?: "customer" | "bulk";
 }): Promise<LoomCsvImportResult> {
 	const inputRows = Array.isArray(rows) ? rows : [];
 	const normalizedRows = inputRows
@@ -918,6 +993,7 @@ export async function processLoomCsvRows({
 				destination: folderId ? { folderId } : {},
 				migrationRequestId,
 				migrationLeaseToken,
+				importPriority,
 			});
 
 			let spaceName = row.spaceName || undefined;

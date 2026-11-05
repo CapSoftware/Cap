@@ -9,11 +9,13 @@ export interface VideoMetadata {
 	loomImportRun?: {
 		runId: string;
 		dispatch: "pending" | "accepted" | "rejected" | "uncertain";
+		importPriority?: "customer" | "bulk";
 		mediaDispatch?: {
 			attemptId: string;
 			videoId?: string;
 			state: "accepted" | "rejected" | "uncertain";
 			jobId?: string;
+			worker?: "importer" | "media" | null;
 		};
 	};
 	loomImportUpload?: {
@@ -29,6 +31,10 @@ export interface VideoMetadata {
 		startedAt?: string;
 	};
 	transcribeOnView?: boolean;
+	loomPreviewGif?: {
+		status: "pending" | "started" | "complete";
+		startedAt?: string;
+	};
 	editProcessing?: {
 		token: string;
 		startedAt: string;

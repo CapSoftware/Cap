@@ -20,7 +20,9 @@ export const markAsRead = async (notificationId?: string) => {
 			.where(
 				and(
 					eq(notifications.recipientId, currentUser.id),
-					notificationId ? eq(notifications.id, notificationId) : undefined,
+					notificationId
+						? eq(notifications.id, notificationId)
+						: eq(notifications.orgId, currentUser.activeOrganizationId),
 				),
 			);
 	} catch (error) {
