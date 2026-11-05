@@ -72,6 +72,22 @@ describe("isDisposableEmailSignup", () => {
 		);
 	});
 
+	it("lets a guest checkout customer sign in for the first time", async () => {
+		mocks.disposable.mockResolvedValue(true);
+		queueRows([
+			{
+				id: "u4",
+				emailVerified: null,
+				stripeCustomerId: "cus_1",
+				stripeSubscriptionId: "sub_1",
+			},
+		]);
+		await expect(isDisposableEmailSignup("d@throwaway.example")).resolves.toBe(
+			false,
+		);
+		expect(mocks.select).toHaveBeenCalledTimes(1);
+	});
+
 	it("refuses an invite-provisioned row that has never signed in", async () => {
 		mocks.disposable.mockResolvedValue(true);
 		queueRows([{ id: "u3", emailVerified: null }], []);
