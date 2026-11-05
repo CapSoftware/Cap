@@ -284,6 +284,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::shortcuts::recording_description(),
             "Start a recording without opening Cap first.",
         ),
+        (tr::settings::shortcuts::cancelling_title(), "Cancelling"),
+        (
+            tr::settings::shortcuts::cancelling_description(),
+            "For screenshots and recordings started from a shortcut or the tray.",
+        ),
         (
             tr::settings::shortcuts::while_recording_title(),
             "While recording",
@@ -384,6 +389,30 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::outcome::instant_copy_link_hint(),
             "Nothing opens",
+        ),
+        (
+            tr::settings::shortcuts::on_cancel::title(),
+            "When you cancel",
+        ),
+        (
+            tr::settings::shortcuts::on_cancel::hint(),
+            "Esc or closing the picker",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden_hint(),
+            "Unless Cap was open",
         ),
         (
             tr::settings::shortcuts::label::screenshot_area(),

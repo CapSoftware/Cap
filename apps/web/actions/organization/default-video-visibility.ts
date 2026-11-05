@@ -3,15 +3,18 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireOrganizationSettingsManager } from "./authorization";
 
-export async function updateDefaultVideoVisibility(privateByDefault: boolean) {
+export async function updateDefaultVideoVisibility(
+	privateByDefault: boolean,
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
-	if (!user?.activeOrganizationId) throw new Error("Unauthorized");
+	if (!user) throw new Error("Unauthorized");
 
-	const organizationId = user.activeOrganizationId;
 	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	await db()

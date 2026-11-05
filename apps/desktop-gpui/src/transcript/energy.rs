@@ -92,7 +92,7 @@ impl EnergyEnvelope {
             clip_offsets,
             clips: clips.into_iter().map(Arc::from).collect(),
             thresholds,
-            silences,
+            silences: super::model::merge_ranges(silences),
         }
     }
 
