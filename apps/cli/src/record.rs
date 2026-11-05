@@ -39,6 +39,13 @@ use crate::{
 pub struct RecordParams {
     #[command(flatten)]
     target: RecordTargets,
+    #[arg(
+        long,
+        requires = "window",
+        conflicts_with = "screen",
+        help = "Capture only the window content (Focus) on macOS/Windows, instead of its screen region; Instant mode cannot combine this with --camera"
+    )]
+    window_only: bool,
     /// Recording mode to use
     #[arg(long, value_enum, default_value_t = RecordMode::Studio)]
     mode: RecordMode,
@@ -66,6 +73,17 @@ pub struct RecordParams {
 
 impl RecordParams {
     fn validate(&self) -> Result<(), String> {
+        if self.window_only {
+            if self.target.window.is_none() || self.target.screen.is_some() {
+                return Err("--window-only requires --window and cannot use --screen".to_string());
+            }
+            if !cfg!(any(target_os = "macos", windows)) {
+                return Err("--window-only is supported only on macOS and Windows".to_string());
+            }
+            if self.mode == RecordMode::Instant && self.camera.is_some() {
+                return Err("--window-only cannot combine --mode instant with --camera; use Studio mode or omit --camera".to_string());
+            }
+        }
         if self.duration.is_some_and(|duration| {
             // `> u64::MAX` would panic in `Duration::from_secs_f64` (used by `wait_for_stop`).
             !duration.is_finite() || duration <= 0.0 || duration > u64::MAX as f64
@@ -87,6 +105,9 @@ impl RecordParams {
         if let Some(id) = &self.target.window {
             args.push("--window".to_string());
             args.push(id.to_string());
+        }
+        if self.window_only {
+            args.push("--window-only".to_string());
         }
         args.push("--mode".to_string());
         args.push(self.mode.to_string());
@@ -422,6 +443,7 @@ impl SessionRunArgs {
 }
 
 async fn session_worker(params: RecordParams, recording_id: &str) -> Result<(), String> {
+    params.validate()?;
     let target = resolve_target(&params)?;
     let path = params
         .path
@@ -755,9 +777,11 @@ async fn start_recording(
     let target_for_shareable_content = target.clone();
     let camera_only_target = matches!(target, ScreenCaptureTarget::CameraOnly);
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
-        .with_system_audio(params.system_audio);
-    let mut instant_builder =
-        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+        .with_system_audio(params.system_audio)
+        .with_window_only(params.window_only);
+    let mut instant_builder = instant_recording::Actor::builder(path, target)
+        .with_system_audio(params.system_audio)
+        .with_window_only(params.window_only);
     let mut camera_active = false;
     let camera_recorded =
         !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
@@ -1274,8 +1298,11 @@ struct RecordTargets {
     /// ID of the screen to capture
     #[arg(long, group = "target")]
     screen: Option<DisplayId>,
-    /// ID of the window to capture
-    #[arg(long, group = "target")]
+    #[arg(
+        long,
+        group = "target",
+        help = "ID of the window to capture (screen region by default; use --window-only for Focus)"
+    )]
     window: Option<WindowId>,
 }
 
@@ -1332,6 +1359,153 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    fn parse_record(args: &[&str]) -> RecordParams {
+        let cli = crate::Cli::try_parse_from(args).unwrap();
+        let Some(crate::Commands::Record(record)) = cli.command else {
+            panic!("expected record command");
+        };
+        match record.command {
+            Some(crate::RecordCommands::Start(start)) => start.params,
+            Some(crate::RecordCommands::SessionRun(worker)) => worker.params,
+            None => record.args.params,
+            _ => panic!("expected recording parameters"),
+        }
+    }
+
+    #[test]
+    fn window_only_requires_a_window_target() {
+        for args in [
+            vec!["cap", "record", "start", "--window-only"],
+            vec!["cap", "record", "start", "--screen", "1", "--window-only"],
+            vec![
+                "cap",
+                "record",
+                "start",
+                "--screen",
+                "1",
+                "--window",
+                "247",
+                "--window-only",
+            ],
+        ] {
+            assert!(crate::Cli::try_parse_from(&args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn window_only_validates_mode_camera_and_platform() {
+        for mode in ["studio", "instant"] {
+            for camera in [false, true] {
+                let mut args = vec![
+                    "cap",
+                    "record",
+                    "start",
+                    "--window",
+                    "247",
+                    "--window-only",
+                    "--mode",
+                    mode,
+                ];
+                if camera {
+                    args.extend(["--camera", "synthetic-camera"]);
+                }
+                let params = parse_record(&args);
+                let supported = cfg!(any(target_os = "macos", windows));
+                assert_eq!(
+                    params.validate().is_ok(),
+                    supported && !(mode == "instant" && camera)
+                );
+                let mut default_params = params.clone();
+                default_params.window_only = false;
+                assert!(default_params.validate().is_ok());
+                let mut missing_target = params;
+                missing_target.target.window = None;
+                assert!(
+                    missing_target
+                        .validate()
+                        .unwrap_err()
+                        .contains("requires --window")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn window_only_rejects_instant_camera_before_creating_a_project() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("unused.cap");
+        let mut params = parse_record(&[
+            "cap",
+            "record",
+            "start",
+            "--window",
+            "247",
+            "--window-only",
+            "--mode",
+            "instant",
+            "--camera",
+            "synthetic-camera",
+        ]);
+        params.path = Some(path.clone());
+        for detach in [false, true] {
+            let start = RecordStart {
+                params: params.clone(),
+                detach,
+                format: OutputFormat::Json,
+            };
+            let error = start.run_inner(OutputFormat::Json).await.unwrap_err();
+            assert!(error.contains("--window-only"));
+            assert!(!path.exists());
+        }
+        let error = session_worker(params, "synthetic-session")
+            .await
+            .unwrap_err();
+        assert!(error.contains("--window-only"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn window_only_survives_detached_worker_round_trip() {
+        for mode in ["studio", "instant"] {
+            for enabled in [false, true] {
+                let mut args = vec![
+                    "cap",
+                    "record",
+                    "start",
+                    "--window",
+                    "247",
+                    "--mode",
+                    mode,
+                    "--detach",
+                    "--duration",
+                    "2",
+                    "--fps",
+                    "30",
+                ];
+                if enabled {
+                    args.push("--window-only");
+                }
+                let params = parse_record(&args);
+                let serialized = params.to_cli_args();
+                assert_eq!(serialized.iter().any(|arg| arg == "--window-only"), enabled);
+                let mut worker_args = vec![
+                    "cap",
+                    "record",
+                    "__session-run",
+                    "--session-id",
+                    "synthetic-session",
+                ];
+                worker_args.extend(serialized.iter().map(String::as_str));
+                let worker = parse_record(&worker_args);
+                assert_eq!(worker.window_only, enabled);
+                assert_eq!(worker.to_cli_args(), serialized);
+                assert_eq!(worker.validate(), params.validate());
+            }
+        }
+        assert!(parse_record(&["cap", "record", "--window", "247", "--window-only"]).window_only);
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -1347,6 +1521,7 @@ mod tests {
                 screen: None,
                 window: None,
             },
+            window_only: false,
             mode: RecordMode::Studio,
             camera: None,
             mic: None,
