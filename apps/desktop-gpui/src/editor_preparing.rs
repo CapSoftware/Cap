@@ -668,6 +668,7 @@ fn adapt(
     let studio = recording_meta.studio_meta().ok_or_else(ended)?;
     let mut project = crate::recording::preparing_presentation(
         live.configuration().ok_or_else(ended)?,
+        &recording_meta.project_path,
         control.finalization.camera_snapshot(),
     )?;
     if project.clips.is_empty() {
