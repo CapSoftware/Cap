@@ -1043,6 +1043,7 @@ struct InjectedCodecFailure {
     error: ffmpeg::Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConversionRequirements {
     pub input_format: format::Pixel,
     pub input_width: u32,
@@ -1265,10 +1266,24 @@ impl H264Encoder {
 
     pub fn queue_preconverted_frame(
         &mut self,
-        mut frame: frame::Video,
+        frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
     ) -> Result<(), QueueFrameError> {
+        self.queue_preconverted_frame_to(frame, timestamp, output)
+    }
+
+    pub fn queue_preconverted_frame_to<S: PacketSink + ?Sized>(
+        &mut self,
+        mut frame: frame::Video,
+        timestamp: Duration,
+        output: &mut S,
+    ) -> Result<(), QueueFrameError> {
+        #[cfg(test)]
+        if let Some(error) = self.injected_codec_failure() {
+            return Err(QueueFrameError::Encode(error));
+        }
+
         trace!(
             "Encoding pre-converted frame: format={:?}, size={}x{}, expected={:?} {}x{}",
             frame.format(),

@@ -320,6 +320,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         shared_pause_state,
                         disk_space_callback: None,
                         segment_tx: None,
+                        ..Default::default()
                     })
                     .await
             }
@@ -369,6 +370,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 shared_pause_state: None,
                 disk_space_callback: None,
                 segment_tx,
+                ..Default::default()
             })
             .await
     }
