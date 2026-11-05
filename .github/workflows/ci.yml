@@ -160,6 +160,7 @@ jobs:
           __tests__/unit/summary-chapters.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
+          __tests__/unit/thumbnail-published-output.test.ts
           __tests__/unit/timeline-paused-window.test.ts
           __tests__/unit/toggle-pro-seat.test.ts
           __tests__/unit/transcript-arrow-text.test.ts
