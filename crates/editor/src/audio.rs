@@ -1416,6 +1416,7 @@ fn mix_music(
 pub struct AudioResampler {
     pub context: resampling::Context,
     pub output_frame: FFAudio,
+    output_capacity: usize,
     delay: Option<resampling::Delay>,
     output: AudioInfo,
 }
@@ -1446,8 +1447,22 @@ impl AudioResampler {
             output: output_info,
             context,
             output_frame: FFAudio::empty(),
+            output_capacity: 0,
             delay: None,
         })
+    }
+
+    fn prepare_output(&mut self, input_samples: usize) {
+        let capacity = cap_audio::resample_capacity(&self.context, input_samples);
+        if capacity > self.output_capacity {
+            self.output_frame = FFAudio::new(
+                self.output.sample_format,
+                capacity,
+                self.output.channel_layout(),
+            );
+            self.output_capacity = capacity;
+        }
+        self.output_frame.set_samples(capacity);
     }
 
     fn current_frame_data(&self) -> &[u8] {
@@ -1456,6 +1471,7 @@ impl AudioResampler {
     }
 
     pub fn queue_and_process_frame<'a>(&'a mut self, frame: &FFAudio) -> &'a [u8] {
+        self.prepare_output(frame.samples());
         self.delay = self.context.run(frame, &mut self.output_frame).unwrap();
 
         // Teeechnically this doesn't work for planar output
@@ -1465,6 +1481,7 @@ impl AudioResampler {
     pub fn flush_frame(&mut self) -> Option<&[u8]> {
         self.delay?;
 
+        self.prepare_output(0);
         self.delay = self.context.flush(&mut self.output_frame).unwrap();
 
         Some(self.current_frame_data())
@@ -3402,6 +3419,25 @@ mod tests {
         }
 
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn output_resampling_keeps_a_bounded_delay() {
+        ffmpeg::init().unwrap();
+        for rate in [44_100, 48_000, 96_000, 192_000] {
+            let mut resampler =
+                AudioResampler::new(AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, rate, 2)).unwrap();
+            let input = silent_audio_frame(1024);
+            let mut output_frames = 0;
+            for _ in 0..100 {
+                output_frames += resampler.queue_and_process_frame(&input).len() / 8;
+            }
+            let expected = 1024 * 100 * rate as usize / AudioData::SAMPLE_RATE as usize;
+            assert!(
+                expected.abs_diff(output_frames) <= 512,
+                "rate={rate}, expected={expected}, rendered={output_frames}"
+            );
+        }
     }
 
     fn write_sine_wav(path: &Path, frequency: f64, duration: f64) {
