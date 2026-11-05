@@ -74,6 +74,7 @@ use crate::{
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
     project_save::PendingProjectSave,
+    recording::load_recording_clicks,
     store::SettingsEnum,
     theme::Theme,
     ui,
@@ -531,34 +532,6 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             .map(|mic| mic.channels),
         recording_clips: recordings.segments.len(),
     })
-}
-
-fn load_recording_clicks(
-    project_path: &std::path::Path,
-) -> Vec<Vec<cap_project::CursorClickEvent>> {
-    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
-        return Vec::new();
-    };
-    let RecordingMetaInner::Studio(studio) = &meta.inner else {
-        return Vec::new();
-    };
-    let load = |cursor: Option<PathBuf>| {
-        cursor
-            .and_then(|cursor| cap_project::CursorEvents::load_clicks_from_file(&cursor).ok())
-            .unwrap_or_default()
-    };
-    match &**studio {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            vec![load(
-                segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
-            )]
-        }
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
-            .collect(),
-    }
 }
 
 fn has_recorded_cursor_data(meta: &RecordingMeta, studio: &StudioRecordingMeta) -> bool {
