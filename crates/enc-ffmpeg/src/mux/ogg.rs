@@ -218,6 +218,53 @@ mod tests {
     }
 
     #[test]
+    fn resampled_recording_preserves_a_continuous_tone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resampled.ogg");
+        write_recording(path.clone(), 44_100, 44_100);
+
+        let mut input = format::input(&path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let rate = decoder.rate();
+        let mut decoded = ffmpeg::frame::Audio::empty();
+        let mut samples = Vec::new();
+        for (_, packet) in input.packets() {
+            decoder.send_packet(&packet).unwrap();
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                samples.extend_from_slice(decoded.plane::<f32>(0));
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            samples.extend_from_slice(decoded.plane::<f32>(0));
+        }
+        assert!(samples.len().abs_diff(rate as usize) <= 1);
+        let error = samples
+            .iter()
+            .enumerate()
+            .skip(1000)
+            .take(46_000)
+            .map(|(index, sample)| {
+                let expected =
+                    0.5 * (index as f32 / rate as f32 * 440.0 * std::f32::consts::TAU).sin();
+                (sample - expected).powi(2)
+            })
+            .sum::<f32>()
+            / 46_000.0;
+        let largest_step = samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(largest_step < 0.08, "tone discontinuity {largest_step}");
+        assert!(error.sqrt() < 0.02, "tone RMS error {}", error.sqrt());
+    }
+
+    #[test]
     fn sub_frame_input_is_flushed_not_dropped() {
         // Less input than one opus frame (20ms): finish() must drain the
         // resampler remainder instead of dropping it.

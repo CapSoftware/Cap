@@ -13,6 +13,7 @@ pub struct BufferedResampler {
     buffer: VecDeque<(ffmpeg::frame::Audio, i64)>,
     sample_index: usize,
     last_buffered_end: Option<i64>,
+    next_output_pts: Option<i64>,
     // used to account for cases where pts is rounded down instead of up
     min_next_pts: Option<i64>,
 }
@@ -29,6 +30,7 @@ impl BufferedResampler {
             buffer: VecDeque::new(),
             sample_index: 0,
             last_buffered_end: None,
+            next_output_pts: None,
             min_next_pts: None,
         })
     }
@@ -80,6 +82,7 @@ impl BufferedResampler {
             (output.format, output.channel_layout, output.rate),
         ) {
             Ok(resampler) => {
+                self.flush_resampler();
                 let previous_rate = self.resampler.input().rate;
                 if previous_rate > 0 && frame.rate() > 0 {
                     self.min_next_pts = self.min_next_pts.map(|pts| {
@@ -88,6 +91,7 @@ impl BufferedResampler {
                     });
                 }
                 self.resampler = resampler;
+                self.next_output_pts = None;
                 true
             }
             Err(error) => {
@@ -138,7 +142,12 @@ impl BufferedResampler {
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
-        if !self.accepts(&frame) && !self.rebuild_for(&frame) {
+        let discontinuity = !self.accepts(&frame)
+            || self
+                .min_next_pts
+                .zip(frame.pts())
+                .is_some_and(|(next, pts)| pts > next);
+        if discontinuity && !self.rebuild_for(&frame) {
             return;
         }
 
@@ -149,39 +158,42 @@ impl BufferedResampler {
         }
 
         let pts = frame.pts().unwrap();
-
-        let mut resampled_frame = ffmpeg::frame::Audio::empty();
-
+        let output = self.output();
+        let capacity = ((self.resampler.delay().map_or(0, |delay| delay.input) as u64
+            + frame.samples() as u64)
+            * u64::from(output.rate))
+        .div_ceil(u64::from(frame.rate())) as usize;
+        let mut resampled_frame =
+            ffmpeg::frame::Audio::new(output.format, capacity, output.channel_layout);
         if let Err(error) = self.resampler.run(&frame, &mut resampled_frame) {
             tracing::warn!(?error, "Dropping an audio frame the resampler rejected");
             return;
         }
 
-        let resampled_pts =
-            (pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64)) as i64;
-
-        let mut next_pts = resampled_pts + resampled_frame.samples() as i64;
-
+        let resampled_pts = *self.next_output_pts.get_or_insert_with(|| {
+            (pts as f64 * (f64::from(output.rate) / f64::from(frame.rate()))) as i64
+        });
+        self.next_output_pts = Some(resampled_pts + resampled_frame.samples() as i64);
         self.push_resampled_frame(resampled_frame, resampled_pts);
+        self.min_next_pts = Some(pts + frame.samples() as i64);
+    }
 
+    fn flush_resampler(&mut self) {
+        let Some(mut next_pts) = self.next_output_pts else {
+            return;
+        };
         while self.resampler.delay().is_some() {
-            let mut resampled_frame = ffmpeg::frame::Audio::new(
-                self.resampler.output().format,
-                0,
-                self.resampler.output().channel_layout,
-            );
-            self.resampler.flush(&mut resampled_frame).unwrap();
-            let samples = resampled_frame.samples();
+            let output = self.output();
+            let mut frame = ffmpeg::frame::Audio::new(output.format, 0, output.channel_layout);
+            self.resampler.flush(&mut frame).unwrap();
+            let samples = frame.samples();
             if samples == 0 {
                 break;
             }
-
-            self.push_resampled_frame(resampled_frame, next_pts);
-
+            self.push_resampled_frame(frame, next_pts);
             next_pts += samples as i64;
         }
-
-        self.min_next_pts = Some(pts + frame.samples() as i64);
+        self.next_output_pts = Some(next_pts);
     }
 
     fn get_frame_inner(&mut self, samples: usize) -> Option<ffmpeg::frame::Audio> {
@@ -351,6 +363,7 @@ impl BufferedResampler {
     }
 
     pub fn flush(&mut self, max_samples: usize) -> Option<ffmpeg::frame::Audio> {
+        self.flush_resampler();
         let remaining_samples = self.remaining_samples();
         if remaining_samples == 0 {
             return None;
@@ -397,11 +410,68 @@ mod test {
         use super::*;
 
         #[test]
+        fn chunked_resampling_preserves_the_signal() {
+            for input_rate in [44_100, 96_000] {
+                let info = AudioInfo::new_raw(
+                    format::Sample::F32(cap_media_info::Type::Packed),
+                    input_rate,
+                    1,
+                );
+                let output = AudioInfo::new_raw(info.sample_format, 48_000, 1);
+                let resample = |chunk: usize| {
+                    let mut bufferer = BufferedResampler::new(info, output).unwrap();
+                    let mut result = Vec::new();
+                    for start in (0..input_rate as usize).step_by(chunk) {
+                        let samples = chunk.min(input_rate as usize - start);
+                        let mut frame = ffmpeg::frame::Audio::new(
+                            info.sample_format,
+                            samples,
+                            ChannelLayout::MONO,
+                        );
+                        frame.set_rate(input_rate);
+                        frame.set_pts(Some(start as i64));
+                        for (index, value) in frame.plane_mut::<f32>(0).iter_mut().enumerate() {
+                            *value = (std::f32::consts::TAU * 1_000.0 * (start + index) as f32
+                                / input_rate as f32)
+                                .sin();
+                        }
+                        bufferer.add_frame(frame);
+                        while let Some(frame) = bufferer.get_frame(960) {
+                            result.extend_from_slice(frame.plane::<f32>(0));
+                        }
+                    }
+                    while let Some(frame) = bufferer.flush(960) {
+                        result.extend_from_slice(frame.plane::<f32>(0));
+                    }
+                    result
+                };
+                let expected = resample(input_rate as usize);
+                for chunk in [1024, 1, 7, 4800] {
+                    let actual = resample(chunk);
+                    assert_eq!(actual.len(), 48_000, "rate {input_rate}, chunk {chunk}");
+                    let error = expected
+                        .iter()
+                        .zip(&actual)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0_f32, f32::max);
+                    assert!(
+                        error < 0.001,
+                        "rate {input_rate}: {} vs {} samples, max error {error}",
+                        actual.len(),
+                        expected.len()
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn sequential_frames() {
             let mut bufferer = create_resampler(200);
 
             bufferer.add_frame(make_input_frame(100, 0));
             bufferer.add_frame(make_input_frame(100, 100));
+
+            bufferer.flush_resampler();
 
             let sample_sum = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
             assert_eq!(sample_sum, 400);
@@ -420,6 +490,8 @@ mod test {
             bufferer.add_frame(make_input_frame(100, 100));
             bufferer.add_frame(make_input_frame(100, 200));
 
+            bufferer.flush_resampler();
+
             let first = bufferer.buffer.front().unwrap();
             assert_eq!(first.1, 200);
 
@@ -434,11 +506,19 @@ mod test {
             bufferer.add_frame(make_input_frame(100, 0));
             bufferer.add_frame(make_input_frame(100, 200));
 
+            bufferer.flush_resampler();
+
             let first = bufferer.buffer.front().unwrap();
             assert_eq!(first.1, 0);
 
             let last = bufferer.buffer.back().unwrap();
             assert_eq!(last.1 + last.0.samples() as i64, 600);
+
+            let frame = bufferer.get_frame(600).unwrap();
+            assert_eq!(&frame.data(0)[..200], &[69; 200]);
+            assert_eq!(&frame.data(0)[200..400], &[0; 200]);
+            assert_eq!(&frame.data(0)[400..600], &[69; 200]);
+            assert!(bufferer.flush(600).is_none());
         }
 
         #[test]
@@ -713,13 +793,14 @@ mod test {
             let mut bufferer = create_resampler(200);
 
             bufferer.add_frame(make_input_frame(100, 0));
+            bufferer.flush_resampler();
 
             let out_frame = bufferer.get_frame(125);
             assert!(out_frame.is_some());
             let out_frame = out_frame.unwrap();
 
             assert_eq!(out_frame.samples(), 125);
-            assert_eq!(bufferer.sample_index, 25);
+            assert_eq!(bufferer.remaining_samples(), 75);
             assert_eq!(out_frame.pts(), Some(0));
 
             let out_frame = bufferer.get_frame(100);
