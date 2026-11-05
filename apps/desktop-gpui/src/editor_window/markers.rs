@@ -106,9 +106,7 @@ pub(super) fn neighbour_marker(placed: &[PlacedMarker], time: f64, forward: bool
     }
 }
 
-/// What pressing M at output `time` does.
 pub(super) enum MarkerPress {
-    /// A marker is already drawn where the new one would land.
     Select(usize),
     Add(TimelineMarker),
 }
