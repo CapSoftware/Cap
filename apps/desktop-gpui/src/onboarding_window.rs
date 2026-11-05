@@ -197,6 +197,7 @@ pub(crate) struct ModeDetail {
 pub(crate) fn mode_detail(mode: ModeChoice) -> &'static ModeDetail {
     MODES
         .iter()
+        .chain(ux_walk::ACTIONS)
         .find(|detail| detail.mode == mode)
         .unwrap_or(&MODES[0])
 }
@@ -818,6 +819,7 @@ pub(crate) fn mode_doodle(mode: ModeChoice) -> &'static crate::doodle::Doodle {
         ModeChoice::Capture(Mode::Studio) => &crate::onboarding_doodles::TRACKS,
         ModeChoice::Capture(Mode::Screenshot) => &crate::onboarding_doodles::SNAP,
         ModeChoice::UxWalk => &crate::onboarding_doodles::UX_WALK,
+        ModeChoice::Diatribe => &crate::onboarding_doodles::MICROPHONE,
     }
 }
 

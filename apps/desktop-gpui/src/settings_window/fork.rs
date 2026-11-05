@@ -95,18 +95,18 @@ pub(super) fn row_title(item: &RecordingItem) -> String {
 }
 
 pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
-    if item.walk.is_some() {
-        "icons/ux-walk.svg"
-    } else {
-        item.mode.icon()
+    match &item.walk {
+        Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_ICON,
+        Some(_) => "icons/ux-walk.svg",
+        None => item.mode.icon(),
     }
 }
 
 pub(super) fn row_label(item: &RecordingItem) -> &'static str {
-    if item.walk.is_some() {
-        fork_brand::WALK_MODE_NAME
-    } else {
-        item.mode.label()
+    match &item.walk {
+        Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_SHORT_NAME,
+        Some(_) => fork_brand::WALK_MODE_NAME,
+        None => item.mode.label(),
     }
 }
 
@@ -166,10 +166,15 @@ impl SettingsWindow {
             return actions;
         };
         let notes = walk.file.clone();
+        let (icon, label) = if walk.diatribe {
+            (crate::mode_choice::DIATRIBE_ICON, "View notes")
+        } else {
+            ("icons/ux-walk.svg", "View walk notes")
+        };
         actions = actions.child(self.row_button(
             "recording-walk-notes",
-            "icons/ux-walk.svg",
-            "View walk notes",
+            icon,
+            label,
             false,
             cx,
             move |_, _, cx| {
@@ -362,6 +367,7 @@ mod tests {
             topic: "Checkout findings".into(),
             started_at_ms: 1,
             status: crate::ux_walk_library::WalkStatus::Saved,
+            diatribe: false,
         });
         assert!(matches_recording_filters(
             &walk,
@@ -385,6 +391,40 @@ mod tests {
             ""
         ));
         assert_eq!(RecordingsTab::UxWalk.icon(), Some("icons/ux-walk.svg"));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    #[test]
+    fn diatribes_list_under_the_walk_filter_with_their_own_name() {
+        let mut talk = recording("Cap recording", RecordingMode::Instant);
+        talk.walk = Some(crate::ux_walk_library::WalkSummary {
+            file: "/talk/native-walk.json".into(),
+            directory: "/talk".into(),
+            source_project: talk.path.clone(),
+            topic: "Diatribe".into(),
+            started_at_ms: 1,
+            status: crate::ux_walk_library::WalkStatus::Ready,
+            diatribe: true,
+        });
+        assert!(matches_recording_filters(&talk, RecordingsTab::UxWalk, ""));
+        assert!(matches_recording_filters(
+            &talk,
+            RecordingsTab::UxWalk,
+            "diatribe"
+        ));
+        assert!(matches_recording_filters(&talk, RecordingsTab::All, ""));
+        assert!(!matches_recording_filters(
+            &talk,
+            RecordingsTab::Instant,
+            ""
+        ));
+        assert_eq!(row_label(&talk), "Diatribe");
+        assert_eq!(row_icon(&talk), crate::mode_choice::DIATRIBE_ICON);
+        assert_eq!(row_title(&talk), "Diatribe");
+        let mut walk = talk.clone();
+        walk.walk.as_mut().unwrap().diatribe = false;
+        assert_eq!(row_label(&walk), fork_brand::WALK_MODE_NAME);
+        assert_eq!(row_icon(&walk), "icons/ux-walk.svg");
     }
 
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]

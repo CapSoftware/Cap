@@ -705,6 +705,7 @@ EOF
                     topic: "Health contract".into(),
                     url: "https://example.com".into(),
                     speakers: Vec::new(),
+                    kind: crate::ux_walk_journal::Kind::Walk,
                 },
                 directory.with_extension("cap"),
                 100000,

@@ -364,3 +364,19 @@ fn foreign_or_malformed_processed_notes_fall_back_to_the_selected_journal() {
         assert_eq!(events[0].text, "Saved observation");
     }
 }
+
+#[test]
+fn diatribes_join_the_walk_library_and_say_what_they_are() {
+    let f = Fixture::new();
+    let source = f.source("talk");
+    let walk = f.journal("walk", &f.source("walked"), 100);
+    let file = f.journal("diatribe", &source, 200);
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    value["request"]["kind"] = "diatribe".into();
+    value["request"]["url"] = "".into();
+    fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(read_summary(&file).unwrap().diatribe);
+    assert!(!read_summary(&walk).unwrap().diatribe);
+    let index = index_in(&[f.0.clone()], &[]);
+    assert!(index[&source.canonicalize().unwrap()].diatribe);
+}

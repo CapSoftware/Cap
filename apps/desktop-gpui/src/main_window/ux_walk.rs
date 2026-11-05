@@ -137,6 +137,7 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.hover_title(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
+            Self::Diatribe => crate::mode_choice::DIATRIBE_NAME,
         }
     }
 
@@ -144,6 +145,7 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.header_title(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
+            Self::Diatribe => crate::mode_choice::DIATRIBE_NAME,
         }
     }
 }
@@ -288,11 +290,122 @@ impl MainWindow {
         if let Some(mode) = choice.capture_mode() {
             self.set_mode(mode, cx);
             cx.defer(app_windows::refresh_target_overlays);
+        } else if choice == ModeChoice::Diatribe {
+            self.clear_mode_hover();
+            cx.notify();
+            self.start_diatribe(cx);
         } else {
             self.clear_mode_hover();
             cx.notify();
             self.set_ux_walk(cx);
         }
+    }
+
+    fn diatribe_blocked(&self, cx: &gpui::App) -> bool {
+        self.session.read(cx).phase != Phase::Idle
+            || self.is_preparing_recording()
+            || self.session.read(cx).editor_recording_target().is_some()
+    }
+
+    /// Record Diatribe: no setup, an Instant recording of the display under the pointer with
+    /// the selected microphone (else the system default), no camera, and system audio only
+    /// when it is on. The recorder's mode, devices and walk selection stay as they were.
+    pub(crate) fn start_diatribe(&mut self, cx: &mut Context<Self>) {
+        if self.diatribe_blocked(cx) {
+            return;
+        }
+        let request = match crate::ux_walk::diatribe_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.session.update(cx, |session, cx| {
+                    session.error = Some(error);
+                    cx.notify();
+                });
+                cx.defer(app_windows::show_main_window);
+                return;
+            }
+        };
+        cx.defer(app_windows::dismiss_target_overlays);
+        let selected = self.microphone.as_ref().map(|mic| mic.name.clone());
+        cx.spawn(async move |this, cx| {
+            let microphone = match selected {
+                Some(name) => Some((name, true)),
+                None => cx
+                    .background_executor()
+                    .spawn(async {
+                        cap_recording::feeds::microphone::MicrophoneFeed::default_device()
+                            .map(|(name, _, _)| name)
+                    })
+                    .await
+                    .map(|name| (name, false)),
+            };
+            this.update(cx, |this, cx| this.begin_diatribe(request, microphone, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn begin_diatribe(
+        &mut self,
+        request: Request,
+        microphone: Option<(String, bool)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.diatribe_blocked(cx) {
+            return;
+        }
+        let Some((microphone, selected)) = microphone else {
+            self.session.update(cx, |session, cx| {
+                session.error = Some(
+                    "Record Diatribe needs a microphone. Connect one or choose it in the recorder, then try again."
+                        .into(),
+                );
+                cx.notify();
+            });
+            cx.defer(app_windows::show_main_window);
+            return;
+        };
+        let display = scap_targets::Display::get_containing_cursor()
+            .unwrap_or_else(scap_targets::Display::primary);
+        let (mic_feed, mic_meter, mut input_readiness, device_settings) = {
+            let feeds = crate::feeds::Feeds::global(cx).read(cx);
+            (
+                feeds.mic_actor(),
+                feeds.mic_meter(),
+                feeds.input_readiness(),
+                feeds.requested_device_settings(),
+            )
+        };
+        input_readiness.camera = None;
+        if !selected {
+            // The app's feed and its readiness belong to the selected microphone, not this one.
+            input_readiness.microphone = None;
+        }
+        // An open camera bubble would land in an Instant frame; a diatribe has no camera.
+        let excluded_windows = app_windows::camera_window_number(cx)
+            .and_then(|number| number.to_string().parse().ok())
+            .into_iter()
+            .collect();
+        let config = crate::recording::StartConfig {
+            ux_walk: Some(request),
+            mode: crate::recording::RecordingMode::Instant,
+            target: cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
+                id: display.id(),
+            },
+            device_settings,
+            input_readiness,
+            microphone: Some(microphone),
+            camera: None,
+            system_audio: self.system_audio,
+            excluded_windows,
+            camera_feed: None,
+            mic_feed: mic_feed.filter(|_| selected),
+            mic_meter,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
+            start_gate: None,
+        };
+        self.start_recording_config(config, cx);
     }
 
     pub(super) fn walk_deselect(&mut self, cx: &mut Context<Self>) {

@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::PathBuf};
 
+/// What a native recording is. A walk records a fresh browser window with its evidence; a
+/// diatribe is the owner talking a topic through (screen and microphone, no browser), which
+/// the engine turns into notes and action items (`kind: "diatribe"` in its session files).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Walk,
+    Diatribe,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
@@ -8,14 +19,30 @@ pub struct Request {
     pub topic: String,
     pub url: String,
     pub speakers: Vec<String>,
+    /// Absent in journals written before diatribes existed: those are walks.
+    #[serde(default)]
+    pub kind: Kind,
 }
 
 impl Request {
     pub fn for_restart(&self, unique: &str) -> Self {
+        let prefix = match self.kind {
+            Kind::Walk => "walk",
+            Kind::Diatribe => "diatribe",
+        };
         Self {
-            directory: self.directory.with_file_name(format!("walk-{unique}")),
+            directory: self.directory.with_file_name(format!("{prefix}-{unique}")),
             ..self.clone()
         }
+    }
+
+    pub fn is_diatribe(&self) -> bool {
+        self.kind == Kind::Diatribe
+    }
+
+    /// Only a walk owns a browser window, its evidence collector and their health checks.
+    pub fn uses_browser(&self) -> bool {
+        self.kind == Kind::Walk
     }
 }
 

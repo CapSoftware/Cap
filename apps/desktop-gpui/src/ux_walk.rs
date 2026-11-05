@@ -11,6 +11,23 @@ pub fn start(cx: &mut gpui::App) {
     crate::app_windows::show_main_window(cx);
 }
 
+/// Record Diatribe: an Instant screen and microphone recording that starts at once and is
+/// processed like a walk into notes and action items. The recorder's mode is left as it was.
+pub fn start_diatribe(cx: &mut gpui::App) {
+    let main = cx.global::<crate::app_windows::AppWindows>().main;
+    main.update(cx, |view, _, cx| view.start_diatribe(cx)).ok();
+}
+
+pub const DIATRIBE_TOPIC: &str = "Diatribe";
+
+/// A walk request for a diatribe: the walk output folder and speakers, no browser page.
+pub fn diatribe_request() -> Result<crate::ux_walk_journal::Request, String> {
+    let mut request = request(DIATRIBE_TOPIC)?;
+    request.kind = crate::ux_walk_journal::Kind::Diatribe;
+    request.url.clear();
+    Ok(request)
+}
+
 pub fn request(topic: &str) -> Result<crate::ux_walk_journal::Request, String> {
     let settings = load()?;
     let output = text(&settings, "outDir");
@@ -58,6 +75,7 @@ pub fn request(topic: &str) -> Result<crate::ux_walk_journal::Request, String> {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect(),
+        kind: crate::ux_walk_journal::Kind::Walk,
     })
 }
 

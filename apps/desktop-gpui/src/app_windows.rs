@@ -6902,7 +6902,7 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-fn camera_window_number(cx: &mut App) -> Option<isize> {
+pub(crate) fn camera_window_number(cx: &mut App) -> Option<isize> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
         .update(cx, |_, window, _| platform::window_number(window))

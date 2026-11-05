@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+	exportInstant,
 	finishNativeWalk,
 	nativeWalkPrompt,
 	snapshotNativeWalk,
@@ -1010,4 +1011,194 @@ test("sealed unsupported zero-job capture falls back once after stop and caches 
 	assert.equal(submissions, 1);
 	await finishNativeWalk(f.file, { transcriber: "elevenlabs" }, deps);
 	assert.equal(submissions, 1);
+});
+
+function diatribeFixture(t) {
+	const f = fixture(t);
+	// An Instant project: a finished video and no Studio segments.
+	fs.writeFileSync(
+		path.join(f.source, "recording-meta.json"),
+		JSON.stringify({ pretty_name: "Talk", fps: 30, sample_rate: 48000 }),
+	);
+	fs.mkdirSync(path.join(f.source, "content"));
+	fs.writeFileSync(path.join(f.source, "content/output.mp4"), "instant");
+	f.journal.request.kind = "diatribe";
+	f.journal.request.topic = "Diatribe";
+	f.journal.request.url = "";
+	f.journal.events = [
+		{ kind: "note", text: "Importer before billing", offsetMs: 1500 },
+	];
+	f.save();
+	// Left over from a walk: a diatribe must not read browser evidence.
+	fs.writeFileSync(
+		path.join(f.directory, "browser-evidence.json"),
+		JSON.stringify({ schemaVersion: 1, state: "unavailable", reason: "x" }),
+	);
+	return f;
+}
+
+test("a diatribe is processed as kind diatribe with a forced brief and no browser", async (t) => {
+	const f = diatribeFixture(t);
+	const briefs = [];
+	const deps = {
+		client: {
+			export: async () => {
+				throw new Error("An Instant project must not take the web export");
+			},
+		},
+		exportInstant: async (_client, project, output) => {
+			assert.equal(project, path.join(f.directory, "media/source.cap"));
+			fs.writeFileSync(output, "instant export");
+			return { durationS: 10 };
+		},
+		clip: async () => {
+			throw new Error("One chapter reuses the whole export");
+		},
+		prepareAudio: async () => null,
+		processChapter: async (directory, cfg, options) => {
+			const chapter = JSON.parse(
+				fs.readFileSync(path.join(directory, "chapter.json"), "utf8"),
+			);
+			assert.equal(chapter.kind, "diatribe");
+			assert.equal(cfg.brief, false);
+			if (!options.transcriptOnly) briefs.push(options.brief);
+			return {};
+		},
+		writeIndex: () => {},
+		writeReport: () => {},
+	};
+	await finishNativeWalk(f.file, { transcriber: "none", brief: false }, deps);
+	assert.deepEqual(briefs, [true]);
+	const session = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "session.json"), "utf8"),
+	);
+	assert.equal(session.kind, "diatribe");
+	assert.equal(session.url, null);
+	assert.deepEqual(Object.keys(session.coverage), ["window"]);
+	assert.deepEqual(
+		session.chapters.map((chapter) => chapter.dir),
+		["01-diatribe"],
+	);
+	assert.equal(
+		fs.readFileSync(path.join(f.directory, "01-diatribe/video.mp4"), "utf8"),
+		"instant export",
+	);
+	const report = fs.readFileSync(path.join(f.directory, "report.html"), "utf8");
+	assert.ok(report.includes("Importer before billing"));
+	assert.ok(report.includes("<title>Diatribe · Diatribe</title>"));
+	assert.ok(!report.includes("Browser evidence"));
+	const prompt = fs.readFileSync(
+		path.join(f.directory, "agent-prompt.txt"),
+		"utf8",
+	);
+	assert.ok(
+		prompt.startsWith(
+			`Turn the action items into beads (or issues) from this diatribe: ${f.directory}.`,
+		),
+	);
+	assert.match(prompt, /preparation: ready/);
+	assert.match(prompt, /ux-walk items/);
+	assert.doesNotMatch(prompt, /Browser coverage/);
+	assert.ok(!walkModeName.includes("Diatribe"));
+});
+
+test("a walk keeps its brief setting and browser coverage", async (t) => {
+	const f = fixture(t);
+	const briefs = [];
+	await finishNativeWalk(
+		f.file,
+		{ transcriber: "none", brief: false },
+		{
+			client: {
+				export: async (_project, output) => {
+					fs.writeFileSync(output, "export");
+					return { durationS: 10 };
+				},
+			},
+			clip: async (_input, output) => fs.writeFileSync(output, "clip"),
+			processChapter: async (directory, _cfg, options) => {
+				const chapter = JSON.parse(
+					fs.readFileSync(path.join(directory, "chapter.json"), "utf8"),
+				);
+				assert.equal(chapter.kind, "native-cap");
+				briefs.push(options.brief);
+				return {};
+			},
+			writeIndex: () => {},
+			writeReport: () => {},
+		},
+	);
+	assert.deepEqual(briefs, [false, false]);
+	const session = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "session.json"), "utf8"),
+	);
+	assert.equal(session.chapters[0].dir, "01-walkthrough");
+	assert.ok("dom" in session.coverage);
+});
+
+test("an unfinished diatribe's prompt says so", (t) => {
+	const f = diatribeFixture(t);
+	f.journal.state = "recording";
+	f.journal.durationMs = null;
+	f.save();
+	const prompt = nativeWalkPrompt(f.file);
+	assert.match(prompt, /Capture state: recording/);
+	assert.match(prompt, /incomplete or still in progress/);
+});
+
+test("Instant export copies the finished video at Cap's default settings", async (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ux-walk-instant-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const video = path.join(root, "made.mp4");
+	const made = spawnSync(
+		"ffmpeg",
+		[
+			"-v",
+			"error",
+			"-y",
+			"-f",
+			"lavfi",
+			"-i",
+			"color=size=32x32:rate=10:duration=1",
+			"-c:v",
+			"libx264",
+			"-threads",
+			"1",
+			video,
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(made.status, 0, made.stderr);
+	const output = path.join(root, "out.mp4");
+	let args;
+	const client = {
+		exportEvents: async (given) => {
+			args = given;
+			fs.copyFileSync(video, output);
+			return { type: "Completed", path: output };
+		},
+	};
+	const info = await exportInstant(client, "/p/source.cap", output);
+	assert.deepEqual(args, [
+		"export",
+		"/p/source.cap",
+		"--output",
+		output,
+		"--format",
+		"mp4",
+	]);
+	assert.ok(info.durationS > 0.5);
+	await assert.rejects(
+		exportInstant(client, "/p/source.cap", output),
+		/Refusing/,
+	);
+	const missing = path.join(root, "missing.mp4");
+	await assert.rejects(
+		exportInstant(
+			{ exportEvents: async () => ({ type: "Completed", path: missing }) },
+			"/p/source.cap",
+			missing,
+		),
+		/did not produce/,
+	);
 });

@@ -59,6 +59,8 @@ pub struct WalkSummary {
     pub topic: String,
     pub started_at_ms: u64,
     pub status: WalkStatus,
+    /// A diatribe: notes and action items from someone talking, with no browser evidence.
+    pub diatribe: bool,
 }
 
 #[derive(Default)]
@@ -154,6 +156,7 @@ pub fn read_walk(file: &Path) -> Result<(WalkSummary, crate::ux_walk_journal::Jo
         topic: journal.request.topic.clone(),
         started_at_ms: journal.started_at_ms,
         status,
+        diatribe: journal.request.is_diatribe(),
     };
     Ok((summary, journal))
 }

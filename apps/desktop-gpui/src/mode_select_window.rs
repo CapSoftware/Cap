@@ -335,6 +335,7 @@ impl Render for ModeSelectWindow {
                                 ModeChoice::ALL
                                     .iter()
                                     .copied()
+                                    .filter(|mode| mode.selectable())
                                     .map(|mode| self.render_card(mode, cx)),
                             ),
                     ),
