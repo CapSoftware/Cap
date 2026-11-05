@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
+import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
 	normalizeEmailAddress,
 } from "@cap/database/auth/domain-utils";
 import {
@@ -453,6 +455,20 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 	function* (email: string) {
 		if (!emailPattern.test(email)) {
 			return yield* Effect.fail(new HttpApiError.BadRequest());
+		}
+
+		if (
+			isEmailBlockedFromSignup(email, serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS)
+		) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+
+		const disposable = yield* Effect.tryPromise({
+			try: () => isDisposableEmailSignup(email),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		if (disposable) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
 		}
 
 		const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
