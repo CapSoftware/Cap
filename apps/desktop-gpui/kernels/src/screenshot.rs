@@ -1103,6 +1103,17 @@ mod tests {
             assert!(mask_filter(&rgba, 16, 12, (0, 11, 1, 2), pixelate, 8.).is_none());
             assert!(mask_filter(&rgba, 16, 12, (16, 0, 1, 1), pixelate, 8.).is_none());
             assert!(mask_filter(&rgba, 16, 12, (0, 0, u32::MAX, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (1, 0, u32::MAX, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (0, 1, 1, u32::MAX), pixelate, 8.).is_none());
+            assert!(mask_filter(
+                &rgba,
+                16,
+                12,
+                (u32::MAX, 0, u32::MAX, u32::MAX),
+                pixelate,
+                8.
+            )
+            .is_none());
         }
         assert!(mask_filter(&rgba, 16, 12, (0, 0, 16, 12), false, 8.).is_some());
     }

@@ -419,6 +419,10 @@ mod tests {
             (0, 180)
         );
         assert_eq!(
+            fit_centered_capture(DynamicImage::ImageRgba8(image.clone()), 320, 0).dimensions(),
+            (320, 0)
+        );
+        assert_eq!(
             fit_centered_capture(DynamicImage::ImageRgba8(image), 320, 180).dimensions(),
             (320, 180)
         );
