@@ -439,7 +439,7 @@ impl Renderer {
             layers.set_realtime_camera_effects(current.realtime);
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
-            let frame_layout = current.input.uniforms().frame_layout();
+            let mut frame_layout = current.input.uniforms().frame_layout();
             let render_result = match (output_format, current.input) {
                 (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => frame_renderer
                     .render_immediate_with_timings(
@@ -555,6 +555,7 @@ impl Renderer {
                         #[cfg(target_os = "macos")]
                         EditorFrameOutput::Surface(frame) => frame.frame_number,
                     };
+                    frame_layout.caption = layers.caption_frame_box();
                     let callback_start = Instant::now();
                     (frame_cb)(frame, frame_layout);
                     let callback_duration = callback_start.elapsed();

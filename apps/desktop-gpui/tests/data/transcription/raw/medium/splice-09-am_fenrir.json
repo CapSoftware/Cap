@@ -1,0 +1,16 @@
+[
+	[
+		{ "text": "So,", "start": 0.0, "end": 0.38 },
+		{ "text": "the...", "start": 0.49, "end": 1.3 },
+		{ "text": "the", "start": 1.3, "end": 1.84 },
+		{ "text": "main", "start": 1.99, "end": 2.23 },
+		{ "text": "reason", "start": 2.23, "end": 2.81 },
+		{ "text": "we", "start": 2.81, "end": 2.85 },
+		{ "text": "built", "start": 3.05, "end": 3.43 },
+		{ "text": "this", "start": 3.49, "end": 3.88 },
+		{ "text": "was", "start": 3.88, "end": 3.91 },
+		{ "text": "a", "start": 4.18, "end": 4.26 },
+		{ "text": "meat", "start": 4.26, "end": 4.38 },
+		{ "text": "bead.", "start": 4.75, "end": 5.4 }
+	]
+]

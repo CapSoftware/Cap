@@ -1,4 +1,5 @@
 import { App, applyDocumentTheme } from "@modelcontextprotocol/ext-apps";
+import { formatClock } from "./player-time";
 
 type Cue = { startMs: number; text: string; url: string };
 type Card = {
@@ -46,8 +47,7 @@ const render = (data: Card) => {
 		button.type = "button";
 		button.className = "cue";
 		const time = document.createElement("strong");
-		const seconds = Math.floor(cue.startMs / 1_000);
-		time.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+		time.textContent = formatClock(cue.startMs / 1_000);
 		const text = document.createElement("span");
 		text.textContent = cue.text;
 		button.append(time, text);

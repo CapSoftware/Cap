@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type BunFile, file, spawn } from "bun";
+import { type BunFile, file } from "bun";
 import {
 	type CapcodecOptions,
 	capcodecOptionsForJob,
@@ -21,7 +21,14 @@ import {
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
+import {
+	assertMediaFileContent,
+	assertTrustedStreamingUrl,
+	isMediaFileExtension,
+	trustLocalPlaylist,
+} from "./media-input-policy";
 import { probeVideoFile } from "./media-probe";
+import { spawn } from "./media-spawn";
 import { fetchMedia, materializeMedia } from "./media-transfer";
 import {
 	buildGpuDecodeInputArgs,
@@ -77,6 +84,7 @@ const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
 const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+const MAX_DASH_SEGMENTS = 200_000;
 export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
 
 export type StorageUploadTarget =
@@ -221,9 +229,8 @@ export function normalizeVideoInputExtension(
 	if (!inputExtension) return ".mp4";
 	const normalized = inputExtension.trim().toLowerCase();
 	if (!normalized) return ".mp4";
-	return normalized.startsWith(".")
-		? (normalized as `.${string}`)
-		: (`.${normalized}` as `.${string}`);
+	const extension = normalized.startsWith(".") ? normalized : `.${normalized}`;
+	return isMediaFileExtension(extension) ? (extension as `.${string}`) : ".mp4";
 }
 
 function isHlsUrl(url: string): boolean {
@@ -603,6 +610,7 @@ function buildDashSegments(
 	resourceBaseUrl: string,
 	query: string,
 	presentationDuration: number | null,
+	maxSegments: number,
 ): DashSegment[] {
 	const media = templateAttrs.media;
 	if (!media) {
@@ -617,6 +625,13 @@ function buildDashSegments(
 			? Math.ceil(presentationDuration * timescale)
 			: null;
 	const segments: DashSegment[] = [];
+	const assertWithinLimit = (count: number) => {
+		if (count > maxSegments) {
+			throw new Error(
+				`DASH manifest lists more than ${MAX_DASH_SEGMENTS} segments`,
+			);
+		}
+	};
 
 	if (timeline) {
 		const timelineSegments = getXmlElementBlocks(timeline.content, "S");
@@ -649,6 +664,7 @@ function buildDashSegments(
 				}
 				count = Math.max(0, Math.ceil((endTime - currentTime) / duration));
 			}
+			assertWithinLimit(segments.length + count);
 
 			for (let offset = 0; offset < count; offset++) {
 				const time = currentTime + duration * offset;
@@ -679,6 +695,7 @@ function buildDashSegments(
 	}
 
 	const segmentCount = Math.max(1, Math.ceil(totalDurationTicks / duration));
+	assertWithinLimit(segmentCount);
 	for (let index = 0; index < segmentCount; index++) {
 		const remainingDuration = totalDurationTicks - duration * index;
 		const segmentDuration = Math.min(duration, remainingDuration);
@@ -704,7 +721,7 @@ function quoteHlsAttribute(value: string): string {
 	return `"${value.replace(/"/g, "%22").replace(/[\r\n]/g, "")}"`;
 }
 
-async function writeDashRepresentationPlaylist(
+export async function writeDashRepresentationPlaylist(
 	dirPath: string,
 	initUrl: string,
 	segments: DashSegment[],
@@ -713,10 +730,11 @@ async function writeDashRepresentationPlaylist(
 		throw new Error("DASH manifest did not resolve any media segments");
 	}
 
-	const targetDuration = Math.max(
-		1,
-		Math.ceil(Math.max(...segments.map((segment) => segment.duration))),
+	const longestSegment = segments.reduce(
+		(longest, segment) => Math.max(longest, segment.duration),
+		0,
 	);
+	const targetDuration = Math.max(1, Math.ceil(longestSegment));
 	const playlistPath = join(dirPath, `${randomUUID()}.m3u8`);
 	const lines = [
 		"#EXTM3U",
@@ -780,6 +798,7 @@ export async function materializeMpdAsHlsPlaylist(
 		parseIsoDurationSeconds(periodAttrs.duration) ??
 		parseIsoDurationSeconds(mpdAttrs.mediaPresentationDuration);
 	const playlists: DashRepresentationPlaylist[] = [];
+	let segmentTotal = 0;
 
 	for (const adaptation of getXmlElementBlocks(
 		periodContent,
@@ -846,7 +865,9 @@ export async function materializeMpdAsHlsPlaylist(
 				resourceBaseUrl,
 				query,
 				presentationDuration,
+				MAX_DASH_SEGMENTS - segmentTotal,
 			);
+			segmentTotal += segments.length;
 			const path = await writeDashRepresentationPlaylist(
 				dirPath,
 				initUrl,
@@ -919,8 +940,12 @@ export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
 	abortSignal?: AbortSignal,
+	trustedHosts?: readonly string[],
 ): Promise<string> {
 	let inputPath: string;
+
+	if (isStreamingUrl(videoUrl))
+		assertTrustedStreamingUrl(videoUrl, trustedHosts);
 
 	if (isHlsUrl(videoUrl)) {
 		inputPath = await materializeHlsPlaylist(
@@ -952,6 +977,7 @@ export async function materializeStreamingInput(
 		}
 	}
 
+	trustLocalPlaylist(inputPath);
 	return inputPath;
 }
 
@@ -1314,6 +1340,7 @@ export async function downloadVideoToTemp(
 			if (file(tempFile.path).size === 0) {
 				throw new Error("Downloaded video is empty");
 			}
+			await assertMediaFileContent(tempFile.path);
 			return tempFile;
 		}
 
@@ -1361,6 +1388,7 @@ export async function downloadVideoToTemp(
 		if (file(tempFile.path).size === 0) {
 			throw new Error("Downloaded video is empty");
 		}
+		await assertMediaFileContent(tempFile.path);
 
 		return tempFile;
 	} catch (err) {
@@ -1577,6 +1605,21 @@ async function probeH264Level(
 	return Number.isFinite(level) && level > 0 ? level : null;
 }
 
+// Safari, phones and Firefox on Windows play H.264 through hardware decoders that only take 8-bit 4:2:0.
+const BROWSER_H264_PIXEL_FORMATS = new Set(["yuv420p", "yuvj420p"]);
+
+async function probeH264PixelFormat(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<string | null> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=pix_fmt",
+		abortSignal,
+	);
+	return stdout?.split(/\s+/)[0] || null;
+}
+
 async function probeVideoRotation(
 	inputPath: string,
 	abortSignal?: AbortSignal,
@@ -1609,22 +1652,30 @@ export async function processVideo(
 	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
-	const sourceH264Level =
+	const [sourceH264Level, sourcePixelFormat] =
 		!remuxOnly && metadata.videoCodec === "h264"
-			? await probeH264Level(inputPath, abortSignal)
-			: null;
+			? await Promise.all([
+					probeH264Level(inputPath, abortSignal),
+					probeH264PixelFormat(inputPath, abortSignal),
+				])
+			: [null, null];
 	abortSignal?.throwIfAborted();
+	const browserPixelFormat =
+		sourcePixelFormat === null ||
+		BROWSER_H264_PIXEL_FORMATS.has(sourcePixelFormat);
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
 		metadata.videoCodec === "h264" &&
+		browserPixelFormat &&
 		sourceH264Level !== null &&
 		sourceH264Level > targetH264Level.value &&
 		metadata.width <= opts.maxWidth &&
 		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
-		: needsVideoTranscode(metadata, opts, sourceH264Level);
+		: !browserPixelFormat ||
+			needsVideoTranscode(metadata, opts, sourceH264Level);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
 		? buildExtraInputFlags(resilientFlags)
@@ -1788,12 +1839,9 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 				)
 			: []),
 		...input.extraInputArgs,
-		// Browser captures change size when the tab resizes. Rebuilding the filter graph for that crashes h264_nvenc
-		// (SIGSEGV on FFmpeg 7.1, even with a fixed output size), so keep the first graph; scale absorbs the new size
-		// exactly as the libx264 fallback's auto-inserted scaler does.
-		...(nvenc && !gpuDecode && input.videoTranscode && !input.normalizeH264Level
-			? ["-reinit_filter", "0"]
-			: []),
+		// Browser captures change size when the tab resizes. FFmpeg rebuilds the filter graph and scales every frame
+		// back to the first size, for NVENC as for libx264. Keeping the first graph instead (-reinit_filter 0) feeds
+		// frames of the new size through filters set up for the old one, and h264_nvenc stalls then segfaults.
 		"-i",
 		input.inputPath,
 	];

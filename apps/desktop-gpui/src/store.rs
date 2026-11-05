@@ -1,16 +1,18 @@
-//! Persisted state: this app's own, and the Tauri app's settings store.
+//! Persisted state: this app's own, and the settings store it shares with
+//! 0.6.0 and earlier (the Tauri app, still downloadable and able to open the
+//! same data after a downgrade).
 //!
 //! Two files, both inside `so.cap.desktop`'s app-data dir:
 //!
-//! - `gpui-state.json` -- ours. The Tauri app keeps the camera window's chrome
+//! - `gpui-state.json` -- ours. The Tauri app kept the camera window's chrome
 //!   state in the webview's `localStorage` (`cameraWindowState`); there is no
 //!   webview here, so the same shape lives in a file. Reads happen once at
 //!   open; writes are whole-file rewrites on a background thread -- the state
 //!   is a handful of scalars, atomicity beyond rename is not worth plumbing.
-//! - `store` -- the tauri-plugin-store file the shipping app loads
-//!   (`Store.load("store")` in `apps/desktop/src/store.ts`), holding
-//!   `general_settings`, `recording_start_safety`, `auth`, `presets` and the
-//!   rest. Both apps read and write it, so every write here is a
+//! - `store` -- the tauri-plugin-store file 0.6.0 loads
+//!   (`Store.load("store")` in `apps/desktop/src/store.ts` at `cap-v0.6.2`),
+//!   holding `general_settings`, `recording_start_safety`, `auth`, `presets`
+//!   and the rest. Both apps read and write it, so every write here is a
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
@@ -63,9 +65,9 @@ impl BlurMode {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Light => Some("Light"),
-            Self::Heavy => Some("Heavy"),
-            Self::Remove => Some("Cutout"),
+            Self::Light => Some(tr::camera::blur::light()),
+            Self::Heavy => Some(tr::camera::blur::heavy()),
+            Self::Remove => Some(tr::camera::blur::cutout()),
         }
     }
 }
@@ -148,13 +150,15 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub turbo: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
 ///
-/// Same identifier the Tauri app uses (`so.cap.desktop`), resolved the way
-/// each OS's app-data convention spells it so a recording made on Windows or
-/// Linux lands in the folder both apps already agree on.
+/// The identifier every Cap release has used (`so.cap.desktop`), resolved
+/// the way each OS's app-data convention spells it, so recordings and
+/// settings from 0.6.0 and earlier are found where those builds left them.
 pub fn app_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
         && !dir.trim().is_empty()
@@ -217,81 +221,6 @@ fn bundled_resource_dirs_for(
     }
 
     directories
-}
-
-/// The Tauri dev harness's hand-off marker (`gpui_app.rs` over there): it
-/// survives the whole session and is removed only on a clean quit, so a marker
-/// left behind reads as a crash and routes the next `bun run dev:desktop` back
-/// to the classic app.
-pub fn handoff_marker_path() -> PathBuf {
-    app_data_dir().join("cap-gpui.handoff")
-}
-
-pub fn mark_handoff_session() {
-    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
-        tracing::warn!("writing the hand-off marker: {error}");
-    }
-}
-
-fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let staged = path.with_extension(format!("handoff-{}", std::process::id()));
-    std::fs::write(&staged, std::process::id().to_string())?;
-    std::fs::rename(&staged, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&staged);
-    })
-}
-
-pub fn clear_handoff_marker() {
-    clear_handoff_marker_at(&handoff_marker_path());
-}
-
-fn clear_handoff_marker_at(path: &Path) {
-    match std::fs::remove_file(path) {
-        Ok(()) => tracing::info!("cleared the hand-off marker"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
-    }
-}
-
-/// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
-/// runs inside its `tauri dev` harness, which exited with the hand-off. This
-/// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
-/// watches for it) to start that harness again; with no supervisor listening it
-/// is inert, and the flag written alongside it still routes the next
-/// `bun run dev:desktop` to the classic app.
-pub fn classic_reopen_path() -> PathBuf {
-    app_data_dir().join("cap-classic.reopen")
-}
-
-pub fn request_classic_reopen() -> std::io::Result<()> {
-    let path = classic_reopen_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn classic_pending_path() -> PathBuf {
-    app_data_dir().join("cap-classic.pending")
-}
-
-pub fn mark_classic_pending() -> std::io::Result<()> {
-    let path = classic_pending_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, std::process::id().to_string())
-}
-
-pub fn clear_classic_pending() {
-    if let Err(error) = std::fs::remove_file(classic_pending_path())
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(%error, "couldn't clear classic handoff readiness");
-    }
 }
 
 fn state_path() -> PathBuf {
@@ -768,9 +697,9 @@ settings_enum! {
 settings_enum! {
     /// `StudioRecordingQuality`, whose Rust default is `balanced`.
     StudioQuality {
-        Compatibility = "compatibility", "Compatibility";
-        Balanced = "balanced", "Balanced";
-        Ultra = "ultra", "Ultra";
+        Compatibility = "compatibility", tr::settings::options::studio_quality::compatibility();
+        Balanced = "balanced", tr::settings::options::studio_quality::balanced();
+        Ultra = "ultra", tr::settings::options::studio_quality::ultra();
     }
     default = Balanced
 }
@@ -789,18 +718,29 @@ settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
     MainWindowStartBehaviour {
-        Close = "close", "Close";
-        Minimise = "minimise", "Minimise";
+        Close = "close", tr::settings::options::main_window_start::close();
+        Minimise = "minimise", tr::settings::options::main_window_start::minimise();
     }
     default = Close
 }
 
 settings_enum! {
+    /// How a window recording captures the picked window: the region of the
+    /// screen it covers, or (Focused) the window by itself, centred by the
+    /// picker and followed if it moves.
+    WindowCaptureStyle {
+        ScreenRegion = "screenRegion", tr::settings::options::window_capture::screen_region();
+        FocusedWindow = "focusedWindow", tr::settings::options::window_capture::focused_window();
+    }
+    default = ScreenRegion
+}
+
+settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show Cap";
-        DoNothing = "doNothing", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
 }
@@ -809,10 +749,10 @@ settings_enum! {
     /// What a finished screenshot does next. GPUI-only: the Tauri app always
     /// opened the editor and never reads this key.
     PostScreenshotBehaviour {
-        OpenEditor = "openEditor", "Open editor";
-        Copy = "copy", "Copy to clipboard";
-        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
-        Save = "save", "Do nothing";
+        OpenEditor = "openEditor", tr::settings::options::post_screenshot::open_editor();
+        Copy = "copy", tr::settings::options::post_screenshot::copy();
+        CopyAndOpenEditor = "copyAndOpenEditor", tr::settings::options::post_screenshot::copy_and_open_editor();
+        Save = "save", tr::settings::options::post_screenshot::do_nothing();
     }
     default = OpenEditor
 }
@@ -830,8 +770,8 @@ impl PostScreenshotBehaviour {
 settings_enum! {
     /// `PostDeletionBehaviour`.
     PostDeletionBehaviour {
-        DoNothing = "doNothing", "Do nothing";
-        ReopenRecordingWindow = "reopenRecordingWindow", "Reopen recording window";
+        DoNothing = "doNothing", tr::settings::options::post_deletion::do_nothing();
+        ReopenRecordingWindow = "reopenRecordingWindow", tr::settings::options::post_deletion::reopen();
     }
     default = DoNothing
 }
@@ -856,9 +796,9 @@ settings_enum! {
 
 settings_enum! {
     EditorPreviewQuality {
-        Quarter = "quarter", "Quarter";
-        Half = "half", "Half";
-        Full = "full", "Full";
+        Quarter = "quarter", tr::settings::options::preview_quality::quarter();
+        Half = "half", tr::settings::options::preview_quality::half();
+        Full = "full", tr::settings::options::preview_quality::full();
     }
     default = Half
 }
@@ -1017,11 +957,21 @@ pub struct GeneralSettings {
     pub enable_notifications: bool,
     pub instant_mode_max_resolution: u32,
     pub disable_auto_open_links: bool,
+    /// GPUI-only `showMainWindowAfterInstantRecording`: whether the main
+    /// window comes back after an Instant recording whose link did not open.
+    /// Kept as stored, absent included, so every reader resolves it the same
+    /// way in [`Self::post_instant_behaviour`].
+    pub show_main_window_after_instant: Option<bool>,
     pub studio_recording_quality: StudioQuality,
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
+    pub window_capture_style: WindowCaptureStyle,
+    pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
+    /// GPUI-only: a cancelled picker leaves the main window hidden unless it
+    /// was on screen when the picker opened.
+    pub keep_main_hidden_on_cancel: bool,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -1030,6 +980,10 @@ pub struct GeneralSettings {
     pub default_zoom_amount: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
+    /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
+    /// during a Studio recording. Off by default, because a microphone or
+    /// system audio capture can record the cue.
+    pub recording_marker_sound: bool,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -1044,6 +998,9 @@ pub struct GeneralSettings {
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
+    /// How fast the editor preview plays. Preview only: export and the
+    /// project never see it. Anything but one of the offered steps reads as 1x.
+    pub editor_preview_speed: cap_editor::PreviewSpeed,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1059,9 +1016,83 @@ pub struct GeneralSettings {
     pub studio_sound_by_default: bool,
 }
 
+pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+
+pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+
+/// Read on every marker press, so it goes through the cached store rather
+/// than a full [`GeneralSettings::load`].
+pub fn recording_marker_sound_enabled() -> bool {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| bool_at(settings, RECORDING_MARKER_SOUND_KEY, false))
+        })
+        .unwrap_or(false)
+}
+
+/// What follows a cleanly stopped Instant recording, the link always copied.
+/// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
+/// whether the link opens, `showMainWindowAfterInstantRecording` whether the
+/// main window comes back when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostInstantBehaviour {
+    OpenLink,
+    ShowCap,
+    CopyLink,
+}
+
+impl PostInstantBehaviour {
+    /// `(disableAutoOpenLinks, showMainWindowAfterInstantRecording)`.
+    pub fn store_values(self) -> (bool, bool) {
+        match self {
+            Self::OpenLink => (false, false),
+            Self::ShowCap => (true, true),
+            Self::CopyLink => (true, false),
+        }
+    }
+}
+
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+
+/// Changes the recordings folder and remembers the old one, like Tauri's
+/// `remember_previous_recordings_path`, so the library keeps listing projects
+/// left in earlier folders.
+pub fn set_recordings_path(path: Option<&str>) -> bool {
+    const MAX_PREVIOUS_PATHS: usize = 20;
+
+    update_store_section(GENERAL_SETTINGS, |settings| {
+        let mut previous_paths = strings_at(settings, "previousRecordingsPaths");
+        if let Some(path) = path {
+            previous_paths.retain(|previous| previous != path);
+        }
+        if let Some(previous) = opt_string_at(settings, "recordingsPath")
+            && Some(previous.as_str()) != path
+            && !previous_paths.contains(&previous)
+        {
+            previous_paths.push(previous);
+            let len = previous_paths.len();
+            if len > MAX_PREVIOUS_PATHS {
+                previous_paths.drain(..len - MAX_PREVIOUS_PATHS);
+            }
+        }
+        settings.insert(
+            "recordingsPath".into(),
+            path.map_or(Value::Null, Value::from),
+        );
+        settings.insert(
+            "previousRecordingsPaths".into(),
+            Value::from(previous_paths),
+        );
+        true
+    })
+}
+
 /// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
 /// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
 /// and the Recording settings card both write it.
@@ -1326,6 +1357,18 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub fn post_instant_behaviour(&self) -> PostInstantBehaviour {
+        if !self.disable_auto_open_links {
+            PostInstantBehaviour::OpenLink
+        } else if self.show_main_window_after_instant.unwrap_or(true) {
+            // Absent: "copy link only" brought the main window back before
+            // the key existed, so a store that never set it keeps doing that.
+            PostInstantBehaviour::ShowCap
+        } else {
+            PostInstantBehaviour::CopyLink
+        }
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1349,14 +1392,20 @@ impl GeneralSettings {
             enable_notifications: bool_at(general, "enableNotifications", true),
             instant_mode_max_resolution: u32_at(general, "instantModeMaxResolution", 1920),
             disable_auto_open_links: bool_at(general, "disableAutoOpenLinks", false),
+            show_main_window_after_instant: general
+                .get(SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY)
+                .and_then(Value::as_bool),
             studio_recording_quality: enum_at(general, "studioRecordingQuality"),
             recording_countdown: opt_u32_at(general, "recordingCountdown"),
             main_window_recording_start_behaviour: enum_at(
                 general,
                 "mainWindowRecordingStartBehaviour",
             ),
+            window_capture_style: enum_at(general, "windowCaptureStyle"),
+            focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
+            keep_main_hidden_on_cancel: bool_at(general, "keepMainHiddenOnCancel", false),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
@@ -1373,6 +1422,7 @@ impl GeneralSettings {
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
+            recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
@@ -1395,6 +1445,11 @@ impl GeneralSettings {
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            editor_preview_speed: general
+                .get(EDITOR_PREVIEW_SPEED_KEY)
+                .and_then(Value::as_f64)
+                .and_then(cap_editor::PreviewSpeed::from_f64)
+                .unwrap_or_default(),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
@@ -1532,6 +1587,54 @@ pub fn set_hotkeys_raw(map: &Map<String, Value>) -> bool {
 
 pub fn hotkey_from_value(value: &Value) -> Option<Hotkey> {
     serde_json::from_value(value.clone()).ok()
+}
+
+pub const RECORDING_MARKER_HOTKEY: &str = "addRecordingMarker";
+
+/// Set once the marker shortcut's default has been offered, so clearing the
+/// shortcut in Settings sticks across launches.
+const RECORDING_MARKER_HOTKEY_SEEDED: &str = "recordingMarkerSeeded";
+
+/// ⌃⌘M on macOS. Elsewhere Ctrl+Alt is AltGr on many layouts (AltGr+M types
+/// µ in German), so Alt+Shift+M instead.
+pub fn default_recording_marker_hotkey() -> Hotkey {
+    let macos = cfg!(target_os = "macos");
+    Hotkey {
+        code: "KeyM".into(),
+        meta: macos,
+        ctrl: macos,
+        alt: !macos,
+        shift: !macos,
+    }
+}
+
+/// Gives the marker shortcut its default the first time this build runs,
+/// unless the user already bound it, or bound something else to the default
+/// combo. Later launches leave the map alone.
+pub fn seed_recording_marker_hotkey() {
+    if store_section(HOTKEYS)
+        .get(RECORDING_MARKER_HOTKEY_SEEDED)
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return;
+    }
+    let mut map = hotkeys_raw();
+    let default = default_recording_marker_hotkey();
+    let taken = map
+        .values()
+        .filter_map(hotkey_from_value)
+        .any(|hotkey| hotkey == default);
+    if !map.contains_key(RECORDING_MARKER_HOTKEY) && !taken {
+        let Ok(value) = serde_json::to_value(&default) else {
+            return;
+        };
+        map.insert(RECORDING_MARKER_HOTKEY.into(), value);
+        if !set_hotkeys_raw(&map) {
+            return;
+        }
+    }
+    set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
 }
 
 // -- Transcription hints --------------------------------------------------------
@@ -2011,23 +2114,6 @@ pub fn preset_names() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_handoff_marker_holds_this_pid_until_a_clean_quit_clears_it() {
-        let directory =
-            std::env::temp_dir().join(format!("cap-gpui-handoff-{}", super::new_uuid_v4()));
-        let marker = directory.join("cap-gpui.handoff");
-        super::mark_handoff_session_at(&marker).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap(),
-            std::process::id().to_string()
-        );
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        super::clear_handoff_marker_at(&marker);
-        assert!(!marker.exists());
-        super::clear_handoff_marker_at(&marker);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
     use super::*;
 
     struct TempStore {
@@ -2388,6 +2474,127 @@ mod tests {
             false
         }));
         assert_eq!(store.read()["auth"]["user_id"], "a");
+    }
+
+    #[test]
+    fn recordings_folder_changes_remember_previous_locations() {
+        let store = TempStore::new(
+            "recordings-folder-history",
+            Some(
+                r#"{"general_settings":{"recordingsPath":"old","previousRecordingsPaths":["older","new"],"maxFps":30,"future":true},"auth":{"user_id":"keep"}}"#,
+            ),
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "new");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old"]
+        );
+
+        assert!(set_recordings_path(Some("new")));
+        assert_eq!(store_section(GENERAL_SETTINGS), reloaded);
+
+        assert!(set_recordings_path(None));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], Value::Null);
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "old", "new"]
+        );
+
+        assert!(set_recordings_path(Some("old")));
+        let reloaded = store_section(GENERAL_SETTINGS);
+        assert_eq!(reloaded["recordingsPath"], "old");
+        assert_eq!(
+            strings_at(&reloaded, "previousRecordingsPaths"),
+            ["older", "new"]
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+        assert_eq!(store.read()[GENERAL_SETTINGS]["future"], true);
+        assert_eq!(store.read()["auth"]["user_id"], "keep");
+    }
+
+    #[test]
+    fn recordings_folder_changes_limit_history_without_duplicates() {
+        let _store = TempStore::new("recordings-folder-history-limit", None);
+        for index in 0..25 {
+            assert!(set_recordings_path(Some(&format!("folder-{index}"))));
+        }
+        let expected = (4..24)
+            .map(|index| format!("folder-{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+
+        assert!(set_recordings_path(Some("folder-23")));
+        assert!(set_recordings_path(Some("folder-24")));
+        assert_eq!(
+            strings_at(&store_section(GENERAL_SETTINGS), "previousRecordingsPaths"),
+            expected
+        );
+    }
+
+    #[test]
+    fn recordings_folder_changes_merge_concurrent_updates() {
+        let store = TempStore::new(
+            "recordings-folder-concurrent",
+            Some(r#"{"general_settings":{"recordingsPath":"original","maxFps":30}}"#),
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|index| {
+                let path = store.path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    set_test_tauri_store_path(Some(path));
+                    barrier.wait();
+                    let saved = set_recordings_path(Some(&format!("folder-{index}")));
+                    set_test_tauri_store_path(None);
+                    saved
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            assert!(worker.join().unwrap());
+        }
+        let reloaded = store_section(GENERAL_SETTINGS);
+        let mut paths = strings_at(&reloaded, "previousRecordingsPaths");
+        assert_eq!(paths.remove(0), "original");
+        paths.push(opt_string_at(&reloaded, "recordingsPath").unwrap());
+        paths.sort();
+        assert_eq!(
+            paths,
+            (0..8)
+                .map(|index| format!("folder-{index}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(reloaded["maxFps"], 30);
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_preferences_when_saving_fails() {
+        let contents = r#"{"general_settings":{"recordingsPath":"old","maxFps":30}}"#;
+        let store = TempStore::new("recordings-folder-write-failure", Some(contents));
+        let staged = store.path.with_extension("gpui-tmp");
+        std::fs::create_dir(&staged).unwrap();
+        let saved = set_recordings_path(Some("new"));
+        std::fs::remove_dir(staged).unwrap();
+
+        assert!(!saved);
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        assert_eq!(store_section(GENERAL_SETTINGS)["recordingsPath"], "old");
+    }
+
+    #[test]
+    fn recordings_folder_changes_preserve_unreadable_stores() {
+        let store = TempStore::new("recordings-folder-corrupt", Some("not JSON"));
+        assert!(!set_recordings_path(Some("new")));
+        assert!(!set_recordings_path(None));
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), "not JSON");
     }
 
     #[test]
@@ -3039,6 +3246,58 @@ mod tests {
         assert_eq!(after["hotkeys"]["hotkeys"]["someFutureAction"]["extra"], 1);
     }
 
+    #[test]
+    fn the_marker_shortcut_default_is_offered_once() {
+        let store = TempStore::new("marker-seed", Some(r#"{ "hotkeys": { "hotkeys": {} } }"#));
+        seed_recording_marker_hotkey();
+        let default = default_recording_marker_hotkey();
+        assert_eq!(
+            hotkey_from_value(&hotkeys_raw()[RECORDING_MARKER_HOTKEY]),
+            Some(default.clone())
+        );
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+
+        let mut cleared = hotkeys_raw();
+        cleared.remove(RECORDING_MARKER_HOTKEY);
+        assert!(set_hotkeys_raw(&cleared));
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+    }
+
+    #[test]
+    fn the_marker_shortcut_default_never_takes_a_combo_in_use() {
+        let default = serde_json::to_string(&default_recording_marker_hotkey()).unwrap();
+        let store = TempStore::new(
+            "marker-seed-taken",
+            Some(&format!(
+                r#"{{ "hotkeys": {{ "hotkeys": {{ "stopRecording": {default} }} }} }}"#
+            )),
+        );
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+    }
+
+    #[test]
+    fn the_marker_sound_is_off_until_turned_on() {
+        let _store = TempStore::new("marker-sound", Some(r#"{ "general_settings": {} }"#));
+        assert!(!recording_marker_sound_enabled());
+        assert!(!GeneralSettings::load().recording_marker_sound);
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            RECORDING_MARKER_SOUND_KEY,
+            Value::Bool(true)
+        ));
+        assert!(recording_marker_sound_enabled());
+        assert!(GeneralSettings::load().recording_marker_sound);
+    }
+
     /// The automations model against the JSON `crates/automation/src/types.rs`
     /// serializes: camelCase everywhere, `type`-tagged conditions/actions, and
     /// the whole key written wholesale.
@@ -3185,6 +3444,31 @@ mod tests {
         assert!(bundle_first.matches(Some("com.cap.desktop"), None, Some("Wrong")));
     }
 
+    #[test]
+    fn editor_preview_speed_reads_offered_steps_and_falls_back_to_normal() {
+        let read = |value: Option<Value>| {
+            let mut general = Map::new();
+            if let Some(value) = value {
+                general.insert(EDITOR_PREVIEW_SPEED_KEY.to_string(), value);
+            }
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .editor_preview_speed
+                .as_f64()
+        };
+        assert_eq!(read(None), 1.0);
+        for speed in cap_editor::PreviewSpeed::ALL {
+            assert_eq!(
+                read(Some(serde_json::json!(speed.as_f64()))),
+                speed.as_f64()
+            );
+        }
+        assert_eq!(read(Some(serde_json::json!(2))), 2.0);
+        assert_eq!(read(Some(serde_json::json!(2.5))), 1.0);
+        assert_eq!(read(Some(serde_json::json!(-1))), 1.0);
+        assert_eq!(read(Some(serde_json::json!("2"))), 1.0);
+        assert_eq!(read(Some(Value::Null)), 1.0);
+    }
+
     /// Key absent -> the default exclusion list (the Rust struct's serde
     /// default); key present but empty -> the user cleared every entry.
     #[test]
@@ -3202,5 +3486,60 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// A store written before `showMainWindowAfterInstantRecording` keeps
+    /// what it did: "copy link only" brought the main window back, so it reads
+    /// as Show Cap; every outcome round-trips through its two keys.
+    #[test]
+    fn post_instant_behaviour_reads_old_stores_and_round_trips() {
+        let settings = |pairs: &[(&str, bool)]| {
+            let general = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::Bool(*value)))
+                .collect::<Map<_, _>>();
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .post_instant_behaviour()
+        };
+        assert_eq!(settings(&[]), PostInstantBehaviour::OpenLink);
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", false)]),
+            PostInstantBehaviour::OpenLink
+        );
+        assert_eq!(
+            settings(&[("disableAutoOpenLinks", true)]),
+            PostInstantBehaviour::ShowCap
+        );
+        assert_eq!(
+            settings(&[
+                ("disableAutoOpenLinks", false),
+                (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, true)
+            ]),
+            PostInstantBehaviour::OpenLink
+        );
+        // The Quality page's auto-open toggle writes only
+        // `disableAutoOpenLinks`; the open window and a reload must agree.
+        let toggled = GeneralSettings {
+            disable_auto_open_links: true,
+            ..GeneralSettings::default()
+        };
+        assert_eq!(
+            toggled.post_instant_behaviour(),
+            settings(&[("disableAutoOpenLinks", true)])
+        );
+        for behaviour in [
+            PostInstantBehaviour::OpenLink,
+            PostInstantBehaviour::ShowCap,
+            PostInstantBehaviour::CopyLink,
+        ] {
+            let (disable_open, show_main) = behaviour.store_values();
+            assert_eq!(
+                settings(&[
+                    ("disableAutoOpenLinks", disable_open),
+                    (SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY, show_main),
+                ]),
+                behaviour
+            );
+        }
     }
 }

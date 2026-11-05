@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Context, Effect, Option } from "effect";
 import { isValidElement, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +16,8 @@ const mocks = vi.hoisted(() => ({
 		NEXT_PUBLIC_IS_CAP: undefined as string | undefined,
 	},
 	quota: vi.fn(),
+	restrictedRedirect: vi.fn(),
+	foreignRedirect: vi.fn(),
 	user: vi.fn(),
 	authenticated: false,
 	ownerIsPro: false,
@@ -22,6 +26,10 @@ const mocks = vi.hoisted(() => ({
 		name: string;
 		organizationId: string;
 	}[],
+	organizationDomains: {} as Record<
+		string,
+		{ customDomain: string; domainVerified: Date }
+	>,
 }));
 
 vi.mock("@cap/database", () => ({ db: () => ({ select: mocks.select }) }));
@@ -77,6 +85,9 @@ vi.mock("next/navigation", () => ({
 	notFound: () => {
 		throw new Error("NOT_FOUND");
 	},
+	redirect: (url: string) => {
+		throw new Error(`REDIRECT ${url}`);
+	},
 }));
 vi.mock("@/lib/video-view-count", () => ({
 	getVideoViewCount: async () => ({ count: 12 }),
@@ -88,7 +99,7 @@ vi.mock("@/lib/ai/provider", () => ({ isAiConfigured: () => false }));
 vi.mock("@/lib/desktop-segments-recovery", () => ({
 	completeDesktopSegmentsManifestAndQueue: vi.fn(),
 }));
-vi.mock("@/lib/Notification", () => ({ createNotification: vi.fn() }));
+vi.mock("@/lib/Notification", () => ({ createNotification: async () => {} }));
 vi.mock("@/lib/public-share-video", () => ({ getPublicShareVideo: vi.fn() }));
 vi.mock("@/lib/share-playback", async (importActual) => ({
 	canStartPlaybackInHtml: (
@@ -102,7 +113,11 @@ vi.mock("@/lib/share-playback", async (importActual) => ({
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoOverShareableLinkLimit: mocks.quota,
 }));
-vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveShareWebUrl: vi.fn(),
+	resolveRestrictedShareRedirect: mocks.restrictedRedirect,
+	resolveForeignShareRedirect: mocks.foreignRedirect,
+}));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: async () => false,
@@ -146,17 +161,28 @@ const createVideo = () => ({
 
 function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	mocks.select.mockImplementation((selection: Record<string, unknown>) => {
-		const result =
-			"ownerId" in selection
+		const resultFor = (condition: SQL) => {
+			if ("customDomain" in selection) {
+				const [organizationId] = new MySqlDialect().sqlToQuery(
+					condition,
+				).params;
+				const domain = mocks.organizationDomains[String(organizationId)];
+				return domain ? [domain] : [];
+			}
+			return "ownerId" in selection
 				? rows
 				: "organizationId" in selection && !("settings" in selection)
 					? mocks.sharedOrganizations
 					: [];
+		};
 		const query = {
 			from: () => query,
 			leftJoin: () => query,
 			innerJoin: () => query,
-			where: () => Promise.resolve(result),
+			where: (condition: SQL) => {
+				const result = Promise.resolve(resultFor(condition));
+				return Object.assign(result, { limit: () => result });
+			},
 		};
 		return query;
 	});
@@ -198,6 +224,8 @@ describe("share page loading", () => {
 		);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
+		mocks.restrictedRedirect.mockResolvedValue(null);
+		mocks.foreignRedirect.mockResolvedValue(null);
 		mocks.defaultStorage = true;
 		mocks.userAgent = "";
 		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
@@ -205,7 +233,54 @@ describe("share page loading", () => {
 		mocks.authenticated = false;
 		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
+		mocks.organizationDomains = {};
 		arrangeRows([createVideo()]);
+	});
+
+	it("renders the private state for a restricted video on the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		const page = (await renderPage()) as ReactElement<{ videoId: string }>;
+		expect(isValidElement(page)).toBe(true);
+		expect(page.props.videoId).toBe(createVideo().id);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+	});
+
+	it("sends a restricted video on a custom domain to the main origin", async () => {
+		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("keeps password gates on the custom domain", async () => {
+		mocks.policy.mockReturnValue(
+			Effect.fail({ _tag: "VerifyVideoPasswordError" }),
+		);
+		mocks.restrictedRedirect.mockResolvedValue("https://cap.so/s/video");
+		const page = (await renderPage()) as ReactElement;
+		expect(page.type).toBe(PasswordGate);
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
+	});
+
+	it("sends another organization's video on a custom domain to the main origin", async () => {
+		mocks.foreignRedirect.mockResolvedValue("https://cap.so/s/video");
+		await expect(renderPage()).rejects.toThrow(
+			"REDIRECT https://cap.so/s/video",
+		);
+		expect(mocks.foreignRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			"video",
+			{},
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("does not look up the host for authorized videos", async () => {
+		await renderAuthorizedContent();
+		expect(mocks.restrictedRedirect).not.toHaveBeenCalled();
 	});
 
 	it.each([false, true])(
@@ -221,6 +296,45 @@ describe("share page loading", () => {
 			} else {
 				expect(callToAction).toBeNull();
 			}
+		},
+	);
+
+	it.each([
+		{
+			viewerId: "owner",
+			videoOrganizationDomain: "videos.team.test",
+			expected: "videos.team.test",
+		},
+		{ viewerId: "owner", videoOrganizationDomain: null, expected: null },
+		{
+			viewerId: "viewer",
+			videoOrganizationDomain: "videos.team.test",
+			expected: null,
+		},
+	])(
+		"gives only the owner the custom domain of the video's organization: %j",
+		async ({ viewerId, videoOrganizationDomain, expected }) => {
+			mocks.user.mockResolvedValue({
+				id: viewerId,
+				activeOrganizationId: "other-organization",
+			});
+			mocks.organizationDomains = {
+				"other-organization": {
+					customDomain: "videos.other-team.test",
+					domainVerified: new Date(),
+				},
+			};
+			if (videoOrganizationDomain) {
+				mocks.organizationDomains.organization = {
+					customDomain: videoOrganizationDomain,
+					domainVerified: new Date(),
+				};
+			}
+			const content = await renderAuthorizedContent();
+			expect(content.props.children.props).toMatchObject({
+				customDomain: expected,
+				domainVerified: expected !== null,
+			});
 		},
 	);
 

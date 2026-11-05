@@ -434,6 +434,9 @@ pub enum PipelineHealthEvent {
     CaptureTargetLost {
         target: String,
     },
+    EncoderTailLost {
+        encoder: String,
+    },
 }
 
 pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
@@ -500,6 +503,7 @@ pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
         PipelineHealthEvent::MicrophoneDigitalSilence => {
             health_event(14, "microphone_digital_silence", &[])
         }
+        PipelineHealthEvent::EncoderTailLost { .. } => health_event(15, "encoder_tail_lost", &[]),
     }
     let _ = tx.try_send(event);
 }
@@ -3443,6 +3447,8 @@ impl VideoTimestampSpan {
     }
 }
 
+const VIDEO_START_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
@@ -3473,10 +3479,28 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let scope = PipelineBuildScope::current();
         async move {
             let started = if scope.is_some() {
-                tokio::select! {
+                let mut start = video_source.start();
+                let finished = tokio::select! {
                     biased;
-                    _ = stop_token.cancelled() => Err(anyhow!("Capture setup cancelled")),
-                    result = video_source.start() => result,
+                    _ = stop_token.cancelled() => None,
+                    result = &mut start => Some(result),
+                };
+                match finished {
+                    Some(result) => result,
+                    // A Pause or Stop right after Resume reaches a committed segment
+                    // whose source is still starting. Reporting that as a setup
+                    // failure left Studio unable to stop or quit.
+                    None if scope.as_ref().is_some_and(PipelineBuildScope::is_committed) => {
+                        tokio::time::timeout(VIDEO_START_SETTLE_TIMEOUT, start)
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(anyhow!(
+                                    "Capture source did not finish starting within {}s of Stop",
+                                    VIDEO_START_SETTLE_TIMEOUT.as_secs()
+                                ))
+                            })
+                    }
+                    None => Err(anyhow!("Capture setup cancelled")),
                 }
             } else {
                 video_source.start().await
@@ -12028,6 +12052,35 @@ mod build_scope_tests {
         tokio::task::yield_now().await;
         probe.cancel.cancel();
         pipeline.stop().await.unwrap();
+        assert_eq!(probe.alive.load(Ordering::Acquire), 0);
+        assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn stopping_a_resumed_segment_while_its_source_starts_is_a_clean_stop() {
+        let scope = PipelineBuildScope::new_macos_segment();
+        let probe = Probe::new(FailureStage::VideoStartPending, &scope);
+        let directory = tempfile::tempdir().unwrap();
+        let pipeline = finish_pipeline_startup(
+            &scope,
+            OutputPipeline::builder(directory.path().join("screen.mp4"))
+                .with_video::<Video>(probe.clone())
+                .build::<Encoder>(probe.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(scope.is_committed());
+        probe.cancel.cancel();
+        let release = probe.setup_pending.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            release.notify_one();
+        });
+        tokio::time::timeout(Duration::from_secs(5), pipeline.stop())
+            .await
+            .expect("stop must not hang on a starting source")
+            .expect("a stop that lands while the source starts is a clean stop");
         assert_eq!(probe.alive.load(Ordering::Acquire), 0);
         assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
     }

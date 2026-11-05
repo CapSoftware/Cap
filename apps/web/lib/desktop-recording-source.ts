@@ -981,6 +981,7 @@ async function copySmallObject(
 					Metadata: copyMetadata(original),
 					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
 				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
 			),
 		);
 	} catch (error) {
@@ -1012,6 +1013,7 @@ async function copyListedObject(
 					Metadata: copyMetadata(original),
 					ContentType: original.track === "audio" ? "audio/mp4" : "video/mp4",
 				},
+				{ retryWithoutUnsupportedIfNoneMatch: true },
 			),
 		);
 	} catch (error) {
@@ -1561,10 +1563,15 @@ async function copyMultipartPartBatch(
 	)
 		invalidSource("Multipart recording source is missing a copied range");
 	await context.run(
-		context.bucket.multipart.complete(multipart.key, multipart.uploadId, {
-			MultipartUpload: { Parts: parts },
-			IfNoneMatch: "*",
-		}),
+		context.bucket.multipart.complete(
+			multipart.key,
+			multipart.uploadId,
+			{
+				MultipartUpload: { Parts: parts },
+				IfNoneMatch: "*",
+			},
+			{ retryWithoutUnsupportedIfNoneMatch: true },
+		),
 	);
 	return {
 		object: await saveObjectReceipt(
@@ -1587,6 +1594,7 @@ async function advanceSourceSnapshot(
 	if (!context.listed)
 		return advanceSourceSnapshotOnce(context, checkpoint, verification);
 	const deadline = Date.now() + LISTED_ADVANCE_BUDGET_MS;
+	const step: ListedStep = {};
 	let current = checkpoint;
 	for (;;) {
 		const result = await advanceSourceSnapshotOnce(
@@ -1594,6 +1602,7 @@ async function advanceSourceSnapshot(
 			current,
 			verification,
 			deadline,
+			step,
 		);
 		if ("source" in result) return { source: result.source };
 		current = result.checkpoint;
@@ -1629,11 +1638,23 @@ function assertReceiptMatchesPlan(
 		invalidSource("Recording copy receipt does not match its source plan");
 }
 
+// Nothing in the plan, enumerate or copy phases of one step writes a copy before the copy phase does, so they
+// share one listing; the only other writer, segment preparation, at worst leaves a copy unlisted and it is
+// copied again. Verification always lists afresh: it is what proves the originals did not change meanwhile.
+type ListedStep = { listing?: Promise<SnapshotListing | null> };
+
+function stepListing(context: SourceContext, step: ListedStep | undefined) {
+	if (!step) return listSnapshot(context, true);
+	step.listing ??= listSnapshot(context, true);
+	return step.listing;
+}
+
 async function advanceSourceSnapshotOnce(
 	context: SourceContext,
 	checkpoint: DesktopRecordingSourceCheckpoint,
 	verification?: RecordingVerification,
 	deadline?: number,
+	step?: ListedStep,
 ): Promise<
 	| { checkpoint: DesktopRecordingSourceCheckpoint; listed?: boolean }
 	| { source: DesktopRecordingSource }
@@ -1646,7 +1667,7 @@ async function advanceSourceSnapshotOnce(
 		const [plan, listing] = await Promise.all([
 			createSourcePlan(context, verification),
 			context.listed && segmented && deadline !== undefined
-				? listSnapshot(context, false)
+				? stepListing(context, step)
 				: null,
 		]);
 		return {
@@ -1671,7 +1692,7 @@ async function advanceSourceSnapshotOnce(
 	if (checkpoint.phase === "enumerate") {
 		if (treeCount(checkpoint.planRoots) !== checkpoint.cursor)
 			invalidSource("Recording source plan cursor is incomplete");
-		const listing = listed ? await listSnapshot(context, false) : null;
+		const listing = listed ? await stepListing(context, step) : null;
 		if (listing && deadline !== undefined) {
 			let cursor = checkpoint.cursor;
 			let planRoots = checkpoint.planRoots;
@@ -1754,9 +1775,7 @@ async function advanceSourceSnapshotOnce(
 				"Recording copy receipts do not match their checkpoint cursor",
 			);
 		const listing =
-			listed && !checkpoint.multipart
-				? await listSnapshot(context, true)
-				: null;
+			listed && !checkpoint.multipart ? await stepListing(context, step) : null;
 		if (listing && deadline !== undefined) {
 			let cursor = checkpoint.cursor;
 			let receiptRoots = checkpoint.receiptRoots;

@@ -41,7 +41,9 @@ export function LoginForm() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const next = searchParams?.get("next");
-	const [email, setEmail] = useState("");
+	const [email, setEmail] = useState(
+		() => searchParams?.get("email")?.trim().toLowerCase() ?? "",
+	);
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
@@ -99,6 +101,10 @@ export function LoginForm() {
 				return;
 			} else if (error === "SignupBlocked") {
 				return;
+			} else if (error === "DisposableEmail") {
+				return toast.error(
+					"Temporary email addresses can't be used with Cap. Please use your work or personal email.",
+				);
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(

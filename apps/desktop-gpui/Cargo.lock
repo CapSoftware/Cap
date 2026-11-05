@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop-gpui"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -1551,6 +1551,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-glass",
  "cap-gpui-kernels",
  "cap-i18n-build",
  "cap-media-info",
@@ -1577,7 +1578,6 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "gpui_tokio",
- "hound",
  "image 0.25.10",
  "jpeg-decoder",
  "jxl-oxide",
@@ -1590,6 +1590,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "ort",
  "parakeet-rs",
  "raw-window-handle",
  "reqwest 0.12.28",
@@ -1771,6 +1772,15 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-glass"
+version = "0.1.0"
+dependencies = [
+ "image 0.25.10",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

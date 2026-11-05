@@ -37,7 +37,7 @@ Configure WorkOS redirect settings for the same environment:
 
 Cap supplies organization-scoped Admin Portal return and success URLs. API-generated links are short-lived bearer capabilities and should be opened immediately, never stored or logged. Use an HTTPS preview origin for a full Admin Portal test.
 
-Configure the Vercel Firewall SDK rule `rl_auth_sso_start`, for example 20 attempts per minute per IP. The shared rate-limit helper is best-effort and fails open when the rule is missing or the firewall is unavailable; merely deploying the rule ID does not enable rate limiting. Self-hosted deployments should provide equivalent perimeter protection.
+Configure the Vercel Firewall SDK rule `rl_auth_sso_start`, for example 20 attempts per minute per IP. When the rule is missing or the firewall is unavailable (including self-hosted deployments), the shared rate-limit helper falls back to an in-process limit of 100 attempts per minute per IP for each server instance. Self-hosted deployments should still provide perimeter protection.
 
 ## Billing and recovery
 

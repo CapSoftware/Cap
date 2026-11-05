@@ -78,7 +78,7 @@ export const CommercialCard = () => {
 					<Tooltip
 						position="top"
 						className="max-w-[260px] items-start text-left leading-relaxed"
-						content="A commercial license to use Cap on your desktop — unlimited local recording and editing, plus 20 cloud shareable links per month. No cloud subscription required."
+						content="A commercial license to use Cap on your desktop. Unlimited local recording and editing, plus 25 cloud shareable links per month. No cloud subscription required."
 					>
 						<button
 							type="button"

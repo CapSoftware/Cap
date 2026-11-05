@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { waitForVideoEvent } from "@/lib/wait-for-video-event";
 
 export const SUPPORTED_FORMATS = {
 	video: ["mp4", "webm", "mov", "avi", "mkv"],
@@ -433,6 +434,8 @@ export const MediaFormatConverter = ({
 	};
 
 	const convertVideoToGif = async (inputFile: File): Promise<void> => {
+		const videoElement = document.createElement("video");
+		let videoUrl: string | undefined;
 		try {
 			const parser = await import("@remotion/media-parser");
 			const _webcodecs = await import("@remotion/webcodecs");
@@ -487,13 +490,12 @@ export const MediaFormatConverter = ({
 			const GifModule = await import("gif.js");
 			const GIF = GifModule.default;
 
-			const videoElement = document.createElement("video");
 			videoElement.muted = true;
 			videoElement.playsInline = true;
-			videoElement.src = URL.createObjectURL(inputFile);
-
-			await new Promise((resolve) => {
-				videoElement.onloadedmetadata = () => resolve(null);
+			videoUrl = URL.createObjectURL(inputFile);
+			const sourceUrl = videoUrl;
+			await waitForVideoEvent(videoElement, "loadedmetadata", () => {
+				videoElement.src = sourceUrl;
 			});
 
 			const videoDuration = videoElement.duration;
@@ -520,14 +522,11 @@ export const MediaFormatConverter = ({
 			});
 
 			const captureFrame = async (time: number): Promise<void> => {
-				return new Promise((resolve) => {
+				await waitForVideoEvent(videoElement, "seeked", () => {
 					videoElement.currentTime = time;
-					videoElement.onseeked = () => {
-						ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
-						gifEncoder.addFrame(canvas, { delay: frameDelay, copy: true });
-						resolve();
-					};
 				});
+				ctx.drawImage(videoElement, 0, 0, targetWidth, targetHeight);
+				gifEncoder.addFrame(canvas, { delay: frameDelay, copy: true });
 			};
 
 			gifEncoder.on("progress", (progress: number) => {
@@ -556,8 +555,6 @@ export const MediaFormatConverter = ({
 				});
 				gifEncoder.render();
 			});
-
-			URL.revokeObjectURL(videoElement.src);
 
 			const gifUrl = URL.createObjectURL(gifBlob);
 			setOutputUrl(gifUrl);
@@ -591,6 +588,13 @@ export const MediaFormatConverter = ({
 			}
 
 			throw error;
+		} finally {
+			if (videoUrl) {
+				URL.revokeObjectURL(videoUrl);
+				videoElement.pause();
+				videoElement.removeAttribute("src");
+				videoElement.load();
+			}
 		}
 	};
 
