@@ -24,6 +24,8 @@ jobs:
     name: Test Docker Compose Self-Hosting
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUSTFS_SECRET_KEY: cap-ci-storage-password
 
     steps:
       - name: Checkout Repository

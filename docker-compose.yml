@@ -17,8 +17,9 @@ services:
       DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
-      CAP_AWS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
-      CAP_AWS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
+      # Preserve credentials from existing MinIO .env files during migration.
+      CAP_AWS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-${MINIO_ROOT_USER:-cap-admin}}
+      CAP_AWS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
       CAP_AWS_BUCKET: cap
       CAP_AWS_REGION: us-east-1
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_URL:-http://localhost:9000}
@@ -92,12 +93,20 @@ services:
 
   rustfs:
     container_name: cap-rustfs
-    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
     restart: unless-stopped
+    # Older Compose versions eagerly expand nested :? checks, even when the new key is set.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY}"
+        exec /entrypoint.sh "$$@"
+      - --
     command: /data
     environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-${MINIO_ROOT_USER:-cap-admin}}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
       RUSTFS_CONSOLE_ENABLE: "true"
       # Presigned uploads also originate from desktop and embedded SDK clients.
       RUSTFS_CORS_ALLOWED_ORIGINS: ${RUSTFS_CORS_ALLOWED_ORIGINS:-*}
@@ -128,8 +137,8 @@ services:
         mc alias set caprustfs http://rustfs:9000 "$${RUSTFS_ACCESS_KEY}" "$${RUSTFS_SECRET_KEY}"
         mc mb caprustfs/cap --ignore-existing
     environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-cap-admin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-cap-rustfs-pwd-456}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-${MINIO_ROOT_USER:-cap-admin}}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
     networks:
       - cap-network
 

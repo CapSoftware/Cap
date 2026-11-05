@@ -10,13 +10,18 @@ You can upload videos to it from the dashboard or from Cap Desktop.
 
 <CapEmbed src="https://cap.so/embed/k310v2vf41d6ffp" />
 
-## Quick Start (One Command)
+## Quick Start
 
-The fastest way to self-host Cap is with Docker Compose. This single command will start everything you need:
+The fastest way to self-host Cap is with Docker Compose. First clone the repository:
 
 ```bash
 git clone https://github.com/CapSoftware/Cap.git
 cd Cap
+```
+
+Set `RUSTFS_SECRET_KEY` to a strong password in `.env`, then start Cap:
+
+```bash
 docker compose up -d
 ```
 
@@ -45,8 +50,9 @@ Best for VPS, home servers, or any Docker-capable host.
 
 **Steps:**
 1. Clone the repository
-2. Run `docker compose up -d`
-3. Access Cap at `http://localhost:3000`
+2. Set `RUSTFS_SECRET_KEY` to a strong password in `.env`
+3. Run `docker compose up -d`
+4. Access Cap at `http://localhost:3000`
 
 > **Note:** The main `docker-compose.yml` builds the media server from source, so a full clone of the repository is required. The Coolify compose file uses a pre-built image from `ghcr.io` instead.
 
@@ -66,10 +72,12 @@ CAP_PORT=3000
 RUSTFS_PORT=9000
 RUSTFS_CONSOLE_PORT=9001
 
-# Replace the built-in credentials before deploying publicly
+# Required for new deployments
+RUSTFS_SECRET_KEY=your-rustfs-password
+
+# Replace the other built-in credentials before deploying publicly
 MYSQL_PASSWORD=your-secure-password
 RUSTFS_ACCESS_KEY=cap-admin
-RUSTFS_SECRET_KEY=your-rustfs-password
 ```
 
 RustFS serves the S3 API on port `9000` and its console on port `9001`. Point `S3_PUBLIC_URL` at the S3 API; browsers and desktop clients must be able to reach it. Cap uses `http://rustfs:9000` inside Docker and path-style S3 URLs. The `cap` bucket is created before Cap Web starts. If you change the public ports, update `CAP_URL` and `S3_PUBLIC_URL` as well.
@@ -106,6 +114,8 @@ The RustFS defaults use new data volumes (`cap-rustfs-data` for self-hosting and
 Before switching an existing deployment, back up the data, pause uploads, and copy the objects through the S3 API into RustFS, preserving bucket names and object keys. Verify uploads and playback before retiring MinIO. The existing `mc` setup client is retained because its bucket operations use the S3 API.
 
 For the main Compose file, replace `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` with `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`, and `MINIO_PORT` / `MINIO_CONSOLE_PORT` with `RUSTFS_PORT` / `RUSTFS_CONSOLE_PORT`. For Coolify, update `SERVICE_URL_MINIO` and `SERVICE_PASSWORD_MINIO` to their `RUSTFS` equivalents. Update reverse-proxy targets from the `minio` service to `rustfs`.
+
+The main Compose file accepts `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` as fallbacks when their corresponding RustFS variables are unset or empty. Nonempty RustFS values take precedence. If both password variables are unset or empty, the RustFS container exits before starting the server and logs `Set RUSTFS_SECRET_KEY`. This preserves credentials only; objects still need to be migrated as described above.
 
 ## Connecting Cap Desktop
 

@@ -80,6 +80,11 @@ The fastest way to self-host Cap Web is Docker Compose:
 ```bash
 git clone https://github.com/CapSoftware/Cap.git
 cd Cap
+```
+
+Set `RUSTFS_SECRET_KEY` to a strong password in `.env`, then start Cap:
+
+```bash
 docker compose up -d
 ```
 
