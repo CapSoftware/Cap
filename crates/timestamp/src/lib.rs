@@ -26,8 +26,12 @@ pub enum Timestamp {
 impl Timestamp {
     pub fn duration_since(&self, start: Timestamps) -> Duration {
         match self {
-            Self::Instant(instant) => instant.duration_since(start.instant),
-            Self::SystemTime(time) => time.duration_since(start.system_time).unwrap(),
+            Self::Instant(instant) => instant
+                .checked_duration_since(start.instant)
+                .unwrap_or(Duration::ZERO),
+            Self::SystemTime(time) => time
+                .duration_since(start.system_time)
+                .unwrap_or(Duration::ZERO),
             #[cfg(windows)]
             Self::PerformanceCounter(counter) => counter.duration_since(start.performance_counter),
             #[cfg(target_os = "macos")]
@@ -183,5 +187,44 @@ impl std::ops::Add<Duration> for Timestamps {
             #[cfg(target_os = "macos")]
             mach_absolute_time: self.mach_absolute_time + rhs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reference() -> Timestamps {
+        Timestamps {
+            instant: Instant::now(),
+            system_time: SystemTime::now(),
+            #[cfg(windows)]
+            performance_counter: PerformanceCounterTimestamp::new(1_000_000_000),
+            #[cfg(target_os = "macos")]
+            mach_absolute_time: MachAbsoluteTimestamp::new(1_000_000_000),
+        }
+    }
+
+    #[test]
+    fn duration_since_saturates_to_zero_when_the_clock_stepped_backwards() {
+        let reference = reference();
+        let instant = Timestamp::Instant(reference.instant - Duration::from_secs(1));
+        let system_time = Timestamp::SystemTime(reference.system_time - Duration::from_secs(1));
+
+        assert_eq!(instant.duration_since(reference), Duration::ZERO);
+        assert_eq!(system_time.duration_since(reference), Duration::ZERO);
+    }
+
+    #[test]
+    fn duration_since_still_measures_forward_time() {
+        let reference = reference();
+        let instant = Timestamp::Instant(reference.instant + Duration::from_secs(2));
+        let system_time = Timestamp::SystemTime(reference.system_time + Duration::from_secs(2));
+
+        assert_eq!(instant.duration_since(reference), Duration::from_secs(2));
+        assert_eq!(
+            system_time.duration_since(reference),
+            Duration::from_secs(2)
+        );
     }
 }
