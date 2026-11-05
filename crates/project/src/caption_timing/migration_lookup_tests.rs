@@ -88,27 +88,34 @@ fn indexed_lookup_matches_reverse_scan_at_shared_edges_and_gaps() {
             source_start: index as f64 * 10.0,
             source_end: index as f64 * 10.0 + end - start,
             edited_start: start,
+            edited_end: end,
             timescale: 1.0,
         })
         .collect();
     let mut times = vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 0.0, 4.5];
     for mapping in &mappings {
-        for time in [mapping.edited_start, mapping.edited_end()] {
+        for time in [mapping.edited_start, mapping.edited_end] {
             times.extend([time.next_down(), time, time.next_up()]);
         }
     }
-    for time in times {
-        let expected = mappings.iter().rev().find_map(|mapping| {
-            let end = mapping.edited_start
-                + (mapping.source_end - mapping.source_start) / mapping.timescale;
-            (time >= mapping.edited_start && time <= end).then_some(
-                (mapping.source_start + (time - mapping.edited_start) * mapping.timescale) as f32,
-            )
-        });
-        assert_eq!(
-            source_time_at(&mappings, time).map(f32::to_bits),
-            expected.map(f32::to_bits)
-        );
+    for is_end in [false, true] {
+        for &time in &times {
+            let expected = mappings.iter().rev().find_map(|mapping| {
+                let after_start = if is_end && time != 0.0 {
+                    time > mapping.edited_start
+                } else {
+                    time >= mapping.edited_start
+                };
+                (after_start && time <= mapping.edited_end).then_some(
+                    (mapping.source_start + (time - mapping.edited_start) * mapping.timescale)
+                        as f32,
+                )
+            });
+            assert_eq!(
+                source_time_at(&mappings, time, is_end).map(f32::to_bits),
+                expected.map(f32::to_bits)
+            );
+        }
     }
 }
 
@@ -208,20 +215,35 @@ fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations:
         let holds = timeline.hold_windows();
         let mappings = build_source_to_edited_mappings(timeline, recording_durations);
         let output_end = timeline.duration() as f32;
-        let to_source = |output: f32| -> Option<f32> {
+        let to_source = |output: f32, is_end: bool| -> Option<f32> {
             if output == output_end {
                 return mappings.last().map(|mapping| mapping.source_end as f32);
             }
-            let output = f64::from(output);
-            let effective = output
+            let output_time = f64::from(output);
+            let effective = output_time
                 - holds
                     .iter()
-                    .map(|(start, end)| (output.min(*end) - start).max(0.0))
+                    .map(|(start, end)| (output_time.min(*end) - start).max(0.0))
                     .sum::<f64>();
+            let effective = if is_end {
+                mappings
+                    .iter()
+                    .rev()
+                    .find(|mapping| {
+                        effective_to_output(&holds, mapping.edited_start) as f32 == output
+                    })
+                    .map_or(effective, |mapping| mapping.edited_start)
+            } else {
+                effective
+            };
             mappings.iter().rev().find_map(|mapping| {
-                let end = mapping.edited_start
-                    + (mapping.source_end - mapping.source_start) / mapping.timescale;
-                (effective >= mapping.edited_start && effective <= end).then_some({
+                let end = mapping.edited_end;
+                let after_start = if is_end && effective != 0.0 {
+                    effective > mapping.edited_start
+                } else {
+                    effective >= mapping.edited_start
+                };
+                (after_start && effective <= end).then_some({
                     (mapping.source_start + (effective - mapping.edited_start) * mapping.timescale)
                         as f32
                 })
@@ -231,16 +253,16 @@ fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations:
             .segments
             .iter()
             .filter_map(|caption| {
-                let start = to_source(caption.start)?;
-                let end = to_source(caption.end)?;
+                let start = to_source(caption.start, false)?;
+                let end = to_source(caption.end, true)?;
                 let words = caption
                     .words
                     .iter()
                     .filter_map(|word| {
                         Some(CaptionWord {
                             text: word.text.clone(),
-                            start: to_source(word.start)?,
-                            end: to_source(word.end)?,
+                            start: to_source(word.start, false)?,
+                            end: to_source(word.end, true)?,
                         })
                     })
                     .collect();
@@ -260,4 +282,84 @@ fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations:
     }
     timeline.caption_segments =
         derive_caption_track_segments(&captions.segments, timeline, recording_durations);
+}
+
+#[test]
+fn legacy_caption_ending_at_a_reordered_cut_keeps_its_source_end() {
+    for (clips, timescale, hold, first_recording_duration, clip_end) in [
+        (2, 1.0, false, 5.0, 5.0),
+        (128, 1.0, false, 5.0, 5.0),
+        (2, 2.0, false, 5.0, 5.0),
+        (128, 0.5, true, 5.0, 5.0),
+        (2, 1.0, false, 7.633333333333334, 5.0),
+        (128, 1.0, false, 7.633333333333334, 5.0),
+        (2, 1.0, false, 5.0, 41.0 / 15.0),
+        (2, 1.0, false, 5.0, 7.0 / 3.0),
+        (128, 1.0, true, 5.0, 82.0 / 15.0),
+    ] {
+        for with_words in [false, true] {
+            let end = (clip_end / timescale + if hold { 1.0 } else { 0.0 }) as f32;
+            let mut project = ProjectConfiguration {
+                timeline: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": (0..clips).rev().map(|index| serde_json::json!({
+                            "recordingSegment": index,
+                            "start": 0.0,
+                            "end": clip_end,
+                            "timescale": timescale,
+                        })).collect::<Vec<_>>(),
+                        "zoomSegments": [],
+                        "textSegments": if hold {
+                            serde_json::json!([{"start": 1.0, "end": 2.0, "layout": "fullscreen"}])
+                        } else {
+                            serde_json::json!([])
+                        },
+                    }))
+                    .unwrap(),
+                ),
+                captions: Some(CaptionsData {
+                    segments: vec![CaptionSegment {
+                        id: "at-cut".into(),
+                        start: end - 1.0,
+                        end,
+                        text: "hello".into(),
+                        words: if with_words {
+                            vec![CaptionWord {
+                                text: "hello".into(),
+                                start: end - 1.0,
+                                end,
+                            }]
+                        } else {
+                            Vec::new()
+                        },
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut durations = vec![clip_end; clips];
+            durations[0] = first_recording_duration;
+            let source_end = durations.iter().sum::<f64>();
+
+            synchronize_captions(&mut project, &durations);
+
+            let source = &project.captions.as_ref().unwrap().segments;
+            assert_eq!(source.len(), 1);
+            assert!(
+                (source[0].start - (source_end - timescale) as f32).abs()
+                    <= source[0].start.abs() * f32::EPSILON
+            );
+            assert_eq!(source[0].end, source_end as f32);
+            if with_words {
+                assert_eq!(source[0].words[0].end, source[0].end);
+            }
+            let track = &project.timeline.as_ref().unwrap().caption_segments;
+            assert_eq!(track.len(), 1);
+            assert!((track[0].start - f64::from(end - 1.0)).abs() < 1e-4);
+            assert!((track[0].end - f64::from(end)).abs() < 1e-4);
+            let saved = serde_json::to_string(&project).unwrap();
+            synchronize_captions(&mut project, &durations);
+            assert_eq!(serde_json::to_string(&project).unwrap(), saved);
+        }
+    }
 }

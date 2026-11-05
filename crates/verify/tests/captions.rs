@@ -237,14 +237,14 @@ fn model_migrate(
 ) -> Vec<CaptionSegment> {
     let time = TimeModel::new(config);
     let starts = clip_starts(durations);
-    let to_source = |o: f32| time.output_to_source(f64::from(o), &starts);
+    let to_source = |o: f32, is_end: bool| time.output_to_source(f64::from(o), &starts, is_end);
     let mut out: Vec<CaptionSegment> = legacy
         .iter()
         .filter_map(|c| {
             Some(CaptionSegment {
                 id: c.id.clone(),
-                start: to_source(c.start)? as f32,
-                end: to_source(c.end)? as f32,
+                start: to_source(c.start, false)? as f32,
+                end: to_source(c.end, true)? as f32,
                 text: c.text.clone(),
                 words: c
                     .words
@@ -252,8 +252,8 @@ fn model_migrate(
                     .filter_map(|w| {
                         Some(CaptionWord {
                             text: w.text.clone(),
-                            start: to_source(w.start)? as f32,
-                            end: to_source(w.end)? as f32,
+                            start: to_source(w.start, false)? as f32,
+                            end: to_source(w.end, true)? as f32,
                         })
                     })
                     .collect(),
@@ -818,6 +818,58 @@ fn legacy_migration_caption_at_timeline_end() {
                 migrated.len(),
                 expected.len()
             ),
+        );
+    }
+    finish(case);
+}
+
+#[test]
+fn legacy_migration_caption_at_a_reordered_cut() {
+    let id = "captions/legacy-migration/ends-at-reordered-cut";
+    if !report::selected(id) {
+        return;
+    }
+    let durations = [5.0, 5.0];
+    let mut config = edits::base_config(&durations);
+    config
+        .timeline
+        .as_mut()
+        .expect("timeline")
+        .segments
+        .reverse();
+    set_captions(
+        &mut config,
+        vec![CaptionSegment {
+            id: "at-cut".into(),
+            start: 4.0,
+            end: 5.0,
+            text: "hello".into(),
+            words: vec![CaptionWord {
+                text: "hello".into(),
+                start: 4.0,
+                end: 5.0,
+            }],
+        }],
+        false,
+    );
+    let expected = model_migrate(
+        &config.captions.as_ref().expect("captions").segments,
+        &config,
+        &durations,
+    );
+    cap_project::synchronize_captions(&mut config, &durations);
+    let mut case = Case::new(id);
+    let track = &edits::timeline(&config).caption_segments;
+    if track.len() != 1 || track[0].start != 4.0 || track[0].end != 5.0 {
+        case.problem(
+            "caption-migration",
+            "the caption ending at the cut disappeared or moved",
+        );
+    }
+    if expected.len() != 1 || expected[0].start != 9.0 || expected[0].end != 10.0 {
+        case.problem(
+            "caption-migration",
+            "the reference model mapped the cut into the next clip",
         );
     }
     finish(case);
