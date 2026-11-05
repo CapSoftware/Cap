@@ -204,6 +204,52 @@ fn benchmark_caption_migration_lookup() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn benchmark_caption_migration_with_holds() {
+    println!("clips,words,holds,reference_ms,migration_ms");
+    for clips in [60, 128, 500] {
+        let (mut project, durations) = fixture(clips, 20);
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments.reverse();
+        let holds: Vec<_> = (0..100)
+            .map(|index| {
+                let start = index as f64 * 4.0 + 1.0;
+                serde_json::json!({"start": start, "end": start + 1.0, "layout": "fullscreen"})
+            })
+            .collect();
+        timeline.text_segments = serde_json::from_value(serde_json::json!(holds)).unwrap();
+        assert_eq!(timeline.hold_windows().len(), 100);
+        let mut expected = project.clone();
+        let mut actual = project.clone();
+        baseline_synchronize(&mut expected, &durations);
+        synchronize_captions(&mut actual, &durations);
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let mut reference = Vec::new();
+        let mut samples = Vec::new();
+        for _ in 0..7 {
+            reference.push(measure(&project, &durations, baseline_synchronize));
+            samples.push(measure(&project, &durations, synchronize_captions));
+        }
+        reference.sort_by(f64::total_cmp);
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "{clips},{},100,{:.4},{:.4}",
+            clips * 20,
+            reference[3],
+            samples[3]
+        );
+        assert!(
+            samples[3] * 1.5 < reference[3],
+            "hold-heavy migration should be faster than the uncached reference"
+        );
+    }
+}
+
 fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations: &[f64]) {
     let (Some(captions), Some(timeline)) = (&mut project.captions, &mut project.timeline) else {
         return;

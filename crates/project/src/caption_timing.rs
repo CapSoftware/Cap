@@ -475,6 +475,10 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
                 pair[0].edited_start <= pair[1].edited_start
                     && pair[0].edited_end <= pair[1].edited_end
             });
+        let output_starts: Vec<_> = mappings
+            .iter()
+            .map(|mapping| effective_to_output(&holds, mapping.edited_start) as f32)
+            .collect();
         let output_end = timeline.duration() as f32;
         let to_source = |output: f32, is_end: bool| -> Option<f32> {
             if output == output_end {
@@ -487,21 +491,14 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
                     .map(|(start, end)| (output_time.min(*end) - start).max(0.0))
                     .sum::<f64>();
             let effective = if is_end {
-                let output_start = |mapping: &SourceToEditedMapping| {
-                    effective_to_output(&holds, mapping.edited_start) as f32
-                };
                 let boundary = if mappings_ordered {
-                    let end = mappings.partition_point(|mapping| output_start(mapping) <= output);
+                    let end = output_starts.partition_point(|start| *start <= output);
                     end.checked_sub(1)
-                        .and_then(|index| mappings.get(index))
-                        .filter(|mapping| output_start(mapping) == output)
+                        .filter(|&index| output_starts[index] == output)
                 } else {
-                    mappings
-                        .iter()
-                        .rev()
-                        .find(|mapping| output_start(mapping) == output)
+                    output_starts.iter().rposition(|start| *start == output)
                 };
-                boundary.map_or(effective, |mapping| mapping.edited_start)
+                boundary.map_or(effective, |index| mappings[index].edited_start)
             } else {
                 effective
             };
