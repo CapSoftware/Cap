@@ -181,6 +181,8 @@ export const RATE_LIMIT_IDS = {
 	/** Organization invite batches, checked per organization and per sender. Suggested: 30 / 1h per key. */
 	ORGANIZATION_INVITE: "rl_organization_invite",
 	CHECKOUT: "rl_checkout",
+	VIDEO_PASSWORD_PER_VIEWER: "rl_video_password_per_viewer",
+	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -219,6 +221,14 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	},
 	[RATE_LIMIT_IDS.ORGANIZATION_INVITE]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIEWER]: {
+		limit: 1,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_VIEWER]: {
+		limit: 1,
+		windowMs: 60 * MINUTE_MS,
+	},
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
