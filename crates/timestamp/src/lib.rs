@@ -214,7 +214,12 @@ mod tests {
                 .checked_sub(Duration::from_secs(1))
                 .expect("reference supports subtraction"),
         );
-        let system_time = Timestamp::SystemTime(reference.system_time - Duration::from_secs(1));
+        let system_time = Timestamp::SystemTime(
+            reference
+                .system_time
+                .checked_sub(Duration::from_secs(1))
+                .expect("reference supports subtraction"),
+        );
 
         assert_eq!(instant.duration_since(reference), Duration::ZERO);
         assert_eq!(system_time.duration_since(reference), Duration::ZERO);
