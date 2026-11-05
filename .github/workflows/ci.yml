@@ -127,6 +127,7 @@ jobs:
           __tests__/unit/messenger-poll-ordering.test.ts
           __tests__/unit/media-comment-playback-cleanup.test.ts
           __tests__/unit/media-client.test.ts
+          __tests__/unit/media-duration.test.ts
           __tests__/unit/media-format-converter-selection.test.ts
           __tests__/unit/media-format-converter.test.ts
           __tests__/unit/gif-video-errors.test.ts
