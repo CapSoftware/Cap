@@ -88,6 +88,15 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	restoreVideoToOriginalAsUser,
+	saveVideoEditsAsUser,
+	VideoEditError,
+} from "@/lib/video-edit-save";
+import {
+	areEditSpecsEquivalent,
+	createIdentityEditSpec,
+} from "@/lib/video-edits";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export const dynamic = "force-dynamic";
@@ -2142,6 +2151,103 @@ const assertMobileVideoOwner = Effect.fn("Mobile.assertVideoOwner")(function* (
 	}
 });
 
+const MOBILE_EDIT_BUSY_UPLOAD_PHASES = new Set([
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"complete",
+	"error",
+]);
+
+/** Mirrors the web edit page: owner only, processed MP4s, Cap Pro, nothing already running. */
+const getCapEdit = Effect.fn("Mobile.getCapEdit")(function* (
+	videoId: Video.VideoId,
+) {
+	yield* assertMobileVideoOwner(videoId);
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({
+				duration: Db.videos.duration,
+				source: Db.videos.source,
+				isScreenshot: Db.videos.isScreenshot,
+				metadata: Db.videos.metadata,
+				uploadPhase: Db.videoUploads.phase,
+			})
+			.from(Db.videos)
+			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	const [edit] = yield* database.use((db) =>
+		db
+			.select({ editSpec: Db.videoEdits.editSpec })
+			.from(Db.videoEdits)
+			.where(eq(Db.videoEdits.videoId, videoId))
+			.limit(1),
+	);
+
+	const duration = row.duration ?? 0;
+	const editable =
+		!row.isScreenshot &&
+		(row.source.type === "desktopMP4" || row.source.type === "webMP4") &&
+		duration > 0;
+	const isPro = yield* currentUserIsPro();
+	const busy =
+		Boolean(row.metadata?.editProcessing) ||
+		(row.uploadPhase !== null &&
+			MOBILE_EDIT_BUSY_UPLOAD_PHASES.has(row.uploadPhase));
+	const status = !editable
+		? ("not_editable" as const)
+		: !isPro
+			? ("pro_required" as const)
+			: busy
+				? ("busy" as const)
+				: ("available" as const);
+	const hasEdits = edit
+		? !areEditSpecsEquivalent(
+				edit.editSpec,
+				createIdentityEditSpec(edit.editSpec.sourceDuration),
+			)
+		: false;
+	return { status, duration, hasEdits };
+});
+
+const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
+	videoId: Video.VideoId,
+	run: (user: typeof Db.users.$inferSelect) => Promise<unknown>,
+) {
+	yield* assertMobileVideoOwner(videoId);
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [userRow] = yield* database.use((db) =>
+		db.select().from(Db.users).where(eq(Db.users.id, user.id)).limit(1),
+	);
+	if (!userRow) return yield* Effect.fail(new HttpApiError.Forbidden());
+	yield* Effect.tryPromise({
+		try: () => run(userRow),
+		catch: (error) => {
+			if (!(error instanceof VideoEditError)) {
+				return new HttpApiError.InternalServerError();
+			}
+			switch (error.code) {
+				case "not_found":
+					return new HttpApiError.NotFound();
+				case "busy":
+					return new HttpApiError.Conflict();
+				case "invalid":
+				case "not_editable":
+				case "unavailable":
+					return new HttpApiError.BadRequest();
+				default:
+					return new HttpApiError.Forbidden();
+			}
+		},
+	});
+	return { success: true as const };
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -3598,6 +3704,32 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							videos
 								.delete(path.id)
 								.pipe(Effect.map(() => ({ success: true as const }))),
+						),
+					)
+					.handle("getCapEdit", ({ path, request }) =>
+						withMappedErrors(getCapEdit(path.id)).pipe(
+							withMobileVideoAccess(request, path.id),
+						),
+					)
+					.handle("saveCapEdit", ({ path, payload }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								saveVideoEditsAsUser(user, path.id, {
+									version: 1,
+									sourceDuration: payload.sourceDuration,
+									keepRanges: payload.keepRanges.map((range) => ({
+										start: range.start,
+										end: range.end,
+									})),
+								}),
+							),
+						),
+					)
+					.handle("restoreCapEdit", ({ path }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								restoreVideoToOriginalAsUser(user, path.id),
+							),
 						),
 					)
 					.handle("getPlayback", ({ path, request }) =>
