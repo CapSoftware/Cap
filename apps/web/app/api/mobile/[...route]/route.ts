@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
+import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
 	normalizeEmailAddress,
 } from "@cap/database/auth/domain-utils";
 import {
@@ -455,6 +457,12 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 			return yield* Effect.fail(new HttpApiError.BadRequest());
 		}
 
+		if (
+			isEmailBlockedFromSignup(email, serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS)
+		) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+
 		const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 		if (!allowedDomains) return;
 
@@ -468,6 +476,19 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 		);
 
 		if (!existingUser && !isEmailAllowedForSignup(email, allowedDomains)) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+	},
+);
+
+// Runs after the per-email rate limit because it can make a DNS lookup.
+const ensureNotDisposableSignup = Effect.fn("Mobile.ensureNotDisposableSignup")(
+	function* (email: string) {
+		const disposable = yield* Effect.tryPromise({
+			try: () => isDisposableEmailSignup(email),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		if (disposable) {
 			return yield* Effect.fail(new HttpApiError.Forbidden());
 		}
 	},
@@ -527,6 +548,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -584,6 +606,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
