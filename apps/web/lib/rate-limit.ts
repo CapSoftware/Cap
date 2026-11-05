@@ -185,6 +185,8 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
 	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
+	/** Video edit saves and restores per user: each one re-encodes the video and regenerates AI output. Suggested: 30 / 1h per key (user). */
+	VIDEO_EDIT: "rl_video_edit",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -231,6 +233,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 1,
 		windowMs: 60 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
