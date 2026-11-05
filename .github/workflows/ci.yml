@@ -144,6 +144,7 @@ jobs:
           __tests__/unit/pro-checkout-webhook.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
+          __tests__/unit/retry-transcription.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/share-comments-rendering.test.ts
           __tests__/unit/share-page-round-trips.test.ts
