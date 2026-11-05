@@ -1145,7 +1145,7 @@ export const useWebRecorder = ({
 			startTimer();
 			updatePhase("recording");
 		} catch (err) {
-			const orphanVideoId = videoCreationRef.current?.id ?? null;
+			const orphanVideoId = pendingInstantVideoIdRef.current;
 			if (instantUploaderRef.current) {
 				await instantUploaderRef.current.cancel();
 			}
