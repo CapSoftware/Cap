@@ -98,6 +98,7 @@ pub fn captions_signature(captions: Option<&CaptionsData>) -> u64 {
     let mut hasher = std::hash::DefaultHasher::new();
     if let Some(captions) = captions {
         captions.source_timed.hash(&mut hasher);
+        captions.settings.filler_language.hash(&mut hasher);
         captions.segments.len().hash(&mut hasher);
         for segment in &captions.segments {
             segment.words.len().hash(&mut hasher);
@@ -175,15 +176,19 @@ fn build_paragraphs(words: &[Word]) -> Vec<Range<usize>> {
 impl TranscriptDoc {
     pub fn build(captions: &CaptionsData) -> Self {
         let words = flatten_words(captions);
-        let tokens: Vec<DisfluencyToken> = words
-            .iter()
-            .map(|word| DisfluencyToken {
-                text: &word.text,
-                start: word.start,
-                end: word.end,
-            })
-            .collect();
-        let fillers = detect_disfluencies(&tokens);
+        let fillers = if captions.settings.filler_language.as_deref() == Some("en") {
+            let tokens: Vec<DisfluencyToken> = words
+                .iter()
+                .map(|word| DisfluencyToken {
+                    text: &word.text,
+                    start: word.start,
+                    end: word.end,
+                })
+                .collect();
+            detect_disfluencies(&tokens)
+        } else {
+            Vec::new()
+        };
         let mut filler_of = vec![NO_FILLER; words.len()];
         for (index, filler) in fillers.iter().enumerate() {
             for slot in &mut filler_of[filler.words.clone()] {
