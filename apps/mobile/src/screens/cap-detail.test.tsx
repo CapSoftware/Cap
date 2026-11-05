@@ -936,6 +936,63 @@ describe("Cap detail screen", () => {
 		expect(getTextNodes(renderer.toJSON())).toContain("Saved");
 	});
 
+	it.each(["success", "failure"] as const)(
+		"submits once for overlapping keyboard and button sends, then allows another send after %s",
+		async (outcome) => {
+			const pending = createDeferred<MobileComment>();
+			const auth = createAuth();
+			auth.client.createComment.mockImplementationOnce(async () => {
+				const comment = await pending.promise;
+				if (outcome === "failure") throw new Error("Network unavailable");
+				return comment;
+			});
+			auth.client.createComment.mockResolvedValue({
+				...createdComment("Ship it"),
+				id: Comment.CommentId.make("comment_next"),
+			});
+			authState.value = auth;
+			const renderer = await renderComponent(
+				React.createElement(CapDetailScreen),
+			);
+			const input = renderer.root.findAllByProps({
+				accessibilityLabel: "Comment",
+			})[0];
+			if (!input) throw new Error("Comment input was not rendered");
+			await act(async () => input.props.onChangeText("Ship it"));
+			const send = renderer.root.findAllByProps({
+				accessibilityLabel: "Send comment",
+			})[0];
+			if (!send) throw new Error("Send button was not rendered");
+
+			await act(async () => {
+				input.props.onSubmitEditing();
+				send.props.onPress();
+			});
+			expect(auth.client.createComment).toHaveBeenCalledTimes(1);
+			expect(auth.client.createComment).toHaveBeenCalledWith("video_123", {
+				content: "Ship it",
+				timestamp: null,
+			});
+
+			await act(async () => pending.resolve(createdComment("Ship it")));
+			expect(input.props.value).toBe(outcome === "success" ? "" : "Ship it");
+			expect(
+				getTextNodes(renderer.toJSON()).filter((text) => text === "Ship it"),
+			).toHaveLength(outcome === "success" ? 1 : 0);
+			expect(Alert.alert).toHaveBeenCalledTimes(outcome === "failure" ? 1 : 0);
+
+			await act(async () => input.props.onChangeText("Ship it"));
+			const nextSend = renderer.root.findAllByProps({
+				accessibilityLabel: "Send comment",
+			})[0];
+			if (!nextSend) throw new Error("Send button was not rendered");
+			await act(async () => nextSend.props.onPress());
+			expect(auth.client.createComment).toHaveBeenCalledTimes(2);
+			expect(input.props.value).toBe("");
+			await act(async () => renderer.unmount());
+		},
+	);
+
 	it("keeps save idle while a comment is sending", async () => {
 		const commentDeferred = createDeferred<MobileComment>();
 		const auth = createAuth();
