@@ -765,6 +765,9 @@ impl EditorWindow {
         if self.clip_segments().len() < 2 {
             return;
         }
+        // The trash button stops the press that would blur the rename input,
+        // and deleting shifts every later index under the draft.
+        self.commit_clip_rename(window, cx);
         self.edit_project("clip-delete", window, cx, move |project| {
             project
                 .timeline
@@ -3609,6 +3612,100 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[cfg(target_os = "linux")]
+    mod rename_and_delete {
+        use super::*;
+        use gpui::Render;
+
+        struct ClipsView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipsView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                ClipsView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn three_clips(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 4.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 6.0}
+                    ],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+        }
+
+        fn clip_names(editor: &EditorWindow) -> Vec<(f64, Option<String>)> {
+            editor
+                .clip_segments()
+                .iter()
+                .map(|segment| (segment.start, segment.name.clone()))
+                .collect()
+        }
+
+        fn rename_then_delete(
+            cx: &mut gpui::TestAppContext,
+            renamed: usize,
+            deleted: usize,
+        ) -> Vec<(f64, Option<String>)> {
+            let (editor, cx) = fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                three_clips(editor);
+                editor.start_clip_rename(renamed, window, cx);
+                let input = editor.clips.rename_input.clone().unwrap();
+                input.update(cx, |input, cx| input.set_text("Intro".to_string(), cx));
+                editor.delete_clip(deleted, window, cx);
+                editor.on_clip_rename_event(&ui::TextInputEvent::Blurred, window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.clips.editing.is_none());
+                clip_names(editor)
+            })
+        }
+
+        #[gpui::test]
+        fn deleting_an_earlier_clip_keeps_the_draft_on_the_clip_being_renamed(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            assert_eq!(
+                rename_then_delete(cx, 1, 0),
+                [(2.0, Some("Intro".to_string())), (4.0, None)]
+            );
+        }
+
+        #[gpui::test]
+        fn deleting_a_clip_before_the_last_keeps_the_last_clips_draft(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            assert_eq!(
+                rename_then_delete(cx, 2, 1),
+                [(0.0, None), (4.0, Some("Intro".to_string()))]
+            );
+        }
+    }
 
     #[test]
     fn appended_recordings_bring_their_markers_onto_the_copied_segments() {
