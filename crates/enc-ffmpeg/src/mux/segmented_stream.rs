@@ -21,6 +21,37 @@ use crate::video::h264::{
 /// with libx264: one bad frame is dropped and retried, a dead device is not.
 const HARDWARE_FAILURES_BEFORE_FALLBACK: u32 = 3;
 
+/// Codec errors within a hardware encoder's last 64 frames before it is
+/// replaced, so one failing every few frames is not kept for the whole
+/// recording just because successes keep breaking up the streak.
+const HARDWARE_FAILURES_IN_WINDOW_BEFORE_FALLBACK: u32 = 8;
+
+#[derive(Debug, Default, Clone, Copy)]
+struct CodecFailureHistory {
+    consecutive: u32,
+    recent: u64,
+}
+
+impl CodecFailureHistory {
+    fn record(&mut self, failed: bool) {
+        self.recent = (self.recent << 1) | u64::from(failed);
+        self.consecutive = if failed {
+            self.consecutive.saturating_add(1)
+        } else {
+            0
+        };
+    }
+
+    fn recent_failures(&self) -> u32 {
+        self.recent.count_ones()
+    }
+
+    fn warrants_fallback(&self) -> bool {
+        self.consecutive >= HARDWARE_FAILURES_BEFORE_FALLBACK
+            || self.recent_failures() >= HARDWARE_FAILURES_IN_WINDOW_BEFORE_FALLBACK
+    }
+}
+
 /// Whether a hardware encoder that fails mid-recording is replaced with
 /// libx264. Windows encoders report a lost or hung GPU (driver reset, sleep,
 /// display change) as an error on every later frame, so without this the
@@ -148,7 +179,7 @@ pub struct SegmentedVideoEncoder {
     disk_space_callback: Option<DiskSpaceCallback>,
 
     runtime_fallback: bool,
-    consecutive_codec_failures: u32,
+    codec_failures: CodecFailureHistory,
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
 }
@@ -478,7 +509,7 @@ impl SegmentedVideoEncoder {
             segment_duration: config.segment_duration,
             disk_space_callback: None,
             runtime_fallback: RUNTIME_SOFTWARE_FALLBACK,
-            consecutive_codec_failures: 0,
+            codec_failures: CodecFailureHistory::default(),
             pending_fallback: None,
             unrecovered_codec_failure: None,
         };
@@ -550,7 +581,7 @@ impl SegmentedVideoEncoder {
         let result = self.encoder.queue_frame_to(frame, timestamp, &mut sink);
         let sink_failed = sink.failed;
         match result {
-            Ok(()) => self.consecutive_codec_failures = 0,
+            Ok(()) => self.codec_failures.record(false),
             Err(EncodeError::Encode(error)) if !sink_failed => {
                 if !self.recover_from_codec_failure(error) {
                     return Err(EncodeError::Encode(error).into());
@@ -565,10 +596,10 @@ impl SegmentedVideoEncoder {
     }
 
     fn recover_from_codec_failure(&mut self, error: ffmpeg::Error) -> bool {
-        self.consecutive_codec_failures += 1;
+        self.codec_failures.record(true);
         if !self.runtime_fallback
             || !self.encoder.is_hardware()
-            || self.consecutive_codec_failures < HARDWARE_FAILURES_BEFORE_FALLBACK
+            || !self.codec_failures.warrants_fallback()
         {
             return false;
         }
@@ -582,7 +613,8 @@ impl SegmentedVideoEncoder {
         tracing::warn!(
             encoder = %failed_encoder,
             %error,
-            failures = self.consecutive_codec_failures,
+            consecutive_failures = self.codec_failures.consecutive,
+            recent_failures = self.codec_failures.recent_failures(),
             "Hardware video encoder stopped working mid-recording; switching to the software encoder"
         );
         match self.encoder.replace_with_software() {
@@ -593,7 +625,7 @@ impl SegmentedVideoEncoder {
                     replacement = %replacement,
                     "Recording continues on the software video encoder"
                 );
-                self.consecutive_codec_failures = 0;
+                self.codec_failures = CodecFailureHistory::default();
                 self.pending_fallback = Some(EncoderFallback {
                     failed_encoder,
                     error,
@@ -2069,6 +2101,73 @@ mod tests {
         assert!(manifest["total_duration"].as_f64().unwrap() > 4.5);
     }
 
+    fn record_with_intermittent_failures(
+        base_path: &Path,
+        healthy_frames_between_failures: usize,
+        total_frames: u64,
+    ) -> (SegmentedVideoEncoder, usize) {
+        let mut encoder = SegmentedVideoEncoder::init_libx264(
+            base_path.to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.force_runtime_fallback(true);
+        encoder.encoder.inject_intermittent_codec_failures(
+            healthy_frames_between_failures,
+            HARDWARE_FAILURE,
+            Some(H264Preset::Ultrafast),
+        );
+        let rejected = (0..total_frames)
+            .filter(|i| {
+                encoder
+                    .queue_frame(
+                        create_test_frame(320, 240),
+                        Duration::from_micros(i * 33_333),
+                    )
+                    .is_err()
+            })
+            .count();
+        (encoder, rejected)
+    }
+
+    #[test]
+    fn hardware_encoder_failing_every_other_frame_continues_on_the_software_encoder() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let total_frames = 150;
+        let (mut encoder, rejected) =
+            record_with_intermittent_failures(temp.path(), 1, total_frames);
+
+        let fallback = encoder
+            .take_encoder_fallback()
+            .expect("an encoder failing every other frame is replaced");
+        assert_eq!(fallback.replacement, "libx264");
+        assert!(
+            rejected < 16,
+            "{rejected} frames rejected before the switch"
+        );
+        encoder.finish().unwrap();
+
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        assert_eq!(decoded.frames, total_frames as usize - rejected - 1);
+    }
+
+    #[test]
+    fn hardware_encoder_with_rare_failures_is_kept() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let total_frames = 150;
+        let (mut encoder, rejected) =
+            record_with_intermittent_failures(temp.path(), 15, total_frames);
+
+        assert!(encoder.take_encoder_fallback().is_none());
+        assert_eq!(rejected, total_frames as usize / 16);
+        encoder.finish().unwrap();
+        let decoded = decode_every_packet(&recorded_track(temp.path()));
+        assert_eq!(decoded.frames, total_frames as usize - rejected);
+    }
+
     #[test]
     fn hardware_encoder_failure_while_flushing_keeps_the_recording() {
         ffmpeg::init().unwrap();
@@ -2175,6 +2274,40 @@ mod tests {
             encoder.finish(),
             Err(FinishError::FFmpeg(error)) if error == HARDWARE_FAILURE
         ));
+    }
+
+    #[test]
+    fn codec_failure_history_trips_on_streaks_and_sustained_failure_rates() {
+        let mut history = CodecFailureHistory::default();
+        for _ in 0..HARDWARE_FAILURES_BEFORE_FALLBACK - 1 {
+            history.record(true);
+            assert!(!history.warrants_fallback());
+        }
+        history.record(true);
+        assert!(history.warrants_fallback());
+
+        let mut history = CodecFailureHistory::default();
+        let mut frames = 0;
+        while !history.warrants_fallback() {
+            history.record(frames % 2 == 1);
+            frames += 1;
+        }
+        assert_eq!(frames, 16);
+
+        let mut history = CodecFailureHistory::default();
+        for frame in 0..10_000 {
+            history.record(frame % 16 == 15);
+            assert!(!history.warrants_fallback());
+        }
+
+        let mut history = CodecFailureHistory::default();
+        history.record(true);
+        history.record(true);
+        for _ in 0..10_000 {
+            history.record(false);
+            assert!(!history.warrants_fallback());
+        }
+        assert_eq!(history.recent_failures(), 0);
     }
 
     #[test]
