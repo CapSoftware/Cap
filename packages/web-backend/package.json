@@ -24,7 +24,7 @@
 		"@effect/rpc": "^0.71.0",
 		"@smithy/types": "^4.3.1",
 		"@vercel/functions": "^3.1.0",
-		"drizzle-orm": "0.44.6",
+		"drizzle-orm": "0.45.2",
 		"effect": "^3.18.4",
 		"next": "16.4.5",
 		"server-only": "^0.0.1"
