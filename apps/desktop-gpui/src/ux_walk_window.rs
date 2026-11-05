@@ -632,8 +632,9 @@ impl Render for WalkWindow {
                     .map(|summary| summary.status.notice())
                     .unwrap_or_else(|| "Loading saved notes…".into())
             } else if session.walk.notice.is_empty() {
-                "Start a UX Walk from the recorder. Use its existing capture and audio controls."
-                    .into()
+                fork_brand::mode_text(
+                    "Start a %walk% recording from the recorder. Use its existing capture and audio controls.",
+                )
             } else {
                 session.walk.notice.clone()
             }
@@ -654,7 +655,7 @@ impl Render for WalkWindow {
                     .child(
                         walk.as_ref()
                             .map(|walk| walk.request.topic.clone())
-                            .unwrap_or_else(|| "UX Walk".into()),
+                            .unwrap_or_else(|| fork_brand::WALK_MODE_NAME.into()),
                     ),
             )
             .child(

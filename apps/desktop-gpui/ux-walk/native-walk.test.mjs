@@ -10,6 +10,7 @@ import {
 	nativeWalkPrompt,
 	snapshotNativeWalk,
 } from "./native-walk.mjs";
+import { walkModeName } from "./walk-brand.mjs";
 
 function fixture(t) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ux-walk-native-"));
@@ -201,6 +202,27 @@ test("a partial failed export cannot block a retry or replace the source", async
 	assert.ok(report.includes("Clipped button"));
 	assert.ok(report.includes("Payment"));
 	assert.ok(report.includes("video.mp4"));
+	assert.ok(report.includes(` · ${walkModeName}</title>`));
+});
+
+test("the report and agent prompt name the mode from the brand door", (t) => {
+	const brand = JSON.parse(
+		fs.readFileSync(
+			new URL("../../../crates/fork-brand/brand.json", import.meta.url),
+			"utf8",
+		),
+	);
+	assert.equal(
+		walkModeName,
+		brand.walk_mode_name.replaceAll("%app%", brand.display_name),
+	);
+	assert.doesNotMatch(walkModeName, /%/);
+	const f = fixture(t);
+	assert.ok(
+		nativeWalkPrompt(f.file).startsWith(
+			`Review this ${walkModeName} recording: ${f.directory}.`,
+		),
+	);
 });
 
 test("reprocessing recovers a lock left by a process that no longer exists", async (t) => {

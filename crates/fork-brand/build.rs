@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-const STRINGS: [(&str, &str); 18] = [
+const STRINGS: [(&str, &str); 19] = [
     ("display_name", "FORK_BRAND_APP_NAME"),
     ("upstream_name", "FORK_BRAND_UPSTREAM_NAME"),
     ("slug", "FORK_BRAND_SLUG"),
@@ -20,6 +20,7 @@ const STRINGS: [(&str, &str); 18] = [
     ("community_url", "FORK_BRAND_COMMUNITY_URL"),
     ("default_server_url", "FORK_BRAND_DEFAULT_SERVER_URL"),
     ("long_description", "FORK_BRAND_LONG_DESCRIPTION"),
+    ("walk_mode_name", "FORK_BRAND_WALK_MODE_NAME"),
 ];
 
 const FORMER_NAMES_SEPARATOR: char = '|';
@@ -34,6 +35,7 @@ fn text<'a>(brand: &'a Value, field: &str) -> &'a str {
 
 fn expand(template: &str, brand: &Value) -> String {
     template
+        .replace("%walk%", text(brand, "walk_mode_name"))
         .replace("%app%", text(brand, "display_name"))
         .replace("%cli%", text(brand, "cli_name"))
         .replace("%skill%", text(brand, "skill_name"))

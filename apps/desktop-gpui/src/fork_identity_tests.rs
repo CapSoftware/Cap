@@ -238,7 +238,10 @@ fn fork_wording_reads_the_same_in_every_locale() {
         );
         assert_eq!(
             tr::settings::shortcuts::sentence::cycle_mode(),
-            "Switch between Studio, Instant, Screenshot and UX Walk mode.",
+            format!(
+                "Switch between Studio, Instant, Screenshot and {}.",
+                fork_brand::WALK_MODE_NAME
+            ),
             "{code}"
         );
         for branded in [tr::menu::app::about(), tr::tray::quit()] {

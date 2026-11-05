@@ -1276,7 +1276,7 @@ const MODE_MENU: &[(fn() -> &'static str, crate::mode_choice::ModeChoice)] = &[
 
 #[cfg(target_os = "macos")]
 fn ux_walk_mode_label() -> &'static str {
-    "UX Walk Mode"
+    fork_brand::WALK_MODE_NAME
 }
 
 fn overlay_mode(mode: Mode, cx: &gpui::App) -> crate::mode_choice::ModeChoice {
@@ -4290,7 +4290,7 @@ impl OverlayWindow {
             }
         };
         let mode_label = if ux_walk {
-            "UX Walk Mode — Record notes, chapters and transcripts"
+            fork_brand::mode_text_static("%walk% — Record notes, chapters and transcripts")
         } else {
             match mode {
                 Mode::Instant if needs_sign_in => tr::overlay::start::instant_sign_in(),
@@ -4999,7 +4999,7 @@ mod tests {
                 ("Instant Mode".to_string(), true),
                 ("Screenshot Mode".to_string(), false),
                 #[cfg(target_os = "macos")]
-                ("UX Walk Mode".to_string(), false),
+                (fork_brand::WALK_MODE_NAME.to_string(), false),
             ],
         );
         assert_eq!(

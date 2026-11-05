@@ -23,6 +23,13 @@ pub const STATUS_URL: Option<&str> = non_empty(env!("FORK_BRAND_STATUS_URL"));
 pub const COMMUNITY_URL: Option<&str> = non_empty(env!("FORK_BRAND_COMMUNITY_URL"));
 pub const DEFAULT_SERVER_URL: &str = env!("FORK_BRAND_DEFAULT_SERVER_URL");
 pub const LONG_DESCRIPTION: &str = env!("FORK_BRAND_LONG_DESCRIPTION");
+/// What the app calls its walk recording mode (`walk_mode_name` in
+/// brand.json). Code identifiers, settings keys and saved files keep their
+/// `ux_walk` names; only the words people read follow this.
+pub const WALK_MODE_NAME: &str = env!("FORK_BRAND_WALK_MODE_NAME");
+/// Stands for [`WALK_MODE_NAME`] in [`mode_text`], the fork's locale overlay
+/// and brand.json's templates.
+pub const WALK_MODE_TOKEN: &str = "%walk%";
 pub const AGENT_SKILL: &str = include_str!(concat!(env!("OUT_DIR"), "/SKILL.md"));
 pub const CLI_HELP: &str = include_str!(concat!(env!("OUT_DIR"), "/cli-help.txt"));
 
@@ -172,6 +179,26 @@ pub fn text_static(source: &'static str) -> &'static str {
         .or_insert_with(|| Box::leak(text(source).into_boxed_str()))
 }
 
+/// `source` with each mode token spelled out: [`WALK_MODE_TOKEN`] becomes
+/// [`WALK_MODE_NAME`].
+pub fn mode_text(source: &str) -> String {
+    source.replace(WALK_MODE_TOKEN, WALK_MODE_NAME)
+}
+
+/// [`mode_text`] for `&'static str`; each distinct input is filled once and
+/// kept for the life of the process.
+pub fn mode_text_static(source: &'static str) -> &'static str {
+    static CACHE: LazyLock<Mutex<HashMap<&'static str, &'static str>>> =
+        LazyLock::new(Default::default);
+    if !source.contains('%') {
+        return source;
+    }
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    cache
+        .entry(source)
+        .or_insert_with(|| Box::leak(mode_text(source).into_boxed_str()))
+}
+
 pub fn update_refusal() -> String {
     format!(
         "This {APP_NAME} build uses releases from {RELEASES_URL}; official {UPSTREAM_NAME} updates would replace it."
@@ -293,9 +320,28 @@ mod tests {
         for template in [AGENT_SKILL, CLI_HELP] {
             assert!(!template.contains("%app%"), "unfilled token");
             assert!(!template.contains("%cli%"), "unfilled token");
+            assert!(!template.contains(WALK_MODE_TOKEN), "unfilled token");
         }
         assert!(AGENT_SKILL.starts_with(&format!("---\nname: {SKILL_NAME}\n")));
         assert!(CLI_HELP.contains(CLI_NAME));
+    }
+
+    #[test]
+    fn the_walk_mode_is_named_by_the_brand() {
+        assert!(!WALK_MODE_NAME.is_empty());
+        assert!(!WALK_MODE_NAME.contains('%'), "unfilled token");
+        assert_eq!(
+            mode_text("Open %walk% settings"),
+            format!("Open {WALK_MODE_NAME} settings")
+        );
+        let first = mode_text_static("No %walk% recordings");
+        assert!(std::ptr::eq(
+            first,
+            mode_text_static("No %walk% recordings")
+        ));
+        assert!(std::ptr::eq(mode_text_static("Settings"), "Settings"));
+        assert!(LONG_DESCRIPTION.contains(WALK_MODE_NAME));
+        assert!(AGENT_SKILL.contains(WALK_MODE_NAME));
     }
 
     #[test]

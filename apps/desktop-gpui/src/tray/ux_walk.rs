@@ -99,7 +99,7 @@ pub(super) fn mode_name(pill: Pill) -> &'static str {
 pub(super) fn mode_heading(pill: Pill) -> &'static str {
     match pill {
         Pill::Mode(mode) => super::mode_heading(mode),
-        Pill::UxWalk => "UX Walk Mode",
+        Pill::UxWalk => fork_brand::WALK_MODE_NAME,
     }
 }
 
@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn the_walk_pill_is_labelled_and_drawn() {
-        assert_eq!(mode_name(Pill::UxWalk), "UX Walk");
-        assert_eq!(mode_heading(Pill::UxWalk), "UX Walk Mode");
+        assert_eq!(mode_name(Pill::UxWalk), fork_brand::WALK_MODE_NAME);
+        assert_eq!(mode_heading(Pill::UxWalk), fork_brand::WALK_MODE_NAME);
         assert!(mode_picker_icon(Pill::UxWalk).is_some());
         for mode in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
             assert_eq!(mode_name(Pill::Mode(mode)), super::super::mode_name(mode));

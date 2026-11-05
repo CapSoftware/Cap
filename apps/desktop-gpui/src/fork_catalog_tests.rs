@@ -28,10 +28,12 @@ fn overlay() -> BTreeMap<String, String> {
             let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"'));
             wording.insert(
                 format!("{section}.{name}"),
-                fork_brand::text(value.expect("overlay values are one-line strings"))
-                    .replace("%upstream%", fork_brand::UPSTREAM_NAME)
-                    .replace("%releases%", fork_brand::RELEASES_URL)
-                    .replace("%cli%", fork_brand::CLI_NAME),
+                fork_brand::mode_text(
+                    &fork_brand::text(value.expect("overlay values are one-line strings"))
+                        .replace("%upstream%", fork_brand::UPSTREAM_NAME)
+                        .replace("%releases%", fork_brand::RELEASES_URL)
+                        .replace("%cli%", fork_brand::CLI_NAME),
+                ),
             );
         }
     }

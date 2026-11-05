@@ -104,7 +104,7 @@ pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
 
 pub(super) fn row_label(item: &RecordingItem) -> &'static str {
     if item.walk.is_some() {
-        "UX Walk"
+        fork_brand::WALK_MODE_NAME
     } else {
         item.mode.label()
     }
@@ -398,7 +398,11 @@ mod tests {
             ("all", "Show all", None),
             ("instant", "Instant", Some("icons/instant.svg")),
             ("studio", "Studio", Some("icons/film-cut.svg")),
-            ("ux-walk", "UX Walk", Some("icons/ux-walk.svg")),
+            (
+                "ux-walk",
+                fork_brand::WALK_MODE_NAME,
+                Some("icons/ux-walk.svg"),
+            ),
         ];
         assert_eq!(actual, expected);
     }

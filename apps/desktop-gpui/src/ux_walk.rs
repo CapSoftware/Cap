@@ -47,7 +47,7 @@ pub fn request(topic: &str) -> Result<crate::ux_walk_journal::Request, String> {
             crate::store::new_uuid_v4()
         )),
         topic: if topic.trim().is_empty() {
-            "UX Walk".into()
+            fork_brand::WALK_MODE_NAME.into()
         } else {
             topic.trim().to_string()
         },
@@ -102,7 +102,9 @@ pub fn run_engine(command: &str, file: &std::path::Path) -> Result<String, Strin
 pub fn prompt_key(label: &str) -> Option<String> {
     prompt_secret(
         &format!("{label} API key"),
-        "Saved in your login Keychain for UX Walk. Your audio is sent to this provider when transcription runs.",
+        fork_brand::mode_text_static(
+            "Saved in your login Keychain for %walk%. Your audio is sent to this provider when transcription runs.",
+        ),
     )
 }
 

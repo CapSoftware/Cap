@@ -311,6 +311,7 @@ jobs:
           assert (app / 'Contents/Resources' / icon).read_bytes() == pathlib.Path('apps/desktop-gpui/assets/branding/app/icon.icns').read_bytes(), 'The app icon must be the fork art'
           assert not (app / 'Contents/Helpers/UX Walk.app').exists(), 'Do not ship a second menu bar app'
           assert (app / 'Contents/Resources/ux-walk/native-walk.mjs').is_file(), 'Bundle the native walk processor'
+          assert (app / 'Contents/Resources/ux-walk/brand.json').is_file(), 'Bundle the brand door for the walk mode name'
           assert info['LSMinimumSystemVersion'] == minimum, f"{name} requires macOS {minimum}; bundled value was {info['LSMinimumSystemVersion']}"
           assert info['LSEnvironment'] == {
               'CAP_GPUI_APP_DATA_DIR': profile + '/data',

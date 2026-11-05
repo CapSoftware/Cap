@@ -8331,7 +8331,9 @@ mod tests {
             }
         };
         let picker = match mode {
-            _ if crate::store::ux_walk_selected() => "record it in UX Walk mode",
+            _ if crate::store::ux_walk_selected() => {
+                fork_brand::mode_text_static("record it in %walk%")
+            }
             crate::main_window::Mode::Studio => "record it in Studio mode",
             crate::main_window::Mode::Instant => "record it in Instant mode",
             crate::main_window::Mode::Screenshot => "take a screenshot of it",
@@ -8364,10 +8366,12 @@ mod tests {
             "openRecordingPickerArea" => format!("select an area, then {picker}"),
             "openRecordingPickerWindow" => format!("choose a window, then {picker}"),
             "openRecordingPickerDisplay" => format!("choose a display, then {picker}"),
-            "openUxWalk" => {
-                "open UX Walk setup with the recorder’s capture and audio controls".into()
+            "openUxWalk" => fork_brand::mode_text(
+                "open %walk% setup with the recorder’s capture and audio controls",
+            ),
+            "openUxWalkNotes" => {
+                fork_brand::mode_text("open notes for your current or most recent %walk% recording")
             }
-            "openUxWalkNotes" => "open notes for your current or most recent UX Walk".into(),
             "openRecordingPicker" => "open Cap so you can choose what to record".into(),
             "cycleRecordingMode" => "switch between Studio, Instant and Screenshot mode".into(),
             "stopRecording" => "stop the current recording".into(),

@@ -19,11 +19,11 @@ Worm combines [Cap](https://github.com/CapSoftware/Cap)'s screen recorder and ed
 
 ## What you get
 
-- **UX Walk in every mode picker.** Open a fresh Chrome window from the menu, recorder or mode picker, already selected for capture. Onboarding introduces it alongside Instant, Studio and Screenshot.
+- **Worm Mode in every mode picker.** Open a fresh Chrome window from the menu, recorder or mode picker, already selected for capture. Onboarding introduces it alongside Instant, Studio and Screenshot.
 - **One settings window.** Walk defaults live in General, the output folder in Recordings, and providers in Transcription. The CLI reads the same preferences.
 - **Your transcription provider.** ElevenLabs Scribe, AssemblyAI, Descript, or no transcription. Existing Keychain entries are reused. Cap editor captions keep their local models.
 - **Evidence an agent can read.** Video, screenshots, timestamped notes, chapters and a local report stay together. The walk's Chrome window adds semantic clicks, console warnings/errors, page exceptions and redacted failed-request diagnostics. Reports show when browser evidence is partial or unavailable.
-- **Notes and handoff in your library.** Filter recordings by UX Walk, view a walk's notes or copy its agent prompt. Assign walk shortcuts in the existing Shortcuts settings.
+- **Notes and handoff in your library.** Filter recordings by Worm Mode, view a walk's notes or copy its agent prompt. Assign walk shortcuts in the existing Shortcuts settings.
 - **Local recording without an account.** Instant saves a ready-to-play video; Studio keeps its editable project. All recording-quality options are available.
 - **Your sharing server.** Choose a compatible endpoint and expiry in Settings → Sharing. Share a video or screenshot explicitly and revoke its link from the library. Cloud sharing is off until configured.
 - **Cap's editor.** Keep the original recording as evidence and edit a copy for sharing.
@@ -32,7 +32,7 @@ Worm combines [Cap](https://github.com/CapSoftware/Cap)'s screen recorder and ed
 
 Worm is currently a macOS 15+ developer preview. A signed public installer is not available yet. The native CI workflow can build an isolated **Worm Preview.app** with its own profile, the pinned UX Walk engine, a Node runtime and the native walk adapter.
 
-Fresh walk windows use Google Chrome. The walkthrough processor currently needs FFmpeg on your Mac. Optional chapter briefs need your configured Claude CLI; agent handoffs to cmux need cmux. Cloud transcription needs your own provider key. UX Walk does not automatically publish recordings.
+Fresh walk windows use Google Chrome. The walkthrough processor currently needs FFmpeg on your Mac. Optional chapter briefs need your configured Claude CLI; agent handoffs to cmux need cmux. Cloud transcription needs your own provider key. Worm Mode does not automatically publish recordings.
 
 For a source build, clone the repository:
 

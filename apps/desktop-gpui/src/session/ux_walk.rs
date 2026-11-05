@@ -274,7 +274,9 @@ impl RecordingSession {
         self.walk
             .journal
             .as_mut()
-            .ok_or("This recording is not a UX Walk.")?
+            .ok_or(fork_brand::mode_text_static(
+                "This recording is not a %walk% recording.",
+            ))?
             .add(kind, text, elapsed)?;
         cx.notify();
         Ok(())

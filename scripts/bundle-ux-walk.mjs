@@ -260,12 +260,17 @@ export async function bundleUxWalk(app) {
 		"restore-checkpoint.mjs",
 		"native-browser.mjs",
 		"browser-evidence.mjs",
+		"walk-brand.mjs",
 	]) {
 		await fs.copyFile(
 			path.join(root, "apps/desktop-gpui/ux-walk", file),
 			path.join(engine, file),
 		);
 	}
+	await fs.copyFile(
+		path.join(root, "crates/fork-brand/brand.json"),
+		path.join(engine, "brand.json"),
+	);
 	buildChromeLauncher(path.join(engine, "bin", "walk-chrome-launcher"));
 	await fs.writeFile(
 		path.join(resources, "engine-source.json"),

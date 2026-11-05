@@ -8,7 +8,7 @@ const WALK_SHORTCUTS: bool = cfg!(all(target_os = "macos", feature = "ux-walk"))
 
 pub(super) fn shortcut_label(action: &str) -> Option<&'static str> {
     match action {
-        "openUxWalk" if WALK_SHORTCUTS => Some("Open UX Walk"),
+        "openUxWalk" if WALK_SHORTCUTS => Some(fork_brand::mode_text_static("Open %walk%")),
         "openUxWalkNotes" if WALK_SHORTCUTS => Some("Open walk notes"),
         _ => None,
     }
@@ -17,28 +17,46 @@ pub(super) fn shortcut_label(action: &str) -> Option<&'static str> {
 pub(super) fn shortcut_effect(action: &str) -> Option<ShortcutEffect> {
     Some(match action {
         "openRecordingPickerArea" if crate::store::ux_walk_selected() => ShortcutEffect {
-            phrase: || "select an area, then record it in UX Walk mode",
-            sentence: || "Select an area, then record it in UX Walk mode.",
+            phrase: || fork_brand::mode_text_static("select an area, then record it in %walk%"),
+            sentence: || fork_brand::mode_text_static("Select an area, then record it in %walk%."),
         },
         "openRecordingPickerWindow" if crate::store::ux_walk_selected() => ShortcutEffect {
-            phrase: || "choose a window, then record it in UX Walk mode",
-            sentence: || "Choose a window, then record it in UX Walk mode.",
+            phrase: || fork_brand::mode_text_static("choose a window, then record it in %walk%"),
+            sentence: || fork_brand::mode_text_static("Choose a window, then record it in %walk%."),
         },
         "openRecordingPickerDisplay" if crate::store::ux_walk_selected() => ShortcutEffect {
-            phrase: || "choose a display, then record it in UX Walk mode",
-            sentence: || "Choose a display, then record it in UX Walk mode.",
+            phrase: || fork_brand::mode_text_static("choose a display, then record it in %walk%"),
+            sentence: || {
+                fork_brand::mode_text_static("Choose a display, then record it in %walk%.")
+            },
         },
         "startInstantRecording" if FORK => ShortcutEffect {
             phrase: || "record your selected screen or window in Instant mode, then save it locally when you stop",
             sentence: || "Record your selected screen or window in Instant mode, then save it locally when you stop.",
         },
         "openUxWalk" if WALK_SHORTCUTS => ShortcutEffect {
-            phrase: || "open UX Walk setup with the recorder’s capture and audio controls",
-            sentence: || "Open UX Walk setup with the recorder’s capture and audio controls.",
+            phrase: || {
+                fork_brand::mode_text_static(
+                    "open %walk% setup with the recorder’s capture and audio controls",
+                )
+            },
+            sentence: || {
+                fork_brand::mode_text_static(
+                    "Open %walk% setup with the recorder’s capture and audio controls.",
+                )
+            },
         },
         "openUxWalkNotes" if WALK_SHORTCUTS => ShortcutEffect {
-            phrase: || "open notes for your current or most recent UX Walk",
-            sentence: || "Open notes for your current or most recent UX Walk.",
+            phrase: || {
+                fork_brand::mode_text_static(
+                    "open notes for your current or most recent %walk% recording",
+                )
+            },
+            sentence: || {
+                fork_brand::mode_text_static(
+                    "Open notes for your current or most recent %walk% recording.",
+                )
+            },
         },
         _ => return None,
     })
@@ -119,9 +137,9 @@ impl SettingsWindow {
         vec![
             self.section(
                 fork_brand::text_static("Cap updates"),
-                Some(
-                    "Native UX Walk recording, notes, chapters, transcripts and explicit agent handoffs.",
-                ),
+                Some(fork_brand::mode_text_static(
+                    "Native %walk% recording, notes, chapters, transcripts and explicit agent handoffs.",
+                )),
                 None,
                 vec![self.card(true).child(body).into_any_element()],
             )

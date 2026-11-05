@@ -14,6 +14,7 @@ import {
 import { clipNativeAudio, prepareNativeAudio } from "./native-audio.mjs";
 import { RecoveryTransport } from "./recovery-transport.mjs";
 import { restoreRecovery } from "./restore-checkpoint.mjs";
+import { walkModeName } from "./walk-brand.mjs";
 import { acquireWalkLock } from "./walk-lock.mjs";
 
 const local = new URL("./src/cap.mjs", import.meta.url);
@@ -274,7 +275,7 @@ function writeNativeReport(directory, session, journal, browser) {
 		.join("");
 	fs.writeFileSync(
 		report,
-		`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHTML(session.topic)} · UX Walk</title><style>body{font:16px system-ui;color:#20242c;background:#fafaf9;max-width:960px;margin:48px auto;padding:0 24px;line-height:1.6}h1{font-size:32px;line-height:1.2}h2{margin-top:40px}video{width:100%;border-radius:12px;background:#15171c}a{color:#2467d5}time{color:#666;font-variant-numeric:tabular-nums;margin-right:12px}li{margin:12px 0;overflow-wrap:anywhere}.meta{color:#666;font-size:14px}</style><p class="meta">UX Walk</p><h1>${escapeHTML(session.topic)}</h1><p class="meta">${escapeHTML(session.startedAt)}${session.url ? ` · ${escapeHTML(session.url)}` : ""}</p><h2>Notes</h2>${notes ? `<ul>${notes}</ul>` : "<p>No notes added.</p>"}${chapters}<h2>Browser evidence</h2><ul>${browserDetails}</ul><p>${browserLinks}</p>${findings ? `<h3>Console and failed requests</h3><ul>${findings}</ul><p class="meta">Up to 200 observations shown. The timeline and action log retain the full captured evidence.</p>` : ""}<h2>Capture details</h2><p class="meta">Recorded locally. Notes, chapters and browser events use the recorder’s elapsed time, excluding pauses; first-frame alignment is approximate.</p><p><a href="media/video.mp4">Full recording</a> · <a href="native-walk.json">Saved journal</a> · <a href="session.json">Session</a></p></html>`,
+		`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHTML(session.topic)} · ${escapeHTML(walkModeName)}</title><style>body{font:16px system-ui;color:#20242c;background:#fafaf9;max-width:960px;margin:48px auto;padding:0 24px;line-height:1.6}h1{font-size:32px;line-height:1.2}h2{margin-top:40px}video{width:100%;border-radius:12px;background:#15171c}a{color:#2467d5}time{color:#666;font-variant-numeric:tabular-nums;margin-right:12px}li{margin:12px 0;overflow-wrap:anywhere}.meta{color:#666;font-size:14px}</style><p class="meta">${escapeHTML(walkModeName)}</p><h1>${escapeHTML(session.topic)}</h1><p class="meta">${escapeHTML(session.startedAt)}${session.url ? ` · ${escapeHTML(session.url)}` : ""}</p><h2>Notes</h2>${notes ? `<ul>${notes}</ul>` : "<p>No notes added.</p>"}${chapters}<h2>Browser evidence</h2><ul>${browserDetails}</ul><p>${browserLinks}</p>${findings ? `<h3>Console and failed requests</h3><ul>${findings}</ul><p class="meta">Up to 200 observations shown. The timeline and action log retain the full captured evidence.</p>` : ""}<h2>Capture details</h2><p class="meta">Recorded locally. Notes, chapters and browser events use the recorder’s elapsed time, excluding pauses; first-frame alignment is approximate.</p><p><a href="media/video.mp4">Full recording</a> · <a href="native-walk.json">Saved journal</a> · <a href="session.json">Session</a></p></html>`,
 		{ mode: 0o600 },
 	);
 }
@@ -896,7 +897,7 @@ export function nativeWalkPrompt(file, { prepared = false } = {}) {
 	const findings = browserFindings(browser)
 		.slice(0, 8)
 		.map((event) => event.text.slice(0, 800));
-	return `Review this UX Walk: ${journal.request.directory}. Capture state: ${journal.state}; preparation: ${preparation}.${journal.state !== "complete" ? " Capture is incomplete or still in progress; reports and transcripts may not exist. Read the saved journal notes first and label findings provisional." : ""} Read report.html and the chapter timelines when available, inspect the referenced screenshots, transcript, notes and actions.jsonl, and propose concrete fixes. Browser coverage: ${Object.entries(
+	return `Review this ${walkModeName} recording: ${journal.request.directory}. Capture state: ${journal.state}; preparation: ${preparation}.${journal.state !== "complete" ? " Capture is incomplete or still in progress; reports and transcripts may not exist. Read the saved journal notes first and label findings provisional." : ""} Read report.html and the chapter timelines when available, inspect the referenced screenshots, transcript, notes and actions.jsonl, and propose concrete fixes. Browser coverage: ${Object.entries(
 		browser.coverage,
 	)
 		.map(([kind, status]) => `${kind}: ${status}`)

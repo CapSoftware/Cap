@@ -9,7 +9,7 @@ description: Record or review %app% walkthroughs and prepare evidence-linked age
 
 ## Capture and review
 
-Use the native app's UX Walk mode when the task needs its fresh browser window, semantic clicks, console errors and failed-request evidence. The ordinary `%cli% record` command records local video; do not describe it as collecting browser evidence unless the walk manifest confirms that capture.
+Use the native app's %walk% when the task needs its fresh browser window, semantic clicks, console errors and failed-request evidence. The ordinary `%cli% record` command records local video; do not describe it as collecting browser evidence unless the walk manifest confirms that capture.
 
 For plain recording, the CLI exposes targets, doctor, record, project, recordings and export commands. Keep capture scoped to the requested window and audio sources. Use the existing app settings and transcription provider configuration. The `%cli%` command and its older `cap` alias both point to the installed app's bundled binary.
 

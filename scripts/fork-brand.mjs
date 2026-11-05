@@ -58,6 +58,7 @@ export function brandLeaks(file, contents) {
 
 export function expand(text) {
 	return text
+		.replaceAll("%walk%", brand.walk_mode_name)
 		.replaceAll("%app%", brand.display_name)
 		.replaceAll("%cli%", brand.cli_name)
 		.replaceAll("%skill%", brand.skill_name)
