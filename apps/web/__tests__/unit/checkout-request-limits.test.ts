@@ -77,6 +77,10 @@ vi.mock("@/lib/checkout/referral", () => ({
 	referralDiscountParams: () => ({ allow_promotion_codes: true }),
 }));
 
+vi.mock("@/lib/checkout/live-subscription", () => ({
+	hasLiveProSubscription: vi.fn(async () => false),
+}));
+
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: {
 		CHECKOUT: "rl_checkout",
