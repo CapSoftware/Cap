@@ -939,6 +939,19 @@ test.describe("extension recording upload", () => {
 			if (!uploadPage) throw new Error("Upload tab did not open");
 			const destination = `${mockServer.origin}/capture.html?working`;
 			await uploadPage.goto(destination);
+			// The worker publishes completed before checking the tab. Its response
+			// waits for that check, so drive completion while the upload is gated.
+			const completionResponse = await sendServiceWorkerMessage(messengerPage, {
+				target: "recording-status",
+				type: "recording-status-changed",
+				status: {
+					phase: "completed",
+					videoId: mockServer.state.videoId,
+					shareUrl: `${mockServer.origin}/share/${mockServer.state.videoId}`,
+				},
+			});
+			expect(completionResponse).toMatchObject({ ok: true });
+			await expect(uploadPage).toHaveURL(destination);
 			finishUpload();
 			await expectSuccessfulUpload(messengerPage, mockServer.state);
 			await expect(uploadPage).toHaveURL(destination);
