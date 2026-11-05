@@ -111,6 +111,7 @@ jobs:
           __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
+          __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
           __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
