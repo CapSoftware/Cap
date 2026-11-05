@@ -17,7 +17,6 @@ import {
 	grainBg,
 	H_HERO,
 	H_SECTION,
-	MONO,
 	SHELL,
 } from "@/components/pages/HomeTwo/theme";
 import { homepageCopy } from "@/data/homepage-copy";
@@ -66,9 +65,7 @@ const Hero = () => (
 				onClick={() => scrollTo("testimonials")}
 				className="group mt-8 inline-flex max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6]"
 			>
-				<span
-					className={`${MONO} hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111] sm:inline-block`}
-				>
+				<span className="hidden rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111] sm:inline-block">
 					80,000+
 				</span>
 				<span className="truncate pl-2 sm:hidden">
@@ -88,9 +85,7 @@ const Hero = () => (
 								className="mx-2 size-[3px] rounded-full bg-[rgba(17,17,17,0.25)]"
 							/>
 						) : null}
-						<span
-							className={`${MONO} text-[11.5px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.55)]`}
-						>
+						<span className="text-[13px] leading-none text-[rgba(17,17,17,0.55)]">
 							{item}
 						</span>
 					</li>

@@ -29,12 +29,12 @@ const bodyClass =
 
 const markdownComponents: Components = {
 	h1: (props) => (
-		<h3 className="mt-7 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-9">
+		<h3 className="mt-7 mb-2 text-[13px] font-semibold text-gray-10">
 			{props.children}
 		</h3>
 	),
 	h2: (props) => (
-		<h3 className="mt-7 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-9">
+		<h3 className="mt-7 mb-2 text-[13px] font-semibold text-gray-10">
 			{props.children}
 		</h3>
 	),

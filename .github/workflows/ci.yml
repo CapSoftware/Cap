@@ -101,17 +101,24 @@ jobs:
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test
+          __tests__/unit/add-videos-dialog-retry.test.ts
           __tests__/unit/analytics-track-route.test.ts
           __tests__/unit/caps-analytics-round-trips.test.ts
           __tests__/unit/caps-keyboard.test.ts
           __tests__/unit/caption-translation-ownership.test.ts
+          __tests__/unit/checkout-request-limits.test.ts
+          __tests__/unit/clock-hours.test.ts
           __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
+          __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/desktop-subscribe-route.test.ts
+          __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/first-view-email.test.ts
+          __tests__/unit/folder-delete.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/generate-ai-duration.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
@@ -119,6 +126,7 @@ jobs:
           __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/messenger-message-limits.test.ts
           __tests__/unit/messenger-poll-ordering.test.ts
           __tests__/unit/media-comment-playback-cleanup.test.ts
           __tests__/unit/media-client.test.ts
@@ -131,8 +139,13 @@ jobs:
           __tests__/unit/mobile-loom-import.test.ts
           __tests__/unit/mobile-organization-analytics.test.ts
           __tests__/unit/notification-read-state.test.ts
+          __tests__/unit/organization-preferences-switch.test.ts
+          __tests__/unit/organization-preferences-target.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
           __tests__/unit/playback-store.test.ts
+          __tests__/unit/pro-checkout-session.test.ts
+          __tests__/unit/pro-checkout-webhook.test.ts
+          __tests__/unit/referral-checkout.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
@@ -148,6 +161,7 @@ jobs:
           __tests__/unit/speed-controller-metadata.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/speed-controller.test.ts
+          __tests__/unit/subscribe-checkout.test.ts
           __tests__/unit/summary-chapters.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts
@@ -156,7 +170,10 @@ jobs:
           __tests__/unit/transcript-arrow-text.test.ts
           __tests__/unit/transcript-hours.test.ts
           __tests__/unit/transcript-numbers.test.ts
+          __tests__/unit/translate-transcript-once.test.ts
           __tests__/unit/trimming-tool-audio.test.ts
+          __tests__/unit/update-seat-quantity.test.ts
+          __tests__/unit/video-ai-route-retry.test.ts
           __tests__/unit/video-analytics-access.test.ts
           __tests__/unit/video-analytics-bulk.test.ts
           __tests__/unit/video-create-atomicity.test.ts

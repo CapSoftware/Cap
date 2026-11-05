@@ -21,6 +21,10 @@ import {
 
 export type CaptionLanguage = LanguageCode | "original" | "off";
 
+const TRANSLATION_RETRY_WINDOW_MS = 6 * 60 * 1000;
+const TRANSLATION_RETRY_DELAY_MS = 5_000;
+const TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS = 30_000;
+
 interface AvailableTranslation {
 	code: LanguageCode;
 	name: string;
@@ -78,6 +82,7 @@ function CaptionProviderForVideo({
 		null,
 	);
 	const mounted = useRef(true);
+	const selectedLanguageRef = useRef<CaptionLanguage>("original");
 	const translations = useRef(new Map<LanguageCode, string>());
 	const pending = useRef(new Map<LanguageCode, Promise<string | null>>());
 
@@ -108,6 +113,34 @@ function CaptionProviderForVideo({
 
 	const hasOriginal = availableData?.hasOriginal ?? false;
 
+	const translateWhileInProgress = useCallback(
+		async (language: LanguageCode) => {
+			const isStillWanted = () =>
+				mounted.current && selectedLanguageRef.current === language;
+			const startedAt = Date.now();
+			for (;;) {
+				const result = await translateTranscript(videoId, language);
+				if (
+					!(result.inProgress || result.rateLimited) ||
+					Date.now() - startedAt >= TRANSLATION_RETRY_WINDOW_MS ||
+					!isStillWanted()
+				) {
+					return result;
+				}
+				await new Promise((resolve) =>
+					setTimeout(
+						resolve,
+						result.rateLimited
+							? TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS
+							: TRANSLATION_RETRY_DELAY_MS,
+					),
+				);
+				if (!isStillWanted()) return result;
+			}
+		},
+		[videoId],
+	);
+
 	const requestTranslation = useCallback(
 		(language: LanguageCode): Promise<string | null> => {
 			const cached = translations.current.get(language);
@@ -116,7 +149,7 @@ function CaptionProviderForVideo({
 			if (existing) return existing;
 
 			const request = Promise.resolve()
-				.then(() => translateTranscript(videoId, language))
+				.then(() => translateWhileInProgress(language))
 				.then((result) => {
 					if (!result.success || !result.translatedVtt) return null;
 					if (mounted.current) {
@@ -135,7 +168,7 @@ function CaptionProviderForVideo({
 			if (mounted.current) setIsTranslating(true);
 			return request;
 		},
-		[videoId],
+		[translateWhileInProgress],
 	);
 
 	const currentVttContent = useMemo(() => {
@@ -150,6 +183,7 @@ function CaptionProviderForVideo({
 
 	const handleSetSelectedLanguage = useCallback(
 		async (language: CaptionLanguage) => {
+			selectedLanguageRef.current = language;
 			setSelectedLanguage(language);
 
 			if (

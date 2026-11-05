@@ -354,3 +354,172 @@ describe("conditional writes on storage without If-None-Match support", () => {
 		]);
 	});
 });
+
+describe("multipart part listing", () => {
+	let server: Server | undefined;
+	let client: S3.S3Client | undefined;
+
+	afterEach(async () => {
+		client?.destroy();
+		client = undefined;
+		await new Promise<void>((resolve) =>
+			server ? server.close(() => resolve()) : resolve(),
+		);
+		server = undefined;
+	});
+
+	const partXml = (partNumber: number, size: number) =>
+		`<Part><PartNumber>${partNumber}</PartNumber><ETag>"etag-${partNumber}"</ETag><Size>${size}</Size></Part>`;
+
+	const listPartsPage = (
+		parts: string[],
+		next: { truncated: boolean; marker?: number },
+	) =>
+		`<?xml version="1.0" encoding="UTF-8"?><ListPartsResult><Bucket>capso</Bucket><Key>developer/video</Key><UploadId>upload-1</UploadId><IsTruncated>${next.truncated}</IsTruncated>${next.marker ? `<NextPartNumberMarker>${next.marker}</NextPartNumberMarker>` : ""}${parts.join("")}</ListPartsResult>`;
+
+	it("returns every part of an upload across listing pages", async () => {
+		const requestedUrls: string[] = [];
+		const listening = createServer((request, response) => {
+			request.resume();
+			request.on("end", () => {
+				requestedUrls.push(request.url ?? "");
+				const url = new URL(request.url ?? "", "http://storage");
+				const body =
+					url.searchParams.get("part-number-marker") === "2"
+						? listPartsPage([partXml(3, 300)], { truncated: false })
+						: listPartsPage([partXml(1, 100), partXml(2, 200)], {
+								truncated: true,
+								marker: 2,
+							});
+				response.writeHead(200, { "Content-Type": "application/xml" });
+				response.end(body);
+			});
+		});
+		server = listening;
+		await new Promise<void>((resolve) =>
+			listening.listen(0, "127.0.0.1", resolve),
+		);
+		const { port } = listening.address() as AddressInfo;
+		const s3 = new S3.S3Client({
+			credentials: {
+				accessKeyId: "test-access-key",
+				secretAccessKey: "test-secret-key",
+			},
+			endpoint: `http://127.0.0.1:${port}`,
+			forcePathStyle: true,
+			region: "us-east-1",
+		});
+		client = s3;
+		const access = await Effect.runPromise(
+			createS3BucketAccess.pipe(
+				Effect.provideService(S3BucketClientProvider, {
+					bucket: "capso",
+					getInternal: Effect.succeed(s3),
+					getPublic: Effect.succeed(s3),
+					isPathStyle: true,
+				}),
+			),
+		);
+
+		const parts = await Effect.runPromise(
+			access.multipart.listParts("developer/video", "upload-1"),
+		);
+
+		expect(
+			parts.map(({ PartNumber, ETag, Size }) => ({ PartNumber, ETag, Size })),
+		).toEqual([
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 100 },
+			{ PartNumber: 2, ETag: '"etag-2"', Size: 200 },
+			{ PartNumber: 3, ETag: '"etag-3"', Size: 300 },
+		]);
+		expect(requestedUrls).toHaveLength(2);
+		expect(requestedUrls[0]).toContain("uploadId=upload-1");
+		expect(requestedUrls[1]).toContain("part-number-marker=2");
+	});
+});
+
+describe("multipart upload listing", () => {
+	let server: Server | undefined;
+	let client: S3.S3Client | undefined;
+
+	afterEach(async () => {
+		client?.destroy();
+		client = undefined;
+		await new Promise<void>((resolve) =>
+			server ? server.close(() => resolve()) : resolve(),
+		);
+		server = undefined;
+	});
+
+	it("lists incomplete uploads under a prefix from the given markers", async () => {
+		const requestedUrls: string[] = [];
+		const listening = createServer((request, response) => {
+			request.resume();
+			request.on("end", () => {
+				requestedUrls.push(request.url ?? "");
+				response.writeHead(200, { "Content-Type": "application/xml" });
+				response.end(
+					`<?xml version="1.0" encoding="UTF-8"?><ListMultipartUploadsResult><Bucket>capso</Bucket><Prefix>developer/</Prefix><IsTruncated>true</IsTruncated><NextKeyMarker>developer/app-1/video-2/video</NextKeyMarker><NextUploadIdMarker>upload-2</NextUploadIdMarker><Upload><Key>developer/app-1/video-2/video</Key><UploadId>upload-2</UploadId><Initiated>2026-11-01T10:00:00.000Z</Initiated></Upload></ListMultipartUploadsResult>`,
+				);
+			});
+		});
+		server = listening;
+		await new Promise<void>((resolve) =>
+			listening.listen(0, "127.0.0.1", resolve),
+		);
+		const { port } = listening.address() as AddressInfo;
+		const s3 = new S3.S3Client({
+			credentials: {
+				accessKeyId: "test-access-key",
+				secretAccessKey: "test-secret-key",
+			},
+			endpoint: `http://127.0.0.1:${port}`,
+			forcePathStyle: true,
+			region: "us-east-1",
+		});
+		client = s3;
+		const access = await Effect.runPromise(
+			createS3BucketAccess.pipe(
+				Effect.provideService(S3BucketClientProvider, {
+					bucket: "capso",
+					getInternal: Effect.succeed(s3),
+					getPublic: Effect.succeed(s3),
+					isPathStyle: true,
+				}),
+			),
+		);
+
+		const page = await Effect.runPromise(
+			access.multipart.listUploads({
+				prefix: "developer/",
+				keyMarker: "developer/app-1/video-1/video",
+				uploadIdMarker: "upload-1",
+			}),
+		);
+
+		expect(
+			page.Uploads?.map(({ Key, UploadId, Initiated }) => ({
+				Key,
+				UploadId,
+				Initiated: Initiated?.toISOString(),
+			})),
+		).toEqual([
+			{
+				Key: "developer/app-1/video-2/video",
+				UploadId: "upload-2",
+				Initiated: "2026-11-01T10:00:00.000Z",
+			},
+		]);
+		expect(page.IsTruncated).toBe(true);
+		expect(page.NextKeyMarker).toBe("developer/app-1/video-2/video");
+		expect(page.NextUploadIdMarker).toBe("upload-2");
+		const url = new URL(requestedUrls[0] ?? "", "http://storage");
+		expect(url.pathname).toBe("/capso/");
+		expect(url.searchParams.has("uploads")).toBe(true);
+		expect(url.searchParams.get("prefix")).toBe("developer/");
+		expect(url.searchParams.get("key-marker")).toBe(
+			"developer/app-1/video-1/video",
+		);
+		expect(url.searchParams.get("upload-id-marker")).toBe("upload-1");
+	});
+});

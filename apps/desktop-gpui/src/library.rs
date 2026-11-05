@@ -747,6 +747,7 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
 /// The Tauri command also emits `RecordingDeleted`, which the page listens for
 /// to refetch; here the caller refreshes its own list instead.
 pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     delete_recording_directory_in(&known_recordings_dirs(), path)
 }
 

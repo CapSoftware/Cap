@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFfmpegPath } from "@/lib/audio-extract";
+import { ffmpegChildEnv, getFfmpegPath } from "@/lib/audio-extract";
 
 export interface VideoConversionResult {
 	filePath: string;
@@ -17,6 +17,7 @@ function runFfmpeg(args: string[]): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, args, {
 			stdio: ["ignore", "ignore", "pipe"],
+			env: ffmpegChildEnv(),
 		});
 
 		let stderr = "";
@@ -61,11 +62,17 @@ function resolveResourceUrl(
 	baseUrl: string,
 	query: string,
 ): string {
+	const resolved = new URL(resource, baseUrl);
+	if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+		throw new Error(
+			`Unsupported media resource protocol: ${resolved.protocol}`,
+		);
+	}
 	if (resource.startsWith("http://") || resource.startsWith("https://")) {
 		return withQuery(resource, query);
 	}
 
-	return withQuery(new URL(resource, baseUrl).toString(), query);
+	return withQuery(resolved.toString(), query);
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -204,6 +211,15 @@ async function materializeStreamingInput(
 	return videoUrl;
 }
 
+function inputProtocolArgs(input: string): string[] {
+	return [
+		"-protocol_whitelist",
+		/^https?:\/\//i.test(input)
+			? "http,https,tcp,tls"
+			: "file,http,https,tcp,tls,crypto",
+	];
+}
+
 async function convertRemoteVideoToMp4FileInternal(
 	videoUrl: string,
 	outputPath: string,
@@ -211,6 +227,7 @@ async function convertRemoteVideoToMp4FileInternal(
 	try {
 		await runFfmpeg([
 			"-y",
+			...inputProtocolArgs(videoUrl),
 			"-i",
 			videoUrl,
 			"-c",
@@ -222,6 +239,7 @@ async function convertRemoteVideoToMp4FileInternal(
 	} catch {
 		await runFfmpeg([
 			"-y",
+			...inputProtocolArgs(videoUrl),
 			"-i",
 			videoUrl,
 			"-c:v",
