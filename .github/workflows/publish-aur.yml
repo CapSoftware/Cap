@@ -133,7 +133,8 @@ jobs:
           if [[ -f "$AUR/.SRCINFO" ]]; then
             CURRENT="$(version_of "$AUR/.SRCINFO")"
             NEW="$(version_of "$PACKAGE/.SRCINFO")"
-            if (( $(docker run --rm --network none "$ARCH_IMAGE" vercmp "$NEW" "$CURRENT") < 0 )); then
+            COMPARISON="$(docker run --rm --network none "$ARCH_IMAGE" vercmp "$NEW" "$CURRENT")"
+            if (( COMPARISON < 0 )); then
               echo "::notice::The AUR already has $PKGBASE $CURRENT, which is newer than $NEW."
               exit 0
             fi
