@@ -199,6 +199,24 @@ describe("organization invite delivery", () => {
 		);
 	});
 
+	it("does not count a batch whose addresses are all invited or members", async () => {
+		mocks.existingInviteEmails = ["pending@example.com"];
+		mocks.existingMemberEmails = ["member@example.com"];
+		mocks.isRateLimited.mockResolvedValue(true);
+		const result = await sendOrganizationInvites(
+			["Pending@example.com", "member@example.com"],
+			Organisation.OrganisationId.make("org-1"),
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+		});
+		expect(mocks.isRateLimited).not.toHaveBeenCalled();
+		expect(mocks.insert).not.toHaveBeenCalled();
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
 	it("still rejects batches over the per-call maximum", async () => {
 		await expect(
 			sendOrganizationInvites(
