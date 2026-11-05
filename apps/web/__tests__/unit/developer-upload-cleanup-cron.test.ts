@@ -1,4 +1,5 @@
-import { Effect } from "effect";
+import type { HttpApi } from "@effect/platform";
+import { Effect, type Layer as EffectLayer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Upload = { Key?: string; UploadId?: string; Initiated?: Date };
@@ -33,11 +34,18 @@ vi.mock("@cap/web-backend", async () => {
 	};
 });
 
+type ApiLayer = EffectLayer.Layer<HttpApi.Api>;
+
 vi.mock("@/lib/server", async () => {
-	const { Effect } = await import("effect");
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
 	return {
-		runPromise: (effect: Effect.Effect<unknown, unknown>) =>
-			Effect.runPromise(effect),
+		apiToHandler: (api: ApiLayer) => {
+			const { handler } = HttpApiBuilder.toWebHandler(
+				Layer.mergeAll(api, HttpServer.layerContext),
+			);
+			return (request: Request) => handler(request);
+		},
 	};
 });
 
@@ -113,11 +121,7 @@ describe("developer upload cleanup cron", () => {
 		const response = await runCron();
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({
-			success: true,
-			aborted: 2,
-			failed: 0,
-		});
+		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
 		expect(mocks.listUploads).toHaveBeenCalledWith({
 			prefix: "developer/",
 			keyMarker: undefined,
@@ -156,11 +160,7 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({
-			success: true,
-			aborted: 2,
-			failed: 0,
-		});
+		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
 		expect(mocks.listUploads.mock.calls).toEqual([
 			[
 				{
@@ -201,12 +201,18 @@ describe("developer upload cleanup cron", () => {
 		const response = await runCron();
 
 		expect(response.status).toBe(500);
-		expect(await response.json()).toEqual({
-			success: false,
-			aborted: 1,
-			failed: 1,
-		});
 		expect(mocks.abort).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns a server error when listing uploads fails", async () => {
+		mocks.listUploads.mockImplementation(() =>
+			Effect.fail(new Error("listing failed")),
+		);
+
+		const response = await runCron();
+
+		expect(response.status).toBe(500);
+		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 
 	it("skips listing entries without a key, upload id or start time", async () => {
@@ -222,11 +228,7 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({
-			success: true,
-			aborted: 0,
-			failed: 0,
-		});
+		expect(await response.json()).toEqual({ aborted: 0, failed: 0 });
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 });
