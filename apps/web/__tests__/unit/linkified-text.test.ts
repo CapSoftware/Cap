@@ -2,6 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { LinkifiedText } from "@/components/LinkifiedText";
+import { PublicEnvContext } from "@/utils/public-env";
 
 vi.mock("@cap/env", () => ({
 	buildEnv: {
@@ -11,8 +12,22 @@ vi.mock("@cap/env", () => ({
 
 vi.stubGlobal("React", React);
 
+const publicEnv = {
+	webUrl: "https://cap.so",
+	googleAuthAvailable: false,
+	workosAuthAvailable: false,
+	oidcAuthAvailable: false,
+	oidcName: "SSO",
+};
+
 const renderLinkifiedText = (text: string) =>
-	renderToStaticMarkup(React.createElement(LinkifiedText, { text }));
+	renderToStaticMarkup(
+		React.createElement(
+			PublicEnvContext,
+			{ value: publicEnv },
+			React.createElement(LinkifiedText, { text }),
+		),
+	);
 
 describe("LinkifiedText", () => {
 	it("does not link unsafe protocols", () => {

@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -12,8 +11,10 @@ import {
 	paperStateStyles as styles,
 } from "@/components/paper-state/PaperState";
 import { TOO_MANY_PASSWORD_ATTEMPTS } from "@/lib/password-attempts";
+import { usePublicEnv } from "@/utils/public-env";
 
 export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
+	const { webUrl } = usePublicEnv();
 	const [password, setPassword] = useState("");
 	const router = useRouter();
 
@@ -31,7 +32,7 @@ export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
 
 	return (
 		<PaperState
-			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+			homeHref={webUrl}
 			doodle={<PasswordDoodle />}
 			title="This video is password protected"
 			lede="Enter the password the owner gave you to start watching."

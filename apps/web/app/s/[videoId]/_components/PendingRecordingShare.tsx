@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { RecordingDoodle } from "@/components/paper-state/doodles";
@@ -9,11 +8,13 @@ import {
 	PaperState,
 	paperStateStyles as styles,
 } from "@/components/paper-state/PaperState";
+import { usePublicEnv } from "@/utils/public-env";
 
 const MAX_REFRESH_ATTEMPTS = 30;
 const REFRESH_INTERVAL_MS = 2000;
 
 export function PendingRecordingShare() {
+	const { webUrl } = usePublicEnv();
 	const router = useRouter();
 	const [hasTimedOut, setHasTimedOut] = useState(false);
 
@@ -38,7 +39,7 @@ export function PendingRecordingShare() {
 
 	return (
 		<PaperState
-			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+			homeHref={webUrl}
 			doodle={<RecordingDoodle />}
 			title={
 				hasTimedOut
