@@ -30,7 +30,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 	const folderId = Folder.FolderId.make(params.id);
 
 	const user = await getCurrentUser();
-	if (!user || !user.activeOrganizationId) return notFound();
+	if (!user) return notFound();
 
 	const folder = await getFolderById(folderId).pipe(
 		Effect.provide(makeCurrentUserLayer(user)),
