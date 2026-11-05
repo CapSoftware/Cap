@@ -33,8 +33,11 @@ export type VideoOgVariant =
 
 // Thumbnails and titles can change, so cache briefly at the edge and let
 // stale-while-revalidate keep crawler/email fetches instant.
-const VIDEO_OG_CACHE_CONTROL =
-	"public, max-age=600, s-maxage=3600, stale-while-revalidate=86400";
+const VIDEO_OG_HEADERS = {
+	"Cache-Control":
+		"public, max-age=600, s-maxage=3600, stale-while-revalidate=86400",
+	"X-Robots-Tag": "noindex",
+};
 
 export const formatDuration = (seconds: number) => {
 	const total = Math.max(0, Math.round(seconds));
@@ -406,9 +409,27 @@ export async function renderVideoOg(variant: VideoOgVariant) {
 		width: OG_WIDTH,
 		height: OG_HEIGHT,
 		fonts,
-		headers: {
-			"Cache-Control": VIDEO_OG_CACHE_CONTROL,
-			"X-Robots-Tag": "noindex",
-		},
+		headers: VIDEO_OG_HEADERS,
+	});
+}
+
+export type VideoOgStatus = Exclude<VideoOgVariant["kind"], "video">;
+
+const statusImages = new Map<VideoOgStatus, Promise<ArrayBuffer>>();
+
+export async function renderVideoOgStatus(kind: VideoOgStatus) {
+	let image = statusImages.get(kind);
+	if (!image) {
+		const rendered = renderVideoOg({ kind }).then((response) =>
+			response.arrayBuffer(),
+		);
+		rendered.catch(() => {
+			if (statusImages.get(kind) === rendered) statusImages.delete(kind);
+		});
+		statusImages.set(kind, rendered);
+		image = rendered;
+	}
+	return new Response(await image, {
+		headers: { "content-type": "image/png", ...VIDEO_OG_HEADERS },
 	});
 }

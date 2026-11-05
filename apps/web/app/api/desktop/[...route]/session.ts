@@ -1,9 +1,11 @@
 import { db } from "@cap/database";
 import { decodeSessionToken } from "@cap/database/auth/auth-options";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { authApiKeys } from "@cap/database/schema";
+import { authApiKeys, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import type { User } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
@@ -53,12 +55,7 @@ app.get(
 				expires: String(decodedToken.exp),
 			};
 		} else {
-			const id = crypto.randomUUID();
-			await db()
-				.insert(authApiKeys)
-				.values({ id, userId: user.id, source: "desktop" });
-
-			data = { type: "api_key", api_key: id };
+			data = { type: "api_key", api_key: await createDesktopApiKey(user.id) };
 		}
 
 		const params = new URLSearchParams({ ...data, user_id: user.id });
@@ -86,6 +83,45 @@ app.get(
 		return Response.redirect(deepLinkUrl);
 	},
 );
+
+const MAX_DESKTOP_API_KEYS_PER_USER = 20;
+const STALE_DESKTOP_API_KEY_BATCH = 1000;
+
+async function createDesktopApiKey(userId: User.UserId) {
+	const id = crypto.randomUUID();
+	await db().transaction(async (tx) => {
+		await tx
+			.select({ id: users.id })
+			.from(users)
+			.where(eq(users.id, userId))
+			.for("update");
+		await tx.insert(authApiKeys).values({ id, userId, source: "desktop" });
+		for (;;) {
+			const staleKeys = await tx
+				.select({ id: authApiKeys.id })
+				.from(authApiKeys)
+				.where(
+					and(
+						eq(authApiKeys.userId, userId),
+						eq(authApiKeys.source, "desktop"),
+						ne(authApiKeys.id, id),
+					),
+				)
+				.orderBy(desc(authApiKeys.createdAt), desc(authApiKeys.id))
+				.limit(STALE_DESKTOP_API_KEY_BATCH)
+				.offset(MAX_DESKTOP_API_KEYS_PER_USER - 1);
+			if (staleKeys.length === 0) break;
+			await tx.delete(authApiKeys).where(
+				inArray(
+					authApiKeys.id,
+					staleKeys.map((key) => key.id),
+				),
+			);
+			if (staleKeys.length < STALE_DESKTOP_API_KEY_BATCH) break;
+		}
+	});
+	return id;
+}
 
 function getDeploymentOrigin() {
 	const webUrl = serverEnv().WEB_URL;
