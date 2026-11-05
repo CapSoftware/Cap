@@ -4438,7 +4438,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const [account] = yield* database.use((db) =>
 							db
 								.select({
-									stripeCustomerId: Db.users.stripeCustomerId,
 									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
 									thirdPartyStripeSubscriptionId:
 										Db.users.thirdPartyStripeSubscriptionId,
@@ -4461,14 +4460,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								),
 						);
 						if (!account) return yield* notFound(requestId);
-						const { stripeCustomerId } = account;
-						if (
-							userIsPro(account) ||
-							(stripeCustomerId &&
-								(yield* Effect.tryPromise(() =>
-									hasLiveProSubscription(stripeCustomerId),
-								)))
-						) {
+						if (userIsPro(account)) {
 							return yield* badRequest(
 								requestId,
 								"The organization owner already has Cap Pro",
@@ -4500,6 +4492,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										providerIdempotencyKey,
 										requestId,
 									);
+									if (
+										yield* Effect.tryPromise(() =>
+											hasLiveProSubscription(customerId),
+										)
+									) {
+										return yield* badRequest(
+											requestId,
+											"The organization owner already has Cap Pro",
+										);
+									}
 									const environment =
 										serverEnv().VERCEL_ENV === "production"
 											? "production"
