@@ -1,6 +1,6 @@
 import type { VideoId } from "@cap/recorder-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_KEY } from "../shared/storage";
+import { AUTH_KEY, saveUploadProgressTabId } from "../shared/storage";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 import type {
 	BootstrapData,
@@ -21,6 +21,7 @@ let contextReplies: Array<(contexts: object[]) => void>;
 let closeOffscreenDocument: ReturnType<typeof vi.fn>;
 let onActionClicked: (tab: chrome.tabs.Tab) => void;
 let tabsApi: Record<string, ReturnType<typeof vi.fn>>;
+let sendRuntimeMessage: ReturnType<typeof vi.fn>;
 
 const liveStatus: RecordingStatus = {
 	phase: "recording",
@@ -50,6 +51,7 @@ beforeEach(async () => {
 		setAccessLevel: vi.fn(),
 	};
 	tabsApi = {
+		get: vi.fn(),
 		update: vi.fn((tabId, properties, callback) =>
 			callback({ id: tabId, windowId: 1, ...properties }),
 		),
@@ -58,6 +60,9 @@ beforeEach(async () => {
 		),
 	};
 	closeOffscreenDocument = vi.fn((callback: () => void) => callback());
+	sendRuntimeMessage = vi.fn((_message, callback) => {
+		pollReplies.push(callback);
+	});
 	vi.stubGlobal("chrome", {
 		storage: { local: storage, session: storage },
 		offscreen: { closeDocument: closeOffscreenDocument },
@@ -67,9 +72,7 @@ beforeEach(async () => {
 			getContexts: vi.fn((_filter, callback) => {
 				contextReplies.push(callback);
 			}),
-			sendMessage: vi.fn((_message, callback) => {
-				pollReplies.push(callback);
-			}),
+			sendMessage: sendRuntimeMessage,
 			onMessage: {
 				addListener: (listener: MessageListener) => {
 					onMessage = listener;
@@ -308,6 +311,137 @@ const answerContexts = (present: boolean) => {
 		present ? [{ documentUrl: "chrome-extension://test/offscreen.html" }] : [],
 	);
 };
+
+describe("upload destination ownership", () => {
+	const uploadUrl = "chrome-extension://test/uploading.html?videoId=video";
+	const uploading: RecordingStatus = {
+		...liveStatus,
+		phase: "uploading",
+		videoId: "video" as VideoId,
+	};
+	const completed: RecordingStatus = {
+		phase: "completed",
+		videoId: "video" as VideoId,
+		shareUrl: "https://cap.so/s/video",
+	};
+	let tab: { id: number; url: string; pendingUrl?: string } | null;
+
+	const stop = () =>
+		new Promise<ServiceWorkerResponse>((resolve) => {
+			onMessage(
+				{ target: "service-worker", type: "stop-recording" },
+				{},
+				resolve,
+			);
+		});
+	const complete = () =>
+		new Promise((resolve) => {
+			onMessage(
+				{
+					target: "recording-status",
+					type: "recording-status-changed",
+					status: completed,
+				},
+				{},
+				resolve,
+			);
+		});
+
+	beforeEach(async () => {
+		tab = { id: 42, url: uploadUrl };
+		tabsApi.get.mockImplementation((_id, callback) => callback(tab));
+		vi.mocked(chrome.runtime.getContexts).mockImplementation(
+			(_filter, callback) =>
+				callback([
+					{
+						documentId: "offscreen",
+						documentUrl: "chrome-extension://test/offscreen.html",
+					} as chrome.runtime.ExtensionContext,
+				]),
+		);
+		sendRuntimeMessage.mockImplementation((_message, callback) =>
+			callback({ ok: true, status: uploading }),
+		);
+		await saveUploadProgressTabId(42);
+	});
+
+	it.each(["persisted", "in memory"])(
+		"does not redirect a navigated tab with its id %s",
+		async (state) => {
+			if (state === "in memory") {
+				await stop();
+				await vi.waitFor(() => expect(tabsApi.update).toHaveBeenCalled());
+				tabsApi.update.mockClear();
+			}
+			if (!tab) throw new Error("Missing upload tab");
+			tab.url = "https://example.com/work";
+
+			await complete();
+
+			expect(tabsApi.update).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ name: "navigated", url: "https://example.com/work" },
+		{
+			name: "navigating",
+			url: uploadUrl,
+			pendingUrl: "https://example.com/work",
+		},
+		{ name: "closed", url: null },
+	])("opens a new upload tab when the old one is $name", async (scenario) => {
+		tab = scenario.url
+			? { id: 42, url: scenario.url, pendingUrl: scenario.pendingUrl }
+			: null;
+
+		await stop();
+		await vi.waitFor(() =>
+			expect(tabsApi.create).toHaveBeenCalledWith(
+				{ url: uploadUrl, active: true },
+				expect.any(Function),
+			),
+		);
+		expect(tabsApi.update).not.toHaveBeenCalled();
+	});
+
+	it("does not replace a pending navigation on completion", async () => {
+		if (!tab) throw new Error("Missing upload tab");
+		tab.pendingUrl = "https://example.com/work";
+		await complete();
+		expect(tabsApi.update).not.toHaveBeenCalled();
+	});
+
+	it("does not redirect another recording's upload page", async () => {
+		if (!tab) throw new Error("Missing upload tab");
+		tab.url = "chrome-extension://test/uploading.html?videoId=other-video";
+		await complete();
+		expect(tabsApi.update).not.toHaveBeenCalled();
+	});
+
+	it("redirects its own upload page on completion", async () => {
+		await complete();
+		expect(tabsApi.update).toHaveBeenCalledWith(
+			42,
+			{ url: "https://cap.so/s/video", active: true },
+			expect.any(Function),
+		);
+	});
+
+	it("reuses an upload page for the next recording", async () => {
+		if (!tab) throw new Error("Missing upload tab");
+		tab.url = "chrome-extension://test/uploading.html?videoId=previous-video";
+		await stop();
+		await vi.waitFor(() =>
+			expect(tabsApi.update).toHaveBeenCalledWith(
+				42,
+				{ url: uploadUrl, active: true },
+				expect.any(Function),
+			),
+		);
+		expect(tabsApi.create).not.toHaveBeenCalled();
+	});
+});
 
 describe("recording status synchronization", () => {
 	it.each(["recording", "paused", "uploading"] as const)(
