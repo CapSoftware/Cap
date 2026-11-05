@@ -15,6 +15,7 @@ import {
 	referralDiscountParams,
 } from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
@@ -74,6 +75,17 @@ export async function POST(request: NextRequest) {
 				}),
 			},
 			{ status: 200 },
+		);
+	}
+
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+			key: `checkout:${user.id}`,
+		})
+	) {
+		return Response.json(
+			{ error: true, message: "Too many checkout attempts" },
+			{ status: 429 },
 		);
 	}
 

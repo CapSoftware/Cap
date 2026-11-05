@@ -605,6 +605,15 @@ app.post(
 			);
 		}
 
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+				key: `checkout:${user.id}`,
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json({ error: true, code: "rate_limited" }, { status: 429 });
+		}
+
 		// Starts now so the Dub lookup overlaps the Stripe customer calls below.
 		const referralDiscountLookup = referralDiscountForCheckout(user);
 
