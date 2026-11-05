@@ -1881,8 +1881,6 @@ impl RecordingSession {
             self.discard_studio_after_stop(Some(config), cx);
             return;
         }
-        #[cfg(target_os = "linux")]
-        let restart_generation = self.recording_generation;
         self.storage_monitor = None;
         let Some(active) = self.active.take() else {
             return;
@@ -1891,11 +1889,26 @@ impl RecordingSession {
         {
             self.failure_monitor = None;
         }
+        let task = gpui_tokio::Tokio::spawn(cx, active.cancel_and_delete());
+        self.restart_after_discard(config, task, Self::start, cx)
+            .detach();
+    }
+
+    fn restart_after_discard(
+        &mut self,
+        config: StartConfig,
+        task: Task<Result<anyhow::Result<()>, gpui_tokio::JoinError>>,
+        start: impl FnOnce(&mut Self, StartConfig, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        #[cfg(target_os = "linux")]
+        let restart_generation = self.recording_generation;
+        #[cfg(target_os = "linux")]
+        let clean_capture = crate::app_windows::clean_capture_active(cx);
         self.phase = Phase::Starting;
         self.started_at = None;
         cx.notify();
 
-        let task = gpui_tokio::Tokio::spawn(cx, active.cancel_and_delete());
         cx.spawn(async move |this, cx| {
             if let Ok(Err(error)) = task.await {
                 tracing::error!("restart: discarding old recording: {error:#}");
@@ -1953,11 +1966,10 @@ impl RecordingSession {
                     return;
                 }
                 this.phase = Phase::Idle;
-                this.start(config, cx);
+                start(this, config, cx);
             })
             .ok();
         })
-        .detach();
     }
 
     #[cfg(any(target_os = "macos", windows))]
@@ -2188,9 +2200,79 @@ mod restart_tests {
     use super::*;
 
     #[gpui::test]
-    fn stop_during_restart_without_clean_capture_cancels_the_queued_start(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    async fn stop_during_restart_discard_prevents_a_new_start(cx: &mut gpui::TestAppContext) {
+        for request_stop in [true, false] {
+            let session = cx.update(RecordingSession::init);
+            let (release, discard) = tokio::sync::oneshot::channel();
+            let task = cx.background_spawn(async move {
+                discard.await.unwrap();
+                Ok(Ok(()))
+            });
+            let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+            let config = StartConfig {
+                mode: recording::RecordingMode::Studio,
+                target: cap_recording::screen_capture::ScreenCaptureTarget::Display {
+                    id: "1".parse().unwrap(),
+                },
+                microphone: None,
+                camera: None,
+                device_settings: Default::default(),
+                input_readiness: Default::default(),
+                system_audio: false,
+                excluded_windows: Vec::new(),
+                camera_feed: None,
+                mic_feed: None,
+                mic_meter: None,
+                #[cfg(target_os = "linux")]
+                linux_instant_camera: None,
+                start_gate: None,
+            };
+            let restart = session.update(cx, |session, cx| {
+                session.phase = Phase::Recording { paused: false };
+                session.last_config = Some(config.clone());
+                session.started_at = Some(Instant::now());
+                let starts = starts.clone();
+                session.restart_after_discard(
+                    config,
+                    task,
+                    move |session, _, _| {
+                        assert_eq!(session.phase, Phase::Idle);
+                        starts.set(starts.get() + 1);
+                        session.phase = Phase::Starting;
+                    },
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+            session.update(cx, |session, cx| {
+                assert_eq!(session.phase, Phase::Starting);
+                assert_eq!(starts.get(), 0);
+                assert!(session.started_at.is_none());
+                if request_stop {
+                    session.stop(cx);
+                    session.stop(cx);
+                    assert!(session.stop_requested);
+                }
+            });
+            release.send(()).unwrap();
+            restart.await;
+            session.read_with(cx, |session, _| {
+                assert_eq!(starts.get(), usize::from(!request_stop));
+                assert_eq!(
+                    session.phase,
+                    if request_stop {
+                        Phase::Idle
+                    } else {
+                        Phase::Starting
+                    }
+                );
+                assert!(!session.stop_requested);
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn stop_during_start_or_stop_is_remembered_until_finish(cx: &mut gpui::TestAppContext) {
         let session = cx.update(RecordingSession::init);
         for phase in [Phase::Starting, Phase::Stopping] {
             session.update(cx, |session, cx| {
