@@ -26,11 +26,12 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
                                    a walk filmed as a video (Loom-style): the ux-walk browser with its full log at
                                    30 fps; the menu bar app's camera bubble is drawn over it (--bubble-window id);
                                    --display N films the whole screen instead of the browser window
-  ux-walk import <file|project.cap> [topic words] [--ask "..."] [--start <iso|epoch-ms>] [--no-brief]
+  ux-walk import <file|project.cap> [topic words] [--ask "..."] [--start <iso|epoch-ms>] [--no-brief] [--diatribe]
                                    a video made elsewhere (an iPhone screen recording with the mic on; .mp4 .mov
                                    .m4v) or a voice memo (.m4a .mp3 .wav .aac) becomes a recording: same folder,
                                    transcript, shots, timeline and brief, with no click log. Start time: --start,
-                                   else the file's own dates (see README)
+                                   else the file's own dates (see README). --diatribe: a ramble; the brief is
+                                   organized notes with action items (owner and due when said)
   ux-walk process <dir>...         (re)process chapters or old recordings: audio, shots, transcript, timeline
   ux-walk process --stale [dir]    rebuild timelines made by an older ux-walk or before a glossary change (--dry-run lists)
   ux-walk timeline <dir> [--short] [--stdout]
@@ -45,9 +46,12 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
   ux-walk cap edit <project.cap>  open an editable copy in Cap; preserve the source project
   ux-walk brief <dir>              Claude writes brief.md + items.json: notes, asks, decisions, bugs (ids C1-01...),
                                    errors, questions for you (needs the claude CLI)
-  ux-walk link <folder> <id> <ref> [note] [--add]
+  ux-walk link <folder> <id|key> <ref> [note] [--add]
                                    record what an item became (a bead, a PR, "dropped") in ledger.json;
                                    replaces the item's refs (--add: keep them and add this one)
+  ux-walk items [folder] [--json]  the items with your edits (edits.json) applied, deleted ones flagged
+  ux-walk items <folder> --apply <file|->
+                                   replace edits.json with this JSON (validated); prints the merged items
   ux-walk status [folder] [--all]  items with no ref yet, and open questions (default: the latest recording;
                                    --all: every recording from the last 14 days)
   ux-walk search <terms> [-n 40]   brief items and speech across every recording, newest first
@@ -106,7 +110,7 @@ shots/, transcript.srt, trace.zip; index.md lists the chapters. Config: ${CONFIG
 
 function parse(argv) {
   const pos = [], flags = {};
-  const bool = new Set(['all', 'no-browser', 'no-mic', 'no-trace', 'short', 'stdout', 'retranscribe', 'reshoot', 'resection', 'quiet', 'help', 'h', 'brief', 'no-brief', 'stale', 'dry-run', 'add', 'ipc', 'conversation', 'evidence-only', 'system-audio', 'json', 'no-open']);
+  const bool = new Set(['all', 'no-browser', 'no-mic', 'no-trace', 'short', 'stdout', 'retranscribe', 'reshoot', 'resection', 'quiet', 'help', 'h', 'brief', 'no-brief', 'stale', 'dry-run', 'add', 'ipc', 'conversation', 'evidence-only', 'system-audio', 'json', 'no-open', 'diatribe']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
@@ -121,7 +125,7 @@ function parse(argv) {
 }
 
 const { pos, flags } = parse(process.argv.slice(2));
-const commands = new Set(['start', 'record', 'import', 'call', 'video', 'process', 'timeline', 'brief', 'link', 'status', 'search', 'speakers', 'frame', 'glossary', 'windows', 'setup', 'app', 'agent', 'report', 'cap', 'help']);
+const commands = new Set(['start', 'record', 'import', 'call', 'video', 'process', 'timeline', 'brief', 'link', 'items', 'status', 'search', 'speakers', 'frame', 'glossary', 'windows', 'setup', 'app', 'agent', 'report', 'cap', 'help']);
 const selected = commands.has(pos[0]) ? pos.shift() : 'record';
 const cmd = selected === 'start' ? 'record' : selected;
 
@@ -278,14 +282,14 @@ if (cmd === 'cap') {
 } else if (cmd === 'import') {
   // A video (or voice memo) made outside ux-walk becomes a one-chapter recording, processed and briefed.
   const [file, ...words] = pos;
-  if (!file) { console.error('usage: ux-walk import <video> [topic words] [--ask "..."] [--start <iso|epoch-ms>] [--no-brief]'); process.exit(2); }
+  if (!file) { console.error('usage: ux-walk import <video> [topic words] [--ask "..."] [--start <iso|epoch-ms>] [--no-brief] [--diatribe]'); process.exit(2); }
   const { importRecording } = await import(path.join(ROOT, 'src/import.mjs'));
   const { handoffLine } = await import(path.join(ROOT, 'src/naming.mjs'));
   let r;
   try {
-    r = await importRecording(path.resolve(file), cfg, { topic: words.join(' '), ask: flags.ask, start: flags.start, brief: !flags['no-brief'], glossary: flags.glossary });
+    r = await importRecording(path.resolve(file), cfg, { topic: words.join(' '), ask: flags.ask, start: flags.start, brief: !flags['no-brief'], glossary: flags.glossary, kind: flags.diatribe ? 'diatribe' : 'import' });
   } catch (e) { console.error(e.message); process.exit(1); }
-  const line = handoffLine(r.dir, r.session.ask);
+  const line = handoffLine(r.dir, r.session.ask, { kind: r.session.kind });
   const copied = !cfg.evidenceOnly && !process.env.UXW_NO_COPY && spawnSync('pbcopy', { input: line }).status === 0;
   console.log(`Folder: ${r.dir}`);
   console.log(cfg.evidenceOnly ? `Report: ${path.join(r.dir, 'report.html')}` : r.brief ? `Brief: ${r.brief}` : `No brief${r.summary?.transcriptError ? ' (no transcript)' : flags['no-brief'] ? ' (--no-brief)' : ''}; timeline: ${path.join(r.chapterDir, 'timeline-short.md')}`);
@@ -295,7 +299,7 @@ if (cmd === 'cap') {
   const dir = await dirArg(pos[0]);
   const { handoffLine, openInCmux } = await import(path.join(ROOT, 'src/record.mjs'));
   const s = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
-  const line = handoffLine(dir, pos.slice(1).join(' ') || s.ask);
+  const line = handoffLine(dir, pos.slice(1).join(' ') || s.ask, { kind: s.kind });
   const why = openInCmux(dir, line, cfg, s.topic || path.basename(dir));
   if (why) { console.error(`Could not open the agent in cmux: ${why}`); process.exit(1); }
   console.log(`Opened a Claude Code session in cmux: ${line}`);
@@ -314,7 +318,7 @@ if (cmd === 'cap') {
   let failed = 0, untranscribed = 0;
   for (const p of pos.length ? pos : [undefined]) {
     for (const d of chapterDirs(await dirArg(p))) {
-      const sum = await processChapter(d, cfg, { force, speakers: flags.speakers, glossary: flags.glossary, brief: flags.brief ? true : undefined, quiet: !!flags.quiet }).catch((e) => { failed++; console.error(`${d}: ${e.message}`); });
+      const sum = await processChapter(d, cfg, { force, speakers: flags.speakers, glossary: flags.glossary, brief: flags.brief ? true : flags['no-brief'] ? false : undefined, quiet: !!flags.quiet }).catch((e) => { failed++; console.error(`${d}: ${e.message}`); });
       if (sum?.transcriptError) { untranscribed++; console.error(`${d}: no transcript: ${sum.transcriptError}`); }
     }
   }
@@ -323,7 +327,7 @@ if (cmd === 'cap') {
 } else if (cmd === 'timeline') {
   const { processChapter } = await import(path.join(ROOT, 'src/process.mjs'));
   for (const d of chapterDirs(await dirArg(pos[0]))) {
-    await processChapter(d, { ...cfg, transcriber: 'none', brief: false, sections: 'cached' }, { speakers: flags.speakers, log: flags.stdout ? () => {} : console.log, quiet: !!flags.stdout });
+    await processChapter(d, { ...cfg, transcriber: 'none', brief: false, sections: 'cached' }, { speakers: flags.speakers, brief: false, log: flags.stdout ? () => {} : console.log, quiet: !!flags.stdout });
     if (flags.stdout) process.stdout.write(fs.readFileSync(path.join(d, flags.short ? 'timeline-short.md' : 'timeline.md'), 'utf8'));
   }
 } else if (cmd === 'report') {
@@ -338,12 +342,39 @@ if (cmd === 'cap') {
 } else if (cmd === 'link') {
   const { link, resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
   const [folder, id, ref, ...note] = pos;
-  if (!folder || !id || !ref) { console.error('usage: ux-walk link <folder> <item-id> <ref> [note] [--add]   e.g. ux-walk link romerosojan C1-04 oncall-abc12'); process.exit(2); }
+  if (!folder || !id || !ref) { console.error('usage: ux-walk link <folder> <item-id|key> <ref> [note] [--add]   e.g. ux-walk link romerosojan C1-04 oncall-abc12'); process.exit(2); }
   try {
     const s = resolveSession(folder, cfg.outDir);
-    const refs = link(s, id.toUpperCase(), ref, note.join(' '), { add: !!flags.add });
-    console.log(`${path.basename(s)} ${id.toUpperCase()}: ${refs.map((r) => r.ref).join(', ')}`);
+    const refs = link(s, id, ref, note.join(' '), { add: !!flags.add });
+    console.log(`${path.basename(s)} ${/^c\d+-q?\d+$/i.test(id) ? id.toUpperCase() : id}: ${refs.map((r) => r.ref).join(', ')}`);
   } catch (e) { console.error(e.message); process.exit(1); }
+} else if (cmd === 'items') {
+  // What the desktop editor reads (--json) and saves (--apply). 0 ok; 1 bad input or IO (a JSON error on stderr with --json).
+  const { mergedItems, resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
+  const { saveEdits } = await import(path.join(ROOT, 'src/edits.mjs'));
+  const fail = (msg) => { console.error(flags.json ? JSON.stringify({ error: msg }) : msg); process.exit(1); };
+  let s, m;
+  try {
+    s = resolveSession(pos[0], cfg.outDir);
+    if ('apply' in flags) {
+      if (typeof flags.apply !== 'string' || !flags.apply) fail('--apply needs a file, or - for stdin');
+      let edits;
+      try { edits = JSON.parse(fs.readFileSync(flags.apply === '-' ? 0 : path.resolve(flags.apply), 'utf8')); } catch (e) { fail(`--apply: ${e instanceof SyntaxError ? `not JSON (${e.message})` : e.message}`); }
+      saveEdits(s, edits);
+    }
+    m = mergedItems(s);
+  } catch (e) { fail(e.message); }
+  if (flags.json) { console.log(JSON.stringify(m, null, 2)); process.exit(0); }
+  const all = m.chapters.flatMap((c) => c.items);
+  console.log(`${path.basename(s)}: ${all.filter((i) => !i.deleted).length} item(s) (${all.filter((i) => i.edited).length} edited, ${all.filter((i) => i.origin === 'user').length} added, ${all.filter((i) => i.deleted).length} deleted)${'apply' in flags ? '; edits saved' : ''}`);
+  for (const c of m.chapters) {
+    console.log(`  Chapter ${c.n} "${c.name}"${c.brief ? '' : ': no brief yet'}`);
+    for (const i of c.items) {
+      const extra = [i.owner && `owner: ${i.owner}`, i.due && `due: ${i.due}`, i.priority && i.priority.slice(0, 40)].filter(Boolean).join(', ');
+      console.log(`    ${(i.id || '-').padEnd(6)} ${i.key.padEnd(12)} ${String(i.type).padEnd(8)} ${(i.when || '').padEnd(6)} ${i.title}${extra ? `  [${extra}]` : ''}${i.edited ? '  (edited)' : ''}${i.deleted ? '  (deleted)' : ''}${i.refs.length ? `  -> ${i.refs.map((r) => r.ref).join(', ')}` : ''}`);
+    }
+  }
+  for (const o of m.orphans) console.log(`  Orphaned edit ${o.key}: ${JSON.stringify(o.edit || o.added)} (its item is gone after a re-brief)`);
 } else if (cmd === 'status') {
   const { status, resolveSession, recentSessions } = await import(path.join(ROOT, 'src/ledger.mjs'));
   try {

@@ -1,9 +1,11 @@
 // What happened to each brief item: `ux-walk link` records a bead / PR / "dropped" ref against an
-// item id in <session>/ledger.json; `ux-walk status` lists the items nobody has linked yet, and the
-// open questions; `ux-walk search` finds brief items and speech across every recording.
+// item in <session>/ledger.json (by its stable key; older ledgers are keyed by id); `ux-walk status` lists the
+// items nobody has linked yet, and the open questions; `ux-walk search` finds brief items and speech across
+// every recording. `mergedItems` is the items with the user's edits (edits.mjs) applied.
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergeBriefs, parseBrief } from './brief.mjs';
+import { chapterKind, mergeBriefs, parseBrief, withKeys } from './brief.mjs';
+import { overlay, readEdits } from './edits.mjs';
 
 const readJson = (f, d = {}) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 const isSession = (d) => fs.existsSync(path.join(d, 'session.json'));
@@ -39,51 +41,88 @@ export function chapters(sessionDir) {
 }
 
 // items.json, or (older chapters) the same thing derived from brief.md. null when there is no brief.
+// Items from before keys existed get them on the fly (the same keys every time the brief is unchanged).
 export function loadItems(chDir, first = 'the speaker') {
   const j = readJson(path.join(chDir, 'items.json'), null);
-  if (j) return j;
+  if (j) return { ...j, items: withKeys(j.items || [], j.chapter || readJson(path.join(chDir, 'chapter.json')).n || 1) };
   const f = path.join(chDir, 'brief.md');
   if (!fs.existsSync(f)) return null;
   const meta = readJson(path.join(chDir, 'chapter.json'));
   const b = parseBrief(fs.readFileSync(f, 'utf8'));
-  const m = mergeBriefs([b], { n: meta.n || 1, title: b.title, first });
-  return { chapter: meta.n || 1, items: m.items, decisions: m.decisions, questions: m.questions, derived: true };
+  const n = meta.n || 1;
+  const m = mergeBriefs([b], { n, title: b.title, first, kind: chapterKind(chDir, meta) });
+  return { chapter: n, items: withKeys(m.items, n), decisions: m.decisions, questions: m.questions, derived: true };
+}
+
+// An item's refs: by key, else (a ledger from before keys) by id.
+const refsOf = (l, i) => (i.key && l[i.key]?.length ? l[i.key] : (i.id && l[i.id]) || []);
+
+// Every chapter's items with the user's edits applied (what `ux-walk items --json` prints and the desktop editor
+// reads). Deleted items stay in the list, flagged; orphans are edits whose item is gone after a re-brief.
+export function mergedItems(sessionDir) {
+  const s = readJson(path.join(sessionDir, 'session.json'));
+  const first = (s.speakers || [])[0] || 'the speaker';
+  const edits = readEdits(sessionDir);
+  const l = readLedger(sessionDir);
+  const base = chapters(sessionDir).map((c) => {
+    const j = loadItems(c.dir, first);
+    return { n: c.n, name: c.name, dir: c.dir, kind: chapterKind(c.dir), brief: !!j, title: j?.title || null, items: j?.items || [], decisions: j?.decisions || [], questions: j?.questions || [] };
+  });
+  const { chapters: out, orphans } = overlay(base, edits);
+  for (const c of out) {
+    for (const i of c.items) i.refs = refsOf(l, i);
+    c.questions = c.questions.map((q) => ({ ...q, refs: l[q.id] || [] }));
+  }
+  return { version: 1, session: sessionDir, topic: s.topic || null, kind: s.kind || null, ask: s.ask || null, chapters: out, orphans, edits };
 }
 
 const ledgerFile = (s) => path.join(s, 'ledger.json');
 export const readLedger = (s) => readJson(ledgerFile(s));
 
-// Replaces the item's refs (a corrected link leaves no stale ref behind); add: true appends instead.
+// Replaces the item's refs (a corrected link leaves no stale ref behind); add: true appends instead. Takes an item's
+// key or id (any case), or a question id; items are stored by key so the link survives a re-brief.
 export function link(sessionDir, id, ref, note = '', { add = false } = {}) {
-  const known = chapters(sessionDir).flatMap((c) => { const j = loadItems(c.dir); return j ? [...j.items.map((i) => i.id), ...(j.questions || []).map((q) => q.id)] : []; });
-  if (!known.includes(id)) throw new Error(`no item ${id} in ${path.basename(sessionDir)}${known.length ? ` (items: ${known[0]}..${known.at(-1)})` : ' (no brief yet: ux-walk brief <folder>)'}`);
+  const m = mergedItems(sessionDir);
+  const items = m.chapters.flatMap((c) => c.items), qs = m.chapters.flatMap((c) => c.questions);
+  const want = String(id).toLowerCase(), is = (v) => !!v && v.toLowerCase() === want;
+  const item = items.find((i) => is(i.key)) || items.find((i) => is(i.id));
+  const q = !item && qs.find((x) => is(x.id));
+  if (!item && !q) {
+    const known = items.map((i) => i.id || i.key);
+    throw new Error(`no item ${id} in ${path.basename(sessionDir)}${known.length ? ` (items: ${known[0]}..${known.at(-1)}, or their keys: ux-walk items)` : ' (no brief yet: ux-walk brief <folder>)'}`);
+  }
+  const at = item ? item.key : q.id;
   const l = readLedger(sessionDir);
   const entry = { ref, ...(note ? { note } : {}), at: new Date().toISOString() };
-  l[id] = add ? [...(l[id] || []), entry] : [entry];
+  const prev = item ? refsOf(l, item) : l[at] || [];
+  // An entry under the old id moves to the key: the id meant this item when it was written.
+  if (item?.id && item.id !== at) delete l[item.id];
+  l[at] = add ? [...prev, entry] : [entry];
   const tmp = `${ledgerFile(sessionDir)}.${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(l, null, 2) + '\n');
   fs.renameSync(tmp, ledgerFile(sessionDir));
-  return l[id];
+  return l[at];
 }
 
 // Items with no ref, by chapter, then the open questions. Returns lines to print.
 export function status(sessionDir) {
   const s = readJson(path.join(sessionDir, 'session.json'));
   const first = (s.speakers || [])[0] || 'the speaker';
-  const l = readLedger(sessionDir);
+  const m = mergedItems(sessionDir);
   const out = [];
   let open = 0, total = 0, linked = 0, qs = [];
   const body = [];
-  for (const c of chapters(sessionDir)) {
-    const j = loadItems(c.dir, first);
-    if (!j) { body.push(`  Chapter ${c.n} "${c.name}": no brief yet (ux-walk brief ${c.dir})`); continue; }
-    const todo = j.items.filter((i) => !l[i.id]?.length);
-    total += j.items.length; open += todo.length; linked += j.items.length - todo.length;
+  for (const c of m.chapters) {
+    if (!c.brief) { body.push(`  Chapter ${c.n} "${c.name}": no brief yet (ux-walk brief ${c.dir})`); continue; }
+    // Deleted in the editor: not work, so not counted.
+    const list = c.items.filter((i) => !i.deleted);
+    const todo = list.filter((i) => !i.refs.length);
+    total += list.length; open += todo.length; linked += list.length - todo.length;
     if (todo.length) {
       body.push(`  Chapter ${c.n} "${c.name}"`);
-      for (const i of todo) body.push(`    ${i.id.padEnd(7)} ${String(i.type).padEnd(8)} ${(i.when || '').padEnd(6)} ${i.note ? `(note #${i.note}) ` : ''}${i.title}${i.priority ? `  [${i.priority.replace(/\s*\(.*$/, '').slice(0, 40)}]` : ''}`);
+      for (const i of todo) body.push(`    ${(i.id || i.key).padEnd(7)} ${String(i.type).padEnd(8)} ${(i.when || '').padEnd(6)} ${i.note ? `(note #${i.note}) ` : ''}${i.title}${i.priority ? `  [${i.priority.replace(/\s*\(.*$/, '').slice(0, 40)}]` : ''}`);
     }
-    qs.push(...(j.questions || []).filter((q) => !l[q.id]?.length));
+    qs.push(...c.questions.filter((q) => !q.refs.length));
   }
   out.push(`${path.basename(sessionDir)}: ${open} of ${total} items with no ref (${linked} linked), ${qs.length} open question(s)`);
   out.push(...body);
@@ -91,6 +130,7 @@ export function status(sessionDir) {
     out.push(`  Questions for ${first}`);
     for (const q of qs) out.push(`    ${q.id.padEnd(7)} ${q.when ? `(${q.when}) ` : ''}${q.text}`);
   }
+  if (m.orphans.length) out.push(`  ${m.orphans.length} edit(s) whose item is gone after a re-brief: ux-walk items ${path.basename(sessionDir)}`);
   return { lines: out, open, questions: qs.length };
 }
 

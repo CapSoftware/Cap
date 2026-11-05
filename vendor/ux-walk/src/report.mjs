@@ -1,6 +1,8 @@
 // Deterministic local report: no transcription, model calls, or remote resources.
 import fs from 'node:fs';
 import path from 'node:path';
+import { withKeys } from './brief.mjs';
+import { emptyEdits, overlay, readEdits } from './edits.mjs';
 const read = (f, fallback) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fallback; } };
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const pretty = (v) => `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
@@ -46,7 +48,7 @@ function loadSource(dir, id = '') {
     source.checkpoints.set(e.evidenceId, e);
   }
   source.ledger = read(localFile(source.dir, 'ledger.json').absolute, {}) || {};
-  const ids = new Set();
+  const ids = new Set(), inventories = [];
   for (const c of source.session.chapters || []) {
     if (typeof c?.dir !== 'string') { source.problems.push(`Invalid chapter directory in ${id || dir}; finding coverage unverified`); continue; }
     const file = localFile(source.dir, path.join(c.dir, 'items.json'));
@@ -54,9 +56,15 @@ function loadSource(dir, id = '') {
     if (!Array.isArray(inventory?.items)) { source.problems.push(`Finding inventory unavailable: ${id || dir}/${c.dir}; no findings pass inferred`); continue; }
     for (const f of inventory.items) {
       if (ids.has(f.id)) throw new Error(`Duplicate finding ID in ${id || dir}: ${f.id}`);
-      ids.add(f.id); source.findings.push({ ...f, source });
+      ids.add(f.id);
     }
+    inventories.push({ n: c.n, items: withKeys(inventory.items, inventory.chapter || c.n || 1) });
   }
+  // The user's edits (edits.json) apply; items they deleted are left out, items they added are findings too.
+  let edits = emptyEdits();
+  const editsFile = localFile(source.dir, 'edits.json');
+  if (!editsFile.error) { try { edits = readEdits(source.dir); } catch (e) { source.problems.push(`Unreadable edits: ${id || dir}; generated items shown unedited (${e.message})`); } }
+  for (const c of overlay(inventories, edits).chapters) for (const f of c.items) if (!f.deleted) source.findings.push({ ...f, id: f.id || f.key, source });
   return source;
 }
 function loadReport(dir) {
@@ -164,7 +172,7 @@ export function writeReport(dir) {
 ${sources.map(captureWarning).join('')}
 <aside><strong>Physical capture differs from CSS layout.</strong> Native bounds are display points and PNG dimensions are pixels; supplied CSS viewport dimensions may exceed the recorded physical window. Full CSS viewport coverage is unverified. See each session's geometry table below.</aside>
 ${segmentSummary(sources, manifest, dir)}
-<h2>Findings</h2><table><tr><th>Finding</th><th>Verdict / severity / persona</th><th>Expected</th><th>Observed</th><th>Evidence / refs</th></tr>${findings.map((f) => `<tr>${rows([esc(`${qualified(f.source, f.id)}: ${f.title}`), esc(`${f.verdict || 'not-tested'} / ${f.severity || f.priority || ''} / ${f.persona || ''}`), esc(f.expected || ''), esc(f.observed || f.said || ''), evidence(f.evidence || [], f.source, sources, dir) + (f.source.ledger[f.id] || []).map((l) => `<p>${esc(l.ref)} ${esc(l.note || '')}</p>`).join('')])}</tr>`).join('')}</table>
+<h2>Findings</h2><table><tr><th>Finding</th><th>Verdict / severity / persona</th><th>Expected</th><th>Observed</th><th>Evidence / refs</th></tr>${findings.map((f) => `<tr>${rows([esc(`${qualified(f.source, f.id)}: ${f.title}`), esc(`${f.verdict || 'not-tested'} / ${f.severity || f.priority || ''} / ${f.persona || ''}`), esc(f.expected || ''), esc(f.observed || f.said || ''), evidence(f.evidence || [], f.source, sources, dir) + (f.source.ledger[f.key] || f.source.ledger[f.id] || []).map((l) => `<p>${esc(l.ref)} ${esc(l.note || '')}</p>`).join('')])}</tr>`).join('')}</table>
 ${sources.map((s) => renderSource(s, sources, dir)).join('')}
 </html>`;
   const out = path.join(dir, 'report.html'); fs.writeFileSync(out, html); return out;
