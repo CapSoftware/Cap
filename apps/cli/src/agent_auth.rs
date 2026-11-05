@@ -151,9 +151,18 @@ async fn wait_for_callback(
     expected_state: &str,
     timeout: Duration,
 ) -> Result<String, String> {
-    let (mut stream, _) = tokio::time::timeout(timeout, listener.accept())
+    tokio::time::timeout(timeout, receive_callback(listener, expected_state))
         .await
         .map_err(|_| "Timed out waiting for browser approval".to_string())?
+}
+
+async fn receive_callback(
+    listener: tokio::net::TcpListener,
+    expected_state: &str,
+) -> Result<String, String> {
+    let (mut stream, _) = listener
+        .accept()
+        .await
         .map_err(|error| format!("Failed to receive browser approval: {error}"))?;
     let mut buffer = Vec::new();
     loop {
@@ -468,6 +477,39 @@ mod tests {
         assert!(should_delete_persistent_credentials(
             AgentCredentialSource::File
         ));
+    }
+
+    #[tokio::test]
+    async fn callback_timeout_applies_to_incomplete_requests() {
+        for request in [b"".as_slice(), b"GET /callback?state=expected_state"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+            client.write_all(request).await.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_callback(listener, "expected_state", Duration::from_millis(50)),
+            )
+            .await
+            .expect("The login timeout must also bound reads from a connected client");
+            assert_eq!(
+                result.unwrap_err(),
+                "Timed out waiting for browser approval"
+            );
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await.unwrap();
+            assert!(response.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_times_out_without_a_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let result = wait_for_callback(listener, "expected_state", Duration::from_millis(50)).await;
+        assert_eq!(
+            result.unwrap_err(),
+            "Timed out waiting for browser approval"
+        );
     }
 
     #[tokio::test]
