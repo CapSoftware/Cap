@@ -2518,6 +2518,9 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	type: "text" | "emoji";
 }) {
 	const user = yield* CurrentUser;
+	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
 	let parentCommentId = requestedParentCommentId;
 	yield* assertCanCreateFeedback(videoId);
 	const { settings } = yield* getMobileVideoRules(videoId);
@@ -2527,9 +2530,6 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 
 	const trimmedContent = content.trim();
 	if (trimmedContent.length === 0) {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
