@@ -26,6 +26,7 @@ import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import {
 	createWithReferralDiscount,
 	referralDiscountForCheckout,
@@ -647,6 +648,11 @@ app.post(
 				.where(eq(users.id, user.id));
 
 			customerId = customer.id;
+		}
+
+		if (customerId && (await hasLiveProSubscription(customerId))) {
+			console.log("[POST] Error: Stripe customer already has Pro");
+			return c.json({ error: true, subscription: true }, { status: 400 });
 		}
 
 		console.log("[POST] Creating checkout session");

@@ -111,6 +111,7 @@ jobs:
           __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
@@ -142,6 +143,7 @@ jobs:
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
+          __tests__/unit/referral-checkout.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
@@ -157,6 +159,7 @@ jobs:
           __tests__/unit/speed-controller-metadata.test.ts
           __tests__/unit/speed-controller-playback-failure.test.ts
           __tests__/unit/speed-controller.test.ts
+          __tests__/unit/subscribe-checkout.test.ts
           __tests__/unit/summary-chapters.test.ts
           __tests__/unit/summary-editor.test.ts
           __tests__/unit/sso-login-pages.test.ts

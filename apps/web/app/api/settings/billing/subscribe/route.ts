@@ -6,6 +6,7 @@ import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
 import {
 	createWithReferralDiscount,
@@ -77,13 +78,23 @@ export async function POST(request: NextRequest) {
 	}
 
 	try {
-		const [customerId, referralDiscount] = await Promise.all([
-			ensureStripeCustomerId(user),
-			referralDiscountForCheckout(
-				user,
-				request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
-			),
-		]);
+		const customerLookup = ensureStripeCustomerId(user);
+		const [customerId, alreadySubscribed, referralDiscount] = await Promise.all(
+			[
+				customerLookup,
+				customerLookup.then(hasLiveProSubscription),
+				referralDiscountForCheckout(
+					user,
+					request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
+				),
+			],
+		);
+		if (alreadySubscribed) {
+			return Response.json(
+				{ error: true, subscription: true },
+				{ status: 400 },
+			);
+		}
 
 		const checkoutSession = await createWithReferralDiscount(
 			referralDiscount,
