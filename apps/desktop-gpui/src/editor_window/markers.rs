@@ -106,19 +106,36 @@ pub(super) fn neighbour_marker(placed: &[PlacedMarker], time: f64, forward: bool
     }
 }
 
-/// The marker for the source instant playing at output `time`, and the
-/// output time it is drawn at. That is `time` itself except on a fullscreen
-/// text hold, which plays one source frame for its whole length and draws
-/// that frame's marker at the hold's end.
-pub(super) fn marker_for_output_time(
+/// What pressing M at output `time` does.
+pub(super) enum MarkerPress {
+    /// A marker is already drawn where the new one would land.
+    Select(usize),
+    Add(TimelineMarker),
+}
+
+/// A new marker is for the source instant playing at `time`, drawn where that
+/// instant plays. That is `time` itself except on a fullscreen text hold,
+/// which plays one source frame for its whole length and draws that frame's
+/// marker at the hold's end, so the duplicate check has to look there.
+pub(super) fn marker_press(
     timeline: &TimelineConfiguration,
+    placed: &[PlacedMarker],
     time: f64,
-) -> Option<(TimelineMarker, f64)> {
+) -> Option<MarkerPress> {
     let (recording_clip, source) = timeline.source_for_output_time(time)?;
     let drawn_at = timeline
         .output_time_for_source(recording_clip, source)
         .unwrap_or(time);
-    Some((TimelineMarker::new(recording_clip, source), drawn_at))
+    let epsilon = 0.5 / EDITOR_PREVIEW_FPS as f64;
+    Some(
+        match placed
+            .iter()
+            .find(|placed| (placed.time - drawn_at).abs() < epsilon)
+        {
+            Some(existing) => MarkerPress::Select(existing.index),
+            None => MarkerPress::Add(TimelineMarker::new(recording_clip, source)),
+        },
+    )
 }
 
 /// Splits the clip under each output time. Splits never move footage, so
@@ -264,29 +281,26 @@ impl EditorWindow {
             return;
         }
         let time = self.playhead.clamp(0.0, self.total_duration());
-        let Some((marker, drawn_at)) = self
+        let Some(press) = self
             .project
             .timeline
             .as_ref()
-            .and_then(|timeline| marker_for_output_time(timeline, time))
+            .and_then(|timeline| marker_press(timeline, &self.markers.placed, time))
         else {
             return;
         };
-        let epsilon = 0.5 / EDITOR_PREVIEW_FPS as f64;
-        if let Some(existing) = self
-            .markers
-            .placed
-            .iter()
-            .find(|placed| (placed.time - drawn_at).abs() < epsilon)
-        {
-            let id = self.project.markers[existing.index].id.clone();
-            self.select_marker(Some(id), cx);
-            return;
+        match press {
+            MarkerPress::Select(index) => {
+                let id = self.project.markers[index].id.clone();
+                self.select_marker(Some(id), cx);
+            }
+            MarkerPress::Add(marker) => {
+                let id = marker.id.clone();
+                self.project.markers.push(marker);
+                self.markers_changed("marker-add", window, cx);
+                self.select_marker(Some(id), cx);
+            }
         }
-        let id = marker.id.clone();
-        self.project.markers.push(marker);
-        self.markers_changed("marker-add", window, cx);
-        self.select_marker(Some(id), cx);
     }
 
     pub(super) fn jump_to_marker(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -1427,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_added_on_a_fullscreen_text_hold_is_found_where_it_is_drawn() {
+    fn a_second_press_selects_the_marker_instead_of_adding_another() {
         let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
             "segments": [
                 { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
@@ -1436,14 +1450,18 @@ mod tests {
             "textSegments": [{ "start": 2.0, "end": 5.0, "layout": "fullscreen" }],
         }))
         .unwrap();
-        let (marker, drawn_at) = marker_for_output_time(&timeline, 3.0).unwrap();
-        assert_eq!((marker.recording_clip, marker.time), (0, 2.0));
-        assert_eq!(drawn_at, 5.0);
-        assert_eq!(timeline.place_markers(&[marker])[0].time, drawn_at);
-
-        timeline.text_segments.clear();
-        let (marker, drawn_at) = marker_for_output_time(&timeline, 3.0).unwrap();
-        assert_eq!((marker.time, drawn_at), (3.0, 3.0));
+        for expected_time in [2.0, 3.0] {
+            let Some(MarkerPress::Add(marker)) = marker_press(&timeline, &[], 3.0) else {
+                panic!("the first press adds a marker");
+            };
+            assert_eq!((marker.recording_clip, marker.time), (0, expected_time));
+            let placed = timeline.place_markers(&[marker]);
+            assert!(matches!(
+                marker_press(&timeline, &placed, 3.0),
+                Some(MarkerPress::Select(0))
+            ));
+            timeline.text_segments.clear();
+        }
     }
 
     #[test]
