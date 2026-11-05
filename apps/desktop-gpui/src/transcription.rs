@@ -2633,14 +2633,24 @@ pub fn write_caption_edit_to_source(
         for (&index, original) in piece.source_words.iter().zip(&original).rev() {
             let mut outside = Vec::new();
             if f64::from(original.start) < clip_start {
+                let end = clip_start as f32;
                 outside.push(CaptionWord {
-                    end: clip_start as f32,
+                    end: if f64::from(end) > clip_start {
+                        end.next_down()
+                    } else {
+                        end
+                    },
                     ..original.clone()
                 });
             }
             if f64::from(original.end) > clip_end {
+                let start = clip_end as f32;
                 outside.push(CaptionWord {
-                    start: clip_end as f32,
+                    start: if f64::from(start) < clip_end {
+                        start.next_up()
+                    } else {
+                        start
+                    },
                     ..original.clone()
                 });
             }
@@ -3212,6 +3222,23 @@ mod tests {
                 assert_eq!(after.len(), before.len());
                 assert_eq!(after[1 - index], before[1 - index]);
             }
+        }
+    }
+
+    #[test]
+    fn retyping_at_fractional_cuts_keeps_old_words_outside_the_edited_clip() {
+        for (index, text) in [(0, "one new shared"), (1, "shared new last")] {
+            let mut project = cut_caption_project(
+                &[(0.0, 5.1, 1.0), (6.3, 10.0, 1.0)],
+                &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("last", 8.0, 9.0)],
+            );
+            let before = shown_pieces(&project);
+
+            edit_caption_piece(&mut project, index, |piece| piece.text = text.into());
+
+            let after = shown_pieces(&project);
+            assert_eq!(after[index].0, text);
+            assert_eq!(after[1 - index], before[1 - index]);
         }
     }
 
