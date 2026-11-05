@@ -481,7 +481,10 @@ pub fn sanitize_filename_component(value: &str) -> String {
             other if other.is_control() => '_',
             other => other,
         })
-        .take(128)
+        .scan(0, |bytes, c| {
+            *bytes += c.len_utf8();
+            (*bytes <= 128).then_some(c)
+        })
         .collect();
 
     // Windows rejects filenames ending in a space or '.', so trim those after clamping the length.

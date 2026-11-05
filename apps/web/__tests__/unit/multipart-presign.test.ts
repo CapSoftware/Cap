@@ -139,6 +139,30 @@ describe("multipart presign ownership failures", () => {
 	});
 });
 
+describe("multipart initiation source types", () => {
+	it.each(["raw-upload.m3u8", "result.mpd", "source/original.xml"])(
+		"refuses a %s source upload before touching storage",
+		async (subpath) => {
+			vi.clearAllMocks();
+			const response = await app.request("/initiate", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "video",
+					subpath,
+					contentType: "application/x-mpegURL",
+				}),
+			});
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error: "This file type cannot be uploaded",
+			});
+			expect(mocks.getOwnedById).not.toHaveBeenCalled();
+			expect(mocks.storage).not.toHaveBeenCalled();
+		},
+	);
+});
+
 describe("desktop reupload completion", () => {
 	const oldKey = "owner/video/.recording/outputs/original/result.mp4";
 	let events: string[];

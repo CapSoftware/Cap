@@ -2881,7 +2881,8 @@ impl SettingsWindow {
         let theme = self.theme;
         let item = &row.item;
         // `studioCompleteCheck()`: the only rows whose body is a button.
-        let opens_editor = item.opens_editor();
+        let active = crate::session::RecordingSession::active_project_dir_in(cx);
+        let opens_editor = item.opens_editor(active.as_deref());
         let path = item.path.clone();
 
         let thumbnail = match row.thumbnail.clone() {
@@ -3068,7 +3069,8 @@ impl SettingsWindow {
         let path = item.path.clone();
         let sharing = item.sharing.clone();
         let failed = item.status.error().is_some();
-        let in_progress = item.status.is_in_progress();
+        let active = crate::session::RecordingSession::active_project_dir_in(cx);
+        let in_progress = !item.opens_editor(active.as_deref());
 
         let mut actions = div().flex().flex_row().items_center().gap(px(8.));
 
@@ -3881,6 +3883,23 @@ impl SettingsWindow {
                                     !this.settings.capture_keyboard_events;
                                 let value = this.settings.capture_keyboard_events;
                                 this.write_bool("captureKeyboardEvents", value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::recording::marker_sound::label(),
+                        Some(tr::settings::general::recording::marker_sound::description()),
+                        self.toggle(
+                            "marker-sound",
+                            tr::settings::general::recording::marker_sound::label(),
+                            settings.recording_marker_sound,
+                            cx,
+                            |this, cx| {
+                                this.settings.recording_marker_sound =
+                                    !this.settings.recording_marker_sound;
+                                let value = this.settings.recording_marker_sound;
+                                this.write_bool(store::RECORDING_MARKER_SOUND_KEY, value, cx);
                             },
                         )
                         .into_any_element(),

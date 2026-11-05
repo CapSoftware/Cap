@@ -1,0 +1,57 @@
+name: Windows recording encoder
+
+# The segmented recording encoder's tests on Windows, the only platform where
+# a hardware encoder that fails mid-recording is replaced with libx264.
+on:
+  pull_request:
+    paths:
+      - "crates/enc-ffmpeg/**"
+      - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
+      - "Cargo.lock"
+      - ".github/workflows/windows-recording-encoder.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/enc-ffmpeg/**"
+      - "crates/recording/src/output_pipeline/win_fragmented_m4s.rs"
+      - "Cargo.lock"
+      - ".github/workflows/windows-recording-encoder.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-recording-encoder-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  segmented-encoder:
+    name: Segmented encoder (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-windows-recording-encoder
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Native dependencies
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node scripts/setup.js
+
+      - name: FFmpeg DLLs on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\target\ffmpeg\bin"
+
+      - name: Segmented encoder tests
+        run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture

@@ -6,7 +6,7 @@ import {
 	Storage,
 	Videos,
 } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
 import {
 	HttpApi,
 	HttpApiBuilder,
@@ -28,6 +28,7 @@ import {
 	totalSegmentDuration,
 } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
+import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
 	generateM3U8Playlist,
@@ -98,6 +99,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									Effect.fail(new HttpApiError.NotFound()),
 								),
 							);
+
+						const viewer = yield* Effect.serviceOption(CurrentUser);
+						if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+							const locked = yield* Effect.tryPromise(() =>
+								isVideoLockedByShareableLinkLimit(video.id),
+							).pipe(
+								Effect.tapError(Effect.logError),
+								Effect.orElseSucceed(() => false),
+							);
+							if (locked)
+								return yield* Effect.fail(new HttpApiError.Forbidden());
+						}
 
 						return yield* getPlaylistResponse(
 							video,

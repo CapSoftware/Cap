@@ -17,12 +17,9 @@ import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
-import {
-	getPublishedRecordingCopyKeys,
-	getPublishedRecordingThumbnailKey,
-	isInternalRecordingKey,
-} from "../Storage/recording-output.ts";
+import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
+import { getDuplicateVideoMetadata, planVideoDuplicate } from "./duplicate.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
@@ -40,6 +37,14 @@ const SCREENSHOT_OBJECT_KEY_SUFFIXES = [
 	"screen-capture.jpg",
 	"screen-capture.jpeg",
 ];
+const SCREENSHOT_OBJECT_LIST_PREFIXES = [
+	"screenshot/screen-capture.",
+	"screen-capture.",
+];
+const SCREENSHOT_OBJECT_LIST_MAX_KEYS = 100;
+type StorageBucket = Effect.Effect.Success<
+	ReturnType<StorageService["getAccessForVideo"]>
+>[0];
 type ScreenshotObject = {
 	Key?: string | null;
 	LastModified?: Date | string | number | null;
@@ -236,6 +241,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			},
 		);
 
+		const findStoredScreenshotKey = Effect.fn("Videos.findStoredScreenshotKey")(
+			function* (bucket: StorageBucket, videoPrefix: string) {
+				for (const prefix of SCREENSHOT_OBJECT_LIST_PREFIXES) {
+					const page = yield* bucket.listObjects({
+						prefix: `${videoPrefix}${prefix}`,
+						maxKeys: SCREENSHOT_OBJECT_LIST_MAX_KEYS,
+					});
+					const key = findScreenshotObjectKey(page.Contents ?? []);
+					if (key) return key;
+				}
+				return null;
+			},
+		);
+
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
 				const [bucket] = yield* storage.getAccessForVideo(video);
@@ -245,11 +264,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						yield* bucket.getSignedObjectUrl(publishedThumbnail),
 					);
 				}
-				const listResponse = yield* bucket.listObjects({
-					prefix: `${video.ownerId}/${video.id}/`,
-				});
-				const contents = listResponse.Contents || [];
-				const thumbnailKey = findScreenshotObjectKey(contents);
+				const thumbnailKey = yield* findStoredScreenshotKey(
+					bucket,
+					`${video.ownerId}/${video.id}/`,
+				);
 				if (!thumbnailKey) return Option.none<string>();
 				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
 				return Option.some(url);
@@ -399,9 +417,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video, password] = maybeVideo.value;
 
+				const [row] = yield* db.use((db) =>
+					db
+						.select({
+							isScreenshot: Db.videos.isScreenshot,
+							settings: Db.videos.settings,
+						})
+						.from(Db.videos)
+						.where(Dz.eq(Db.videos.id, videoId)),
+				);
+				if (!row) return yield* Effect.fail(new Video.NotFoundError());
+
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
-				const publishedKeys = new Set(getPublishedRecordingCopyKeys(video));
+				const plan = planVideoDuplicate(video);
 				const newVideoId = Video.VideoId.make(nanoId());
 				if (Option.isSome(yield* repo.getById(newVideoId))) {
 					return yield* Effect.fail(
@@ -426,7 +455,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						);
 					});
 				yield* Effect.gen(function* () {
-					for (const key of publishedKeys) yield* copyObject(key);
+					for (const key of plan.publishedKeys) yield* copyObject(key);
 					let continuationToken: string | undefined;
 					const seenTokens = new Set<string>();
 					do {
@@ -446,15 +475,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 									}),
 								);
 							}
-							if (
-								key.includes("/comments/") ||
-								isInternalRecordingKey(key) ||
-								publishedKeys.has(key) ||
-								(publishedKeys.size > 0 && key.startsWith(`${prefix}segments/`))
-							) {
-								continue;
-							}
-							yield* copyObject(key);
+							if (plan.copiesListedKey(key)) yield* copyObject(key);
 						}
 					} while (continuationToken);
 					publicationAttempted = true;
@@ -465,21 +486,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							orgId: video.orgId,
 							name: video.name,
 							public: video.public,
-							source:
-								publishedKeys.size > 0
-									? {
-											type:
-												video.source.type === "webMP4"
-													? "webMP4"
-													: "desktopMP4",
-										}
-									: video.source,
-							metadata: Option.map(video.metadata, (metadata) => {
-								const copied = { ...metadata };
-								delete copied.desktopRecordingUpload;
-								delete copied.customCreatedAt;
-								return copied;
-							}),
+							source: plan.source,
+							metadata: Option.map(video.metadata, getDuplicateVideoMetadata),
 							bucketId: video.bucketId,
 							storageIntegrationId: video.storageIntegrationId,
 							folderId: video.folderId,
@@ -487,6 +495,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							width: video.width,
 							height: video.height,
 							duration: video.duration,
+							isScreenshot: row.isScreenshot,
+							settings: row.settings,
 							...(hasPassword ? { password: password.value } : {}),
 						},
 						{ id: newVideoId },
@@ -570,9 +580,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						phase: automaticRetry ? "processing" : result.phase,
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
-						processingError: automaticRetry
-							? Option.none()
-							: Option.fromNullable(result.processingError),
+						processingError: Option.none(),
+						processingErrorKind: automaticRetry
+							? undefined
+							: Video.getUploadProgressErrorKind(result.processingError),
 						hasRawFallback: result.rawFileKey != null,
 						automaticRetry,
 					}),
@@ -642,6 +653,28 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
+					const folderId: RepoCreateVideoInput["folderId"] =
+						input.folderId ?? Option.none<Folder.FolderId>();
+					if (Option.isSome(folderId)) {
+						const requestedFolderId = folderId.value;
+						const [folder] = yield* db.use((db) =>
+							db
+								.select({ id: Db.folders.id })
+								.from(Db.folders)
+								.where(
+									Dz.and(
+										Dz.eq(Db.folders.id, requestedFolderId),
+										Dz.eq(Db.folders.organizationId, input.orgId),
+										Dz.eq(Db.folders.createdById, user.id),
+										Dz.isNull(Db.folders.spaceId),
+									),
+								)
+								.limit(1),
+						);
+						if (!folder)
+							return yield* Effect.fail(new Policy.PolicyDeniedError());
+					}
+
 					const writable = yield* storage.getWritableAccessForUser(
 						user.id,
 						input.orgId,
@@ -649,8 +682,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const bucketId: RepoCreateVideoInput["bucketId"] = writable.bucketId;
 					const storageIntegrationId: RepoCreateVideoInput["storageIntegrationId"] =
 						writable.storageIntegrationId;
-					const folderId: RepoCreateVideoInput["folderId"] =
-						input.folderId ?? Option.none<Folder.FolderId>();
 					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
 						input.width,
 					);
@@ -878,6 +909,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							},
 							onSuccess: () =>
 								getThumbnailURLForVideo(entry.video).pipe(
+									Effect.catchTag("StorageError", (error) =>
+										Effect.logWarning("Thumbnail lookup failed", {
+											videoId: entry.video.id,
+											error,
+										}).pipe(Effect.as(Option.none<string>())),
+									),
 									Effect.map((url) => Exit.succeed(url)),
 								),
 						});

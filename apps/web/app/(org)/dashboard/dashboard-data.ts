@@ -15,6 +15,7 @@ import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
+import { cache } from "react";
 import {
 	canManageOrganizationMembers,
 	canManageOrganizationProSeats,
@@ -41,6 +42,7 @@ export type Organization = {
 			"id" | "name" | "email" | "lastName"
 		> & { image?: ImageUpload.ImageUrl | null };
 	})[];
+	memberCount: number;
 	invites: (typeof organizationInvites.$inferSelect)[];
 	inviteQuota: number;
 	totalInvites: number;
@@ -303,7 +305,7 @@ async function loadAllSpacesEntry(
 	}).pipe(runPromise);
 }
 
-export async function getDashboardSpacesData(
+async function loadDashboardSpacesData(
 	user: typeof userSelectProps,
 ): Promise<Spaces[]> {
 	const userOrganizations = await loadUserOrganizations(user);
@@ -325,6 +327,8 @@ export async function getDashboardSpacesData(
 
 	return allSpacesEntry ? [allSpacesEntry, ...spacesRows] : spacesRows;
 }
+
+export const getDashboardSpacesData = cache(loadDashboardSpacesData);
 
 async function loadActiveOrganizationData(
 	user: typeof userSelectProps,
@@ -394,11 +398,13 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						.execute()
 				: Promise.resolve<(typeof organizationInvites.$inferSelect)[]>([]);
 
+		const activeOrganizationId = active?.activeOrganizationId;
 		const organizationSelectPromise: Promise<Organization[]> = Effect.all(
 			userOrganizations.map(
 				Effect.fn(function* (organization) {
 					const db = yield* Database;
 					const iconImages = yield* ImageUploads;
+					const isActiveOrganization = organization.id === activeOrganizationId;
 
 					const managerIds = Array.from(
 						new Set([organization.ownerId, user.id]),
@@ -415,74 +421,118 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									isNull(organizations.tombstoneAt),
 								),
 							);
-					const [allMembers, managers, memberCountResult, inviteCountResult] =
-						yield* Effect.all(
-							[
-								db.use((db) =>
-									db
-										.select({
-											member: organizationMembers,
-											user: {
-												id: users.id,
-												name: users.name,
-												lastName: users.lastName,
-												email: users.email,
-												image: users.image,
-											},
-										})
-										.from(organizationMembers)
-										.leftJoin(users, eq(organizationMembers.userId, users.id))
-										.where(
-											eq(organizationMembers.organizationId, organization.id),
-										),
-								),
-								db.use((db) =>
-									db
-										.select({
-											id: users.id,
-											inviteQuota: users.inviteQuota,
-											stripeSubscriptionId: users.stripeSubscriptionId,
-											stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-											thirdPartyStripeSubscriptionId:
-												users.thirdPartyStripeSubscriptionId,
-										})
-										.from(users)
-										.where(inArray(users.id, managerIds)),
-								),
-								db.use((db) =>
-									db
-										.select({ value: count() })
-										.from(organizationMembers)
-										.where(
-											inArray(
-												organizationMembers.organizationId,
-												ownedOrganizationIds(db),
+					const [
+						allMembers,
+						currentMembership,
+						organizationMemberCountResult,
+						managers,
+						memberCountResult,
+						inviteCountResult,
+					] = yield* Effect.all(
+						[
+							isActiveOrganization
+								? db.use((db) =>
+										db
+											.select({
+												member: organizationMembers,
+												user: {
+													id: users.id,
+													name: users.name,
+													lastName: users.lastName,
+													email: users.email,
+													image: users.image,
+												},
+											})
+											.from(organizationMembers)
+											.leftJoin(users, eq(organizationMembers.userId, users.id))
+											.where(
+												eq(organizationMembers.organizationId, organization.id),
 											),
+									)
+								: Effect.succeed([]),
+							isActiveOrganization
+								? Effect.succeed([])
+								: db.use((db) =>
+										db
+											.select({
+												member: organizationMembers,
+												user: {
+													id: users.id,
+													name: users.name,
+													lastName: users.lastName,
+													email: users.email,
+													image: users.image,
+												},
+											})
+											.from(organizationMembers)
+											.leftJoin(users, eq(organizationMembers.userId, users.id))
+											.where(
+												and(
+													eq(
+														organizationMembers.organizationId,
+														organization.id,
+													),
+													eq(organizationMembers.userId, user.id),
+												),
+											)
+											.limit(1),
+									),
+							db.use((db) =>
+								db
+									.select({ value: count() })
+									.from(organizationMembers)
+									.where(
+										eq(organizationMembers.organizationId, organization.id),
+									),
+							),
+							db.use((db) =>
+								db
+									.select({
+										id: users.id,
+										inviteQuota: users.inviteQuota,
+										stripeSubscriptionId: users.stripeSubscriptionId,
+										stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+										thirdPartyStripeSubscriptionId:
+											users.thirdPartyStripeSubscriptionId,
+									})
+									.from(users)
+									.where(inArray(users.id, managerIds)),
+							),
+							db.use((db) =>
+								db
+									.select({ value: count() })
+									.from(organizationMembers)
+									.where(
+										inArray(
+											organizationMembers.organizationId,
+											ownedOrganizationIds(db),
 										),
-								),
-								db.use((db) =>
-									db
-										.select({ value: count() })
-										.from(organizationInvites)
-										.where(
-											inArray(
-												organizationInvites.organizationId,
-												ownedOrganizationIds(db),
-											),
+									),
+							),
+							db.use((db) =>
+								db
+									.select({ value: count() })
+									.from(organizationInvites)
+									.where(
+										inArray(
+											organizationInvites.organizationId,
+											ownedOrganizationIds(db),
 										),
-								),
-							],
-							{ concurrency: "unbounded" },
-						);
+									),
+							),
+						],
+						{ concurrency: "unbounded" },
+					);
 					const owner = managers.find(
 						(manager) => manager.id === organization.ownerId,
 					);
 					const currentManager = managers.find(
 						(manager) => manager.id === user.id,
 					);
-					const currentMember = allMembers.find(
-						(member) => member.member.userId === user.id,
-					);
+					const currentMember = isActiveOrganization
+						? allMembers.find((member) => member.member.userId === user.id)
+						: currentMembership[0];
+					const memberCount = organizationMemberCountResult[0]?.value ?? 0;
 					const currentRole = getEffectiveOrganizationRole({
 						userId: user.id,
 						ownerId: organization.ownerId,
@@ -510,25 +560,28 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									)
 								: null,
 						},
-						members: yield* Effect.all(
-							allMembers.map(
-								Effect.fn(function* (m) {
-									const imageUploads = yield* ImageUploads;
-									if (!m.user) {
-										throw new Error("Organization member user not found");
-									}
-									return {
-										...m.member,
-										user: {
-											...m.user,
-											image: m.user.image
-												? yield* imageUploads.resolveImageUrl(m.user.image)
-												: null,
-										},
-									};
-								}),
-							),
-						),
+						members: isActiveOrganization
+							? yield* Effect.all(
+									allMembers.map(
+										Effect.fn(function* (m) {
+											const imageUploads = yield* ImageUploads;
+											if (!m.user) {
+												throw new Error("Organization member user not found");
+											}
+											return {
+												...m.member,
+												user: {
+													...m.user,
+													image: m.user.image
+														? yield* imageUploads.resolveImageUrl(m.user.image)
+														: null,
+												},
+											};
+										}),
+									),
+								)
+							: [],
+						memberCount,
 						invites: (yield* Effect.promise(
 							() => organizationInvitesPromise,
 						)).filter((invite) => invite.organizationId === organization.id),
