@@ -6,19 +6,19 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { extractPosterFrameDataUri } from "@/lib/og/poster-frame";
-import { renderVideoOg } from "@/lib/og/video-og";
+import { renderVideoOg, renderVideoOgStatus } from "@/lib/og/video-og";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function generateVideoOgImage(videoId: Video.VideoId) {
 	const videoData = await getData(videoId);
 
-	if (!videoData) return renderVideoOg({ kind: "not-found" });
+	if (!videoData) return renderVideoOgStatus("not-found");
 
 	const { video, ownerName } = videoData;
 
-	if (video.password) return renderVideoOg({ kind: "password" });
-	if (video.public === false) return renderVideoOg({ kind: "locked" });
+	if (video.password) return renderVideoOgStatus("password");
+	if (video.public === false) return renderVideoOgStatus("locked");
 
 	let screenshotUrl: string | undefined;
 

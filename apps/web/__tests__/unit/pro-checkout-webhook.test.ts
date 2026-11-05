@@ -498,6 +498,30 @@ describe("Stripe webhook: Cap Pro checkout fulfilment", () => {
 			});
 		});
 
+		it("moves the account onto the customer's other live subscription when the tracked one is deleted", async () => {
+			const canceled = fakeSubscription("sub_own", "cus_own", 5, "canceled");
+			stripeSubscriptions([
+				canceled,
+				fakeSubscription("sub_second", "cus_own", 2, "past_due"),
+			]);
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_own",
+				email: "owner@example.com",
+				metadata: { userId: "user-own" },
+			});
+			mockStripe.webhooks.constructEvent.mockReturnValue(
+				subscriptionEvent("customer.subscription.deleted", canceled),
+			);
+
+			expect((await POST(request())).status).toBe(200);
+			expect(state.users[0]).toMatchObject({
+				stripeSubscriptionId: "sub_second",
+				stripeSubscriptionStatus: "past_due",
+				stripeCustomerId: "cus_own",
+				inviteQuota: 2,
+			});
+		});
+
 		it.each([
 			[
 				"has been canceled",
