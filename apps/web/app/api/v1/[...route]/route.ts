@@ -117,6 +117,7 @@ import {
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { withJsonNotFound } from "@/lib/api-errors";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { getClientIp } from "@/lib/client-ip";
 import {
 	type CustomStorageAttemptAction,
@@ -4491,6 +4492,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										providerIdempotencyKey,
 										requestId,
 									);
+									if (
+										yield* Effect.tryPromise(() =>
+											hasLiveProSubscription(customerId),
+										)
+									) {
+										return yield* badRequest(
+											requestId,
+											"The organization owner already has Cap Pro",
+										);
+									}
 									const environment =
 										serverEnv().VERCEL_ENV === "production"
 											? "production"

@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
@@ -96,6 +97,11 @@ export function AnalyticsDashboard() {
 
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
+				return;
+			}
+
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
 				return;
 			}
 
