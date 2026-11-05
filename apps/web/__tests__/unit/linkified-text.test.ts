@@ -20,11 +20,11 @@ const publicEnv = {
 	oidcName: "SSO",
 };
 
-const renderLinkifiedText = (text: string) =>
+const renderLinkifiedText = (text: string, webUrl = publicEnv.webUrl) =>
 	renderToStaticMarkup(
 		React.createElement(
 			PublicEnvContext,
-			{ value: publicEnv },
+			{ value: { ...publicEnv, webUrl } },
 			React.createElement(LinkifiedText, { text }),
 		),
 	);
@@ -86,6 +86,26 @@ describe("LinkifiedText", () => {
 		expect(html).not.toContain("<a");
 		expect(html).not.toContain("<button");
 		expect(html).toContain("https://user:pass@cap.so/s/demo");
+	});
+
+	it("trusts the runtime web url, not the build-time one", () => {
+		const html = renderLinkifiedText(
+			"https://cap.example.com/s/demo",
+			"https://cap.example.com",
+		);
+
+		expect(html).toContain('href="https://cap.example.com/s/demo"');
+		expect(html).not.toContain("<button");
+	});
+
+	it("still warns on hosts outside the runtime web url", () => {
+		const html = renderLinkifiedText(
+			"https://evil.test/path",
+			"https://cap.example.com",
+		);
+
+		expect(html).toContain("<button");
+		expect(html).not.toContain('href="https://evil.test/path"');
 	});
 
 	it("escapes non-link markup in comment text", () => {

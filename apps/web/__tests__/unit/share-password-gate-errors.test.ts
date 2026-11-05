@@ -5,6 +5,15 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PasswordGate } from "@/app/s/[videoId]/_components/PasswordGate";
+import { PublicEnvContext } from "@/utils/public-env";
+
+const publicEnv = {
+	webUrl: "https://cap.so",
+	googleAuthAvailable: false,
+	workosAuthAvailable: false,
+	oidcAuthAvailable: false,
+	oidcName: "SSO",
+};
 
 const mocks = vi.hoisted(() => ({
 	verifyVideoPassword: vi.fn(),
@@ -55,9 +64,13 @@ async function submitPassword(password: string) {
 	await act(async () => {
 		root.render(
 			createElement(
-				QueryClientProvider,
-				{ client: queryClient },
-				createElement(PasswordGate, { videoId: "video-1" as never }),
+				PublicEnvContext,
+				{ value: publicEnv },
+				createElement(
+					QueryClientProvider,
+					{ client: queryClient },
+					createElement(PasswordGate, { videoId: "video-1" as never }),
+				),
 			),
 		);
 	});

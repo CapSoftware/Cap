@@ -1,8 +1,9 @@
-import { type ComponentProps, createElement } from "react";
+import { type ComponentProps, createElement, type ReactElement } from "react";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ShareableLinkLimitOverlay } from "@/app/s/[videoId]/_components/ShareableLinkLimitOverlay";
 import { ShareVideo } from "@/app/s/[videoId]/_components/ShareVideo";
+import { PublicEnvContext } from "@/utils/public-env";
 
 vi.mock("@cap/env", () => ({
 	NODE_ENV: "production",
@@ -79,8 +80,22 @@ function props(
 	};
 }
 
+const publicEnv = {
+	webUrl: "https://cap.so",
+	googleAuthAvailable: false,
+	workosAuthAvailable: false,
+	oidcAuthAvailable: false,
+	oidcName: "SSO",
+};
+
+function withPublicEnv(node: ReactElement) {
+	return createElement(PublicEnvContext, { value: publicEnv }, node);
+}
+
 async function render(props: ShareVideoProps) {
-	const stream = await renderToReadableStream(createElement(ShareVideo, props));
+	const stream = await renderToReadableStream(
+		withPublicEnv(createElement(ShareVideo, props)),
+	);
 	await stream.allReady;
 	return new Response(stream).text();
 }
@@ -94,11 +109,13 @@ describe("share video quota loading", () => {
 				viewerIsOwner: isOwner,
 			});
 			const overlay = renderToStaticMarkup(
-				createElement(ShareableLinkLimitOverlay, {
-					isOwner,
-					onUpgrade: vi.fn(),
-					className: "h-full",
-				}),
+				withPublicEnv(
+					createElement(ShareableLinkLimitOverlay, {
+						isOwner,
+						onUpgrade: vi.fn(),
+						className: "h-full",
+					}),
+				),
 			);
 			expect(html).toContain(overlay);
 			expect(html).not.toContain("<video");
