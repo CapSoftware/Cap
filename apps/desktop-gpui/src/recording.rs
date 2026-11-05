@@ -1669,7 +1669,7 @@ fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::pat
 
 pub(crate) fn preparing_presentation(
     project: &cap_project::ProjectConfiguration,
-    project_dir: &std::path::Path,
+    clicks_by_clip: Vec<Vec<cap_project::CursorClickEvent>>,
     camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<cap_project::ProjectConfiguration, String> {
     let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
@@ -1682,11 +1682,9 @@ pub(crate) fn preparing_presentation(
         &library,
         &crate::presets::PresetsStore::load(),
     )?;
-    apply_auto_zoom(
-        &mut config,
-        project_dir,
-        &crate::store::GeneralSettings::load(),
-    );
+    apply_auto_zoom(&mut config, &crate::store::GeneralSettings::load(), || {
+        clicks_by_clip
+    });
     if crate::store::studio_sound_by_default() {
         config.audio.improve = true;
         config.audio.isolation = crate::store::studio_sound_isolation();
@@ -1740,7 +1738,9 @@ fn apply_recording_defaults_to_project_config(
         return false;
     }
     let mut project = preset.unwrap_or(project);
-    apply_auto_zoom(&mut project, project_dir, &settings);
+    apply_auto_zoom(&mut project, &settings, || {
+        load_recording_clicks(project_dir)
+    });
     if let Err(error) = project.write(project_dir) {
         tracing::warn!(path = %project_dir.display(), "could not apply recording defaults: {error}");
         return false;
@@ -1778,8 +1778,8 @@ pub(crate) fn load_recording_clicks(
 
 fn apply_auto_zoom(
     project: &mut cap_project::ProjectConfiguration,
-    project_dir: &std::path::Path,
     settings: &crate::store::GeneralSettings,
+    load_clicks: impl FnOnce() -> Vec<Vec<cap_project::CursorClickEvent>>,
 ) {
     if !settings.auto_zoom_on_clicks {
         return;
@@ -1793,11 +1793,8 @@ fn apply_auto_zoom(
     let amount = settings
         .default_zoom_amount
         .map_or(crate::editor_edits::DEFAULT_AUTO_ZOOM_AMOUNT, f64::from);
-    timeline.zoom_segments = crate::editor_edits::generate_zoom_segments_for_timeline(
-        &load_recording_clicks(project_dir),
-        timeline,
-        amount,
-    );
+    timeline.zoom_segments =
+        crate::editor_edits::generate_zoom_segments_for_timeline(&load_clicks(), timeline, amount);
 }
 
 /// The camera preview bubble's current blur mode.
@@ -4006,6 +4003,9 @@ mod tests {
         }
 
         let dir = temp_project("auto-zoom-preference");
+        let segments_dir = dir.join("content/segments");
+        std::fs::create_dir_all(&segments_dir).unwrap();
+        let source = cap_enc_ffmpeg::RelocatableSource::new(segments_dir.clone()).unwrap();
         let store_path = dir.join("store");
         crate::store::set_test_tauri_store_path(Some(store_path.clone()));
         let _store = StoreOverride;
@@ -4015,14 +4015,14 @@ mod tests {
                 "pretty_name": "Auto zoom", "platform": "MacOS",
                 "segments": [
                     { "display": { "path": "first.mp4", "fps": 30 } },
-                    { "display": { "path": "second.mp4", "fps": 30 }, "cursor": "cursor.json" }
+                    { "display": { "path": "second.mp4", "fps": 30 }, "cursor": "content/segments/cursor.json" }
                 ]
             }))
             .unwrap(),
         )
         .unwrap();
         std::fs::write(
-            dir.join("cursor.json"),
+            segments_dir.join("cursor.json"),
             serde_json::to_vec(&serde_json::json!({
                 "clicks": [{ "time_ms": 2000.0, "down": true, "cursor_num": 0, "cursor_id": "arrow", "active_modifiers": [] }],
                 "moves": []
@@ -4054,15 +4054,20 @@ mod tests {
                 recorded.write(&dir).unwrap();
                 apply_recording_defaults_to_project_config(&dir, &presets);
                 let opened = cap_project::ProjectConfiguration::load(&dir).unwrap();
+                source.relocate(dir.join("segments-backup")).unwrap();
+                assert!(!segments_dir.exists());
+                let mut reader = source.reader(std::path::Path::new("cursor.json")).unwrap();
+                let cursor = cap_gpui_kernels::codec::read_cursor_events(&mut reader).unwrap();
                 let shown = preparing_presentation(
                     &recorded,
-                    &dir,
+                    vec![Vec::new(), cursor.clicks],
                     Some(StudioCameraSnapshot {
                         blur: BlurMode::Off,
                         placement: None,
                     }),
                 )
                 .unwrap();
+                source.relocate(segments_dir.clone()).unwrap();
                 assert_eq!(
                     serde_json::to_value(&shown).unwrap(),
                     serde_json::to_value(&opened).unwrap()
@@ -4099,9 +4104,9 @@ mod tests {
         ));
         for cursor in [None, Some(b"invalid json".as_slice())] {
             if let Some(cursor) = cursor {
-                std::fs::write(dir.join("cursor.json"), cursor).unwrap();
+                std::fs::write(segments_dir.join("cursor.json"), cursor).unwrap();
             } else {
-                std::fs::remove_file(dir.join("cursor.json")).unwrap();
+                std::fs::remove_file(segments_dir.join("cursor.json")).unwrap();
             }
             recorded.write(&dir).unwrap();
             apply_recording_defaults_to_project_config(
