@@ -213,7 +213,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 		}
 	}, [space, form]);
 
-	const [selectedFile, setSelectedFile] = useState<File | null>(null);
+	const [selectedFile, setSelectedFile] = useState<File | null>();
 	const [isUploading, setIsUploading] = useState(false);
 	const { activeOrganization, user, setUpgradeModalOpen } =
 		useDashboardContext();
@@ -229,6 +229,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const iconInputId = useId();
 
 	useEffect(() => {
+		setSelectedFile(undefined);
 		setSettings({ ...defaultSettings, ...space?.settings });
 		setPasswordEnabled(Boolean(space?.hasPassword));
 		setPublicEnabled(Boolean(space?.public));
@@ -355,7 +356,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						}
 
 						form.reset();
-						setSelectedFile(null);
+						setSelectedFile(undefined);
 						props.onSpaceCreated();
 					} catch (error) {
 						console.error(
