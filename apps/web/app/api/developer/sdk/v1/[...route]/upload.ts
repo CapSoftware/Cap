@@ -351,7 +351,7 @@ app.post(
 			}).pipe(provideOptionalAuth, runPromise);
 
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
-				duration: clampedDuration,
+				duration: billingDuration,
 			};
 			if (width !== undefined) updates.width = width;
 			if (height !== undefined) updates.height = height;
