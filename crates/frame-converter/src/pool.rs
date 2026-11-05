@@ -434,9 +434,9 @@ fn worker_loop(ctx: WorkerContext) {
                         }
                     }
                     Err(e) => {
-                        // The input frame was consumed but produced no output;
-                        // count it as dropped so frames_received stays equal to
-                        // frames_converted + frames_dropped once the queue drains.
+                        // Count conversion errors as dropped so they are
+                        // subtracted from drain_with_timeout's pending count
+                        // instead of looking like they are still in flight.
                         ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
                         local_errors += 1;
                         if local_errors % 10 == 1 {
