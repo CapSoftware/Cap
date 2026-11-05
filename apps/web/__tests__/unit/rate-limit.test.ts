@@ -112,6 +112,22 @@ describe("isRateLimited outside production", () => {
 		expect(await invite()).toBe(false);
 	});
 
+	it("allows 20 checkouts per account every ten minutes", async () => {
+		vi.useFakeTimers();
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const checkout = (userId: string) =>
+			isRateLimited(RATE_LIMIT_IDS.CHECKOUT, { key: `checkout:${userId}` });
+
+		expect(await callTimes(20, () => checkout("user-1"))).toEqual(
+			Array(20).fill(false),
+		);
+		expect(await checkout("user-1")).toBe(true);
+		expect(await checkout("user-2")).toBe(false);
+
+		vi.advanceTimersByTime(10 * 60_000);
+		expect(await checkout("user-1")).toBe(false);
+	});
+
 	it("keys on x-real-ip, then the first x-forwarded-for entry", async () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const fromHeaders = (init: Record<string, string>) =>

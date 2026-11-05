@@ -577,6 +577,25 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						partNumberMarker = nextMarker;
 					}
 				}),
+			listUploads: (config: {
+				prefix: string;
+				keyMarker?: string;
+				uploadIdMarker?: string;
+			}) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.ListMultipartUploadsCommand({
+									Bucket: provider.bucket,
+									Prefix: config.prefix,
+									KeyMarker: config.keyMarker,
+									UploadIdMarker: config.uploadIdMarker,
+								}),
+							),
+						),
+					),
+				),
 			copyPart: (
 				key: string,
 				uploadId: string,

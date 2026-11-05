@@ -194,18 +194,46 @@ describe("translations still running elsewhere", () => {
 		expect(captions.currentVttContent).toBe("Spanish");
 		expect(captions.isTranslating).toBe(false);
 	});
-	it("stops after a few attempts", async () => {
+	it("keeps asking while a long translation finishes elsewhere", async () => {
 		vi.useFakeTimers();
-		translate.mockResolvedValue(inProgress);
+		for (let attempt = 0; attempt < 10; attempt += 1) {
+			translate.mockResolvedValueOnce(inProgress);
+		}
+		translate.mockResolvedValueOnce({
+			success: true,
+			translatedVtt: "Spanish",
+		});
 		await act(async () => {
 			captions.setSelectedLanguage("es");
 		});
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(60_000);
 		});
-		expect(translate).toHaveBeenCalledTimes(4);
+		expect(translate).toHaveBeenCalledTimes(11);
+		expect(captions.translatedVttContent.get("es")).toBe("Spanish");
+		expect(captions.isTranslating).toBe(false);
+	});
+	it("stops asking once the retry window has passed", async () => {
+		vi.useFakeTimers();
+		translate.mockResolvedValue(inProgress);
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+		});
+		expect(captions.isTranslating).toBe(true);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+		});
+		const calls = translate.mock.calls.length;
+		expect(calls).toBeLessThanOrEqual(6 * 12 + 1);
 		expect(captions.isTranslating).toBe(false);
 		expect(captions.translatedVttContent.has("es")).toBe(false);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(60_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(calls);
 	});
 	it("stops asking once a different language is selected", async () => {
 		vi.useFakeTimers();
@@ -221,6 +249,33 @@ describe("translations still running elsewhere", () => {
 		});
 		expect(translate).toHaveBeenCalledTimes(1);
 		expect(captions.isTranslating).toBe(false);
+	});
+	it("waits longer and asks again after a request limit", async () => {
+		vi.useFakeTimers();
+		translate
+			.mockResolvedValueOnce({
+				success: false,
+				rateLimited: true,
+				message: "Too many requests",
+			})
+			.mockResolvedValueOnce(inProgress)
+			.mockResolvedValueOnce({ success: true, translatedVtt: "Spanish" });
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(29_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(2);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(3);
+		expect(captions.translatedVttContent.get("es")).toBe("Spanish");
 	});
 	it("does not ask again after any other failure", async () => {
 		vi.useFakeTimers();
