@@ -440,7 +440,7 @@ async function processNextLiveChunk(options: {
 			},
 			words: noSpokenAudio ? [] : transcript.words,
 			languageCode:
-				typeof transcript.language_code === "string"
+				!noSpokenAudio && typeof transcript.language_code === "string"
 					? transcript.language_code
 					: null,
 		});
