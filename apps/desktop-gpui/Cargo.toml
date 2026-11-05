@@ -354,3 +354,9 @@ debug = "line-tables-only"
 codegen-units = 1
 lto = "thin"
 strip = "symbols"
+
+# Proc macros and build scripts inherit `strip = "symbols"`. On macOS 27 the
+# stripped proc-macro dylibs fail to load ("mis-aligned LINKEDIT string pool"),
+# so every release build stops at serde. They never ship, so leave them unstripped.
+[profile.release.build-override]
+strip = "none"
