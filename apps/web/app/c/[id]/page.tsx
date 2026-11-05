@@ -8,8 +8,9 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { PublicCapCard } from "@/components/PublicCapCard";
 import {
@@ -28,6 +29,7 @@ import {
 	parsePublicCollectionPage,
 } from "@/lib/public-collections-policy";
 import type { SharePageBranding } from "@/lib/share-branding";
+import { resolveForeignCollectionRedirect } from "@/lib/share-web-url";
 import { CapPagination } from "../../(org)/dashboard/caps/components/CapPagination";
 import { CollectionCopyLinkButton } from "./CollectionCopyLinkButton";
 import { CollectionPasswordOverlay } from "./CollectionPasswordOverlay";
@@ -36,9 +38,10 @@ export async function generateMetadata(
 	props: PageProps<"/c/[id]">,
 ): Promise<Metadata> {
 	const params = await props.params;
-	const collection = await getPublicCollectionMetadata(params.id);
-
-	if (!collection) notFound();
+	const collection = await getCollectionForHost(
+		params.id,
+		await props.searchParams,
+	);
 
 	const title = collection.publicPage.title.trim() || collection.name;
 	const description =
@@ -51,6 +54,23 @@ export async function generateMetadata(
 		description,
 		robots: "noindex, nofollow",
 	};
+}
+
+async function getCollectionForHost(
+	id: string,
+	searchParams: Record<string, string | string[] | undefined>,
+) {
+	const collection = await getPublicCollectionMetadata(id);
+	if (!collection) notFound();
+
+	const redirectTo = await resolveForeignCollectionRedirect(
+		await headers(),
+		collection,
+		searchParams,
+	);
+	if (redirectTo) redirect(redirectTo);
+
+	return collection;
 }
 
 function resolveBranding(
@@ -104,6 +124,7 @@ export default async function PublicCollectionPage(
 ) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
+	await getCollectionForHost(params.id, searchParams);
 	const page = parsePublicCollectionPage(searchParams.page);
 	const data = await getPublicCollectionPageData(params.id, page);
 
