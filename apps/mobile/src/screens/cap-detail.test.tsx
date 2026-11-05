@@ -1,4 +1,5 @@
 import { Comment, User, Video } from "@cap/web-domain";
+import type { StatusChangeEventPayload } from "expo-video";
 import React, { type ReactElement, type ReactNode } from "react";
 import { ActionSheetIOS, Alert } from "react-native";
 import TestRenderer, {
@@ -110,7 +111,12 @@ const authState = vi.hoisted((): { value: AuthStub | null } => ({
 	value: null,
 }));
 
+const playerStatusListeners = new Set<
+	(event: StatusChangeEventPayload) => void
+>();
+
 const videoPlayerState = vi.hoisted(() => ({
+	addListener: vi.fn(),
 	currentTime: 0,
 	play: vi.fn(),
 	replaceAsync: vi.fn(() => Promise.resolve()),
@@ -171,7 +177,7 @@ const createAuth = (): AuthStub => ({
 		createReaction: vi.fn(),
 		deleteCap: vi.fn(),
 		getCap: vi.fn(() => Promise.resolve(detail)),
-		getPlayback: vi.fn(() => Promise.resolve(playback)),
+		getPlayback: vi.fn(() => Promise.resolve({ ...playback })),
 		blockUser: vi.fn(() => Promise.resolve({ success: true })),
 		reportCap: vi.fn(() => Promise.resolve({ success: true })),
 		updateCapSharing: vi.fn(),
@@ -406,6 +412,14 @@ describe("Cap detail screen", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		videoViewState.renderCount = 0;
+		playerStatusListeners.clear();
+		videoPlayerState.addListener.mockImplementation(
+			(event: string, listener: (event: StatusChangeEventPayload) => void) => {
+				expect(event).toBe("statusChange");
+				playerStatusListeners.add(listener);
+				return { remove: () => playerStatusListeners.delete(listener) };
+			},
+		);
 		videoPlayerState.replaceAsync.mockResolvedValue(undefined);
 		authState.value = createAuth();
 	});
@@ -662,6 +676,110 @@ describe("Cap detail screen", () => {
 		});
 		const screen = renderer.root.find((node) => String(node.type) === "Screen");
 		expect(screen.props.automaticallyAdjustKeyboardInsets).toBe(true);
+	});
+
+	it("shows a retry action for a player error after the video loaded", async () => {
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		await act(async () => {
+			for (const listener of playerStatusListeners) {
+				listener({ status: "error", error: { message: "Connection lost" } });
+			}
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain(
+			"Unable to play this video",
+		);
+		expect(
+			renderer.root.findByProps({ accessibilityHint: "Reloads this video" })
+				.props.onPress,
+		).toBeTypeOf("function");
+		await act(async () => renderer.unmount());
+		expect(playerStatusListeners.size).toBe(0);
+	});
+
+	it("requests a fresh playback URL on retry without reloading the Cap", async () => {
+		const auth = createAuth();
+		authState.value = auth;
+		videoPlayerState.replaceAsync.mockRejectedValueOnce(
+			new Error("URL expired"),
+		);
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		expect(getTextNodes(renderer.toJSON())).toContain(
+			"Unable to play this video",
+		);
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityLabel: "Comment" })
+				.props.onChangeText("Keep my draft");
+		});
+		const nextPlayback = createDeferred<MobilePlaybackResponse>();
+		auth.client.getPlayback.mockReturnValueOnce(nextPlayback.promise);
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityHint: "Reloads this video" })
+				.props.onPress();
+		});
+
+		expect(auth.client.getPlayback).toHaveBeenCalledTimes(2);
+		expect(videoPlayerState.replaceAsync).toHaveBeenCalledTimes(1);
+		expect(getTextNodes(renderer.toJSON())).toContain("Launch review");
+		await act(async () =>
+			nextPlayback.resolve({
+				...playback,
+				url: "https://cap.so/video.mp4?token=fresh",
+			}),
+		);
+		expect(videoPlayerState.replaceAsync).toHaveBeenLastCalledWith({
+			uri: "https://cap.so/video.mp4?token=fresh",
+			contentType: "progressive",
+		});
+		expect(auth.client.getCap).toHaveBeenCalledTimes(1);
+		expect(
+			renderer.root.findByProps({ accessibilityLabel: "Comment" }).props.value,
+		).toBe("Keep my draft");
+		expect(playerStatusListeners.size).toBe(1);
+		expect(getTextNodes(renderer.toJSON())).not.toContain(
+			"Unable to play this video",
+		);
+		await act(async () => renderer.unmount());
+	});
+
+	it("keeps playback retry available when fetching a new URL fails", async () => {
+		const auth = createAuth();
+		authState.value = auth;
+		videoPlayerState.replaceAsync.mockRejectedValueOnce(
+			new Error("URL expired"),
+		);
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		auth.client.getPlayback.mockRejectedValueOnce(new Error("Offline"));
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityHint: "Reloads this video" })
+				.props.onPress();
+		});
+
+		expect(auth.client.getPlayback).toHaveBeenCalledTimes(2);
+		expect(videoPlayerState.replaceAsync).toHaveBeenCalledTimes(1);
+		expect(getTextNodes(renderer.toJSON())).toContain(
+			"Unable to play this video",
+		);
+		await act(async () => {
+			renderer.root
+				.findByProps({ accessibilityHint: "Reloads this video" })
+				.props.onPress();
+		});
+		expect(auth.client.getPlayback).toHaveBeenCalledTimes(3);
+		expect(videoPlayerState.replaceAsync).toHaveBeenCalledTimes(2);
+		expect(getTextNodes(renderer.toJSON())).not.toContain(
+			"Unable to play this video",
+		);
+		await act(async () => renderer.unmount());
 	});
 
 	it("offers the full reaction set in the reaction bar", async () => {
