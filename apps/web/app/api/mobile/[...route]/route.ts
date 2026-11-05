@@ -2250,6 +2250,8 @@ const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
 				return new HttpApiError.InternalServerError();
 			}
 			switch (error.code) {
+				case "rate_limited":
+					return new Mobile.MobileTooManyRequests();
 				case "not_found":
 					return new HttpApiError.NotFound();
 				case "busy":

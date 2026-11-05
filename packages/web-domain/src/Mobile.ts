@@ -826,7 +826,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound)
 			.addError(HttpApiError.Conflict)
-			.addError(HttpApiError.InternalServerError),
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.post("restoreCapEdit", "/caps/:id/edit/restore")
@@ -837,7 +838,8 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound)
 			.addError(HttpApiError.Conflict)
-			.addError(HttpApiError.InternalServerError),
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback")

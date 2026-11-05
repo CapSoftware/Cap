@@ -289,6 +289,7 @@ describe("POST /api/mobile/caps/:id/edit", () => {
 		["busy", 409],
 		["invalid", 400],
 		["not_editable", 400],
+		["rate_limited", 429],
 	])("maps %s to %i", async (code, status) => {
 		mocks.save.mockRejectedValueOnce(new mocks.VideoEditError(code, code));
 		const response = await save({

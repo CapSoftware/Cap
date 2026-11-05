@@ -12,6 +12,7 @@ import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import { assertLegacyEditsQuiescent } from "@/lib/legacy-video-edit-recovery";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import {
@@ -38,7 +39,8 @@ export type VideoEditErrorCode =
 	| "not_editable"
 	| "busy"
 	| "invalid"
-	| "unavailable";
+	| "unavailable"
+	| "rate_limited";
 
 export class VideoEditError extends Error {
 	constructor(
@@ -204,6 +206,20 @@ async function markEditProcessing({
 	return operation;
 }
 
+// Counted only once an edit will really render, so saving an unchanged edit costs nothing.
+async function assertEditBudget(user: EditUser) {
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.VIDEO_EDIT, {
+			key: `video-edit:${user.id}`,
+		})
+	) {
+		throw new VideoEditError(
+			"rate_limited",
+			"You've made a lot of edits. Try again in a little while.",
+		);
+	}
+}
+
 async function loadEditableVideo(
 	user: EditUser,
 	videoId: Video.VideoId,
@@ -308,6 +324,7 @@ export async function saveVideoEditsAsUser(
 		return { success: true, skipped: true };
 	}
 
+	await assertEditBudget(user);
 	const sourceKey =
 		existingEdit?.sourceKey ?? getEditSourceKey(video.ownerId, video.id);
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
@@ -420,6 +437,7 @@ export async function restoreVideoToOriginalAsUser(
 		return { success: true, skipped: true };
 	}
 
+	await assertEditBudget(user);
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
 
 	const operation = await markEditProcessing({
