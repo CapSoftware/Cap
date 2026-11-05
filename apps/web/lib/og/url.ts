@@ -63,11 +63,11 @@ export const buildMarketingMetadata = ({
 
 	return {
 		title,
-		description,
+		...(description && { description }),
 		...(path && { alternates: { canonical: path } }),
 		openGraph: {
 			title,
-			description,
+			...(description && { description }),
 			type: "website",
 			...(path && { url: path }),
 			siteName: "Cap",
@@ -76,7 +76,7 @@ export const buildMarketingMetadata = ({
 		twitter: {
 			card: "summary_large_image",
 			title,
-			description,
+			...(description && { description }),
 			images: [image.url],
 		},
 	};
