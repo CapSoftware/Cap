@@ -60,14 +60,15 @@ export function deviceOf({ name, replayKit, width, height, audioOnly }) {
 
 // session.json and chapter.json in the recorder's shapes (src/record.mjs), plus kind "import" (or "diatribe": a
 // ramble that becomes notes and action items) and the source.
-export function importRecords({ outDir, topic, ask, startMs, durationS, speakers, glossaries, source, kind = 'import' }) {
+// brief: true/false when --brief/--no-brief was given (the recording's own switch); absent otherwise.
+export function importRecords({ outDir, topic, ask, startMs, durationS, speakers, glossaries, source, kind = 'import', project = null, brief }) {
   const dir = path.join(outDir, sessionName(topic, new Date(startMs)));
   const name = kind === 'diatribe' ? 'diatribe' : source.audioOnly ? 'voice memo' : 'screen recording';
   const cdir = chapterName(1, name);
   const endMs = startMs + Math.round(durationS * 1000);
-  const session = { topic, url: null, kind, source, dir, startedAt: new Date(startMs).toISOString(), speakers, glossaries,
+  const session = { topic, url: null, kind, source, dir, startedAt: new Date(startMs).toISOString(), speakers, glossaries, project, ...(typeof brief === 'boolean' ? { brief } : {}),
     chapters: [{ n: 1, name, dir: cdir, startMs, endMs, status: 'processing' }], ...(ask && ask.trim() ? { ask: ask.trim() } : {}) };
-  const chapter = { n: 1, name, topic, url: null, kind, source, startMs, endMs, speakers, glossaries,
+  const chapter = { n: 1, name, topic, url: null, kind, source, startMs, endMs, speakers, glossaries, project, ...(typeof brief === 'boolean' ? { brief } : {}),
     ...(source.audioOnly ? { video: 'audio.m4a' } : {}) };
   return { dir, chapterDir: path.join(dir, cdir), session, chapter };
 }
@@ -135,7 +136,7 @@ export async function placeMedia(src, chapterDir, info, log = () => {}) {
 const saveJson = (f, o) => { const tmp = `${f}.${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(o, null, 2)); fs.renameSync(tmp, f); };
 
 // Returns { dir, chapterDir, session, summary, brief } once processed.
-export async function importRecording(file, cfg, { topic, ask, start, brief = true, glossary, kind = 'import', log = console.log } = {}) {
+export async function importRecording(file, cfg, { topic, ask, start, brief, glossary, kind = 'import', log = console.log } = {}) {
   if (file.endsWith('.cap')) return importCapRecording(file, cfg, { topic, ask, start, brief, glossary, kind, log });
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`no such file: ${file}`);
   if (!VIDEO_EXT.test(file) && !AUDIO_EXT.test(file)) throw new Error(`not a video or voice memo: ${path.basename(file)} (.mp4, .mov, .m4v, .m4a, .mp3, .wav, .aac)`);
@@ -151,7 +152,7 @@ export async function importRecording(file, cfg, { topic, ask, start, brief = tr
   const speakers = list(cfg.speakers).length ? list(cfg.speakers) : [cfg.me].filter(Boolean);
   const glossaries = resolveGlossaries([cfg.glossary, glossary].filter(Boolean).join(','));
   const words = (topic || '').trim() || (kind === 'diatribe' ? 'diatribe' : audioOnly ? 'voice memo' : 'screen recording');
-  const r = importRecords({ outDir: cfg.outDir, topic: words, ask, startMs: startAt.ms, durationS: info.durationS, speakers, glossaries, source, kind });
+  const r = importRecords({ outDir: cfg.outDir, topic: words, ask, startMs: startAt.ms, durationS: info.durationS, speakers, glossaries, source, kind, project: cfg.project || null, brief });
   if (fs.existsSync(r.dir)) throw new Error(`already there: ${r.dir} (rerun its processing with: ux-walk process ${r.dir})`);
   log(`Start ${new Date(startAt.ms).toLocaleString()} (from the ${startAt.from}); ${Math.round(info.durationS)} s${source.device ? ` from ${source.device === 'iPhone' ? 'an iPhone' : 'a phone'}` : ''}${audioOnly ? ', audio only' : ` ${info.video.width}x${info.video.height} ${info.video.codec_name}`}`);
   fs.mkdirSync(r.chapterDir, { recursive: true });
@@ -163,7 +164,7 @@ export async function importRecording(file, cfg, { topic, ask, start, brief = tr
   return finishImport(r, cfg, { brief, log });
 }
 
-export async function importCapRecording(file, cfg, { topic, ask, start, brief = true, glossary, kind = 'import', log = console.log, client = new CapClient() } = {}) {
+export async function importCapRecording(file, cfg, { topic, ask, start, brief, glossary, kind = 'import', log = console.log, client = new CapClient() } = {}) {
   checkCapProject(file);
   const inspection = await client.inspect(file);
   if (path.resolve(cfg.outDir) === path.resolve(file) || path.resolve(cfg.outDir).startsWith(path.resolve(file) + path.sep)) throw new Error('Import output must be outside the source Cap project');
@@ -183,7 +184,7 @@ export async function importCapRecording(file, cfg, { topic, ask, start, brief =
     const source = { backend: 'cap', file: path.basename(file), path: file, project: 'source.cap', audioOnly: false, startFrom: startAt.from,
       timing: 'imported project; wall-clock alignment unknown unless --start is supplied; edited export time is not source time' };
     r = importRecords({ outDir: cfg.outDir, topic: topic?.trim() || inspection.name || 'Cap recording', ask, startMs: startAt.ms, durationS: info.durationS,
-      speakers: list(cfg.speakers).length ? list(cfg.speakers) : [cfg.me].filter(Boolean), glossaries: resolveGlossaries([cfg.glossary, glossary].filter(Boolean).join(',')), source, kind });
+      speakers: list(cfg.speakers).length ? list(cfg.speakers) : [cfg.me].filter(Boolean), glossaries: resolveGlossaries([cfg.glossary, glossary].filter(Boolean).join(',')), source, kind, project: cfg.project || null, brief });
     await capManifest(project, output, info, { source: startAt.from, exactFirstFrame: false, imported: true });
     fs.mkdirSync(r.dir); // atomic reservation: never overwrite an existing import
     fs.renameSync(stage, r.chapterDir);
@@ -208,7 +209,8 @@ async function finishImport(r, cfg, { brief, log }) {
   const row = r.session.chapters[0];
   let summary = null;
   try {
-    summary = await processChapter(r.chapterDir, cfg, { brief, log });
+    // An import is briefed unless the caller said no.
+    summary = await processChapter(r.chapterDir, cfg, { brief: brief ?? true, log });
     row.status = summary?.transcriptError ? 'no transcript' : 'ready';
   } catch (e) { row.status = 'failed'; saveJson(path.join(r.dir, 'session.json'), r.session); throw e; }
   saveJson(path.join(r.dir, 'session.json'), r.session);

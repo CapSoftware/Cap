@@ -55,7 +55,9 @@ export function loadItems(chDir, first = 'the speaker') {
 }
 
 // An item's refs: by key, else (a ledger from before keys) by id.
-const refsOf = (l, i) => (i.key && l[i.key]?.length ? l[i.key] : (i.id && l[i.id]) || []);
+// Entries are { ref, note?, at, tracker?, url? }; a bare string (hand-edited or older ledgers) reads as { ref }.
+const asRef = (r) => (typeof r === 'string' ? { ref: r } : r);
+const refsOf = (l, i) => (i.key && l[i.key]?.length ? l[i.key] : (i.id && l[i.id]) || []).map(asRef);
 
 // Every chapter's items with the user's edits applied (what `ux-walk items --json` prints and the desktop editor
 // reads). Deleted items stay in the list, flagged; orphans are edits whose item is gone after a re-brief.
@@ -71,7 +73,7 @@ export function mergedItems(sessionDir) {
   const { chapters: out, orphans } = overlay(base, edits);
   for (const c of out) {
     for (const i of c.items) i.refs = refsOf(l, i);
-    c.questions = c.questions.map((q) => ({ ...q, refs: l[q.id] || [] }));
+    c.questions = c.questions.map((q) => ({ ...q, refs: (l[q.id] || []).map(asRef) }));
   }
   return { version: 1, session: sessionDir, topic: s.topic || null, kind: s.kind || null, ask: s.ask || null, chapters: out, orphans, edits };
 }
@@ -81,7 +83,8 @@ export const readLedger = (s) => readJson(ledgerFile(s));
 
 // Replaces the item's refs (a corrected link leaves no stale ref behind); add: true appends instead. Takes an item's
 // key or id (any case), or a question id; items are stored by key so the link survives a re-brief.
-export function link(sessionDir, id, ref, note = '', { add = false } = {}) {
+// tracker/url: a typed ref from `ux-walk file` (the tracker plugin's id and the issue's web address).
+export function link(sessionDir, id, ref, note = '', { add = false, tracker, url } = {}) {
   const m = mergedItems(sessionDir);
   const items = m.chapters.flatMap((c) => c.items), qs = m.chapters.flatMap((c) => c.questions);
   const want = String(id).toLowerCase(), is = (v) => !!v && v.toLowerCase() === want;
@@ -93,8 +96,8 @@ export function link(sessionDir, id, ref, note = '', { add = false } = {}) {
   }
   const at = item ? item.key : q.id;
   const l = readLedger(sessionDir);
-  const entry = { ref, ...(note ? { note } : {}), at: new Date().toISOString() };
-  const prev = item ? refsOf(l, item) : l[at] || [];
+  const entry = { ref, ...(note ? { note } : {}), at: new Date().toISOString(), ...(tracker ? { tracker } : {}), ...(url ? { url } : {}) };
+  const prev = item ? refsOf(l, item) : (l[at] || []).map(asRef);
   // An entry under the old id moves to the key: the id meant this item when it was written.
   if (item?.id && item.id !== at) delete l[item.id];
   l[at] = add ? [...prev, entry] : [entry];

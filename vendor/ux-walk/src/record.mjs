@@ -16,12 +16,14 @@ import { CapSessionCapture } from './cap-session.mjs';
 import { pathToFileURL } from 'node:url';
 import { CONFIG_DIR, ROOT } from './config.mjs';
 import { resolveGlossaries, listGlossaries } from './glossary.mjs';
+import { wantsBrief } from './brief.mjs';
 import { askSpeakers } from './speakers.mjs';
 import { createAsker } from './ask.mjs';
 import { emit, readCommands, createIpcAsker } from './ipc.mjs';
 import { transcriberProblem } from './transcribe.mjs';
 import { isRisky, label, writeKind, writeLabel } from './timeline.mjs';
 import { chapterName, handoffContext, handoffLine, pad, createSessionDir } from './naming.mjs';
+import { sessionProject } from './projects.mjs';
 import { assertCompanionAvailable, CompanionSession, durableCompanionJson, startCompanionServer } from './companion.mjs';
 
 const tty = process.stdout.isTTY;
@@ -63,14 +65,21 @@ export function openInCmux(dir, line, cfg, name) {
   const bin = [process.env.UXW_CMUX, '/Applications/cmux.app/Contents/Resources/bin/cmux'].find((p) => p && fs.existsSync(p)) || 'cmux';
   const cwd = String(cfg.sourceRoot || '~').replace(/^~(?=\/|$)/, os.homedir());
   const prompt = path.join(dir, 'agent-prompt.txt');
-  fs.writeFileSync(prompt, `${line}\n\n${handoffContext(dir)}\n`);
+  fs.writeFileSync(prompt, `${line}\n\n${handoffContext(dir, { project: sessionProject(dir, cfg) })}\n`);
   const cmd = `claude --dangerously-skip-permissions --model ${shq(cfg.agentModel || 'opus')} "$(cat ${shq(prompt)})"`;
   const r = spawnSync(bin, ['new-workspace', '--name', `walk: ${name}`.slice(0, 60), '--cwd', cwd, '--command', cmd, '--focus', 'true'], { encoding: 'utf8', timeout: 15000 });
   if (r.error) return r.error.code === 'ENOENT' ? 'cmux is not installed' : r.error.message;
   return r.status === 0 ? null : (r.stderr || r.stdout || `cmux exited ${r.status}`).trim();
 }
 
-export async function record(cfg, { topic, url, app, title, windowId, display, bubbleWindow, callApp, kind, noBrowser, glossary, script, ipc, sources = null }) {
+// The background processor for a finished chapter. It is told yes or no about the brief: it reloads the config,
+// so a --no-brief given to the recording would otherwise be lost.
+export function processArgs(dir, meta, session, kind, cfg) {
+  const want = wantsBrief(undefined, meta, session, (meta.kind || kind) === 'diatribe', cfg);
+  return [path.join(ROOT, 'bin', 'ux-walk'), 'process', dir, '--quiet', want ? '--brief' : '--no-brief'];
+}
+
+export async function record(cfg, { topic, url, app, title, windowId, display, bubbleWindow, callApp, kind, noBrowser, glossary, script, ipc, sources = null, brief }) {
   if (cfg.capture === 'cap' && (!noBrowser || cfg.screenId == null || windowId != null)) throw new Error('Cap capture needs --no-browser and --screen-id (whole screen). Use --capture window for isolated windows; the tested Cap window video included overlapping apps.');
   if (cfg.capture === 'cap' && (app || display != null || bubbleWindow || callApp)) throw new Error('Cap uses explicit target/device IDs; --app, --display, --bubble-window and --call-app are not supported. System audio needs --system-audio.');
   if (cfg.attachCap && cfg.capture !== 'cap') throw new Error('--attach-cap requires --capture cap');
@@ -100,7 +109,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
   if (!speakers.length) speakers = [cfg.me];
   const glossaries = resolveGlossaries(glossaryRefs);
   const dir = createSessionDir(cfg.outDir, topic);
-  const session = { topic, url, mode: noBrowser ? 'passive-external' : 'recorder-owned-browser', evidenceOnly: !!cfg.evidenceOnly, ...(kind ? { kind } : {}), ...(sources ? { sources } : {}), dir, startedAt: new Date().toISOString(), speakers, glossaries, chapters: [] };
+  const session = { topic, url, mode: noBrowser ? 'passive-external' : 'recorder-owned-browser', evidenceOnly: !!cfg.evidenceOnly, ...(kind ? { kind } : {}), ...(sources ? { sources } : {}), dir, startedAt: new Date().toISOString(), speakers, glossaries, project: cfg.project || null, ...(typeof brief === 'boolean' ? { brief } : {}), chapters: [] };
   // The app (--ipc) hears every change of state: a chapter starting or finishing, pause, notes, speakers.
   let sendState = () => {};
   const saveSession = () => { fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify(session, null, 2)); sendState(); };
@@ -231,7 +240,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
   // Close the chapter on disk and hand it to a background processor.
   const close = async (ch, finished, revisit = false) => {
     const endMs = finished?.endMs ?? (finished?.durationS ? ch.startMs + finished.durationS * 1000 : Date.now());
-    const meta = revisit ? JSON.parse(fs.readFileSync(path.join(ch.dir, 'chapter.json'), 'utf8')) : { n: ch.n, name: ch.name, topic, url, ...(kind ? { kind } : {}), ...(sources ? { sources } : {}), startMs: ch.startMs, endMs, speakers: [...speakers], glossaries, actions: '../actions.jsonl',
+    const meta = revisit ? JSON.parse(fs.readFileSync(path.join(ch.dir, 'chapter.json'), 'utf8')) : { n: ch.n, name: ch.name, topic, url, ...(kind ? { kind } : {}), ...(sources ? { sources } : {}), startMs: ch.startMs, endMs, speakers: [...speakers], glossaries, project: cfg.project || null, ...(typeof brief === 'boolean' ? { brief } : {}), actions: '../actions.jsonl',
       ...(capture.continuous ? { media: 'media.json', sourceProject: '../media/source.cap', timing: capture.state?.timing } : finished?.media ? { media: finished.media, sourceProject: finished.sourceProject, timing: finished.timing } : {}) };
     fs.writeFileSync(path.join(ch.dir, 'chapter.json'), JSON.stringify(meta, null, 2));
     const row = session.chapters.find((c) => c.n === ch.n);
@@ -240,7 +249,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
     if (finished?.empty || endMs - ch.startMs < 1500) { row.status = 'empty'; saveSession(); return; }
     if (capture.continuous && !fs.existsSync(ch.video)) { row.status = 'waiting for media'; saveSession(); return; }
     if (cfg.evidenceOnly) { row.status = 'evidence'; saveSession(); return; }
-    const job = spawn(process.execPath, [path.join(ROOT, 'bin', 'ux-walk'), 'process', ch.dir, '--quiet', ...(cfg.brief ? ['--brief'] : [])], {
+    const job = spawn(process.execPath, processArgs(ch.dir, meta, session, kind, cfg), {
       stdio: ['ignore', fs.openSync(path.join(ch.dir, 'process.log'), 'a'), fs.openSync(path.join(ch.dir, 'process.log'), 'a')],
     });
     jobs.add(job);
@@ -414,7 +423,7 @@ export async function record(cfg, { topic, url, app, title, windowId, display, b
     await processing;
     // No speaker popup: voices are named from the roll call. Fix a label any time with ux-walk speakers.
     if (speakers.length > 1) out(`Voices are named from the roll call; rename one any time with: ux-walk speakers ${dir}`);
-    const line = handoffLine(dir, session.ask, { kind: session.kind });
+    const line = handoffLine(dir, session.ask, { kind: session.kind, project: sessionProject(dir, cfg) });
     writeHandoff(dir, line);
     // A --script run (the self-test) leaves the clipboard alone.
     const copied = !script && !process.env.UXW_NO_COPY && copy(line);

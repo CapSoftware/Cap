@@ -60,6 +60,13 @@ phrased so {FIRST_SPEAKER} can answer it in one line (yes/no, or pick one):
 `1. C{N}-Q1 ({mm:ss}) {question}`
 Write "None." if there are none.
 
+## Glossary suggestions
+Names, product terms and jargon the transcript seems to have misheard or spelled more than one way
+(the screen, the page text or the context shows the right spelling). One per line, the right
+spelling first, then each wrong form as written in the timeline:
+`- {Right spelling}: {wrong}, {wrong}`
+Only terms you are confident about; never ordinary words. Write "None." if there are none.
+
 Ids and order:
 - `{N}` is the chapter number given below. Number items C{N}-01, C{N}-02... in the order they appear,
   continuing the same numbering into Errors. Questions are C{N}-Q1, C{N}-Q2...

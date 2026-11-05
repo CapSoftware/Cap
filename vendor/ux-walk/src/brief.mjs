@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { expand, ROOT } from './config.mjs';
+import { mergeSuggestions, parseGlossaryLines, sessionOf } from './glossary-suggestions.mjs';
 
 const SPLIT_S = 25 * 60; // chapters longer than this are briefed per section (when it has sections)
 const PART_S = 10 * 60; // sections are grouped into parts of at least this long
@@ -23,6 +24,15 @@ export function chapterKind(dir, meta = readJson(path.join(dir, 'chapter.json'))
 }
 // A diatribe (someone thinking out loud) gets organized notes and action items; everything else, the walkthrough brief.
 export const promptFile = (kind) => path.join(ROOT, 'prompts', kind === 'diatribe' ? 'notes.md' : 'brief.md');
+
+// Whether a chapter gets a brief: an explicit --brief/--no-brief, else the chapter's own "brief", else the session's
+// (the app's per-recording "Notes & action items" switch), else a diatribe always and anything else per config.
+export function wantsBrief(explicit, chapter = {}, session = {}, diatribe = false, cfg = {}) {
+  if (typeof explicit === 'boolean') return explicit;
+  if (typeof chapter?.brief === 'boolean') return chapter.brief;
+  if (typeof session?.brief === 'boolean') return session.brief;
+  return !!(diatribe || cfg.brief);
+}
 
 export async function runBrief(dir, cfg, { log = () => {} } = {}) {
   const timeline = path.join(dir, 'timeline-short.md');
@@ -73,6 +83,11 @@ export async function runBrief(dir, cfg, { log = () => {} } = {}) {
   try { agentItems = JSON.parse(fs.readFileSync(path.join(dir, 'items.json'), 'utf8')).items.filter((i) => i.source === 'agent'); } catch {}
   fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ chapter: n, title, ...(kind === 'diatribe' ? { kind } : {}), generatedAt: new Date().toISOString(), parts: briefs.length, items: withKeys([...merged.items, ...agentItems], n), decisions: merged.decisions, questions: merged.questions }, null, 2) + '\n');
   if (merged.dropped) log(`dropped ${merged.dropped} "screenshot not opened" line(s)`);
+  // The brief's "## Glossary suggestions" lines: kept out of brief.md, offered to the user in glossary-suggestions.json.
+  const terms = briefs.flatMap((b) => b.glossary || []);
+  if (terms.length) {
+    try { mergeSuggestions(sessionOf(dir), terms.map((g) => ({ ...g, source: 'brief', evidence: { chapter: n, when: null, said: null } })), { cfg, glossaries: meta.glossaries || [] }); } catch (e) { log(`glossary suggestions skipped: ${e.message}`); }
+  }
   return file;
 }
 
@@ -149,7 +164,7 @@ const LEAK = /not (been )?opened|(did ?n[o']t|could ?n[o']t|cannot|can't|unable 
 
 // brief.md -> { title, summary, items, decisions, errors, questions }. Tolerant of missing ids.
 export function parseBrief(text) {
-  const out = { title: '', summary: '', notes: '', items: [], decisions: [], errors: [], questions: [] };
+  const out = { title: '', summary: '', notes: '', items: [], decisions: [], errors: [], questions: [], glossary: [] };
   const blocks = text.split(/^(?=## )/m);
   const head = blocks.shift() || '';
   out.title = (/^# Brief:?\s*(.*)$/m.exec(head) || [])[1] || '';
@@ -159,6 +174,8 @@ export function parseBrief(text) {
     const body = b.slice(b.indexOf('\n') + 1);
     if (name.startsWith('items')) {
       for (const it of body.split(/^(?=### )/m).filter((x) => x.startsWith('### '))) out.items.push(parseItem(it));
+    } else if (name.startsWith('glossary')) {
+      out.glossary.push(...parseGlossaryLines(body));
     } else if (name.startsWith('notes')) {
       out.notes = body.trim();
     } else if (name.startsWith('decision')) {
