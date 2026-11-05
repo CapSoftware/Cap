@@ -367,6 +367,14 @@ describe("mobile email sessions", () => {
 		await requestCode("person@example.com");
 	});
 
+	it("checks for disposable addresses only after the rate limit", async () => {
+		mocks.isRateLimited.mockResolvedValue(true);
+
+		const response = await post("request", { email: "person@example.com" });
+		expect(response.status).toBe(429);
+		expect(mocks.disposableSignup).not.toHaveBeenCalled();
+	});
+
 	it("refuses blocked domains without sending a code", async () => {
 		mocks.blockedDomains = "blocked.example";
 

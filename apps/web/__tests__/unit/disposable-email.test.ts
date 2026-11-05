@@ -54,6 +54,24 @@ describe("isDisposableEmailDomain", () => {
 		).resolves.toBe(false);
 	});
 
+	it("refuses domains past DNS length limits without a lookup", async () => {
+		const resolveMx = vi.fn(noMx);
+		const deep = `${"a.".repeat(12)}example`;
+		const long = `${"a".repeat(64)}.example`;
+		await expect(isDisposableEmailDomain(deep, resolveMx)).resolves.toBe(true);
+		await expect(isDisposableEmailDomain(long, resolveMx)).resolves.toBe(true);
+		expect(resolveMx).not.toHaveBeenCalled();
+	});
+
+	it("caches a failed MX lookup instead of repeating it", async () => {
+		const resolveMx = vi.fn(async () => {
+			throw new Error("ETIMEOUT");
+		});
+		await isDisposableEmailDomain("flaky-dns.example", resolveMx);
+		await isDisposableEmailDomain("flaky-dns.example", resolveMx);
+		expect(resolveMx).toHaveBeenCalledTimes(1);
+	});
+
 	it("ignores values that are not domains", async () => {
 		const resolveMx = vi.fn(noMx);
 		await expect(isDisposableEmailDomain("localhost", resolveMx)).resolves.toBe(

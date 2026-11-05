@@ -7,7 +7,10 @@ import { promises as dns } from "node:dns";
 
 const MX_LOOKUP_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FAILURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5000;
+const MAX_HOST_LENGTH = 253;
+const MAX_HOST_LABELS = 10;
 
 export type ResolveMx = (domain: string) => Promise<string[]>;
 
@@ -29,11 +32,25 @@ export function hostMatchesDomainList(
 	host: string,
 	domains: ReadonlySet<string>,
 ): boolean {
-	const labels = normalizeHost(host).split(".");
-	for (let i = 0; i < labels.length - 1; i++) {
-		if (domains.has(labels.slice(i).join("."))) return true;
+	const normalized = normalizeHost(host);
+	if (!isPlausibleHost(normalized)) return false;
+	let suffix = normalized;
+	for (let dot = suffix.indexOf("."); dot !== -1; dot = suffix.indexOf(".")) {
+		if (domains.has(suffix)) return true;
+		suffix = suffix.slice(dot + 1);
 	}
 	return false;
+}
+
+// RFC 1035 limits, plus a label cap no real mail domain comes near, so
+// attacker-supplied input stays cheap to check.
+function isPlausibleHost(host: string): boolean {
+	if (host.length === 0 || host.length > MAX_HOST_LENGTH) return false;
+	const labels = host.split(".");
+	return (
+		labels.length <= MAX_HOST_LABELS &&
+		labels.every((label) => label.length > 0 && label.length <= 63)
+	);
 }
 
 const resolveMxHosts: ResolveMx = async (domain) => {
@@ -57,6 +74,7 @@ const resolveMxHosts: ResolveMx = async (domain) => {
 /**
  * Whether an email domain belongs to a throwaway inbox service. DNS failures
  * count as not disposable, so a resolver outage never blocks sign-ups.
+ * Domains past DNS length limits count as disposable.
  */
 export async function isDisposableEmailDomain(
 	domain: string,
@@ -64,6 +82,9 @@ export async function isDisposableEmailDomain(
 ): Promise<boolean> {
 	const host = normalizeHost(domain);
 	if (!host.includes(".")) return false;
+	// No real mailbox lives on a domain this long or deep, and refusing it
+	// keeps a wildcard-MX service's deep subdomains from slipping past.
+	if (!isPlausibleHost(host)) return true;
 
 	const cached = cache.get(host);
 	if (cached && cached.expires > Date.now()) return cached.disposable;
@@ -78,6 +99,7 @@ export async function isDisposableEmailDomain(
 	try {
 		mxHosts = await resolveMx(host);
 	} catch {
+		remember(host, false, FAILURE_CACHE_TTL_MS);
 		return false;
 	}
 
@@ -92,10 +114,14 @@ export async function isDisposableEmail(email: string): Promise<boolean> {
 	return isDisposableEmailDomain(domain);
 }
 
-function remember(host: string, disposable: boolean) {
+function remember(
+	host: string,
+	disposable: boolean,
+	ttlMs: number = CACHE_TTL_MS,
+) {
 	if (cache.size >= CACHE_MAX_ENTRIES) {
 		const oldest = cache.keys().next().value;
 		if (oldest !== undefined) cache.delete(oldest);
 	}
-	cache.set(host, { disposable, expires: Date.now() + CACHE_TTL_MS });
+	cache.set(host, { disposable, expires: Date.now() + ttlMs });
 }
