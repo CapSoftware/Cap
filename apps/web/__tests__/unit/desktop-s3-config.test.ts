@@ -1,6 +1,8 @@
+import type { S3ClientConfig } from "@aws-sdk/client-s3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
+	handle: vi.fn(),
 	isCap: "true" as string | undefined,
 	nodeEnv: "production",
 	user: {
@@ -13,6 +15,20 @@ const state = vi.hoisted(() => ({
 	updates: [] as unknown[],
 }));
 
+vi.mock("@aws-sdk/client-s3", async (importOriginal) => {
+	const sdk = await importOriginal<typeof import("@aws-sdk/client-s3")>();
+	return {
+		...sdk,
+		S3Client: class extends sdk.S3Client {
+			constructor(config: S3ClientConfig) {
+				super({
+					...config,
+					requestHandler: { handle: state.handle, destroy: () => {} },
+				});
+			}
+		},
+	};
+});
 vi.mock("@cap/env", () => ({
 	buildEnv: {
 		get NEXT_PUBLIC_IS_CAP() {
@@ -233,5 +249,98 @@ describe("desktop personal S3 config", () => {
 		const response = await app.request("/delete", { method: "DELETE" });
 		expect(response.status).toBe(200);
 		expect(state.updates).toEqual([{ active: false }]);
+	});
+});
+
+describe("desktop S3 connection test timeout", () => {
+	const success = { response: { statusCode: 200, headers: {} } };
+
+	beforeEach(() => {
+		state.isCap = "true";
+		state.user.stripeSubscriptionStatus = "active";
+		state.handle.mockReset();
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		vi.spyOn(console, "log").mockImplementation(() => undefined);
+	});
+
+	it("aborts a stalled storage request after five seconds", async () => {
+		vi.useFakeTimers();
+		let releaseRequest: () => void = () => {};
+		let requestStarted: () => void = () => {};
+		const started = new Promise<void>((resolve) => {
+			requestStarted = resolve;
+		});
+		state.handle.mockImplementation(
+			(
+				_request: unknown,
+				{ abortSignal }: { abortSignal?: AbortSignal } = {},
+			) =>
+				new Promise((resolve, reject) => {
+					releaseRequest = () => resolve(success);
+					abortSignal?.addEventListener("abort", () => {
+						reject(
+							Object.assign(new Error("Request aborted"), {
+								name: "AbortError",
+							}),
+						);
+					});
+					requestStarted();
+				}),
+		);
+		let settled = false;
+		const request = Promise.resolve(
+			testConnection("https://s3.example.com"),
+		).then((response) => {
+			settled = true;
+			return response;
+		});
+		try {
+			await started;
+			await vi.advanceTimersByTimeAsync(4999);
+			expect(settled).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(settled).toBe(true);
+			const response = await request;
+			expect(response.status).toBe(500);
+			expect(await response.json()).toMatchObject({
+				error:
+					"Connection timed out after 5 seconds. Please check the endpoint URL and your network connection.",
+			});
+		} finally {
+			releaseRequest();
+			await request;
+			vi.useRealTimers();
+		}
+	});
+
+	it("returns success and cancels the deadline when storage responds", async () => {
+		vi.useFakeTimers();
+		state.handle.mockResolvedValue(success);
+		try {
+			const response = await testConnection("https://s3.example.com");
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("returns storage errors and cancels the deadline", async () => {
+		vi.useFakeTimers();
+		state.handle.mockRejectedValue(
+			Object.assign(new Error("Access denied"), { name: "AccessDenied" }),
+		);
+		try {
+			const response = await testConnection("https://s3.example.com");
+			expect(response.status).toBe(500);
+			expect(await response.json()).toMatchObject({
+				error:
+					"Access denied. Please check your credentials and bucket permissions.",
+			});
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
