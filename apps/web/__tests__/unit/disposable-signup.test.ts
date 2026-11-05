@@ -88,22 +88,19 @@ describe("isDisposableEmailSignup", () => {
 		expect(mocks.select).toHaveBeenCalledTimes(1);
 	});
 
-	it("refuses an invited row that has never signed in even after someone paid for it", async () => {
+	it("keeps a paid guest's access after an invite marks the row as a teammate", async () => {
 		mocks.disposable.mockResolvedValue(true);
-		queueRows(
-			[
-				{
-					id: "u5",
-					emailVerified: null,
-					stripeCustomerId: "cus_2",
-					stripeSubscriptionId: "sub_2",
-					marketingOrigin: "teammate",
-				},
-			],
-			[],
-		);
+		queueRows([
+			{
+				id: "u5",
+				emailVerified: null,
+				stripeCustomerId: "cus_2",
+				stripeSubscriptionId: "sub_2",
+				marketingOrigin: "teammate",
+			},
+		]);
 		await expect(isDisposableEmailSignup("e@throwaway.example")).resolves.toBe(
-			true,
+			false,
 		);
 	});
 
