@@ -350,9 +350,10 @@ impl WindowImpl {
     }
 
     /// The window `id`, without enumerating every window. Whether it still
-    /// exists shows in what its getters return.
+    /// exists is checked through its owner metadata.
     pub fn from_id_direct(id: &WindowIdImpl) -> Option<Self> {
-        Some(Self(id.0))
+        let window = Self(id.0);
+        window.owner_pid().map(|_| window)
     }
 
     pub fn id(&self) -> WindowIdImpl {
