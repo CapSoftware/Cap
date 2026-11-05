@@ -261,6 +261,7 @@ export async function bundleUxWalk(app) {
 		"native-browser.mjs",
 		"browser-evidence.mjs",
 		"walk-brand.mjs",
+		"walk-project.mjs",
 	]) {
 		await fs.copyFile(
 			path.join(root, "apps/desktop-gpui/ux-walk", file),

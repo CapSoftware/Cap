@@ -78,6 +78,7 @@ pub fn request(topic: &str) -> Result<crate::ux_walk_journal::Request, String> {
             .map(str::to_string)
             .collect(),
         kind: crate::ux_walk_journal::Kind::Walk,
+        project: None,
     })
 }
 

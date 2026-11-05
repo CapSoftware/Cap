@@ -141,6 +141,16 @@ pub(super) fn row_label(item: &RecordingItem) -> &'static str {
     }
 }
 
+/// The recording's project, as a small badge beside its status. Long names are shortened.
+pub(super) fn project_badge(item: &RecordingItem) -> Option<String> {
+    let name = item.walk.as_ref()?.project.as_deref()?;
+    Some(if name.chars().count() > 24 {
+        format!("{}…", name.chars().take(23).collect::<String>().trim_end())
+    } else {
+        name.to_string()
+    })
+}
+
 pub(super) fn walk_status(item: &RecordingItem) -> Option<&'static str> {
     item.walk
         .as_ref()
@@ -560,6 +570,7 @@ mod tests {
             status: crate::ux_walk_library::WalkStatus::Saved,
             diatribe: false,
             notes: false,
+            project: None,
         });
         assert!(matches_recording_filters(
             &walk,
@@ -598,6 +609,7 @@ mod tests {
             status: crate::ux_walk_library::WalkStatus::Ready,
             diatribe: true,
             notes: false,
+            project: None,
         });
         assert!(matches_recording_filters(&talk, RecordingsTab::UxWalk, ""));
         assert!(matches_recording_filters(
@@ -652,6 +664,25 @@ mod tests {
     }
 
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    #[test]
+    fn a_recording_in_a_project_shows_its_project_badge() {
+        let plain = recording("Cap recording", RecordingMode::Studio);
+        assert_eq!(project_badge(&plain), None);
+        let mut notes = with_notes(
+            recording("Standup", RecordingMode::Instant),
+            crate::ux_walk_library::WalkStatus::Ready,
+        );
+        assert_eq!(project_badge(&notes), None);
+        notes.walk.as_mut().unwrap().project = Some("Acme Web".into());
+        assert_eq!(project_badge(&notes).as_deref(), Some("Acme Web"));
+        notes.walk.as_mut().unwrap().project = Some("A very long project name for a badge".into());
+        assert_eq!(
+            project_badge(&notes).as_deref(),
+            Some("A very long project nam…")
+        );
+    }
+
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
     fn with_notes(
         mut item: RecordingItem,
         status: crate::ux_walk_library::WalkStatus,
@@ -665,6 +696,7 @@ mod tests {
             status,
             diatribe: false,
             notes: true,
+            project: None,
         });
         item
     }

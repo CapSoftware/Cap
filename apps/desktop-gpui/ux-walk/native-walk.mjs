@@ -16,6 +16,7 @@ import { RecoveryTransport } from "./recovery-transport.mjs";
 import { restoreRecovery } from "./restore-checkpoint.mjs";
 import { walkModeName } from "./walk-brand.mjs";
 import { acquireWalkLock } from "./walk-lock.mjs";
+import { withJournalProject, withRecordingProject } from "./walk-project.mjs";
 
 const local = new URL("./src/cap.mjs", import.meta.url);
 const engine = fs.existsSync(local)
@@ -351,9 +352,11 @@ function writeNativeReport(directory, session, journal, browser) {
 	);
 }
 
-export async function finishNativeWalk(file, cfg, dependencies = {}) {
+export async function finishNativeWalk(file, loaded, dependencies = {}) {
 	const journal = readJournal(file);
 	const directory = journal.request.directory;
+	// The recording's project layers its glossary, source folder and notes over the config.
+	const { cfg, project: projectId } = withRecordingProject(journal, loaded);
 	const processingLease = await acquireWalkLock(directory, "processing", {
 		waitMs: dependencies.reconcileStopTail
 			? (dependencies.reconcileWaitMs ?? 150000)
@@ -419,6 +422,7 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 			startedAt: new Date(journal.startedAtMs).toISOString(),
 			speakers: journal.request.speakers,
 			glossaries,
+			project: projectId,
 			chapters: [],
 			coverage: {
 				window: isNotes(journal)
@@ -523,6 +527,7 @@ export async function finishNativeWalk(file, cfg, dependencies = {}) {
 							kind: session.kind,
 							speakers: session.speakers,
 							glossaries,
+							project: session.project,
 							actions: "../actions.jsonl",
 							sourceProject: "../media/source.cap",
 							sourceRange: {
@@ -1092,6 +1097,118 @@ export async function handoffNativeWalk(file, cfg) {
 	);
 }
 
+// Projects and issue trackers for Settings. The desktop never edits project files itself:
+// these go through the engine's validated helpers.
+const isObject = (value) =>
+	!!value && typeof value === "object" && !Array.isArray(value);
+const GLOSSARY_NAME = /^[A-Za-z0-9][\w .-]{0,63}$/;
+
+export async function listWalkProjects(cfg) {
+	const { listProjects } = await import(new URL("projects.mjs", engine));
+	const { listGlossaries } = await import(new URL("glossary.mjs", engine));
+	const problems = [];
+	const projects = listProjects(cfg, {
+		onProblem: (problem) => problems.push(problem),
+	});
+	return {
+		version: 1,
+		default: cfg.project || null,
+		projects,
+		problems,
+		glossaries: listGlossaries().named.sort((a, b) => a.localeCompare(b)),
+	};
+}
+
+// A file-name id from a display name, unique among the saved projects.
+export function projectSlug(name, taken = () => false) {
+	const base =
+		String(name || "")
+			.normalize("NFKD")
+			.replace(/[\u0300-\u036f]/g, "")
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 56)
+			.replace(/-+$/, "") || "project";
+	if (!taken(base)) return base;
+	for (let n = 2; ; n++) if (!taken(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+// { project, create? }: a new project (no id) gets a slug from its name; an existing one keeps
+// its id. A glossary given as a bare name that has no file yet is created empty.
+export async function saveWalkProject(cfg, request) {
+	const { projectFile, saveProject, validateProject } = await import(
+		new URL("projects.mjs", engine)
+	);
+	const { glossaryPath } = await import(new URL("glossary.mjs", engine));
+	if (!isObject(request) || !isObject(request.project))
+		throw new Error("project: must be a JSON object");
+	const taken = (id) => fs.existsSync(projectFile(cfg, id));
+	const input = { version: 1, ...request.project };
+	if (!input.id) input.id = projectSlug(input.name, taken);
+	else if (request.create && taken(input.id))
+		throw new Error(`project.id: "${input.id}" is already used`);
+	const project = validateProject(input);
+	if (project.glossary && !/[/~]|\.txt$/.test(project.glossary)) {
+		if (!GLOSSARY_NAME.test(project.glossary))
+			throw new Error(
+				"project.glossary: use letters, digits, spaces, dots, - or _",
+			);
+		const file = glossaryPath(project.glossary);
+		if (!fs.existsSync(file)) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(
+				file,
+				"# Names a transcriber gets wrong, one per line: Right: wrong, wrong\n",
+				{ flag: "wx" },
+			);
+		}
+	}
+	return saveProject(cfg, project);
+}
+
+export async function deleteWalkProject(cfg, request) {
+	const { PROJECT_ID, projectFile } = await import(
+		new URL("projects.mjs", engine)
+	);
+	const id = request?.id;
+	if (typeof id !== "string" || !PROJECT_ID.test(id))
+		throw new Error(
+			"project.id: must be a slug (lowercase letters, digits, -)",
+		);
+	try {
+		fs.unlinkSync(projectFile(cfg, id));
+	} catch (error) {
+		if (error.code === "ENOENT") throw new Error(`No project "${id}"`);
+		throw error;
+	}
+	return { deleted: id, wasDefault: cfg.project === id };
+}
+
+export async function walkTrackers(cfg) {
+	const { trackerStatus } = await import(new URL("trackers/index.mjs", engine));
+	return trackerStatus(cfg);
+}
+
+export async function walkTrackerTargets(cfg, request) {
+	const { getTracker } = await import(new URL("trackers/index.mjs", engine));
+	const targets = await getTracker(String(request?.provider ?? "")).listTargets(
+		cfg,
+	);
+	return targets.map(({ id, name }) => ({
+		id: String(id),
+		name: String(name),
+	}));
+}
+
+const PROJECT_COMMANDS = {
+	projects: listWalkProjects,
+	"save-project": saveWalkProject,
+	"delete-project": deleteWalkProject,
+	trackers: walkTrackers,
+	targets: walkTrackerTargets,
+};
+
 function isMainModule() {
 	try {
 		return (
@@ -1141,7 +1258,9 @@ if (isMainModule()) {
 		} else if (command === "checkpoint-resume") {
 			const { loadConfig } = await import(new URL("config.mjs", engine));
 			const { runCheckpointWorker } = await import("./checkpoint-worker.mjs");
-			await runCheckpointWorker(file, loadConfig(), { resume: true });
+			await runCheckpointWorker(file, withJournalProject(file, loadConfig()), {
+				resume: true,
+			});
 		} else if (command === "prepare-edit") {
 			const { prepareCapEdit } = await import(new URL("cap.mjs", engine));
 			console.log(JSON.stringify(prepareCapEdit(snapshotNativeWalk(file))));
@@ -1157,9 +1276,18 @@ if (isMainModule()) {
 			console.log(
 				JSON.stringify(await saveWalkItems(request.journal, request.edits)),
 			);
+		} else if (PROJECT_COMMANDS[command]) {
+			const { loadConfig } = await import(new URL("config.mjs", engine));
+			const request =
+				command === "projects" || command === "trackers"
+					? null
+					: JSON.parse(fs.readFileSync(file, "utf8"));
+			console.log(
+				JSON.stringify(await PROJECT_COMMANDS[command](loadConfig(), request)),
+			);
 		} else
 			throw new Error(
-				"Usage: native-walk.mjs snapshot|process|handoff|items <native-walk.json>",
+				"Usage: native-walk.mjs snapshot|process|handoff|items <native-walk.json>, or projects|trackers|save-project|delete-project|targets",
 			);
 	} catch (error) {
 		console.error(error.message);

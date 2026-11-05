@@ -136,6 +136,10 @@ fn validate(key: &str, value: &Value) -> Result<(), String> {
         "me" | "url" | "outDir" | "sourceRoot" | "speakers" | "glossary" | "language" => {
             value.as_str().is_some_and(|text| !text.contains('\0'))
         }
+        // The default project's id, or empty for none.
+        "project" => value
+            .as_str()
+            .is_some_and(|id| id.is_empty() || crate::ux_walk_projects::valid_id(id)),
         _ => false,
     };
     if valid {
@@ -265,11 +269,20 @@ pub fn save_key(
     provider: Provider,
     secret: &str,
 ) -> Result<(), String> {
-    if !cfg!(target_os = "macos") || provider.id == "none" || secret.trim().is_empty() {
+    if provider.id == "none" {
+        return Err("Enter an API key to save in the macOS Keychain.".into());
+    }
+    save_keychain_secret(&keychain_item(settings, provider), secret)
+}
+
+/// Saves a secret as the login Keychain item `item` for this user. The secret goes to
+/// `security -i` on stdin as hex, so it never appears in any process's arguments.
+pub fn save_keychain_secret(item: &str, secret: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") || item.trim().is_empty() || secret.trim().is_empty() {
         return Err("Enter an API key to save in the macOS Keychain.".into());
     }
     let account = security_argument(&account())?;
-    let item = security_argument(&keychain_item(settings, provider))?;
+    let item = security_argument(item)?;
     let encoded = secret
         .trim()
         .as_bytes()
@@ -397,5 +410,21 @@ mod tests {
         let saved = update_file(&fixture.0, RECORDING_NOTES, json!(true)).unwrap();
         assert!(enabled(&saved, RECORDING_NOTES));
         assert!(enabled(&read_file(&fixture.0).unwrap(), RECORDING_NOTES));
+    }
+
+    #[test]
+    fn the_default_project_saves_as_an_id_or_none() {
+        let fixture = Fixture::new();
+        for refused in [json!("Acme"), json!("../x"), json!(true)] {
+            assert!(update_file(&fixture.0, "project", refused).is_err());
+        }
+        assert_eq!(
+            update_file(&fixture.0, "project", json!("acme-web")).unwrap()["project"],
+            "acme-web"
+        );
+        assert_eq!(
+            update_file(&fixture.0, "project", json!("")).unwrap()["project"],
+            ""
+        );
     }
 }

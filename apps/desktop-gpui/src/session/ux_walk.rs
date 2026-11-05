@@ -631,6 +631,7 @@ mod tests {
                 url: String::new(),
                 speakers: Vec::new(),
                 kind,
+                project: None,
             },
             directory.with_extension("cap"),
             100_000,

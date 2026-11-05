@@ -75,6 +75,8 @@ pub struct WalkSummary {
     pub diatribe: bool,
     /// Notes & action items for an ordinary recording, which stays a Studio or Instant row.
     pub notes: bool,
+    /// The name of the recording's project, for its library badge.
+    pub project: Option<String>,
 }
 
 #[derive(Default)]
@@ -175,6 +177,7 @@ pub fn read_walk(file: &Path) -> Result<(WalkSummary, crate::ux_walk_journal::Jo
         "complete" => processing_status(&directory),
         _ => return Err("Invalid walk state.".into()),
     };
+    let project = project_name(&directory, journal.request.project.as_deref());
     let summary = WalkSummary {
         file,
         directory,
@@ -184,8 +187,39 @@ pub fn read_walk(file: &Path) -> Result<(WalkSummary, crate::ux_walk_journal::Jo
         status,
         diatribe: journal.request.is_diatribe(),
         notes: journal.request.is_notes(),
+        project,
     };
     Ok((summary, journal))
+}
+
+/// A recording's project name: session.json's project once the recording is processed (it
+/// can be moved to another project later), else the one it was recorded with. `None` when it
+/// has none or the project file is gone.
+pub fn project_name(directory: &Path, requested: Option<&str>) -> Option<String> {
+    let read =
+        |path: &Path| -> Option<Value> { serde_json::from_slice(&fs::read(path).ok()?).ok() };
+    let id = match read(&directory.join("session.json"))
+        .as_ref()
+        .and_then(|session| session.get("project"))
+    {
+        Some(value) => value.as_str().map(str::to_string),
+        None => requested.map(str::to_string),
+    }
+    .filter(|id| {
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })?;
+    let config = crate::ux_walk::config_path();
+    let project = read(&config.parent()?.join("projects").join(format!("{id}.json")))?;
+    project
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 pub fn read_summary(file: &Path) -> Result<WalkSummary, String> {
