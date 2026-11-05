@@ -877,6 +877,8 @@ struct Toast {
 struct PanDrag {
     start: Point<Pixels>,
     origin: (f32, f32),
+    /// Left or middle: the pan follows and ends with this button only.
+    button: MouseButton,
 }
 
 /// The measured geometry `Preview.tsx` derives from the container's bounds.
@@ -1902,6 +1904,7 @@ impl ScreenshotEditorWindow {
         self.panning = Some(PanDrag {
             start: event.position,
             origin: self.pan,
+            button: event.button,
         });
         cx.notify();
     }
@@ -4568,9 +4571,10 @@ impl Render for ScreenshotEditorWindow {
                     }),
                 ))
             })
-            .when(self.panning.is_some(), |root| {
-                root.child(ui::Slider::drag_layer(
+            .when_some(self.panning.map(|drag| drag.button), |root, button| {
+                root.child(ui::Slider::drag_layer_for(
                     "screenshot-pan-drag",
+                    button,
                     cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                         this.preview_mouse_move(event, window, cx);
                     }),
@@ -5712,6 +5716,65 @@ mod tests {
                 assert!(editor.history.can_redo());
                 assert_synchronized(editor, &updates);
             });
+        }
+    }
+
+    /// A pan follows and ends with the button that started it. The pan's
+    /// drag layer only tracked left-button drags, so a middle-button pan never
+    /// moved the image and stayed live until the next left release.
+    #[cfg(target_os = "linux")]
+    mod preview_pan {
+        use super::*;
+        use gpui::{Modifiers, VisualTestContext, point};
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+        }
+
+        #[gpui::test]
+        fn a_pan_follows_and_ends_with_the_button_that_started_it(cx: &mut gpui::TestAppContext) {
+            for button in [MouseButton::Left, MouseButton::Middle] {
+                let project = tempfile::tempdir().unwrap();
+                let bundle = project.path().to_path_buf();
+                let (editor, cx) = cx.add_window_view(move |window, cx| {
+                    ScreenshotEditorWindow::new(bundle.clone(), window, cx)
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.preview_mouse_down(
+                        &MouseDownEvent {
+                            button,
+                            position: point(px(100.), px(100.)),
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        },
+                        window,
+                        cx,
+                    );
+                });
+                draw(cx);
+                let origin = editor.read_with(cx, |editor, _| editor.pan);
+                let moved = (origin.0 + 30., origin.1 - 10.);
+
+                cx.simulate_mouse_move(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?}");
+                });
+
+                cx.simulate_mouse_up(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert!(editor.panning.is_none(), "{button:?} release");
+                });
+                draw(cx);
+                cx.simulate_mouse_move(point(px(160.), px(120.)), None, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?} after release");
+                });
+                drop(project);
+            }
         }
     }
 }

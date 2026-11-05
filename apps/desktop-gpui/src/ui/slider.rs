@@ -194,6 +194,16 @@ impl Slider {
         on_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
         on_up: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        Self::drag_layer_for(id, MouseButton::Left, on_move, on_up)
+    }
+
+    /// [`Self::drag_layer`] for a drag held with `button`.
+    pub fn drag_layer_for(
+        id: impl Into<ElementId>,
+        button: MouseButton,
+        on_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
+        on_up: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
         // The release can land outside the window -- gpui element listeners
         // are hitbox-gated, so without the `_out` pair the drag would survive
         // its own mouse-up and keep tracking on re-entry.
@@ -206,14 +216,12 @@ impl Slider {
             .left_0()
             .size_full()
             .on_mouse_move(move |event, window, cx| {
-                if event.dragging() {
+                if event.pressed_button == Some(button) {
                     on_move(event, window, cx);
                 }
             })
-            .on_mouse_up(MouseButton::Left, move |event, window, cx| {
-                on_up(event, window, cx)
-            })
-            .on_mouse_up_out(MouseButton::Left, move |event, window, cx| {
+            .on_mouse_up(button, move |event, window, cx| on_up(event, window, cx))
+            .on_mouse_up_out(button, move |event, window, cx| {
                 on_up_out(event, window, cx)
             })
     }
