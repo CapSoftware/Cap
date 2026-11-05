@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
@@ -95,6 +96,26 @@ function mapPhaseToDbPhase(
 	}
 }
 
+function isCurrentLoomProgress(
+	metadata: VideoMetadata | null | undefined,
+	signalToken: string,
+	payload: ProgressWebhookPayload,
+) {
+	const run = metadata?.loomImportRun;
+	const dispatch = run?.mediaDispatch;
+	return Boolean(
+		run &&
+			run.dispatch !== "rejected" &&
+			dispatch &&
+			dispatch.state !== "rejected" &&
+			dispatch.videoId === payload.videoId &&
+			dispatch.attemptId.startsWith(`${run.runId}:`) &&
+			signalToken ===
+				getLoomImportSignalToken(payload.videoId, dispatch.attemptId) &&
+			(!dispatch.jobId || dispatch.jobId === payload.jobId),
+	);
+}
+
 export async function POST(request: NextRequest) {
 	try {
 		const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -128,37 +149,52 @@ export async function POST(request: NextRequest) {
 				.select({ metadata: videos.metadata })
 				.from(videos)
 				.where(eq(videos.id, payload.videoId as Video.VideoId));
-			const run = video?.metadata?.loomImportRun;
-			const dispatch = run?.mediaDispatch;
-			if (
-				!run ||
-				run.dispatch === "rejected" ||
-				!dispatch ||
-				dispatch.state === "rejected" ||
-				dispatch.videoId !== payload.videoId ||
-				!dispatch.attemptId.startsWith(`${run.runId}:`) ||
-				signalToken !==
-					getLoomImportSignalToken(payload.videoId, dispatch.attemptId) ||
-				(dispatch.jobId && dispatch.jobId !== payload.jobId)
-			) {
+			if (!isCurrentLoomProgress(video?.metadata, signalToken, payload)) {
 				return NextResponse.json({ success: true });
 			}
 		}
+		const commitProgress = async (
+			write: (
+				database: Pick<ReturnType<typeof db>, "update" | "delete">,
+			) => Promise<void>,
+		) => {
+			if (signalToken === null) {
+				await write(db());
+				return true;
+			}
+			return db().transaction(async (tx) => {
+				const [video] = await tx
+					.select({ metadata: videos.metadata })
+					.from(videos)
+					.where(eq(videos.id, payload.videoId as Video.VideoId))
+					.for("update");
+				if (!isCurrentLoomProgress(video?.metadata, signalToken, payload))
+					return false;
+				await write(tx);
+				return true;
+			});
+		};
 		const isInputPolicyViolation =
 			payload.phase === "error" &&
 			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
-		if (isInputPolicyViolation && typeof payload.videoId === "string") {
-			try {
-				await recordMediaInputPolicyStrike({
-					videoId: payload.videoId as Video.VideoId,
-				});
-			} catch (error) {
-				console.error("[media-server-webhook] Failed to record input policy", {
-					videoId: payload.videoId,
-					error,
-				});
+		const recordPolicyStrike = async () => {
+			if (isInputPolicyViolation && typeof payload.videoId === "string") {
+				try {
+					await recordMediaInputPolicyStrike({
+						videoId: payload.videoId as Video.VideoId,
+					});
+				} catch (error) {
+					console.error(
+						"[media-server-webhook] Failed to record input policy",
+						{
+							videoId: payload.videoId,
+							error,
+						},
+					);
+				}
 			}
-		}
+		};
+		if (signalToken === null) await recordPolicyStrike();
 		if (
 			await applyEditProgress(
 				payload,
@@ -265,18 +301,6 @@ export async function POST(request: NextRequest) {
 					{ status: 503 },
 				);
 			}
-			if (payload.metadata) {
-				const duration = getValidDuration(payload.metadata.duration);
-				await db()
-					.update(videos)
-					.set({
-						width: payload.metadata.width,
-						height: payload.metadata.height,
-						fps: payload.metadata.fps,
-						...(duration === undefined ? {} : { duration }),
-					})
-					.where(eq(videos.id, payload.videoId as Video.VideoId));
-			}
 
 			const transcribeOnView =
 				request.nextUrl.searchParams.get("transcription") === "on-view";
@@ -311,55 +335,70 @@ export async function POST(request: NextRequest) {
 						]
 					: []),
 			];
-			if (currentVideo && metadataUpdates.length > 0) {
-				await db()
-					.update(videos)
-					.set({
-						metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(metadataUpdates, sql`, `)})`,
-					})
-					.where(eq(videos.id, currentVideo.id));
-			}
+			const saved = await commitProgress(async (database) => {
+				if (payload.metadata) {
+					const duration = getValidDuration(payload.metadata.duration);
+					await database
+						.update(videos)
+						.set({
+							width: payload.metadata.width,
+							height: payload.metadata.height,
+							fps: payload.metadata.fps,
+							...(duration === undefined ? {} : { duration }),
+						})
+						.where(eq(videos.id, payload.videoId as Video.VideoId));
+				}
+				if (currentVideo && metadataUpdates.length > 0) {
+					await database
+						.update(videos)
+						.set({
+							metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), ${sql.join(metadataUpdates, sql`, `)})`,
+						})
+						.where(eq(videos.id, currentVideo.id));
+				}
 
-			if (receipt) {
-				await db()
-					.update(videos)
-					.set({
-						source: { type: "desktopMP4" as const },
-						...(receipt
-							? {
-									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'requiredAudioVerified', JSON_EXTRACT(${JSON.stringify(receipt.requiredAudioVerified)}, '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
-								}
-							: {}),
-					})
-					.where(eq(videos.id, payload.videoId as Video.VideoId));
-			}
+				if (receipt) {
+					await database
+						.update(videos)
+						.set({
+							source: { type: "desktopMP4" as const },
+							...(receipt
+								? {
+										metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'requiredAudioVerified', JSON_EXTRACT(${JSON.stringify(receipt.requiredAudioVerified)}, '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
+									}
+								: {}),
+						})
+						.where(eq(videos.id, payload.videoId as Video.VideoId));
+				}
 
-			if (isEditUpload) {
-				await db()
-					.update(videoUploads)
-					.set({
-						phase: "complete",
-						processingProgress: 100,
-						processingMessage: payload.message,
-						processingError: null,
-						updatedAt: new Date(),
-					})
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-			} else {
-				await db()
-					.delete(videoUploads)
-					.where(
-						and(
-							eq(videoUploads.videoId, payload.videoId as Video.VideoId),
-							deferredSourceKey
-								? or(
-										isNull(videoUploads.rawFileKey),
-										ne(videoUploads.rawFileKey, deferredSourceKey),
-									)
-								: undefined,
-						),
-					);
-			}
+				if (isEditUpload) {
+					await database
+						.update(videoUploads)
+						.set({
+							phase: "complete",
+							processingProgress: 100,
+							processingMessage: payload.message,
+							processingError: null,
+							updatedAt: new Date(),
+						})
+						.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+				} else {
+					await database
+						.delete(videoUploads)
+						.where(
+							and(
+								eq(videoUploads.videoId, payload.videoId as Video.VideoId),
+								deferredSourceKey
+									? or(
+											isNull(videoUploads.rawFileKey),
+											ne(videoUploads.rawFileKey, deferredSourceKey),
+										)
+									: undefined,
+							),
+						);
+				}
+			});
+			if (!saved) return NextResponse.json({ success: true });
 			await invalidateGoogleDriveStorageQuotaCache(
 				currentVideo?.storageIntegrationId,
 			);
@@ -393,41 +432,48 @@ export async function POST(request: NextRequest) {
 			const processingError = isInputPolicyViolation
 				? `${MEDIA_INPUT_REJECTED_ERROR_PREFIX}: ${detail}`
 				: detail;
-			if (isRetryableWorkflowError && !isInputPolicyViolation) {
-				await db()
-					.update(videoUploads)
-					.set({
-						phase: "processing",
-						processingProgress: Math.round(payload.progress),
-						processingError,
-						processingMessage: "Retrying video processing...",
-						updatedAt: new Date(),
-					})
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-			} else {
-				await db()
-					.update(videoUploads)
-					.set({
-						phase: "error",
-						processingError,
-						processingMessage: payload.message,
-						updatedAt: new Date(),
-					})
-					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-			}
+			const saved = await commitProgress(async (database) => {
+				if (isRetryableWorkflowError && !isInputPolicyViolation) {
+					await database
+						.update(videoUploads)
+						.set({
+							phase: "processing",
+							processingProgress: Math.round(payload.progress),
+							processingError,
+							processingMessage: "Retrying video processing...",
+							updatedAt: new Date(),
+						})
+						.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+				} else {
+					await database
+						.update(videoUploads)
+						.set({
+							phase: "error",
+							processingError,
+							processingMessage: payload.message,
+							updatedAt: new Date(),
+						})
+						.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+				}
+			});
+			if (!saved) return NextResponse.json({ success: true });
 		} else {
-			await db()
-				.update(videoUploads)
-				.set({
-					phase: dbPhase,
-					processingProgress: Math.round(payload.progress),
-					processingMessage: payload.message,
-					processingError: null,
-					updatedAt: new Date(),
-				})
-				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			const saved = await commitProgress(async (database) => {
+				await database
+					.update(videoUploads)
+					.set({
+						phase: dbPhase,
+						processingProgress: Math.round(payload.progress),
+						processingMessage: payload.message,
+						processingError: null,
+						updatedAt: new Date(),
+					})
+					.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			});
+			if (!saved) return NextResponse.json({ success: true });
 		}
 
+		if (signalToken !== null) await recordPolicyStrike();
 		if (dbPhase === "complete" || dbPhase === "error")
 			await signalLoomImportFinished(
 				signalToken,
