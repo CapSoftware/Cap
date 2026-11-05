@@ -297,3 +297,54 @@ async fn mp4_replacement_restarts_after_encoder_failure() {
     assert_eq!(String::from_utf8_lossy(&probe.stdout).trim(), "10");
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
 }
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
+async fn mp4_retry_does_not_replace_a_destination_created_while_exporting() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project.cap");
+    create_project(&project);
+    let output = directory.path().join("export.mp4");
+    let mut base = Box::pin(
+        ExporterBase::builder(project)
+            .with_config(ProjectConfiguration::default())
+            .with_output_path(output.clone())
+            .build(),
+    )
+    .await
+    .unwrap();
+    base.fail_video_encoder_at(2);
+    let attempts = Arc::new(AtomicU32::new(0));
+    let progress_attempts = attempts.clone();
+    let destination = output.clone();
+    let export = Mp4ExportSettings {
+        fps: 10,
+        resolution_base: XY::new(64, 64),
+        compression: ExportCompression::Maximum,
+        custom_bpp: None,
+        force_ffmpeg_decoder: false,
+        optimize_filesize: false,
+    }
+    .export(base, move |frame| {
+        if frame == 0 && progress_attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            fs::write(&destination, b"another export").unwrap();
+        }
+        assert_eq!(fs::read(&destination).unwrap(), b"another export");
+        true
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), Box::pin(export))
+        .await
+        .expect("encoder failure must not leave the renderer blocked");
+
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+    assert!(
+        result.is_err(),
+        "retry overwrote a new destination: {result:?}"
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"another export");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+}

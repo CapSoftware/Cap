@@ -397,7 +397,9 @@ impl Mp4ExportSettings {
             .audio_cancellation
             .as_ref()
             .map(|control| control.user.clone());
-        loop {
+        let replace_output =
+            base.streaming_output.is_none() && std::fs::symlink_metadata(&base.output_path).is_ok();
+        let temporary_output = loop {
             let progress = on_progress.clone();
             let hardware_encoder_failed = Arc::new(AtomicBool::new(false));
             let result = self
@@ -435,9 +437,17 @@ impl Mp4ExportSettings {
                     base.reopen_streaming(user_cancellation.clone()).await?;
                     mode.software_encoder = true;
                 }
-                result => return result,
+                result => break result?,
             }
+        };
+        if replace_output {
+            temporary_output.persist_replace(&base.output_path)
+        } else {
+            temporary_output.persist_noclobber(&base.output_path)
         }
+        .map_err(|error| error.to_string())?;
+
+        Ok(base.output_path)
     }
 
     async fn export_nv12_attempt(
@@ -448,7 +458,7 @@ impl Mp4ExportSettings {
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
         mode: ExportNv12Mode,
         hardware_encoder_failed: Arc<AtomicBool>,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<TemporaryExportOutput, String> {
         let pipeline_start = std::time::Instant::now();
         let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
@@ -456,8 +466,6 @@ impl Mp4ExportSettings {
         let audio_control = base.audio_cancellation.take();
         let audio_cancellation = audio_control.as_ref().map(|control| control.stop.clone());
         let user_cancellation = audio_control.as_ref().map(|control| control.user.clone());
-        let replace_output =
-            base.streaming_output.is_none() && std::fs::symlink_metadata(&output_path).is_ok();
         let temporary_output = Arc::new(match base.streaming_output.take() {
             Some(staged) => staged,
             None => temporary_export_output(&output_path)?,
@@ -872,16 +880,7 @@ impl Mp4ExportSettings {
             render_result.map_err(Mp4PipelineError::message)?;
         }
 
-        let temporary_output = Arc::try_unwrap(temporary_output)
-            .map_err(|_| "Export output is still in use".to_string())?;
-        if replace_output {
-            temporary_output.persist_replace(&output_path)
-        } else {
-            temporary_output.persist_noclobber(&output_path)
-        }
-        .map_err(|error| error.to_string())?;
-
-        Ok(output_path)
+        Arc::try_unwrap(temporary_output).map_err(|_| "Export output is still in use".to_string())
     }
 }
 
