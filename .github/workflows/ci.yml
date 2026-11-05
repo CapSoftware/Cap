@@ -105,6 +105,7 @@ jobs:
           __tests__/unit/analytics-track-route.test.ts
           __tests__/unit/caps-analytics-round-trips.test.ts
           __tests__/unit/caps-keyboard.test.ts
+          __tests__/unit/caps-page-image-resolution.test.ts
           __tests__/unit/caption-translation-ownership.test.ts
           __tests__/unit/clock-hours.test.ts
           __tests__/unit/comment-composer-composition.test.ts
