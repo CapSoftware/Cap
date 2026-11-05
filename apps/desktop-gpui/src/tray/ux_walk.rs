@@ -1,5 +1,6 @@
 use gpui::App;
 
+use super::Entry;
 #[cfg(target_os = "macos")]
 use super::{TrayItem, mode_icon};
 use crate::main_window::Mode;
@@ -30,6 +31,24 @@ pub(super) fn icon_name(png: &[u8]) -> Option<&'static str> {
     (png == UX_WALK_ICON).then_some("ux-walk")
 }
 
+/// "Record Diatribe" as its own row, after the capture rows and before Previous.
+pub(super) fn add_menu_items(entries: &mut Vec<Entry>) {
+    #[cfg(target_os = "macos")]
+    {
+        let after_captures = entries
+            .iter()
+            .position(|entry| matches!(entry, Entry::Submenu { .. }))
+            .and_then(|index| index.checked_sub(1))
+            .unwrap_or(entries.len());
+        entries.insert(
+            after_captures,
+            Entry::item(crate::mode_choice::DIATRIBE_NAME, TrayItem::RecordDiatribe),
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = entries;
+}
+
 pub(super) fn menu_mode(mode: Mode, cx: &App) -> Mode {
     let editor_open = editor_open(cx);
     #[cfg(target_os = "macos")]
@@ -47,6 +66,8 @@ thread_local! {
 pub(super) enum Pill {
     Mode(Mode),
     UxWalk,
+    /// Starts a diatribe; never the shown pill, since the mode does not change.
+    Diatribe,
 }
 
 #[cfg(target_os = "macos")]
@@ -65,6 +86,7 @@ impl From<Pill> for Mode {
         match pill {
             Pill::Mode(mode) => mode,
             Pill::UxWalk => Mode::Studio,
+            Pill::Diatribe => Mode::from_store(),
         }
     }
 }
@@ -74,7 +96,10 @@ pub(super) fn picker_pills(modes: &[(Mode, TrayItem)]) -> Vec<(Pill, TrayItem)> 
     modes
         .iter()
         .map(|(mode, item)| (Pill::Mode(*mode), item.clone()))
-        .chain([(Pill::UxWalk, TrayItem::StartWalkthrough)])
+        .chain([
+            (Pill::UxWalk, TrayItem::StartWalkthrough),
+            (Pill::Diatribe, TrayItem::RecordDiatribe),
+        ])
         .collect()
 }
 
@@ -92,6 +117,7 @@ pub(super) fn mode_name(pill: Pill) -> &'static str {
     match pill {
         Pill::Mode(mode) => super::mode_name(mode),
         Pill::UxWalk => crate::mode_choice::ModeChoice::UxWalk.display_name(),
+        Pill::Diatribe => crate::mode_choice::DIATRIBE_NAME,
     }
 }
 
@@ -100,6 +126,7 @@ pub(super) fn mode_heading(pill: Pill) -> &'static str {
     match pill {
         Pill::Mode(mode) => super::mode_heading(mode),
         Pill::UxWalk => fork_brand::WALK_MODE_NAME,
+        Pill::Diatribe => crate::mode_choice::DIATRIBE_NAME,
     }
 }
 
@@ -109,6 +136,10 @@ pub(super) fn mode_picker_icon(pill: Pill) -> Option<Vec<u8>> {
         Pill::Mode(mode) => super::mode_picker_icon(mode),
         Pill::UxWalk => super::svg_icon_png(
             include_bytes!("../../assets/icons/ux-walk.svg"),
+            super::PICKER_ICON_SIZE,
+        ),
+        Pill::Diatribe => super::svg_icon_png(
+            include_bytes!("../../assets/icons/microphone.svg"),
             super::PICKER_ICON_SIZE,
         ),
     }
@@ -141,6 +172,7 @@ mod tests {
                 (Pill::Mode(Mode::Studio), TrayItem::ModeStudio),
                 (Pill::Mode(Mode::Screenshot), TrayItem::ModeScreenshot),
                 (Pill::UxWalk, TrayItem::StartWalkthrough),
+                (Pill::Diatribe, TrayItem::RecordDiatribe),
             ]
         );
     }
@@ -150,6 +182,9 @@ mod tests {
         assert_eq!(mode_name(Pill::UxWalk), fork_brand::WALK_MODE_NAME);
         assert_eq!(mode_heading(Pill::UxWalk), fork_brand::WALK_MODE_NAME);
         assert!(mode_picker_icon(Pill::UxWalk).is_some());
+        assert_eq!(mode_name(Pill::Diatribe), "Record Diatribe");
+        assert_eq!(mode_heading(Pill::Diatribe), "Record Diatribe");
+        assert!(mode_picker_icon(Pill::Diatribe).is_some());
         for mode in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
             assert_eq!(mode_name(Pill::Mode(mode)), super::super::mode_name(mode));
             assert_eq!(
@@ -173,5 +208,45 @@ mod tests {
         WALK_PILL_SHOWN.set(false);
         assert_eq!(shown_pill(Mode::Studio), Pill::Mode(Mode::Studio));
         assert_eq!(shown_pill(Mode::Instant), Pill::Mode(Mode::Instant));
+    }
+
+    #[test]
+    fn the_diatribe_pill_starts_a_recording_without_becoming_the_mode() {
+        for walk in [false, true] {
+            WALK_PILL_SHOWN.set(walk);
+            for mode in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
+                assert_ne!(shown_pill(mode), Pill::Diatribe);
+            }
+        }
+        WALK_PILL_SHOWN.set(false);
+        assert!(Pill::Diatribe != Mode::Instant);
+    }
+
+    #[test]
+    fn the_menu_offers_record_diatribe_after_the_capture_rows() {
+        let mut entries = super::super::build_menu(Mode::Studio, &[], "1.0.0");
+        let previous = entries
+            .iter()
+            .position(|entry| matches!(entry, Entry::Submenu { .. }))
+            .unwrap();
+        add_menu_items(&mut entries);
+        assert!(matches!(
+            &entries[previous - 1],
+            Entry::Item { title, item: Some(TrayItem::RecordDiatribe), .. } if title == "Record Diatribe"
+        ));
+        assert!(matches!(entries[previous], Entry::Separator));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    entry,
+                    Entry::Item {
+                        item: Some(TrayItem::RecordDiatribe),
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
     }
 }

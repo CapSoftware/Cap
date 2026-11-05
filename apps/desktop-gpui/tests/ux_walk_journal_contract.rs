@@ -1,6 +1,6 @@
 #[path = "../src/ux_walk_journal.rs"]
 mod journal;
-use journal::{Journal, Request};
+use journal::{Journal, Kind, Request};
 use std::{
     fs,
     path::PathBuf,
@@ -22,6 +22,7 @@ fn request() -> Request {
         topic: "Checkout walk".into(),
         url: "https://example.com".into(),
         speakers: vec!["Tester".into()],
+        kind: Kind::Walk,
     }
 }
 
@@ -87,4 +88,39 @@ fn restart_creates_a_new_walk_without_overwriting_the_previous_notes() {
     assert_eq!(old["events"][0]["text"], "Retain the discarded attempt");
     fs::remove_dir_all(first.directory).unwrap();
     fs::remove_dir_all(next.directory).unwrap();
+}
+
+#[test]
+fn a_diatribe_request_records_its_kind_and_no_browser() {
+    let req = Request {
+        url: String::new(),
+        topic: "Diatribe".into(),
+        kind: Kind::Diatribe,
+        ..request()
+    };
+    assert!(req.is_diatribe());
+    assert!(!req.uses_browser());
+    let mut walk =
+        Journal::begin(req.clone(), PathBuf::from("/recordings/talk.cap"), 100_000).unwrap();
+    walk.add("note", "Ship the importer first", 2_000).unwrap();
+    walk.complete(9_000).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(walk.file()).unwrap()).unwrap();
+    assert_eq!(saved["request"]["kind"], "diatribe");
+    assert_eq!(saved["request"]["url"], "");
+    let reopened: Journal = serde_json::from_slice(&fs::read(walk.file()).unwrap()).unwrap();
+    assert!(reopened.request.is_diatribe());
+    let next = req.for_restart("again");
+    assert!(next.is_diatribe());
+    assert_eq!(next.directory.file_name().unwrap(), "diatribe-again");
+    fs::remove_dir_all(req.directory).unwrap();
+}
+
+#[test]
+fn journals_written_before_diatribes_read_as_walks() {
+    let mut value = serde_json::to_value(request()).unwrap();
+    assert_eq!(value["kind"], "walk");
+    value.as_object_mut().unwrap().remove("kind");
+    let old: Request = serde_json::from_value(value).unwrap();
+    assert_eq!(old.kind, Kind::Walk);
+    assert!(old.uses_browser());
 }

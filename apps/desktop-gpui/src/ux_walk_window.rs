@@ -934,7 +934,10 @@ impl Render for WalkWindow {
                             )
                         })
                         .when(
-                            !saved_view && walk.state == "complete" && !processing,
+                            !saved_view
+                                && walk.state == "complete"
+                                && !processing
+                                && !walk.request.is_diatribe(),
                             |this| {
                                 this.child(
                                     ui::Button::plain(

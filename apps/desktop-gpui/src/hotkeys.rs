@@ -43,6 +43,8 @@ pub enum HotkeyAction {
     OpenUxWalk,
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]
     OpenUxWalkNotes,
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    RecordDiatribe,
     StopRecording,
     RestartRecording,
     TogglePauseRecording,
@@ -63,6 +65,8 @@ const ACTION_KEYS: &[(&str, HotkeyAction)] = &[
     ("openUxWalk", HotkeyAction::OpenUxWalk),
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]
     ("openUxWalkNotes", HotkeyAction::OpenUxWalkNotes),
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    ("recordDiatribe", HotkeyAction::RecordDiatribe),
     ("stopRecording", HotkeyAction::StopRecording),
     ("restartRecording", HotkeyAction::RestartRecording),
     ("togglePauseRecording", HotkeyAction::TogglePauseRecording),
@@ -866,6 +870,8 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
         HotkeyAction::OpenUxWalk => crate::ux_walk::start(cx),
         #[cfg(all(target_os = "macos", feature = "ux-walk"))]
         HotkeyAction::OpenUxWalkNotes => crate::ux_walk_window::open(cx),
+        #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+        HotkeyAction::RecordDiatribe => crate::ux_walk::start_diatribe(cx),
         HotkeyAction::StopRecording => {
             RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
         }
@@ -1214,7 +1220,7 @@ mod tests {
 
     #[test]
     fn ux_walk_shortcuts_only_register_on_supported_builds() {
-        for key in ["openUxWalk", "openUxWalkNotes"] {
+        for key in ["openUxWalk", "openUxWalkNotes", "recordDiatribe"] {
             assert_eq!(
                 HotkeyAction::from_store_key(key).is_some(),
                 cfg!(all(target_os = "macos", feature = "ux-walk"))

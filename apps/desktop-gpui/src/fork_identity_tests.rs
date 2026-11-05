@@ -290,3 +290,25 @@ async fn fork_refuses_official_update_resolution() {
         .unwrap_err();
     assert!(error.contains(fork_brand::RELEASES_URL));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn record_diatribe_is_named_outside_the_brand_door() {
+    use crate::mode_choice::ModeChoice;
+    let choice = ModeChoice::Diatribe;
+    assert!(ModeChoice::ALL.contains(&choice));
+    assert_eq!(choice.title(), "Record Diatribe");
+    for text in [
+        choice.title(),
+        choice.display_name(),
+        choice.card_description(),
+        choice.hover_description(),
+        choice.panel_description(),
+    ] {
+        for name in [fork_brand::UPSTREAM_NAME, fork_brand::APP_NAME] {
+            assert!(!text.contains(name), "{text}");
+        }
+        assert!(!text.to_lowercase().contains("walk"), "{text}");
+    }
+    assert_eq!(choice.capture_mode(), None);
+}

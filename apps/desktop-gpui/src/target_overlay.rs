@@ -1272,11 +1272,21 @@ const MODE_MENU: &[(fn() -> &'static str, crate::mode_choice::ModeChoice)] = &[
     ),
     #[cfg(target_os = "macos")]
     (ux_walk_mode_label, crate::mode_choice::ModeChoice::UxWalk),
+    #[cfg(target_os = "macos")]
+    (
+        diatribe_mode_label,
+        crate::mode_choice::ModeChoice::Diatribe,
+    ),
 ];
 
 #[cfg(target_os = "macos")]
 fn ux_walk_mode_label() -> &'static str {
     fork_brand::WALK_MODE_NAME
+}
+
+#[cfg(target_os = "macos")]
+fn diatribe_mode_label() -> &'static str {
+    crate::mode_choice::DIATRIBE_NAME
 }
 
 fn overlay_mode(mode: Mode, cx: &gpui::App) -> crate::mode_choice::ModeChoice {
@@ -5000,6 +5010,8 @@ mod tests {
                 ("Screenshot Mode".to_string(), false),
                 #[cfg(target_os = "macos")]
                 (fork_brand::WALK_MODE_NAME.to_string(), false),
+                #[cfg(target_os = "macos")]
+                ("Record Diatribe".to_string(), false),
             ],
         );
         assert_eq!(

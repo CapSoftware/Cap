@@ -942,6 +942,8 @@ const RECORDING_SHORTCUTS: &[&str] = &[
     "openUxWalk",
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]
     "openUxWalkNotes",
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    "recordDiatribe",
     "openRecordingPickerArea",
     "openRecordingPickerWindow",
     "openRecordingPickerDisplay",
@@ -8171,7 +8173,7 @@ mod tests {
         assert_eq!(
             shown.len(),
             if cfg!(all(target_os = "macos", feature = "ux-walk")) {
-                15
+                16
             } else {
                 13
             }
@@ -8372,6 +8374,9 @@ mod tests {
             "openUxWalkNotes" => {
                 fork_brand::mode_text("open notes for your current or most recent %walk% recording")
             }
+            "recordDiatribe" => {
+                "start recording your screen and microphone now, then turn what you say into notes and action items".into()
+            }
             "openRecordingPicker" => "open Cap so you can choose what to record".into(),
             "cycleRecordingMode" => "switch between Studio, Instant and Screenshot mode".into(),
             "stopRecording" => "stop the current recording".into(),
@@ -8428,7 +8433,7 @@ mod tests {
             9
         };
         let walk_effects = if cfg!(all(target_os = "macos", feature = "ux-walk")) {
-            2
+            3
         } else {
             0
         };
