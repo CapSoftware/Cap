@@ -157,6 +157,7 @@ export async function provisionOrganizationInvitee({
 					const allMembers = await tx
 						.select({
 							id: organizationMembers.id,
+							userId: organizationMembers.userId,
 							hasProSeat: organizationMembers.hasProSeat,
 						})
 						.from(organizationMembers)
