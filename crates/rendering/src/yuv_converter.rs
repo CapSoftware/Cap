@@ -2073,34 +2073,46 @@ mod colour_matrix_tests {
             eprintln!("no GPU adapter available, skipping");
             return;
         };
+        assert_decode_matrices(&device, &queue);
+    }
+
+    #[test]
+    fn gl_decode_shaders_apply_each_requested_matrix() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::GL,
+            ..Default::default()
+        });
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GL adapter available, skipping");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("GL test device");
+        assert_decode_matrices(&device, &queue);
+    }
+
+    fn assert_decode_matrices(device: &wgpu::Device, queue: &wgpu::Queue) {
         let (y, uv) = chart_nv12();
         // The same chroma as separate U and V planes for the planar shader.
         let u: Vec<u8> = uv.iter().step_by(2).copied().collect();
         let v: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
-        let mut converter = YuvToRgbaConverter::new(&device);
-        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
+        let mut converter = YuvToRgbaConverter::new(device);
+        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709, YuvMatrix::Bt601] {
             converter.set_matrix(matrix);
             for planar in [false, true] {
                 if planar {
                     converter
-                        .convert_yuv420p(
-                            &device,
-                            &queue,
-                            &y,
-                            &u,
-                            &v,
-                            WIDTH,
-                            HEIGHT,
-                            WIDTH,
-                            WIDTH / 2,
-                        )
+                        .convert_yuv420p(device, queue, &y, &u, &v, WIDTH, HEIGHT, WIDTH, WIDTH / 2)
                         .expect("convert YUV420P");
                 } else {
                     converter
-                        .convert_nv12(&device, &queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
+                        .convert_nv12(device, queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
                         .expect("convert NV12");
                 }
-                let rgba = read_rgba(&device, &queue, converter.output_texture().unwrap());
+                let rgba = read_rgba(device, queue, converter.output_texture().unwrap());
                 for (i, rgb) in CHART.iter().enumerate() {
                     let x = i * 4;
                     let expected = matrix.ycbcr_to_rgb(

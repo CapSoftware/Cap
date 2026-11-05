@@ -312,6 +312,11 @@ impl super::Device {
                 naga_stage: naga_stage.to_owned(),
                 shader_id: stage.module.id,
                 entry_point: stage.entry_point.to_owned(),
+                constants: stage
+                    .constants
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.to_bits()))
+                    .collect(),
                 zero_initialize_workgroup_memory: stage.zero_initialize_workgroup_memory,
             });
         }

@@ -689,6 +689,7 @@ struct ProgramStage {
     naga_stage: naga::ShaderStage,
     shader_id: ShaderId,
     entry_point: String,
+    constants: std::collections::BTreeMap<String, u64>,
     zero_initialize_workgroup_memory: bool,
 }
 
