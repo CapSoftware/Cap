@@ -2,7 +2,11 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationMembers, organizations, users } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	users,
+} from "@cap/database/schema";
 import { Organisation } from "@cap/web-domain";
 import { and, asc, eq, isNull, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -108,7 +112,6 @@ export async function removeOrganizationMember(
 			}
 			await tx.update(users).set(userUpdate).where(eq(users.id, member.userId));
 		}
-
 	});
 
 	revalidatePath("/dashboard/settings/organization");
