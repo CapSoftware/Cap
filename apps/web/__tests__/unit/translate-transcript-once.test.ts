@@ -563,6 +563,7 @@ describe("translateTranscript runs one translation pass per video and language",
 		const translateTranscript = await loadAction();
 		await expect(translateTranscript(videoId, "ja")).resolves.toEqual({
 			success: false,
+			rateLimited: true,
 			message: "Too many requests",
 		});
 		expect(mocks.generateText).not.toHaveBeenCalled();

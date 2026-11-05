@@ -23,6 +23,7 @@ export type CaptionLanguage = LanguageCode | "original" | "off";
 
 const TRANSLATION_RETRY_WINDOW_MS = 6 * 60 * 1000;
 const TRANSLATION_RETRY_DELAY_MS = 5_000;
+const TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS = 30_000;
 
 interface AvailableTranslation {
 	code: LanguageCode;
@@ -120,14 +121,19 @@ function CaptionProviderForVideo({
 			for (;;) {
 				const result = await translateTranscript(videoId, language);
 				if (
-					!result.inProgress ||
+					!(result.inProgress || result.rateLimited) ||
 					Date.now() - startedAt >= TRANSLATION_RETRY_WINDOW_MS ||
 					!isStillWanted()
 				) {
 					return result;
 				}
 				await new Promise((resolve) =>
-					setTimeout(resolve, TRANSLATION_RETRY_DELAY_MS),
+					setTimeout(
+						resolve,
+						result.rateLimited
+							? TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS
+							: TRANSLATION_RETRY_DELAY_MS,
+					),
 				);
 				if (!isStillWanted()) return result;
 			}

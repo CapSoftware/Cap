@@ -250,6 +250,33 @@ describe("translations still running elsewhere", () => {
 		expect(translate).toHaveBeenCalledTimes(1);
 		expect(captions.isTranslating).toBe(false);
 	});
+	it("waits longer and asks again after a request limit", async () => {
+		vi.useFakeTimers();
+		translate
+			.mockResolvedValueOnce({
+				success: false,
+				rateLimited: true,
+				message: "Too many requests",
+			})
+			.mockResolvedValueOnce(inProgress)
+			.mockResolvedValueOnce({ success: true, translatedVtt: "Spanish" });
+		await act(async () => {
+			captions.setSelectedLanguage("es");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(29_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(2);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(translate).toHaveBeenCalledTimes(3);
+		expect(captions.translatedVttContent.get("es")).toBe("Spanish");
+	});
 	it("does not ask again after any other failure", async () => {
 		vi.useFakeTimers();
 		translate.mockResolvedValue({

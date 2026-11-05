@@ -31,6 +31,7 @@ interface TranslateResult {
 	translatedVtt?: string;
 	message: string;
 	inProgress?: boolean;
+	rateLimited?: boolean;
 }
 
 export async function translateTranscript(
@@ -59,7 +60,7 @@ export async function translateTranscript(
 	}
 
 	if (await isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT)) {
-		return { success: false, message: "Too many requests" };
+		return { success: false, rateLimited: true, message: "Too many requests" };
 	}
 
 	const exit = await Effect.gen(function* () {
