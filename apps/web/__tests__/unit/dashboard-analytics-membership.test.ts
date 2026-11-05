@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 describe("dashboard analytics organization membership", () => {
-	it.each([
+	it.each<{ name: string; params: Record<string, string> }>([
 		{ name: "the active organization", params: { range: "lifetime" } },
 		{ name: "an explicit organization", params: { orgId: "org-1" } },
 		{ name: "a cap", params: { capId: "cap-1" } },
