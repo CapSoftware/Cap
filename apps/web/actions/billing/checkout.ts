@@ -4,10 +4,11 @@ import { timingSafeEqual } from "node:crypto";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
-import { isProSubscription, userIsPro } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { cookies, headers } from "next/headers";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import {
 	CHECKOUT_PLANS,
 	type CheckoutEnvironment,
@@ -35,7 +36,6 @@ import { currencyForCountry } from "@/utils/currency";
 
 const INTEGRATION_IDENTIFIER = "cap_pro_checkout_rqmvbkzt";
 const PRICE_CURRENCY_TTL_MS = 10 * 60 * 1000;
-const LIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 export type CreateCheckoutResult =
 	| { ok: true; clientSecret: string }
@@ -73,18 +73,6 @@ async function planCurrencies(environment: CheckoutEnvironment) {
 	);
 	priceCurrencies = { expiresAt: Date.now() + PRICE_CURRENCY_TTL_MS, byPlan };
 	return byPlan;
-}
-
-async function hasLiveProSubscription(customerId: string) {
-	const subscriptions = await checkoutStripe().subscriptions.list({
-		customer: customerId,
-		limit: 100,
-	});
-	return subscriptions.data.some(
-		(subscription) =>
-			isProSubscription(subscription) &&
-			LIVE_SUBSCRIPTION_STATUSES.has(subscription.status),
-	);
 }
 
 export async function createProCheckout(input: {

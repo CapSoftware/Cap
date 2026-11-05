@@ -117,6 +117,7 @@ import {
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { withJsonNotFound } from "@/lib/api-errors";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { getClientIp } from "@/lib/client-ip";
 import {
 	type CustomStorageAttemptAction,
@@ -4437,6 +4438,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const [account] = yield* database.use((db) =>
 							db
 								.select({
+									stripeCustomerId: Db.users.stripeCustomerId,
 									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
 									thirdPartyStripeSubscriptionId:
 										Db.users.thirdPartyStripeSubscriptionId,
@@ -4459,7 +4461,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								),
 						);
 						if (!account) return yield* notFound(requestId);
-						if (userIsPro(account)) {
+						const { stripeCustomerId } = account;
+						if (
+							userIsPro(account) ||
+							(stripeCustomerId &&
+								(yield* Effect.tryPromise(() =>
+									hasLiveProSubscription(stripeCustomerId),
+								)))
+						) {
 							return yield* badRequest(
 								requestId,
 								"The organization owner already has Cap Pro",
