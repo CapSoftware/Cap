@@ -239,7 +239,6 @@ describe("local audio levels integration", () => {
 		expect(objects.publications()).toBe(0);
 	});
 	test("leaves an occupied conversion slot available to its current owner", async () => {
-		// The default slot count follows the CPUs, so occupy every slot.
 		const max = getMaxConcurrentDirectVideoProcesses();
 		const slots = Array.from({ length: max }, () =>
 			tryAcquireDirectVideoProcessSlot(() => true),
