@@ -103,11 +103,17 @@ pub fn text<'a>(settings: &'a Map<String, Value>, key: &str) -> &'a str {
         })
 }
 
+/// The default for "Notes & action items" on ordinary Studio and Instant recordings.
+pub const RECORDING_NOTES: &str = "recordingNotes";
+
+/// Settings that are off until the owner turns them on.
+const OFF_BY_DEFAULT: &[&str] = &["brief", RECORDING_NOTES];
+
 pub fn enabled(settings: &Map<String, Value>, key: &str) -> bool {
     settings
         .get(key)
         .and_then(Value::as_bool)
-        .unwrap_or(key != "brief")
+        .unwrap_or(!OFF_BY_DEFAULT.contains(&key))
 }
 
 pub fn provider(settings: &Map<String, Value>) -> Option<Provider> {
@@ -125,9 +131,8 @@ fn validate(key: &str, value: &Value) -> Result<(), String> {
         "agent" => value
             .as_str()
             .is_some_and(|id| HANDOFFS.iter().any(|(value, _)| *value == id)),
-        "askSpeakers" | "brief" | "screenNames" | "trace" | "liveTranscription" => {
-            value.is_boolean()
-        }
+        "askSpeakers" | "brief" | "screenNames" | "trace" | "liveTranscription"
+        | RECORDING_NOTES => value.is_boolean(),
         "me" | "url" | "outDir" | "sourceRoot" | "speakers" | "glossary" | "language" => {
             value.as_str().is_some_and(|text| !text.contains('\0'))
         }
@@ -381,5 +386,16 @@ mod tests {
             assert!(update_file(&fixture.0, key, value).is_err());
             assert!(!fixture.0.exists());
         }
+    }
+
+    #[test]
+    fn recording_notes_default_off_and_save_as_a_switch() {
+        let fixture = Fixture::new();
+        assert!(!enabled(&Map::new(), RECORDING_NOTES));
+        assert!(enabled(&Map::new(), "askSpeakers"));
+        assert!(update_file(&fixture.0, RECORDING_NOTES, json!("yes")).is_err());
+        let saved = update_file(&fixture.0, RECORDING_NOTES, json!(true)).unwrap();
+        assert!(enabled(&saved, RECORDING_NOTES));
+        assert!(enabled(&read_file(&fixture.0).unwrap(), RECORDING_NOTES));
     }
 }

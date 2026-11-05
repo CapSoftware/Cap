@@ -4168,7 +4168,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     // the frame on any start that never got a bar.
     hide_main_window(cx);
 
-    if config.ux_walk.is_some() {
+    if crate::ux_walk_journal::opens_walk_window(config.ux_walk.as_ref()) {
         match crate::ux_walk_window::prepare(cx) {
             Ok(number) => {
                 if let Ok(id) = number.to_string().parse() {

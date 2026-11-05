@@ -1,11 +1,19 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
-use gpui::{Context, Div, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui::{
+    Context, Div, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
+};
 
 use super::{Page, RecordingsTab, SettingsWindow};
 use crate::{
     library::{self, RecordingItem, RecordingMode},
     theme::Theme,
+    ui,
 };
 
 const FORK: bool = crate::fork_policy::FORK;
@@ -21,6 +29,9 @@ pub(super) struct RecordingsFork {
     notice: Option<String>,
     copy_selection: crate::ux_walk_library::WalkSelection,
     sharing_busy: HashSet<PathBuf>,
+    /// Recordings whose notes are being made from the library, and the last error for each.
+    notes_busy: HashSet<PathBuf>,
+    notes_errors: HashMap<PathBuf, String>,
 }
 
 impl RecordingsFork {
@@ -47,10 +58,12 @@ pub(super) fn recording_filter(
     let walk_tab = tab == RecordingsTab::UxWalk;
     #[cfg(not(all(target_os = "macos", feature = "ux-walk")))]
     let walk_tab = false;
-    if item.walk.is_none() && !walk_tab {
+    // An ordinary recording with notes stays where its mode puts it.
+    let walk = item.walk.as_ref().filter(|walk| !walk.notes);
+    if walk.is_none() && !walk_tab {
         return None;
     }
-    let Some(walk) = &item.walk else {
+    let Some(walk) = walk else {
         return Some(false);
     };
     let matches_tab = walk_tab || tab == RecordingsTab::All;
@@ -87,15 +100,19 @@ pub(super) fn opens_local(item: &RecordingItem) -> bool {
         && item.status.error().is_none()
 }
 
+/// The walk a row is shown as, if any. An ordinary recording with notes is not one.
+fn shown_walk(item: &RecordingItem) -> Option<&crate::ux_walk_library::WalkSummary> {
+    item.walk.as_ref().filter(|walk| !walk.notes)
+}
+
 pub(super) fn row_title(item: &RecordingItem) -> String {
-    item.walk
-        .as_ref()
+    shown_walk(item)
         .map(|walk| walk.topic.clone())
         .unwrap_or_else(|| item.pretty_name.clone())
 }
 
 pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
-    match &item.walk {
+    match shown_walk(item) {
         Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_ICON,
         Some(_) => "icons/ux-walk.svg",
         None => item.mode.icon(),
@@ -103,7 +120,7 @@ pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
 }
 
 pub(super) fn row_label(item: &RecordingItem) -> &'static str {
-    match &item.walk {
+    match shown_walk(item) {
         Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_SHORT_NAME,
         Some(_) => fork_brand::WALK_MODE_NAME,
         None => item.mode.label(),
@@ -111,7 +128,21 @@ pub(super) fn row_label(item: &RecordingItem) -> &'static str {
 }
 
 pub(super) fn walk_status(item: &RecordingItem) -> Option<&'static str> {
-    item.walk.as_ref().map(|walk| walk.status.label())
+    item.walk
+        .as_ref()
+        .map(crate::ux_walk_library::WalkSummary::status_label)
+}
+
+/// "Make notes & action items" is offered on a finished Studio or Instant recording that has
+/// no notes yet, or whose notes were interrupted before they were made.
+pub(super) fn offers_notes(item: &RecordingItem) -> bool {
+    FORK && cfg!(all(target_os = "macos", feature = "ux-walk"))
+        && matches!(item.mode, RecordingMode::Studio | RecordingMode::Instant)
+        && !item.status.is_in_progress()
+        && item.status.error().is_none()
+        && item.walk.as_ref().is_none_or(|walk| {
+            walk.notes && walk.status == crate::ux_walk_library::WalkStatus::Interrupted
+        })
 }
 
 pub(super) fn instant_quality_description() -> &'static str {
@@ -162,11 +193,15 @@ impl SettingsWindow {
         item: &RecordingItem,
         cx: &mut Context<Self>,
     ) -> Div {
-        let Some(walk) = &item.walk else {
+        let Some(walk) = item.walk.as_ref().filter(|walk| {
+            !(walk.notes && walk.status == crate::ux_walk_library::WalkStatus::Interrupted)
+        }) else {
             return actions;
         };
         let notes = walk.file.clone();
-        let (icon, label) = if walk.diatribe {
+        let (icon, label) = if walk.notes {
+            ("icons/scan-text.svg", "View notes")
+        } else if walk.diatribe {
             (crate::mode_choice::DIATRIBE_ICON, "View notes")
         } else {
             ("icons/ux-walk.svg", "View walk notes")
@@ -325,6 +360,131 @@ impl SettingsWindow {
         }).detach();
     }
 
+    /// Makes notes & action items for a recording made earlier: a completed notes journal
+    /// pointing at it, then the same snapshot and processing a live recording gets. The
+    /// recording itself is never changed.
+    fn make_recording_notes(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.recordings.fork.notes_busy.insert(path.clone()) {
+            return;
+        }
+        self.recordings.fork.notes_errors.remove(&path);
+        self.recordings.fork.notice = Some("Making notes & action items in the background…".into());
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let project = path.clone();
+            let journal = cx
+                .background_executor()
+                .spawn(async move { crate::ux_walk::notes::for_recording(&project) })
+                .await;
+            let file = match journal {
+                Ok(file) => {
+                    // The row links to its notes as soon as the journal exists.
+                    this.update_in(cx, |this, window, cx| {
+                        this.refresh_recordings(window, cx);
+                        cx.notify();
+                    })
+                    .ok();
+                    file
+                }
+                Err(error) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.finish_recording_notes(path, Err(error), window, cx)
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::ux_walk::notes::process(&file) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.finish_recording_notes(path, result, window, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_recording_notes(
+        &mut self,
+        path: PathBuf,
+        result: Result<(), String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.recordings.fork.notes_busy.remove(&path);
+        self.recordings.fork.notice = Some(match result {
+            Ok(()) => "Notes & action items are ready. Choose View notes on the recording.".into(),
+            Err(error) => {
+                let message = notes_error(&error);
+                self.recordings
+                    .fork
+                    .notes_errors
+                    .insert(path.clone(), message.clone());
+                message
+            }
+        });
+        self.refresh_recordings(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
+    /// "Make notes & action items" under the recording's name, with the last error inline.
+    /// It sits apart from the row's action buttons so those keep their places.
+    pub(super) fn notes_row(&self, item: &RecordingItem, cx: &mut Context<Self>) -> Option<Div> {
+        let error = self.recordings.fork.notes_errors.get(&item.path).cloned();
+        let offered = offers_notes(item);
+        if !offered && error.is_none() {
+            return None;
+        }
+        let path = item.path.clone();
+        let busy = self.recordings.fork.notes_busy.contains(&path);
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .min_w_0()
+                .when(offered, |this| {
+                    this.child(
+                        div()
+                            .flex_shrink_0()
+                            // The row itself opens the recording; this click is the button's.
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .child(self.button(
+                                gpui::ElementId::Name(
+                                    format!("recording-make-notes-{}", path.display()).into(),
+                                ),
+                                (ui::ButtonVariant::Gray, None),
+                                if busy {
+                                    "Making notes & action items…"
+                                } else {
+                                    crate::ux_walk::notes::MAKE
+                                },
+                                busy,
+                                cx,
+                                move |this, window, cx| {
+                                    this.make_recording_notes(path.clone(), window, cx)
+                                },
+                            )),
+                    )
+                })
+                .when_some(error, |this, error| {
+                    this.child(
+                        div()
+                            .min_w_0()
+                            .text_size(px(11.))
+                            .text_color(self.theme.red_11)
+                            .child(error),
+                    )
+                }),
+        )
+    }
+
     fn copy_walk_prompt(&mut self, file: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let revision = self
             .recordings
@@ -364,6 +524,11 @@ impl SettingsWindow {
     }
 }
 
+/// A library notes failure, worded for the row. The recording itself is untouched.
+fn notes_error(error: &str) -> String {
+    format!("Could not make notes & action items. The recording is unchanged. {error}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::matches_recording_filters;
@@ -382,6 +547,7 @@ mod tests {
             started_at_ms: 1,
             status: crate::ux_walk_library::WalkStatus::Saved,
             diatribe: false,
+            notes: false,
         });
         assert!(matches_recording_filters(
             &walk,
@@ -419,6 +585,7 @@ mod tests {
             started_at_ms: 1,
             status: crate::ux_walk_library::WalkStatus::Ready,
             diatribe: true,
+            notes: false,
         });
         assert!(matches_recording_filters(&talk, RecordingsTab::UxWalk, ""));
         assert!(matches_recording_filters(
@@ -459,5 +626,85 @@ mod tests {
             ),
         ];
         assert_eq!(actual, expected);
+    }
+
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    fn with_notes(
+        mut item: RecordingItem,
+        status: crate::ux_walk_library::WalkStatus,
+    ) -> RecordingItem {
+        item.walk = Some(crate::ux_walk_library::WalkSummary {
+            file: "/notes/native-walk.json".into(),
+            directory: "/notes".into(),
+            source_project: item.path.clone(),
+            topic: item.pretty_name.clone(),
+            started_at_ms: 1,
+            status,
+            diatribe: false,
+            notes: true,
+        });
+        item
+    }
+
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    #[test]
+    fn a_recording_with_notes_stays_an_ordinary_studio_or_instant_row() {
+        use crate::ux_walk_library::WalkStatus;
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            let plain = recording("Team standup", mode);
+            let noted = with_notes(plain.clone(), WalkStatus::Ready);
+            let tab = match mode {
+                RecordingMode::Studio => RecordingsTab::Studio,
+                RecordingMode::Instant => RecordingsTab::Instant,
+            };
+            assert!(matches_recording_filters(&noted, tab, "standup"));
+            assert!(matches_recording_filters(&noted, RecordingsTab::All, ""));
+            assert!(!matches_recording_filters(
+                &noted,
+                RecordingsTab::UxWalk,
+                ""
+            ));
+            assert_eq!(row_title(&noted), row_title(&plain));
+            assert_eq!(row_icon(&noted), mode.icon());
+            assert_eq!(row_label(&noted), mode.label());
+            assert_eq!(walk_status(&noted), Some("Notes ready"));
+            assert_eq!(
+                walk_status(&with_notes(plain, WalkStatus::Failed("No key".into()))),
+                Some("Notes need attention")
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "macos", feature = "ux-walk"))]
+    #[test]
+    fn make_notes_is_offered_on_finished_recordings_without_notes() {
+        use crate::ux_walk_library::WalkStatus;
+        let studio = recording("Demo", RecordingMode::Studio);
+        assert!(offers_notes(&studio));
+        assert!(offers_notes(&recording("Clip", RecordingMode::Instant)));
+        assert!(!offers_notes(&with_notes(
+            studio.clone(),
+            WalkStatus::Processing
+        )));
+        assert!(!offers_notes(&with_notes(
+            studio.clone(),
+            WalkStatus::Ready
+        )));
+        assert!(offers_notes(&with_notes(
+            studio.clone(),
+            WalkStatus::Interrupted
+        )));
+        let mut walk = with_notes(studio.clone(), WalkStatus::Interrupted);
+        walk.walk.as_mut().unwrap().notes = false;
+        assert!(!offers_notes(&walk));
+        let mut recording_now = studio.clone();
+        recording_now.status = crate::library::RecordingStatus::InProgress;
+        assert!(!offers_notes(&recording_now));
+        let mut failed = studio;
+        failed.status = crate::library::RecordingStatus::Failed {
+            error: "Disk full".into(),
+        };
+        assert!(!offers_notes(&failed));
+        assert!(notes_error("No transcription key").contains("The recording is unchanged"));
     }
 }

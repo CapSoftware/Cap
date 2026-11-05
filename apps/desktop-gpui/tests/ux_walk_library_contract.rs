@@ -408,3 +408,41 @@ fn diatribes_join_the_walk_library_and_say_what_they_are() {
     let index = index_in(&[f.0.clone()], &[]);
     assert!(index[&source.canonicalize().unwrap()].diatribe);
 }
+
+#[test]
+fn a_recordings_notes_attach_to_that_recording_with_notes_labels() {
+    let f = Fixture::new();
+    let source = f.source("standup");
+    let file = f.journal("notes", &source, 300);
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    value["request"]["kind"] = "notes".into();
+    value["request"]["url"] = "".into();
+    fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+    let summary = read_summary(&file).unwrap();
+    assert!(summary.notes);
+    assert!(!summary.diatribe);
+    assert_eq!(summary.status, WalkStatus::Saved);
+    assert_eq!(summary.status_label(), "Notes pending");
+    let folder = file.parent().unwrap();
+    fs::write(folder.join("report.html"), "notes").unwrap();
+    fs::write(folder.join("processing.json"), r#"{"state":"ready"}"#).unwrap();
+    let summary = read_summary(&file).unwrap();
+    assert_eq!(summary.status_label(), "Notes ready");
+    assert!(summary.items_editable());
+    fs::write(
+        folder.join("processing.json"),
+        r#"{"state":"failed","error":"No transcription key"}"#,
+    )
+    .unwrap();
+    let summary = read_summary(&file).unwrap();
+    assert_eq!(summary.status_label(), "Notes need attention");
+    assert!(summary.status.notice().contains("No transcription key"));
+    let index = index_in(&[f.0.clone()], &[]);
+    let attached = &index[&source.canonicalize().unwrap()];
+    assert!(attached.notes);
+    assert_eq!(attached.file, file.canonicalize().unwrap());
+    let walk = f.journal("walk", &f.source("walked"), 100);
+    let walk = read_summary(&walk).unwrap();
+    assert!(!walk.notes);
+    assert_eq!(walk.status_label(), "Notes saved");
+}
