@@ -481,7 +481,6 @@ pub struct RecordingSession {
     #[cfg(target_os = "linux")]
     terminal_operation: u64,
     pipeline_failed: bool,
-    #[cfg(target_os = "linux")]
     stop_requested: bool,
     #[cfg(target_os = "linux")]
     clean_control: CleanControlState,
@@ -532,7 +531,6 @@ impl RecordingSession {
             #[cfg(target_os = "linux")]
             terminal_operation: 0,
             pipeline_failed: false,
-            #[cfg(target_os = "linux")]
             stop_requested: false,
             #[cfg(target_os = "linux")]
             clean_control: CleanControlState::default(),
@@ -768,6 +766,7 @@ impl RecordingSession {
         self.pause_control_error = None;
         self.paused_for_sleep = false;
         self.pipeline_failed = false;
+        self.stop_requested = false;
         self.marker_count = 0;
         self.marker_added_at = None;
         #[cfg(target_os = "linux")]
@@ -999,11 +998,13 @@ impl RecordingSession {
                         this.error.as_deref().unwrap_or("Recording startup failed")
                     ));
                 }
-                #[cfg(target_os = "linux")]
                 if this.phase == Phase::Idle {
                     this.stop_requested = false;
-                    this.clean_control = CleanControlState::default();
-                    this.show_controls_after_pause = false;
+                    #[cfg(target_os = "linux")]
+                    {
+                        this.clean_control = CleanControlState::default();
+                        this.show_controls_after_pause = false;
+                    }
                 }
                 cx.notify();
             })
@@ -1041,13 +1042,23 @@ impl RecordingSession {
         }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
+        self.apply_pending_start_controls(cx, Self::stop);
+        cx.notify();
+    }
+
+    fn apply_pending_start_controls(
+        &mut self,
+        cx: &mut Context<Self>,
+        stop: impl FnOnce(&mut Self, &mut Context<Self>),
+    ) {
+        let stop_requested = std::mem::take(&mut self.stop_requested);
+        if stop_requested {
+            stop(self, cx);
+        }
         #[cfg(target_os = "linux")]
-        if self.stop_requested {
-            self.stop(cx);
-        } else if self.show_controls_after_pause {
+        if !stop_requested && self.show_controls_after_pause {
             self.show_clean_capture_controls(cx);
         }
-        cx.notify();
     }
 
     fn discard_primed(&mut self, cx: &mut Context<Self>) {
@@ -1217,6 +1228,11 @@ impl RecordingSession {
         if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
             self.countdown_remaining = None;
             self.finish(cx);
+            return;
+        }
+        if matches!(self.phase, Phase::Starting | Phase::Stopping) {
+            self.stop_requested = true;
+            cx.notify();
             return;
         }
         #[cfg(target_os = "linux")]
@@ -1848,6 +1864,7 @@ impl RecordingSession {
             }
             config
         };
+        self.stop_requested = false;
         #[cfg(target_os = "linux")]
         let clean_capture = crate::app_windows::clean_capture_active(cx);
         #[cfg(target_os = "linux")]
@@ -1931,7 +1948,6 @@ impl RecordingSession {
                 {
                     return;
                 }
-                #[cfg(target_os = "linux")]
                 if this.stop_requested {
                     this.finish(cx);
                     return;
@@ -1973,6 +1989,7 @@ impl RecordingSession {
                 }
                 match result {
                     Ok((true, Ok(_))) => {
+                        let restart = restart.filter(|_| !this.stop_requested);
                         this.active = None;
                         this.finish(cx);
                         if let Some(config) = restart {
@@ -2110,9 +2127,9 @@ impl RecordingSession {
             cx.notify();
             return;
         }
+        self.stop_requested = false;
         #[cfg(target_os = "linux")]
         {
-            self.stop_requested = false;
             self.clean_control.invalidate();
             self.clean_control.uncertain = false;
             self.show_controls_after_pause = false;
@@ -2164,6 +2181,92 @@ fn sleep_action(
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
     current == completed && matches!(phase, Phase::Recording { .. })
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn stop_during_restart_without_clean_capture_cancels_the_queued_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.update(RecordingSession::init);
+        for phase in [Phase::Starting, Phase::Stopping] {
+            session.update(cx, |session, cx| {
+                session.phase = phase;
+                assert!(session.countdown_remaining.is_none());
+                #[cfg(target_os = "linux")]
+                assert!(!crate::app_windows::clean_capture_active(cx));
+
+                session.stop(cx);
+                assert!(session.stop_requested, "{phase:?}");
+                assert_eq!(session.phase, phase);
+
+                session.stop(cx);
+                assert!(session.stop_requested);
+                session.finish(cx);
+                assert_eq!(session.phase, Phase::Idle);
+                assert!(!session.stop_requested);
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn stop_during_ordinary_start_is_consumed_when_the_start_completes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.update(RecordingSession::init);
+        session.update(cx, |session, cx| {
+            session.phase = Phase::Starting;
+            session.stop(cx);
+            assert!(session.stop_requested);
+            assert_eq!(session.phase, Phase::Starting);
+
+            session.phase = Phase::Recording { paused: false };
+            session.apply_pending_start_controls(cx, |session, _| {
+                session.phase = Phase::Stopping;
+            });
+            assert_eq!(session.phase, Phase::Stopping);
+            assert!(!session.stop_requested);
+
+            session.finish(cx);
+            assert_eq!(session.phase, Phase::Idle);
+            assert!(!session.stop_requested);
+        });
+    }
+
+    #[gpui::test]
+    fn completing_a_start_without_stop_keeps_recording(cx: &mut gpui::TestAppContext) {
+        let session = cx.update(RecordingSession::init);
+        session.update(cx, |session, cx| {
+            session.phase = Phase::Recording { paused: false };
+            session.apply_pending_start_controls(cx, |_, _| {
+                panic!("a start without Stop must keep recording");
+            });
+            assert_eq!(session.phase, Phase::Recording { paused: false });
+            assert!(!session.stop_requested);
+        });
+    }
+
+    #[gpui::test]
+    fn stop_while_idle_or_counting_down_does_not_queue_a_stop_for_the_next_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.update(RecordingSession::init);
+        session.update(cx, |session, cx| {
+            session.stop(cx);
+            assert_eq!(session.phase, Phase::Idle);
+            assert!(!session.stop_requested);
+
+            session.phase = Phase::Starting;
+            session.countdown_remaining = Some(2);
+            session.stop(cx);
+            assert_eq!(session.phase, Phase::Idle);
+            assert!(session.countdown_remaining.is_none());
+            assert!(!session.stop_requested);
+        });
+    }
 }
 
 #[cfg(test)]
