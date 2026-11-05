@@ -189,7 +189,11 @@ const settingOptions: {
 	},
 ];
 
-export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
+export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => (
+	<SpaceForm key={props.space?.id} {...props} />
+);
+
+const SpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const { edit = false, space } = props;
 	const router = useRouter();
 
@@ -201,17 +205,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 		},
 		mode: "onChange",
 	});
-
-	useEffect(() => {
-		if (space) {
-			form.reset({
-				name: space.name,
-				members: space.members,
-			});
-		} else {
-			form.reset({ name: "", members: [] });
-		}
-	}, [space, form]);
 
 	const [selectedFile, setSelectedFile] = useState<File | null>();
 	const [isUploading, setIsUploading] = useState(false);
@@ -227,14 +220,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const [publicEnabled, setPublicEnabled] = useState(Boolean(space?.public));
 	const [passwordValue, setPasswordValue] = useState("");
 	const iconInputId = useId();
-
-	useEffect(() => {
-		setSelectedFile(undefined);
-		setSettings({ ...defaultSettings, ...space?.settings });
-		setPasswordEnabled(Boolean(space?.hasPassword));
-		setPublicEnabled(Boolean(space?.public));
-		setPasswordValue("");
-	}, [space]);
 
 	const handleToggleSetting = (key: keyof OrganizationSettings) => {
 		setSettings((prev) => {

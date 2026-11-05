@@ -38,7 +38,8 @@ vi.mock("@cap/ui", async () => ({
 	...(await import("../../../../packages/ui/src/components/input/Label")),
 }));
 vi.mock("@/components/SignedImageUrl", () => ({
-	SignedImageUrl: () => null,
+	SignedImageUrl: ({ image }: { image: string }) =>
+		createElement("span", { "data-preview-url": image }),
 }));
 vi.mock("@/components/Tooltip", () => ({
 	Tooltip: ({ children, content }: { children: ReactNode; content: string }) =>
@@ -124,6 +125,37 @@ async function removeIcon() {
 	expect(mocks.update).not.toHaveBeenCalled();
 }
 
+async function renameSpace(name: string) {
+	const input = container.querySelector<HTMLInputElement>(
+		'input[placeholder="Space name"]',
+	);
+	if (!input) throw new Error("Missing space name input");
+	await act(async () => {
+		Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype,
+			"value",
+		)?.set?.call(input, name);
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+	});
+}
+
+async function chooseIcon() {
+	const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+	if (!input) throw new Error("Missing icon upload input");
+	const file = new File(["image"], "replacement.png", { type: "image/png" });
+	Object.defineProperty(input, "files", { value: [file] });
+	await act(async () => {
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+	});
+	return file;
+}
+
+function previewUrl() {
+	return container
+		.querySelector("[data-preview-url]")
+		?.getAttribute("data-preview-url");
+}
+
 describe("space settings icon edits", () => {
 	it("keeps the current icon when saving other space settings", async () => {
 		await render();
@@ -144,14 +176,7 @@ describe("space settings icon edits", () => {
 	it("uploads a replacement without requesting removal", async () => {
 		await render();
 		await removeIcon();
-		const input =
-			container.querySelector<HTMLInputElement>('input[type="file"]');
-		if (!input) throw new Error("Missing icon upload input");
-		const file = new File(["image"], "replacement.png", { type: "image/png" });
-		Object.defineProperty(input, "files", { value: [file] });
-		await act(async () => {
-			input.dispatchEvent(new Event("change", { bubbles: true }));
-		});
+		const file = await chooseIcon();
 		const formData = await submit();
 		expect(formData.get("icon")).toBe(file);
 		expect(formData.has("removeIcon")).toBe(false);
@@ -161,8 +186,59 @@ describe("space settings icon edits", () => {
 		await render();
 		await removeIcon();
 		await render({ ...space, id: "space-2", name: "Engineering" });
+		expect(previewUrl()).toBe(space.iconUrl);
 		const formData = await submit();
 		expect(formData.get("id")).toBe("space-2");
 		expect(formData.has("removeIcon")).toBe(false);
+	});
+
+	it("keeps a pending replacement when the same space is rendered again", async () => {
+		await render();
+		await removeIcon();
+		const file = await chooseIcon();
+		await render({ ...space, members: [] });
+		expect(previewUrl()).toBe("blob:replacement-icon");
+		const formData = await submit();
+		expect(formData.get("icon")).toBe(file);
+		expect(formData.has("removeIcon")).toBe(false);
+	});
+
+	it("keeps a pending removal when the same space is rendered again", async () => {
+		await render();
+		await removeIcon();
+		await render({ ...space, members: [] });
+		expect(previewUrl()).toBeUndefined();
+		const formData = await submit();
+		expect(formData.get("removeIcon")).toBe("true");
+		expect(formData.has("icon")).toBe(false);
+	});
+
+	it("resets a replacement and its preview when switching spaces", async () => {
+		await render();
+		await removeIcon();
+		await chooseIcon();
+		await render({ ...space, id: "space-2", name: "Engineering" });
+		expect(previewUrl()).toBe(space.iconUrl);
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:replacement-icon");
+		const formData = await submit();
+		expect(formData.get("id")).toBe("space-2");
+		expect(formData.has("icon")).toBe(false);
+		expect(formData.has("removeIcon")).toBe(false);
+	});
+
+	it("preserves the rest of the draft on same-space rerenders", async () => {
+		await render();
+		await renameSpace("New design");
+		await render({ ...space, members: [] });
+		const formData = await submit();
+		expect(formData.get("name")).toBe("New design");
+	});
+
+	it("initializes the draft from the next space when switching", async () => {
+		await render();
+		await renameSpace("Unsaved name");
+		await render({ ...space, id: "space-2", name: "Engineering" });
+		const formData = await submit();
+		expect(formData.get("name")).toBe("Engineering");
 	});
 });
