@@ -7,8 +7,9 @@ import { isDisposableEmail } from "./disposable-email.ts";
 /**
  * Whether a sign-in would create, or finish creating, a Cap account on a
  * throwaway inbox. People who already signed in with that address, or paid
- * for Cap with it through guest checkout, keep access; a row an organization
- * invite provisioned does not count until its owner has signed in once.
+ * for Cap with it through guest checkout, keep access. A row an organization
+ * invite provisioned does not count until its owner has signed in once, even
+ * if someone later paid for it, since anyone can type that address at checkout.
  */
 export async function isDisposableEmailSignup(email: string): Promise<boolean> {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return false;
@@ -20,12 +21,15 @@ export async function isDisposableEmailSignup(email: string): Promise<boolean> {
 			emailVerified: users.emailVerified,
 			stripeCustomerId: users.stripeCustomerId,
 			stripeSubscriptionId: users.stripeSubscriptionId,
+			marketingOrigin: users.marketingOrigin,
 		})
 		.from(users)
 		.where(eq(users.email, email))
 		.limit(1);
 	if (!user) return true;
-	if (user.emailVerified || user.stripeCustomerId || user.stripeSubscriptionId)
+	if (user.emailVerified) return false;
+	const invited = user.marketingOrigin === "teammate";
+	if (!invited && (user.stripeCustomerId || user.stripeSubscriptionId))
 		return false;
 
 	const [linked] = await db()
