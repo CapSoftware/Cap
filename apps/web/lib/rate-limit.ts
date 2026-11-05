@@ -141,6 +141,10 @@ export const RATE_LIMIT_IDS = {
 	/** Organization invite batches, checked per organization and per sender. Suggested: 30 / 1h per key. */
 	ORGANIZATION_INVITE: "rl_organization_invite",
 	CHECKOUT: "rl_checkout",
+	/** Comments, replies and reactions per author. Suggested: 30 / 1m per key (user). */
+	COMMENT_CREATE: "rl_comment_create",
+	/** Video viewer invite emails per owner. Suggested: 30 / 1h per key (user). */
+	VIDEO_VIEWER_INVITE: "rl_video_viewer_invite",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };

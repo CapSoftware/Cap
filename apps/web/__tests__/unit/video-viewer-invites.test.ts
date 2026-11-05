@@ -16,7 +16,11 @@ const fixtures = vi.hoisted(() => ({
 	selected: vi.fn(),
 	inserted: vi.fn(),
 	updated: vi.fn(),
+	limitChecks: [] as Array<{ ruleId: string; key?: string }>,
+	limitCounts: new Map<string, number>(),
 }));
+
+const INVITE_LIMIT = 3;
 
 const schema = vi.hoisted(() => ({
 	videos: { id: "videoId", name: "videoName", ownerId: "videoOwnerId" },
@@ -89,6 +93,16 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("next/cache", () => ({
 	revalidatePath: fixtures.revalidatePath,
 }));
+vi.mock("@/lib/rate-limit", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/rate-limit")>()),
+	isRateLimited: async (ruleId: string, opts?: { key?: string }) => {
+		fixtures.limitChecks.push({ ruleId, key: opts?.key });
+		const bucket = `${ruleId}|${opts?.key}`;
+		const count = (fixtures.limitCounts.get(bucket) ?? 0) + 1;
+		fixtures.limitCounts.set(bucket, count);
+		return count > INVITE_LIMIT;
+	},
+}));
 
 const VIDEO_ID = "video-1" as Video.VideoId;
 
@@ -97,6 +111,8 @@ describe("recording viewer invitations", () => {
 		vi.clearAllMocks();
 		fixtures.grants = [];
 		fixtures.revokedEmails = [];
+		fixtures.limitChecks = [];
+		fixtures.limitCounts = new Map();
 		fixtures.video.ownerId = "owner-1";
 		fixtures.user.mockResolvedValue({ id: "owner-1" });
 		fixtures.sendEmail.mockResolvedValue({
@@ -247,6 +263,64 @@ describe("recording viewer invitations", () => {
 		expect(fixtures.inserted).toHaveBeenCalledOnce();
 		expect(fixtures.revalidatePath).toHaveBeenCalledWith(`/s/${VIDEO_ID}`);
 		expect(log).toHaveBeenCalledOnce();
+	});
+
+	it("stops emailing new viewers once the owner reaches the invite limit", async () => {
+		const results = [];
+		for (let index = 0; index < INVITE_LIMIT + 2; index += 1) {
+			results.push(
+				await inviteVideoViewer(VIDEO_ID, `viewer${index}@example.com`),
+			);
+		}
+
+		expect(results.slice(0, INVITE_LIMIT)).toEqual(
+			Array.from({ length: INVITE_LIMIT }, () => ({
+				success: true,
+				alreadyAdded: false,
+				emailSent: true,
+			})),
+		);
+		expect(results.slice(INVITE_LIMIT)).toEqual([
+			{
+				success: false,
+				error: "Too many invites sent. Please try again later.",
+			},
+			{
+				success: false,
+				error: "Too many invites sent. Please try again later.",
+			},
+		]);
+		expect(fixtures.sendEmail).toHaveBeenCalledTimes(INVITE_LIMIT);
+		expect(fixtures.inserted).toHaveBeenCalledTimes(INVITE_LIMIT);
+		expect(fixtures.limitChecks).toEqual(
+			Array.from({ length: INVITE_LIMIT + 2 }, () => ({
+				ruleId: "rl_video_viewer_invite",
+				key: "video-viewer-invite:user:owner-1",
+			})),
+		);
+	});
+
+	it("counts revoking and inviting the same viewer again against the limit", async () => {
+		fixtures.grants = ["viewer@example.com"];
+		fixtures.revokedEmails = ["viewer@example.com"];
+
+		for (let index = 0; index < INVITE_LIMIT + 2; index += 1) {
+			await inviteVideoViewer(VIDEO_ID, "viewer@example.com");
+		}
+
+		expect(fixtures.sendEmail).toHaveBeenCalledTimes(INVITE_LIMIT);
+	});
+
+	it("does not use the invite budget when re-adding an active viewer", async () => {
+		fixtures.grants = ["viewer@example.com"];
+
+		for (let index = 0; index < INVITE_LIMIT + 2; index += 1) {
+			await expect(
+				inviteVideoViewer(VIDEO_ID, "viewer@example.com"),
+			).resolves.toMatchObject({ success: true, alreadyAdded: true });
+		}
+
+		expect(fixtures.limitChecks).toEqual([]);
 	});
 
 	it("preserves invalid-address rejection when revoking", async () => {

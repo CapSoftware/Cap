@@ -5009,37 +5009,54 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								Agent.AgentOrganizationInviteResponse,
 							),
 							execute: (providerIdempotencyKey) =>
-								Effect.tryPromise({
-									try: async () => {
-										const delivery = await sendEmail({
-											email,
-											subject: `Invitation to join ${organization.name} on Cap`,
-											react: OrganizationInvite({
-												email,
-												url: invitation.inviteUrl,
-												organizationName: organization.name,
-											}),
-											idempotencyKey: providerIdempotencyKey,
-										});
-										if (delivery?.error) {
-											if (delivery.error.name === "email_not_configured") {
-												return {
-													...invitation,
-													emailDelivery: "not_configured" as const,
-												};
-											}
-											throw new Error(delivery.error.message);
-										}
-										return {
-											...invitation,
-											emailDelivery: "accepted" as const,
-										};
-									},
-									catch: () =>
-										temporarilyUnavailable(
-											requestId,
-											"The organization invite email could not be delivered",
+								Effect.gen(function* () {
+									const inviteLimits = yield* Effect.promise(() =>
+										Promise.all(
+											[
+												`organization-invite:organization:${path.organizationId}`,
+												`organization-invite:user:${principal.id}`,
+											].map((key) =>
+												isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
+													key,
+												}),
+											),
 										),
+									);
+									if (inviteLimits.some(Boolean)) {
+										return yield* rateLimited(requestId);
+									}
+									return yield* Effect.tryPromise({
+										try: async () => {
+											const delivery = await sendEmail({
+												email,
+												subject: `Invitation to join ${organization.name} on Cap`,
+												react: OrganizationInvite({
+													email,
+													url: invitation.inviteUrl,
+													organizationName: organization.name,
+												}),
+												idempotencyKey: providerIdempotencyKey,
+											});
+											if (delivery?.error) {
+												if (delivery.error.name === "email_not_configured") {
+													return {
+														...invitation,
+														emailDelivery: "not_configured" as const,
+													};
+												}
+												throw new Error(delivery.error.message);
+											}
+											return {
+												...invitation,
+												emailDelivery: "accepted" as const,
+											};
+										},
+										catch: () =>
+											temporarilyUnavailable(
+												requestId,
+												"The organization invite email could not be delivered",
+											),
+									});
 								}),
 						});
 					}),

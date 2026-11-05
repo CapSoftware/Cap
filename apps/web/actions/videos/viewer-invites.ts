@@ -10,6 +10,7 @@ import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -69,6 +70,17 @@ export async function inviteVideoViewer(videoId: Video.VideoId, email: string) {
 
 	if (existingGrant && !existingGrant.revokedAt) {
 		return { success: true, alreadyAdded: true, emailSent: false } as const;
+	}
+
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.VIDEO_VIEWER_INVITE, {
+			key: `video-viewer-invite:user:${user.id}`,
+		})
+	) {
+		return {
+			success: false,
+			error: "Too many invites sent. Please try again later.",
+		} as const;
 	}
 
 	await db()

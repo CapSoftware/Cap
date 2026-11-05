@@ -69,6 +69,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { isCommentRateLimited } from "@/lib/comment-rate-limit";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
 	isEmailCodeSendLimited,
@@ -2526,6 +2527,9 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 
 	const trimmedContent = content.trim();
 	if (trimmedContent.length === 0) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
+	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
