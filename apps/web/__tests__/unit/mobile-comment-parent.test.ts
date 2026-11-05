@@ -95,7 +95,12 @@ const database = {
 					return [{ id: user.activeOrganizationId }];
 				if (table === Db.videos)
 					return [{ ownerId: user.id, settings: videoSettings }];
-				if (table === Db.spaceVideos) return [];
+				if (
+					table === Db.spaceVideos ||
+					table === Db.sharedVideos ||
+					table === Db.spaceMembers
+				)
+					return [];
 				if (table !== Db.comments) throw new Error("Unexpected table");
 				if (
 					columns &&
