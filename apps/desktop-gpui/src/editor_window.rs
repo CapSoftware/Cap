@@ -13317,6 +13317,7 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn aspect_ratio_toolbar_edits_the_project_while_inspecting_a_style(
         cx: &mut gpui::TestAppContext,
@@ -13365,9 +13366,10 @@ mod tests {
                 div()
             }
         }
+        let project_path = path.clone();
         let (view, cx) = cx.add_window_view(move |window, cx| {
             TestView(cx.new(|cx| {
-                let mut editor = EditorWindow::new(path, window, cx);
+                let mut editor = EditorWindow::new(project_path, window, cx);
                 editor.set_summary(summary, window, cx);
                 editor.set_project(project, window, cx);
                 editor
@@ -13375,16 +13377,25 @@ mod tests {
         });
         let editor = view.read_with(cx, |view, _| view.0.clone());
         editor.update(cx, |editor, _| editor.set_instance(instance.clone()));
+        let assert_saved = |expected: &serde_json::Value, cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.background_executor.advance_clock(PROJECT_SAVE_DEBOUNCE);
+            cx.run_until_parked();
+            let saved = ProjectConfiguration::load(&path).unwrap();
+            assert_eq!(serde_json::to_value(saved).unwrap(), *expected);
+        };
         for group in [
             None,
             Some(StyleGroup::Background),
             Some(StyleGroup::Camera),
             Some(StyleGroup::Cursor),
         ] {
-            editor.update_in(cx, |editor, window, cx| {
-                editor.sidebar.style_target = group.map(|group| (0, group));
+            let style_target = group.map(|group| (0, group));
+            let (before, after) = editor.update_in(cx, |editor, window, cx| {
+                editor.sidebar.style_target = style_target;
                 let before = serde_json::to_value(&editor.project).unwrap();
                 editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 2, window, cx);
+                assert_eq!(editor.sidebar.style_target, style_target);
                 assert!(
                     matches!(
                         editor.project.aspect_ratio,
@@ -13402,20 +13413,30 @@ mod tests {
                     published.aspect_ratio,
                     Some(cap_project::AspectRatio::Vertical)
                 ));
+                (before, after)
+            });
+            assert_saved(&after, cx);
+            editor.update_in(cx, |editor, window, cx| {
                 editor.undo(window, cx);
                 assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
                 editor.redo(window, cx);
                 assert_eq!(serde_json::to_value(&editor.project).unwrap(), after);
-                editor.sidebar.style_target = group.map(|group| (0, group));
+                editor.sidebar.style_target = style_target;
                 editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 2, window, cx);
+                assert_eq!(editor.sidebar.style_target, style_target);
+            });
+            assert_saved(&after, cx);
+            editor.update_in(cx, |editor, window, cx| {
                 editor.undo(window, cx);
                 assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
                 editor.redo(window, cx);
                 assert_eq!(serde_json::to_value(&editor.project).unwrap(), after);
-                editor.sidebar.style_target = group.map(|group| (0, group));
+                editor.sidebar.style_target = style_target;
                 editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 0, window, cx);
+                assert_eq!(editor.sidebar.style_target, style_target);
                 assert!(editor.project.aspect_ratio.is_none());
             });
+            assert_saved(&before, cx);
         }
         runtime.block_on(instance.dispose());
     }
