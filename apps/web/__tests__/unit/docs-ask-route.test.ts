@@ -15,7 +15,10 @@ vi.mock("@/lib/ai/provider", () => ({
 	isAiConfigured: isAiConfiguredMock,
 }));
 
-vi.mock("@/lib/rate-limit", () => ({
+vi.mock("@/lib/rate-limit", async (importOriginal) => ({
+	rateLimitClientAddress: (
+		await importOriginal<typeof import("@/lib/rate-limit")>()
+	).rateLimitClientAddress,
 	isRateLimited: isRateLimitedMock,
 	RATE_LIMIT_IDS: { DOCS_ASK: "docs-ask" },
 }));
@@ -73,10 +76,10 @@ const makeSelection = (
 	...overrides,
 });
 
-const makeRequest = (body: unknown) =>
+const makeRequest = (body: unknown, headers: Record<string, string> = {}) =>
 	new Request("http://localhost/api/docs/ask", {
 		method: "POST",
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...headers },
 		body: JSON.stringify(body),
 	}) as unknown as NextRequest;
 
@@ -175,5 +178,25 @@ describe("docs ask route", () => {
 		const response = await POST(makeRequest({ question: "hi" }));
 
 		expect(response.status).toBe(400);
+	});
+
+	it("limits questions per client behind an appending proxy", async () => {
+		getAiProviderChainMock.mockReturnValue([]);
+
+		const { POST } = await import("@/app/api/docs/ask/route");
+		const ask = (forwardedFor: string) =>
+			POST(
+				makeRequest(
+					{ question: "How do I record my screen?" },
+					{ "x-forwarded-for": forwardedFor },
+				),
+			);
+
+		for (let index = 0; index < 10; index++) {
+			const response = await ask(`192.0.2.${index}, 203.0.113.9`);
+			expect(response.status).not.toBe(429);
+		}
+		expect((await ask("192.0.2.200, 203.0.113.9")).status).toBe(429);
+		expect((await ask("192.0.2.200, 203.0.113.10")).status).not.toBe(429);
 	});
 });

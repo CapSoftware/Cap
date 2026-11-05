@@ -128,7 +128,8 @@ describe("isRateLimited outside production", () => {
 		expect(await checkout("user-1")).toBe(false);
 	});
 
-	it("keys on x-real-ip, then the first x-forwarded-for entry", async () => {
+	it("keys on x-real-ip, then the first x-forwarded-for entry on Vercel", async () => {
+		vi.stubEnv("VERCEL", "1");
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const fromHeaders = (init: Record<string, string>) =>
 			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
@@ -168,19 +169,70 @@ describe("isRateLimited outside production", () => {
 		).toBe(false);
 	});
 
-	it("caps keyless requests from rotating addresses off Vercel", async () => {
+	it("keys on the last x-forwarded-for entry off Vercel", async () => {
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const fromHeaders = (init: Record<string, string>) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers(init),
+			});
+
+		for (let index = 0; index < 30; index++) {
+			expect(
+				await fromHeaders({
+					"x-real-ip": `198.51.100.${index}`,
+					"x-forwarded-for": `192.0.2.${index}, 203.0.113.7`,
+				}),
+			).toBe(false);
+		}
+		expect(
+			await fromHeaders({
+				"x-real-ip": "198.51.100.200",
+				"x-forwarded-for": "192.0.2.200, 203.0.113.7",
+			}),
+		).toBe(true);
+		expect(await fromHeaders({ "x-forwarded-for": "203.0.113.8" })).toBe(false);
+		expect(await fromHeaders({ "x-real-ip": "203.0.113.7" })).toBe(true);
+	});
+
+	it("keeps each client's allowance when many other addresses are seen off Vercel", async () => {
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
 		const fromAddress = (ip: string) =>
 			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
 				headers: new Headers({ "x-forwarded-for": ip }),
 			});
 
-		for (let index = 0; index < 300; index++) {
+		for (let index = 0; index < 400; index++) {
 			expect(await fromAddress(`198.51.${index >> 8}.${index & 255}`)).toBe(
 				false,
 			);
 		}
-		expect(await fromAddress("203.0.113.250")).toBe(true);
+		expect(await fromAddress("203.0.113.250")).toBe(false);
+	});
+
+	it("groups IPv6 clients by their /64 network", async () => {
+		const { isRateLimited, rateLimitClientAddress, RATE_LIMIT_IDS } =
+			await loadRateLimit();
+		const fromAddress = (ip: string) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers({ "x-forwarded-for": ip }),
+			});
+
+		for (let index = 0; index < 30; index++) {
+			expect(await fromAddress(`2001:db8:1:2::${index.toString(16)}`)).toBe(
+				false,
+			);
+		}
+		expect(await fromAddress("2001:db8:1:2:ffff:1:2:3")).toBe(true);
+		expect(await fromAddress("2001:db8:1:3::1")).toBe(false);
+
+		const address = (ip: string) =>
+			rateLimitClientAddress(new Headers({ "x-forwarded-for": ip }));
+		expect(address("2001:0DB8:0001:0002:0:0:0:1")).toBe("2001:db8:1:2::/64");
+		expect(address("::1")).toBe("0:0:0:0::/64");
+		expect(address("::ffff:203.0.113.4")).toBe("203.0.113.4");
+		expect(address("203.0.113.4")).toBe("203.0.113.4");
+		expect(address("fe80::1%eth0")).toBe("fe80::1%eth0");
+		expect(address("1::2::3")).toBe("1::2::3");
 	});
 
 	it("does not let one limited address use up the shared bucket", async () => {
