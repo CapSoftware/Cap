@@ -1,8 +1,8 @@
 name: "publish-aur"
 
-# Publishes each stable release to the AUR as cap-bin. The PKGBUILD is the one
-# scripts/build-linux-arch-package.sh builds the release's own pacman package
-# from, pointed at the release's CrabNebula deb, so the two stay identical.
+# The PKGBUILD is the one scripts/build-linux-arch-package.sh builds the
+# release's own pacman package from, pointed at the release's CrabNebula deb,
+# so the two stay identical.
 #
 # Release events run this file from the tagged commit; for a tag that predates
 # it, dispatch it from main with that tag. Pushing needs the AUR_SSH_PRIVATE_KEY
