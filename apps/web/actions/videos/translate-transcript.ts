@@ -374,6 +374,23 @@ async function translateOnce(
 	}
 }
 
+async function cacheTranslation(
+	translation: PairTranslation,
+	cacheBody: string,
+) {
+	try {
+		await translation.bucket
+			.putObject(translation.translatedKey, cacheBody, {
+				contentType: "text/vtt",
+			})
+			.pipe(runPromise);
+		return true;
+	} catch (error) {
+		console.error("[translateTranscript] Failed to cache translation:", error);
+		return false;
+	}
+}
+
 async function runTranslation(
 	translation: PairTranslation,
 	claim: TranslationClaim,
@@ -391,21 +408,12 @@ async function runTranslation(
 	}
 
 	const cacheBody = withSourceFingerprint(translation.source, translatedVtt);
-	if (cacheBody) {
-		try {
-			await translation.bucket
-				.putObject(translation.translatedKey, cacheBody, {
-					contentType: "text/vtt",
-				})
-				.pipe(runPromise);
-		} catch (error) {
-			console.error(
-				"[translateTranscript] Failed to cache translation:",
-				error,
-			);
-		}
+	if (cacheBody && (await cacheTranslation(translation, cacheBody))) {
+		await releaseClaim(translation, claim);
+	} else {
+		recordFailure(translation.pairKey, Date.now());
+		await updateClaim(translation, claim, "failed");
 	}
-	await releaseClaim(translation, claim);
 
 	return {
 		success: true,

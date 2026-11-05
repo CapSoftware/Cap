@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 	nextETag: 0,
 	provider: "s3" as "s3" | "googleDrive",
 	conditionalWritesSupported: true,
+	cacheWriteFailure: null as "before" | "after" | null,
 	heldMarkerReads: 0,
 	beforeMarkerRead: null as (() => void) | null,
 	claimWrites: 0,
@@ -91,8 +92,14 @@ vi.mock("@cap/web-backend", () => ({
 								: Option.none();
 						}),
 					putObject: (key: string, body: string) =>
-						Effect.sync(() => {
+						Effect.suspend(() => {
+							if (mocks.cacheWriteFailure === "before") {
+								return Effect.fail(new Error("Cache unavailable"));
+							}
 							store(key, body);
+							return mocks.cacheWriteFailure === "after"
+								? Effect.fail(new Error("Cache response lost"))
+								: Effect.void;
 						}),
 					putObjectWithETag: (
 						key: string,
@@ -221,6 +228,7 @@ beforeEach(() => {
 	store(sourceKey, source);
 	mocks.provider = "s3";
 	mocks.conditionalWritesSupported = true;
+	mocks.cacheWriteFailure = null;
 	mocks.generateText.mockReset();
 	mocks.isRateLimited.mockClear();
 });
@@ -284,6 +292,46 @@ describe("translateTranscript runs one translation pass per video and language",
 			translatedVtt: first.translatedVtt,
 		});
 		expect(markerKeys()).toEqual([]);
+	});
+
+	it("backs off after a cache failure without discarding the generated captions", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		mocks.cacheWriteFailure = "before";
+		succeed();
+		const translateTranscript = await loadAction();
+		const first = await translateTranscript(videoId, "ja");
+		expect(first.success).toBe(true);
+		expect(first.translatedVtt).toContain("ja Original line 0");
+
+		await expect(translateTranscript(videoId, "ja")).resolves.toMatchObject({
+			success: false,
+		});
+		const otherInstance = await loadAction();
+		await expect(otherInstance(videoId, "ja")).resolves.toMatchObject({
+			success: false,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
+
+		vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+		mocks.cacheWriteFailure = null;
+		await expect(otherInstance(videoId, "ja")).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount * 2);
+		expect(markerKeys()).toEqual([]);
+	});
+
+	it("serves a cache write that landed even if its response failed", async () => {
+		mocks.cacheWriteFailure = "after";
+		succeed();
+		const translateTranscript = await loadAction();
+		const first = await translateTranscript(videoId, "ja");
+		const otherInstance = await loadAction();
+		await expect(otherInstance(videoId, "ja")).resolves.toMatchObject({
+			success: true,
+			translatedVtt: first.translatedVtt,
+		});
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
 	});
 
 	it("renews its claim after every chunk", async () => {
