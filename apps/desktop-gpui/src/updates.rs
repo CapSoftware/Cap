@@ -735,7 +735,7 @@ pub(crate) fn install_and_relaunch(cx: &mut App) {
         busy_alert(cx);
         return;
     }
-    if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+    if let Err(error) = crate::app_windows::prepare_editors_for_exit(cx) {
         cx.spawn(async move |_| {
             crate::platform::alert_dialog(tr::dialog::quit::still_open(), &error);
         })
@@ -796,7 +796,7 @@ fn restart_after_install(version: Version, executable: PathBuf, cx: &mut App) {
     let deferred = if work_in_flight(cx) {
         tracing::info!(%version, "update installed; waiting for in-flight work before restarting");
         true
-    } else if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+    } else if let Err(error) = crate::app_windows::prepare_editors_for_exit(cx) {
         tracing::warn!(%version, "update installed; editor changes are still unsaved: {error}");
         true
     } else {
