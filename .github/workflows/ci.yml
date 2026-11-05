@@ -143,6 +143,7 @@ jobs:
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
           __tests__/unit/remove-organization-member.test.ts
+          __tests__/unit/remove-organization-videos.test.ts
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/share-comments-rendering.test.ts
