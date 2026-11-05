@@ -211,6 +211,22 @@ describe("verifyVideoPassword attempt limits", () => {
 		);
 	});
 
+	it("bounds first attempts from forwarded addresses a client can choose off Vercel", async () => {
+		vi.stubEnv("VERCEL", "");
+		const verifyVideoPassword = await loadAction();
+		const fromForwarded = (ip: string) =>
+			mocks.headers.mockResolvedValue(new Headers({ "x-forwarded-for": ip }));
+
+		const results: unknown[] = [];
+		for (let index = 0; index < 250; index++) {
+			fromForwarded(`198.51.${index >> 8}.${index & 255}`);
+			results.push(await verifyVideoPassword("video-1" as never, "nope"));
+		}
+
+		expect(results.slice(0, 200)).toEqual(Array(200).fill(WRONG));
+		expect(results.slice(200)).toEqual(Array(50).fill(TOO_MANY));
+	});
+
 	it("rejects ids outside the id alphabet before any lookup", async () => {
 		const verifyVideoPassword = await loadAction();
 
