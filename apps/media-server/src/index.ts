@@ -12,7 +12,10 @@ import {
 	cleanupMediaTransferCache,
 	sweepMediaTransferCache,
 } from "./lib/media-transfer";
+import { installUnhandledRejectionGuard } from "./lib/process-guards";
 import { removeOwnTempDir, startTempDirMaintenance } from "./lib/temp-files";
+
+installUnhandledRejectionGuard();
 
 const port = Number(process.env.PORT) || 3456;
 

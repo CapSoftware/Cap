@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, mkdtemp, open, rm } from "node:fs/promises";
@@ -9,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { decodeThreadsFromEnv, PROCESS_TIMEOUT_MS } from "./media-common";
+import { spawnNode as spawn } from "./media-spawn";
 import {
 	consumeMediaTransferBytes,
 	fetchMedia,

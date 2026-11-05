@@ -43,12 +43,9 @@ import {
 import {
 	addImportOwnerToSpace,
 	extractLoomVideoId,
-	fetchLoomOEmbed,
-	fetchVideoName,
 	getOrCreateImportSpace,
 	getOrganizationMemberByEmail,
 	importLoomVideoForOwner,
-	isDirectMp4Url,
 	isValidImportEmail,
 	isValidImportSpaceName,
 	LOOM_CSV_PERMISSION_ERROR,
@@ -59,11 +56,12 @@ import {
 	normalizeImportEmail,
 	normalizeImportSpaceName,
 	processLoomCsvRows,
+	resolveLoomDownload,
 } from "@/lib/loom-csv-import";
 import {
-	getLoomDownloadUrl,
-	LoomDownloadTemporaryError,
-} from "@/lib/loom-download-url";
+	isLoomDownloadRateLimited,
+	LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE,
+} from "@/lib/loom-download-rate-limit";
 import {
 	LOOM_FILE_SINGLE_UPLOAD_MAX_BYTES,
 	startLoomFileProcessingWorkflow,
@@ -92,63 +90,15 @@ export type {
 export async function downloadLoomVideo(
 	url: string,
 ): Promise<LoomDownloadResult> {
-	if (!url || typeof url !== "string") {
-		return { success: false, error: "Please provide a valid URL." };
+	if (
+		typeof url === "string" &&
+		extractLoomVideoId(url.trim()) &&
+		(await isLoomDownloadRateLimited())
+	) {
+		return { success: false, error: LOOM_DOWNLOAD_RATE_LIMITED_MESSAGE };
 	}
 
-	const videoId = extractLoomVideoId(url.trim());
-
-	if (!videoId) {
-		return {
-			success: false,
-			error:
-				"Invalid Loom URL. Please paste a valid Loom video link (e.g. https://www.loom.com/share/abc123).",
-		};
-	}
-
-	try {
-		const downloadUrl = await getLoomDownloadUrl(videoId);
-
-		if (!downloadUrl) {
-			return {
-				success: false,
-				error:
-					"Could not retrieve a download URL. The video may be private, password-protected, or the link may have expired.",
-			};
-		}
-
-		const [videoName, oembedMeta] = await Promise.all([
-			fetchVideoName(videoId),
-			fetchLoomOEmbed(videoId),
-		]);
-		return {
-			success: true,
-			videoId,
-			videoName: videoName ?? undefined,
-			downloadUrl,
-			downloadMode: isDirectMp4Url(downloadUrl)
-				? "direct-download"
-				: "browser-conversion",
-			durationSeconds: oembedMeta?.duration,
-			width: oembedMeta?.width,
-			height: oembedMeta?.height,
-			requiresProxy: false,
-		};
-	} catch (error) {
-		if (error instanceof LoomDownloadTemporaryError) {
-			return {
-				success: false,
-				error: error.message,
-				errorCode: "loom_temporarily_unavailable",
-				retryAfterMs: error.retryAfterMs,
-			};
-		}
-		return {
-			success: false,
-			error:
-				"An unexpected error occurred. Please try again or check your internet connection.",
-		};
-	}
+	return resolveLoomDownload(url);
 }
 
 async function requireLoomImportLocationAccess(

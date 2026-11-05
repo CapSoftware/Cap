@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { spawnNode as spawn } from "./media-spawn";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,

@@ -9,6 +9,16 @@ import {
 import app from "../../app";
 import { mediaServerPeers } from "../../lib/peer-jobs";
 
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
+
 const SECRET = "peer-test-secret";
 process.env.MEDIA_SERVER_WEBHOOK_SECRET = SECRET;
 

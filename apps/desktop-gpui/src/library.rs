@@ -30,6 +30,8 @@ use cap_project::{
 use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
 use gpui::{App, RenderImage};
 
+use crate::i18n::tr;
+
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
 
@@ -273,9 +275,12 @@ impl RecordingItem {
                 .is_some_and(crate::upload::queue::UploadState::is_pending)
     }
 
-    /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
-    pub fn opens_editor(&self) -> bool {
-        self.mode == RecordingMode::Studio && self.status.is_complete()
+    /// Complete studio rows open the editor, and so do interrupted ones (a
+    /// failed or unfinished recording): the editor recovers them first. Only
+    /// the recording being captured right now stays inert.
+    pub fn opens_editor(&self, active_recording: Option<&Path>) -> bool {
+        self.mode == RecordingMode::Studio
+            && !(self.status.is_in_progress() && active_recording == Some(self.path.as_path()))
     }
 }
 
@@ -454,10 +459,13 @@ pub fn find_incomplete_recordings_in(
 ) -> Vec<IncompleteRecordingItem> {
     scanned_recordings_in(dirs)
         .filter(|recording| {
-            matches!(
-                recording.status(),
+            let status = recording.status();
+            (matches!(
+                status,
                 RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-            ) && active_recording != Some(recording.path.as_path())
+            ) || (matches!(status, RecordingStatus::Failed { .. })
+                && recording_mode(&recording.meta) == RecordingMode::Studio))
+                && active_recording != Some(recording.path.as_path())
                 && is_recording_after_recovery_cutoff(
                     &recording.meta.pretty_name,
                     recording.sort_time_millis,
@@ -551,19 +559,19 @@ fn recover_incomplete_recording_in(
     let Some(studio) = meta.studio_meta() else {
         return Err("Only incomplete studio recordings can be recovered".to_string());
     };
-    if !matches!(
-        studio.status(),
-        StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux
-    ) {
-        return Err("Recording is not waiting for recovery".to_string());
+    if matches!(studio.status(), StudioRecordingStatus::Complete) {
+        return Ok(canonical_path);
     }
 
-    let incomplete = RecoveryManager::inspect_recording(&canonical_path)
-        .ok_or_else(|| "No recoverable segments found".to_string())?;
-    crate::recording::ensure_finalization_storage(&canonical_path)
-        .map_err(|error| format!("{error:#}"))?;
-    let recovered = RecoveryManager::recover(&incomplete)
-        .map_err(|error| format!("Failed to recover recording: {error}"))?;
+    let incomplete = RecoveryManager::inspect_recording(&canonical_path).ok_or_else(|| {
+        tr::main::recovery::error::nothing_saved(canonical_path.display()).to_string()
+    })?;
+    crate::recording::ensure_finalization_storage(&canonical_path).map_err(|error| {
+        tr::main::recovery::error::storage(format!("{error:#}"), canonical_path.display())
+            .to_string()
+    })?;
+    let recovered = RecoveryManager::salvage(&incomplete)
+        .map_err(|error| recovery_failure_message(&error, &canonical_path))?;
     let display = match &recovered.meta {
         StudioRecordingMeta::SingleSegment { segment } => {
             segment.display.path.to_path(&recovered.project_path)
@@ -583,6 +591,99 @@ fn recover_incomplete_recording_in(
     }
 
     Ok(recovered.project_path)
+}
+
+fn recovery_failure_message(
+    error: &cap_recording::recovery::RecoveryError,
+    project_path: &Path,
+) -> String {
+    use cap_recording::recovery::RecoveryError;
+    let path = project_path.display();
+    match error {
+        RecoveryError::NoRecoverableSegments => {
+            tr::main::recovery::error::nothing_saved(path).to_string()
+        }
+        error if is_storage_full(error) => {
+            tr::main::recovery::error::storage(error.to_string(), path).to_string()
+        }
+        error => tr::main::recovery::error::rebuild_failed(error.to_string(), path).to_string(),
+    }
+}
+
+/// A full disk can surface as the recovery's own IO error or inside the FFmpeg
+/// remux that rebuilds a track, so the remux error's chain is checked too.
+fn is_storage_full(error: &cap_recording::recovery::RecoveryError) -> bool {
+    use cap_recording::recovery::RecoveryError;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(match error {
+        RecoveryError::VideoConcat(remux)
+        | RecoveryError::AudioConcat(remux)
+        | RecoveryError::MediaMerge(remux) => remux,
+        error => error,
+    });
+    while let Some(error) = current {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+            || error.to_string().contains("No space left on device")
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Recovers a studio recording that a crash, a force quit or a failed stop left
+/// unfinished, so the editor can open it. Returns whether it recovered
+/// anything. Complete recordings, the recording being captured right now and
+/// bundles outside the library are left alone.
+pub fn recover_interrupted_for_editing(
+    project_path: &Path,
+    active_recording: Option<&Path>,
+) -> Result<bool, String> {
+    recover_interrupted_for_editing_in(&known_recordings_dirs(), project_path, active_recording)
+}
+
+fn recover_interrupted_for_editing_in(
+    dirs: &[PathBuf],
+    project_path: &Path,
+    active_recording: Option<&Path>,
+) -> Result<bool, String> {
+    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
+        return Ok(false);
+    };
+    let Some(studio) = meta.studio_meta() else {
+        return Ok(false);
+    };
+    let interrupted = match studio.status() {
+        StudioRecordingStatus::Complete => false,
+        StudioRecordingStatus::NeedsRemux | StudioRecordingStatus::Failed { .. } => true,
+        StudioRecordingStatus::InProgress => !active_recording.is_some_and(|active| {
+            active == project_path || active.canonicalize().ok() == project_path.canonicalize().ok()
+        }),
+    };
+    let library_path = project_path.canonicalize().ok().and_then(|canonical| {
+        dirs.iter().find_map(|dir| {
+            let relative = canonical.strip_prefix(dir.canonicalize().ok()?).ok()?;
+            Some(dir.join(relative))
+        })
+    });
+    let Some(library_path) = library_path.filter(|_| interrupted) else {
+        return Ok(false);
+    };
+    let project_path = library_path.as_path();
+    if RecoveryManager::inspect_recording(project_path).is_none() {
+        let has_segments = match studio {
+            StudioRecordingMeta::MultipleSegments { inner } => !inner.segments.is_empty(),
+            StudioRecordingMeta::SingleSegment { .. } => true,
+        };
+        return match studio.status() {
+            StudioRecordingStatus::Failed { .. } if has_segments => Ok(false),
+            _ => Err(tr::main::recovery::error::nothing_saved(project_path.display()).to_string()),
+        };
+    }
+    tracing::info!(path = %project_path.display(), "recovering an interrupted recording before editing");
+    recover_incomplete_recording_in(dirs, project_path).map(|_| true)
 }
 
 /// Existing targets and roots are canonicalized before containment is checked.
@@ -646,6 +747,7 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
 /// The Tauri command also emits `RecordingDeleted`, which the page listens for
 /// to refetch; here the caller refreshes its own list instead.
 pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
+    crate::transcription::cancel_refinement(path);
     delete_recording_directory_in(&known_recordings_dirs(), path)
 }
 
@@ -2381,7 +2483,7 @@ mod tests {
         );
         assert_eq!(multi.sharing.as_deref(), Some("https://cap.so/s/abc"));
         assert!(
-            multi.opens_editor(),
+            multi.opens_editor(None),
             "studio + Complete is the clickable row"
         );
         assert!(!multi.is_active());
@@ -2400,11 +2502,15 @@ mod tests {
             }
         );
         assert_eq!(failed.status.error(), Some("encoder died"));
-        assert!(!failed.opens_editor(), "a failed studio row is inert");
+        assert!(
+            failed.opens_editor(None),
+            "a failed studio row opens the editor, which recovers it first"
+        );
         assert!(!failed.is_active(), "Failed does not keep the poll running");
 
         let remux = by_name("Studio remux");
         assert_eq!(remux.status, RecordingStatus::NeedsRemux);
+        assert!(remux.opens_editor(None));
         assert!(
             !remux.is_active(),
             "deferred finalization does not keep polling"
@@ -2419,7 +2525,7 @@ mod tests {
             "the listing still reads saved instant upload state"
         );
         assert!(
-            !complete.opens_editor(),
+            !complete.opens_editor(None),
             "instant rows never open the editor, complete or not"
         );
 
@@ -2826,6 +2932,154 @@ mod tests {
             corrupt_before
         );
         assert!(active.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_scan_offers_failed_studio_recordings_that_kept_their_media() {
+        let _ = ffmpeg::init();
+        let root = temp_dir("recovery-failed-scan");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let failed_meta = r#"{"pretty_name":"Cap 2026-11-03 at 15.51.00","sharing":null,"segments":[],"status":{"status":"Failed","error":"stop_pipeline: display: Task capture-video failed: Capture setup cancelled"}}"#;
+        let failed = write_incomplete_bundle(
+            &recordings,
+            "failed",
+            "Cap 2026-11-03 at 15.51.00",
+            "InProgress",
+            true,
+        );
+        std::fs::write(failed.join("recording-meta.json"), failed_meta).unwrap();
+        let empty = write_incomplete_bundle(
+            &recordings,
+            "failed-empty",
+            "Cap 2026-11-03 at 15.52.00",
+            "InProgress",
+            false,
+        );
+        std::fs::write(empty.join("recording-meta.json"), failed_meta).unwrap();
+
+        let found = find_incomplete_recordings_in(std::slice::from_ref(&recordings), None);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].project_path, failed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_full_disk_inside_a_track_rebuild_gets_the_free_space_advice() {
+        use cap_enc_ffmpeg::remux::RemuxError;
+        use cap_recording::recovery::RecoveryError;
+        let path = Path::new("/recordings/Cap.cap");
+        let full = || std::io::Error::from(std::io::ErrorKind::StorageFull);
+        for error in [
+            RecoveryError::Io(full()),
+            RecoveryError::VideoConcat(RemuxError::Io(full())),
+            RecoveryError::AudioConcat(RemuxError::Io(full())),
+            RecoveryError::MediaMerge(RemuxError::Io(full())),
+        ] {
+            let message = recovery_failure_message(&error, path);
+            assert!(
+                message.starts_with("There is not enough free space"),
+                "{message}"
+            );
+        }
+        let message =
+            recovery_failure_message(&RecoveryError::VideoConcat(RemuxError::NoFragments), path);
+        assert!(message.starts_with("Cap could not rebuild"), "{message}");
+    }
+
+    #[test]
+    fn opening_an_interrupted_recording_recovers_it_or_explains_what_is_kept() {
+        let _ = ffmpeg::init();
+        let root = temp_dir("recovery-for-editing");
+        let recordings = root.join("recordings");
+        let outside = root.join("elsewhere");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let dirs = std::slice::from_ref(&recordings);
+
+        let complete = write_incomplete_bundle(
+            &recordings,
+            "complete",
+            "Cap 2026-11-03 at 10.00.00",
+            "Complete",
+            true,
+        );
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &complete, None),
+            Ok(false)
+        );
+
+        let live = write_incomplete_bundle(
+            &recordings,
+            "live",
+            "Cap 2026-11-03 at 10.01.00",
+            "InProgress",
+            true,
+        );
+        let live_before = std::fs::read(live.join("recording-meta.json")).unwrap();
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &live, Some(&live)),
+            Ok(false)
+        );
+        assert_eq!(
+            std::fs::read(live.join("recording-meta.json")).unwrap(),
+            live_before
+        );
+
+        let foreign = write_incomplete_bundle(
+            &outside,
+            "foreign",
+            "Cap 2026-11-03 at 10.02.00",
+            "InProgress",
+            true,
+        );
+        assert_eq!(
+            recover_interrupted_for_editing_in(dirs, &foreign, None),
+            Ok(false)
+        );
+
+        let empty = write_incomplete_bundle(
+            &recordings,
+            "empty",
+            "Cap 2026-11-03 at 10.03.00",
+            "InProgress",
+            false,
+        );
+        let error = recover_interrupted_for_editing_in(dirs, &empty, None).unwrap_err();
+        assert!(error.starts_with("No video was saved"), "{error}");
+        assert!(error.contains(&empty.display().to_string()), "{error}");
+
+        let damaged = write_incomplete_bundle(
+            &recordings,
+            "damaged",
+            "Cap 2026-11-03 at 10.04.00",
+            "InProgress",
+            true,
+        );
+        let fragment = damaged.join("content/segments/segment-0/display/segment_001.m4s");
+        let fragment_before = std::fs::read(&fragment).unwrap();
+        let error = recover_interrupted_for_editing_in(dirs, &damaged, None).unwrap_err();
+        assert!(error.contains("Nothing was deleted"), "{error}");
+        assert_eq!(std::fs::read(&fragment).unwrap(), fragment_before);
+
+        #[cfg(unix)]
+        {
+            let linked = root.join("linked-recordings");
+            std::os::unix::fs::symlink(&recordings, &linked).unwrap();
+            let error = recover_interrupted_for_editing_in(
+                std::slice::from_ref(&linked),
+                &damaged.canonicalize().unwrap(),
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("Nothing was deleted"),
+                "an editor path in canonical form still reaches recovery: {error}"
+            );
+        }
 
         std::fs::remove_dir_all(root).unwrap();
     }

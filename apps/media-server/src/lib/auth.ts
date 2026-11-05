@@ -28,7 +28,7 @@ export function hasMediaServerSecret(c: MediaServerContext): boolean {
 
 export function canReadStatus(c: MediaServerContext): boolean {
 	const publicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS?.toLowerCase();
-	return publicStatus === "false" || publicStatus === "0"
-		? validateMediaServerSecret(c)
-		: true;
+	return publicStatus === "true" || publicStatus === "1"
+		? true
+		: validateMediaServerSecret(c);
 }

@@ -37,6 +37,7 @@ mod editor_hover_bench;
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_shapes;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
@@ -77,7 +78,9 @@ mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod power;
 mod presets;
+mod style_presets;
 mod project_save;
 mod recording;
 mod screenshot;
@@ -98,6 +101,7 @@ mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
+mod transcript;
 mod transcription;
 mod tray;
 mod ui;
@@ -481,6 +485,7 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        power::install(cx);
         #[cfg(target_os = "macos")]
         match platform::install_native_quit_handler() {
             Ok(requests) => {

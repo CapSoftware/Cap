@@ -18,25 +18,20 @@ export function firewallRequestHeaders(source: Headers): Headers {
 }
 
 /**
- * Best-effort per-key rate limiting backed by the Vercel Firewall.
+ * Per-key rate limiting backed by the Vercel Firewall, with an in-process
+ * fallback.
  *
- * IMPORTANT: each `ruleId` passed here must also be configured as a Rate Limit
- * rule in the Vercel Firewall dashboard (Firewall → Rate Limiting) with a
- * `@vercel/firewall` rule condition whose ID matches `ruleId`, plus the desired
- * window / limit / action. An ID that has no matching dashboard rule fails
- * OPEN (`checkRateLimit` returns `{ rateLimited: false, error: "not-found" }`),
- * so this helper never breaks self-hosted deploys that lack the firewall — but
- * it also provides no protection until the rule exists.
- *
- * Mirrors the existing pattern in `actions/collections/password.ts` and
- * `actions/send-download-link.ts`:
- *  - only enforced in production,
- *  - best-effort (any error → not limited) so a firewall/IP-header outage can
- *    never take down the underlying feature.
+ * Each `ruleId` should also exist as a Rate Limit rule in the Vercel Firewall
+ * dashboard with a `@vercel/firewall` condition matching the id. When the
+ * firewall answers (allowed, limited or blocked) its decision is final. When it
+ * cannot answer (non-production, rule not configured, missing client address
+ * or any firewall error) the request is counted against a fixed-window limit
+ * kept in this process (`FALLBACK_RATE_LIMITS`). That fallback is per instance,
+ * so it is a backstop, not a replacement for the dashboard rule.
  *
  * @param ruleId   Stable rule id, also configured in the Vercel Firewall.
  * @param opts.key Optional bucket key (e.g. per-email / per-user). Defaults to
- *                 the caller IP (the firewall's default behaviour).
+ *                 the caller IP.
  * @param opts.headers Optional request headers (required inside Hono handlers
  *                 where `next/headers` is unavailable; defaults to the App
  *                 Router request headers).
@@ -46,27 +41,61 @@ export async function isRateLimited(
 	ruleId: string,
 	opts?: { key?: string; headers?: Headers },
 ): Promise<boolean> {
-	if (process.env.NODE_ENV !== "production") return false;
-
 	try {
 		const headersList = firewallRequestHeaders(
-			opts?.headers ?? (await nextHeaders()),
+			opts?.headers ?? (await appRouterHeaders()),
 		);
-		const request = new Request("https://cap.so/api/rate-limit", {
-			method: "POST",
-			headers: headersList,
-		});
+		const firewallDecision = await checkFirewallRateLimit(
+			ruleId,
+			headersList,
+			opts?.key,
+		);
+		if (firewallDecision !== undefined) return firewallDecision;
 
-		const { rateLimited } = await checkRateLimit(ruleId, {
-			request,
-			...(opts?.key ? { rateLimitKey: opts.key } : {}),
-		});
-
-		return rateLimited;
+		return await isLocallyRateLimited(ruleId, opts?.key, headersList);
 	} catch (error) {
 		console.warn(`Rate limit check failed for "${ruleId}":`, error);
 		return false;
 	}
+}
+
+async function appRouterHeaders(): Promise<Headers> {
+	try {
+		return new Headers(await nextHeaders());
+	} catch {
+		return new Headers();
+	}
+}
+
+async function checkFirewallRateLimit(
+	ruleId: string,
+	headersList: Headers,
+	key: string | undefined,
+): Promise<boolean | undefined> {
+	if (process.env.NODE_ENV !== "production") return undefined;
+
+	try {
+		const request = new Request("https://cap.so/api/rate-limit", {
+			method: "POST",
+			headers: headersList,
+		});
+		const result = await checkRateLimit(ruleId, {
+			request,
+			...(key ? { rateLimitKey: key } : {}),
+		});
+		return result.error === "not-found" ? undefined : result.rateLimited;
+	} catch (error) {
+		console.warn(`Rate limit check failed for "${ruleId}":`, error);
+		return undefined;
+	}
+}
+
+function clientAddress(headersList: Headers): string | undefined {
+	return (
+		headersList.get("x-real-ip")?.trim() ||
+		headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+		undefined
+	);
 }
 
 /**
@@ -79,24 +108,164 @@ export const RATE_LIMIT_IDS = {
 	AGENT_AUTHORIZATION: "rl_agent_authorization",
 	AGENT_UNLOCK: "rl_agent_unlock",
 	AGENT_LOOM_IMPORT: "rl_loom_import_per_user",
-	/** Email OTP verification attempts (brute-force guard). Suggested: 10 / 10m per key (email). */
+	/** Email OTP verification attempts (brute-force guard). Suggested: 20 / 10m per key (email). */
 	AUTH_OTP_VERIFY: "rl_auth_otp_verify",
-	/** Email OTP / magic-link send (mailbomb + token-reseed guard). Suggested: 5 / 10m per key (email). */
+	/** Email OTP / magic-link send (mailbomb + token-reseed guard). Suggested: 10 / 10m per key (email). */
 	AUTH_OTP_SEND: "rl_auth_otp_send",
 	/** Unauthed Loom download/convert (ffmpeg + memory DoS). Suggested: 10 / 1m per IP. */
 	LOOM_DOWNLOAD: "rl_loom_download",
-	/** Unauthed transcript translation (Groq cost). Suggested: 10 / 1m per IP. */
+	/** Unauthed transcript translation (Groq cost). Suggested: 30 / 1m per IP. */
 	TRANSLATE_TRANSCRIPT: "rl_translate_transcript",
 	/** Anonymous support-chat messages (Groq + Supermemory cost). Suggested: 20 / 1m per IP. */
 	MESSENGER_MESSAGE: "rl_messenger_message",
-	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 60 / 1m per IP. */
+	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 120 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
-	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 10 / 10m per IP. */
+	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
-	/** Mobile share password attempts (brute-force guard). Suggested: 10 / 10m per key (user). */
+	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
+	AUTH_SSO_START: "rl_auth_sso_start",
+	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
+	/** Share-page video password attempts. Suggested: 20 / 10m per IP. */
+	VIDEO_PASSWORD: "rl_video_password",
+	/** Video password attempts across all clients. Suggested: 200 / 10m per key (video). */
+	VIDEO_PASSWORD_PER_VIDEO: "rl_video_password_per_video",
+	/** Public collection password attempts. Suggested: 20 / 10m per IP. */
+	COLLECTION_PASSWORD: "rl_collection_password",
+	/** Collection password attempts across all clients. Suggested: 200 / 10m per key (collection). */
+	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
+	/** Organization invite batches, checked per organization and per sender. Suggested: 30 / 1h per key. */
+	ORGANIZATION_INVITE: "rl_organization_invite",
 } as const;
+
+type FallbackRateLimit = { limit: number; windowMs: number };
+
+const MINUTE_MS = 60_000;
+
+const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
+	[RATE_LIMIT_IDS.AGENT_TOKEN_EXCHANGE]: { limit: 120, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_AUTHORIZATION]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_UNLOCK]: { limit: 30, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
+		limit: 20,
+		windowMs: 10 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DOCS_ASK]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_SSO_START]: { limit: 100, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MCP_CLIENT_REGISTRATION]: { limit: 60, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.VIDEO_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO]: {
+		limit: 200,
+		windowMs: 10 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.COLLECTION_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION]: {
+		limit: 200,
+		windowMs: 10 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.ORGANIZATION_INVITE]: { limit: 30, windowMs: 60 * MINUTE_MS },
+};
+
+const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
+	limit: 60,
+	windowMs: MINUTE_MS,
+};
+
+// Keyless requests also count against one bucket per rule, sized as a multiple
+// of the per-client limit. It catches callers with no client address (a proxy
+// that forwards none) and, off Vercel, callers that rotate x-real-ip or
+// x-forwarded-for themselves, without letting one client lock out a whole
+// self-hosted deploy.
+const SHARED_LIMIT_MULTIPLIER = 10;
+const MAX_LOCAL_BUCKETS = 10_000;
+const LOCAL_BUCKET_SWEEP_INTERVAL_MS = 10_000;
+const MAX_PLAIN_BUCKET_KEY_LENGTH = 256;
+
+const localBuckets = new Map<string, { count: number; resetAt: number }>();
+let nextLocalBucketSweepAt = 0;
+
+async function isLocallyRateLimited(
+	ruleId: string,
+	key: string | undefined,
+	headersList: Headers,
+): Promise<boolean> {
+	const rule = FALLBACK_RATE_LIMITS[ruleId] ?? DEFAULT_FALLBACK_RATE_LIMIT;
+	if (key) {
+		return countLocalRequest(
+			`${ruleId}|key|${await compactBucketKey(key)}`,
+			rule.limit,
+			rule.windowMs,
+		);
+	}
+
+	const address = clientAddress(headersList);
+	if (address) {
+		const addressLimited = countLocalRequest(
+			`${ruleId}|ip|${await compactBucketKey(address)}`,
+			rule.limit,
+			rule.windowMs,
+		);
+		if (addressLimited) return true;
+		if (process.env.VERCEL === "1") return false;
+	}
+
+	return countLocalRequest(
+		`${ruleId}|shared`,
+		rule.limit * SHARED_LIMIT_MULTIPLIER,
+		rule.windowMs,
+	);
+}
+
+function countLocalRequest(
+	bucketKey: string,
+	limit: number,
+	windowMs: number,
+): boolean {
+	const now = Date.now();
+	const bucket = localBuckets.get(bucketKey);
+	if (bucket && bucket.resetAt > now) {
+		bucket.count += 1;
+		return bucket.count > limit;
+	}
+
+	localBuckets.delete(bucketKey);
+	reserveLocalBucket(now);
+	localBuckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
+	return limit < 1;
+}
+
+function reserveLocalBucket(now: number) {
+	if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
+	if (now >= nextLocalBucketSweepAt) {
+		nextLocalBucketSweepAt = now + LOCAL_BUCKET_SWEEP_INTERVAL_MS;
+		for (const [key, bucket] of localBuckets) {
+			if (bucket.resetAt <= now) localBuckets.delete(key);
+		}
+	}
+	for (const key of localBuckets.keys()) {
+		if (localBuckets.size < MAX_LOCAL_BUCKETS) return;
+		localBuckets.delete(key);
+	}
+}
+
+async function compactBucketKey(key: string): Promise<string> {
+	if (key.length <= MAX_PLAIN_BUCKET_KEY_LENGTH) return key;
+	const digest = await globalThis.crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(key),
+	);
+	return `sha256:${Buffer.from(digest).toString("hex")}`;
+}

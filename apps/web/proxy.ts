@@ -1,6 +1,11 @@
 import { statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { db } from "@cap/database";
+import {
+	DUB_CLICK_ID_COOKIE,
+	dubCookieDomain,
+	parseDubClickId,
+} from "@cap/database/referrals";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
@@ -63,13 +68,72 @@ const setFrameHeaders = (response: NextResponse) => {
 	return response;
 };
 
+const REFERRAL_CLICK_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
+
+// Partner links (go.cap.so) redirect here with ?dub_id=<click>. The Dub script
+// stores it too, but ad blockers and no-JS visits skip the script, and without
+// the cookie the sign-up and purchase are never credited to the partner.
+const rememberReferralClick = (
+	request: NextRequest,
+	response: NextResponse,
+) => {
+	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true" || request.method !== "GET") {
+		return response;
+	}
+	const url = request.nextUrl;
+	const clickId = parseDubClickId(url.searchParams.get(DUB_CLICK_ID_COOKIE));
+	if (!clickId) return response;
+
+	response.cookies.set(DUB_CLICK_ID_COOKIE, clickId, {
+		domain: dubCookieDomain(url.hostname),
+		path: "/",
+		sameSite: "lax",
+		secure: url.protocol === "https:",
+		maxAge: REFERRAL_CLICK_MAX_AGE_SECONDS,
+	});
+	return response;
+};
+
+const DUB_PROXY_PREFIX = "/_proxy/dub/";
+
+const dubProxyTarget = (path: string) => {
+	if (path === `${DUB_PROXY_PREFIX}script.js`) {
+		return "https://www.dubcdn.com/analytics/script.js";
+	}
+	const track = /^\/_proxy\/dub\/track\/([a-z-]{1,32})$/.exec(path);
+	return track ? `https://api.dub.co/track/${track[1]}` : null;
+};
+
+// Serves the Dub script and its click tracking from cap.so so ad blockers
+// don't drop them. Visitor cookies (including the Cap session) are stripped:
+// Dub needs none of them.
+const proxyDub = (request: NextRequest) => {
+	const target =
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+			? dubProxyTarget(request.nextUrl.pathname)
+			: null;
+	if (!target) return new NextResponse(null, { status: 404 });
+
+	const headers = new Headers(request.headers);
+	headers.delete("cookie");
+	headers.delete("authorization");
+	return NextResponse.rewrite(new URL(target), { request: { headers } });
+};
+
 export async function proxy(request: NextRequest) {
 	const path = new URL(request.url).pathname;
 
-	if (path.startsWith("/login")) return setFrameHeaders(NextResponse.next());
+	if (path.startsWith(DUB_PROXY_PREFIX)) return proxyDub(request);
+
+	if (path.startsWith("/login")) {
+		return rememberReferralClick(request, setFrameHeaders(NextResponse.next()));
+	}
 
 	const response = await route(request);
-	return isFrameProtectedPath(path) ? setFrameHeaders(response) : response;
+	return rememberReferralClick(
+		request,
+		isFrameProtectedPath(path) ? setFrameHeaders(response) : response,
+	);
 }
 
 async function route(request: NextRequest) {

@@ -8,6 +8,7 @@ import {
 	type VideoMetadata,
 } from "../lib/job-manager";
 import { MediaDownloads } from "../lib/media-downloads";
+import { trustLocalPlaylist } from "../lib/media-input-policy";
 import {
 	abortStorageUploadTarget,
 	generatePreviewGif,
@@ -234,6 +235,7 @@ async function prepareSource(
 			request.videoUrl,
 			manifestDir,
 			downloads.signal,
+			settings.allowedHosts,
 			downloads,
 		),
 	);
@@ -263,6 +265,7 @@ async function prepareSource(
 				);
 		},
 	});
+	trustLocalPlaylist(prefetched.masterPath);
 	return {
 		input: prefetched.masterPath,
 		inputArgs: PLAYLIST_INPUT_ARGS(await getFfmpegHlsCapabilities()),

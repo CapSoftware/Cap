@@ -14,6 +14,7 @@ import {
 	sendWebhook,
 	touchJob,
 	updateJob,
+	type VideoMetadata,
 } from "../../lib/job-manager";
 
 const createdJobs: string[] = [];
@@ -604,5 +605,49 @@ describe("job totals", () => {
 		expect(after.errored - before.errored).toBe(2);
 		expect(after.cancelled - before.cancelled).toBe(1);
 		expect(after.expired - before.expired).toBe(1);
+	});
+});
+
+describe("webhook delivery", () => {
+	test("settles with no acknowledgement when a delivery cannot be built and delivers the next update", async () => {
+		const job = createTrackedJob("job-webhook-unserializable");
+		job.webhookUrl = "https://webhook.example.test/progress";
+		const metadata: VideoMetadata = {
+			duration: 1,
+			width: 1,
+			height: 1,
+			fps: 30,
+			videoCodec: "h264",
+			audioCodec: null,
+			audioChannels: null,
+			sampleRate: null,
+			bitrate: 1,
+			fileSize: 1,
+		};
+		updateJob(job.jobId, {
+			phase: "processing",
+			metadata: { ...metadata, fileSize: BigInt(1) as unknown as number },
+		});
+		const payloads: Record<string, unknown>[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			payloads.push(JSON.parse(String(init?.body)));
+			return new Response(null, { status: 200 });
+		}) as typeof fetch;
+		const errors = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(await sendWebhook(job)).toBeUndefined();
+			expect(errors).toHaveBeenCalled();
+			expect(job.webhookInFlight).toBe(false);
+			expect(job.webhookPromise).toBeUndefined();
+			expect(payloads).toHaveLength(0);
+
+			updateJob(job.jobId, { phase: "complete", progress: 100, metadata });
+			await sendWebhook(job);
+			expect(payloads).toHaveLength(1);
+			expect(payloads[0]).toMatchObject({ phase: "complete", progress: 100 });
+			expect(job.terminalWebhookAcknowledgedAt).toBeNumber();
+		} finally {
+			errors.mockRestore();
+		}
 	});
 });

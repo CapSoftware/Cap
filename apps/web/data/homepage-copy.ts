@@ -310,7 +310,7 @@ export const homepageCopy: HomePageCopy = {
 				"Commercial usage rights",
 				"Unlimited local recordings & editing",
 				"Studio Mode with full editor",
-				"20 cloud shareable links / month (up to 5 min each)",
+				"25 cloud shareable links / month (up to 5 min each)",
 				"Export to any format",
 				"Community support",
 			],
