@@ -40,7 +40,6 @@ export type VideoEditErrorCode =
 	| "invalid"
 	| "unavailable";
 
-/** A failed edit request. The message is what the web editor shows; the code lets other clients branch on it. */
 export class VideoEditError extends Error {
 	constructor(
 		readonly code: VideoEditErrorCode,

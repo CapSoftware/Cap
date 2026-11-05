@@ -2159,11 +2159,29 @@ const MOBILE_EDIT_BUSY_UPLOAD_PHASES = new Set([
 	"error",
 ]);
 
-/** Mirrors the web edit page: owner only, processed MP4s, Cap Pro, nothing already running. */
+// Ownership is checked before viewing rules, so another person's private or password-protected video is a 404.
+const assertMobileVideoEditor = Effect.fn("Mobile.assertVideoEditor")(
+	function* (videoId: Video.VideoId) {
+		const user = yield* CurrentUser;
+		const database = yield* Database;
+		const [owned] = yield* database.use((db) =>
+			db
+				.select({ ownerId: Db.videos.ownerId })
+				.from(Db.videos)
+				.where(eq(Db.videos.id, videoId))
+				.limit(1),
+		);
+		if (!owned || owned.ownerId !== user.id) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		yield* assertMobileVideoOwner(videoId);
+	},
+);
+
 const getCapEdit = Effect.fn("Mobile.getCapEdit")(function* (
 	videoId: Video.VideoId,
 ) {
-	yield* assertMobileVideoOwner(videoId);
+	yield* assertMobileVideoEditor(videoId);
 	const database = yield* Database;
 	const [row] = yield* database.use((db) =>
 		db
@@ -2218,7 +2236,7 @@ const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
 	videoId: Video.VideoId,
 	run: (user: typeof Db.users.$inferSelect) => Promise<unknown>,
 ) {
-	yield* assertMobileVideoOwner(videoId);
+	yield* assertMobileVideoEditor(videoId);
 	const user = yield* CurrentUser;
 	const database = yield* Database;
 	const [userRow] = yield* database.use((db) =>

@@ -382,14 +382,12 @@ export const MobileCapPasswordInput = Schema.Struct({
 	password: Schema.NullOr(Schema.String),
 });
 
-/** Whether the signed-in owner can edit a Cap now, and the length the edit is made against. */
 export const MobileCapEditState = Schema.Struct({
 	status: Schema.Literal("available", "pro_required", "not_editable", "busy"),
 	duration: Schema.Number,
 	hasEdits: Schema.Boolean,
 });
 
-/** Ranges of the current video to keep, in seconds, as the web editor sends them. */
 export const MobileCapEditInput = Schema.Struct({
 	sourceDuration: Schema.Number,
 	keepRanges: Schema.Array(
@@ -835,6 +833,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPath(MobileVideoPath)
 			.addSuccess(MobileSuccessResponse)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound)
 			.addError(HttpApiError.Conflict)

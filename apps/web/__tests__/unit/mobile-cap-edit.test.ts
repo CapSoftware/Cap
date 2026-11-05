@@ -244,8 +244,10 @@ describe("GET /api/mobile/caps/:id/edit", () => {
 		expect((await (await getState()).json()).status).toBe("busy");
 	});
 
-	it("hides other people's videos", async () => {
+	it("hides other people's private videos with a 404", async () => {
 		video.ownerId = "someone-else";
+		video.public = false;
+		video.password = "secret";
 		const response = await getState();
 		expect(response.status).toBe(404);
 	});
@@ -308,6 +310,21 @@ describe("POST /api/mobile/caps/:id/edit", () => {
 });
 
 describe("POST /api/mobile/caps/:id/edit/restore", () => {
+	it.each([
+		["not_editable", 400],
+		["unavailable", 400],
+		["busy", 409],
+	])("maps %s to %i", async (code, status) => {
+		mocks.restore.mockRejectedValueOnce(new mocks.VideoEditError(code, code));
+		expect((await restore()).status).toBe(status);
+	});
+
+	it("never restores someone else's video", async () => {
+		video.ownerId = "someone-else";
+		expect((await restore()).status).toBe(404);
+		expect(mocks.restore).not.toHaveBeenCalled();
+	});
+
 	it("restores the original as the owner", async () => {
 		const response = await restore();
 		expect(response.status).toBe(200);
