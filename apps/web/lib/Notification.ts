@@ -56,6 +56,22 @@ const isDuplicateEntryError = (error: unknown) => {
 	return message.includes("dedup_key_idx");
 };
 
+async function insertVideoNotification(
+	notification: typeof notifications.$inferInsert & { videoId: string },
+) {
+	return db().transaction(async (tx) => {
+		const [video] = await tx
+			.select({ id: videos.id })
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(notification.videoId)))
+			.for("update");
+		if (!video) return false;
+
+		await tx.insert(notifications).values(notification);
+		return true;
+	});
+}
+
 export async function createNotification(
 	notification: CreateNotificationInput,
 ) {
@@ -151,7 +167,7 @@ export async function createNotification(
 
 			const notificationId = nanoId();
 
-			await db().insert(notifications).values({
+			const inserted = await insertVideoNotification({
 				id: notificationId,
 				orgId: recipientUser.activeOrganizationId,
 				recipientId,
@@ -159,6 +175,7 @@ export async function createNotification(
 				data,
 				videoId: notification.videoId,
 			});
+			if (!inserted) return;
 
 			return { success: true, notificationId };
 		}
@@ -226,7 +243,7 @@ export async function createNotification(
 			return;
 		}
 
-		await db().insert(notifications).values({
+		const inserted = await insertVideoNotification({
 			id: notificationId,
 			orgId: videoResult.activeOrganizationId,
 			recipientId: videoResult.ownerId,
@@ -234,6 +251,8 @@ export async function createNotification(
 			data,
 			videoId: notification.videoId,
 		});
+
+		if (!inserted) return;
 
 		if (type === "comment") {
 			await sendNewCommentEmail({
@@ -391,7 +410,7 @@ export async function createAnonymousViewNotification({
 		if (Number(recentNotificationCount?.count ?? 0) >= ANON_NOTIF_MAX_PER_VIDEO)
 			return;
 
-		await database.insert(notifications).values({
+		await insertVideoNotification({
 			id: nanoId(),
 			orgId: videoWithOwner.activeOrganizationId,
 			recipientId: videoWithOwner.ownerId,
