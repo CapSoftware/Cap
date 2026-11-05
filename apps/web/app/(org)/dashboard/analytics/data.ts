@@ -123,18 +123,6 @@ const resolveRangeBounds = async (
 	return { from, to, bucket: config.bucket };
 };
 
-const fallbackIfEmpty = <Row>(
-	primary: Effect.Effect<Row[], never, never>,
-	fallback?: Effect.Effect<Row[], never, never>,
-) =>
-	fallback
-		? primary.pipe(
-				Effect.flatMap((rows: Row[]) =>
-					rows.length > 0 ? Effect.succeed(rows) : fallback,
-				),
-			)
-		: primary;
-
 const withTinybirdFallback = <Row>(
 	effect: Effect.Effect<unknown, unknown, never>,
 ) =>
@@ -151,6 +139,21 @@ const withTinybirdFallback = <Row>(
 			) as Row[];
 		}),
 	);
+
+const queryWithFallback = <Row>(
+	tinybird: TinybirdService,
+	rawSql: string,
+	aggregatedSql?: string,
+) => {
+	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
+	return aggregatedSql
+		? withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)).pipe(
+				Effect.flatMap((rows) =>
+					rows.length > 0 ? Effect.succeed(rows) : rawEffect,
+				),
+			)
+		: rawEffect;
+};
 
 const getSpaceVideoIds = async (spaceId: SpaceOrOrgId): Promise<VideoId[]> => {
 	const rows = await db()
@@ -242,21 +245,51 @@ export const getOrgAnalyticsData = async (
 								typedOrgId,
 								from,
 								to,
+								bucket,
 								videoIds,
 							),
-							cities: queryCities(tinybird, typedOrgId, from, to, videoIds),
-							browsers: queryBrowsers(tinybird, typedOrgId, from, to, videoIds),
-							devices: queryDevices(tinybird, typedOrgId, from, to, videoIds),
+							cities: queryCities(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								bucket,
+								videoIds,
+							),
+							browsers: queryBrowsers(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								bucket,
+								videoIds,
+							),
+							devices: queryDevices(
+								tinybird,
+								typedOrgId,
+								from,
+								to,
+								bucket,
+								videoIds,
+							),
 							operatingSystems: queryOperatingSystems(
 								tinybird,
 								typedOrgId,
 								from,
 								to,
+								bucket,
 								videoIds,
 							),
 							topCapsRaw: capId
 								? Effect.succeed<TopCapRow[]>([])
-								: queryTopCaps(tinybird, typedOrgId, from, to, videoIds),
+								: queryTopCaps(
+										tinybird,
+										typedOrgId,
+										from,
+										to,
+										bucket,
+										videoIds,
+									),
 						},
 						{ concurrency: "unbounded" },
 					);
@@ -603,16 +636,11 @@ const queryViewSeries = (
 	`;
 
 	type Row = { bucket: string; views: number };
-	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
-	const effect =
-		bucket === "hour"
-			? rawEffect
-			: fallbackIfEmpty(
-					withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-					rawEffect,
-				);
-
-	return effect.pipe(
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		bucket === "hour" ? undefined : aggregatedSql,
+	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				bucket: row.bucket,
@@ -627,6 +655,7 @@ const queryCountries = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -660,9 +689,10 @@ const queryCountries = (
 	`;
 
 	type Row = { name: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		bucket === "hour" ? undefined : aggregatedSql,
 	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
@@ -678,6 +708,7 @@ const queryCities = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -713,9 +744,10 @@ const queryCities = (
 	`;
 
 	type Row = { country: string; city: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		bucket === "hour" ? undefined : aggregatedSql,
 	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
@@ -732,6 +764,7 @@ const queryBrowsers = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -763,15 +796,11 @@ const queryBrowsers = (
 	`;
 
 	type Row = { name: string; views: number };
-	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
-	const effect = pathnameFilter
-		? rawEffect
-		: fallbackIfEmpty(
-				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-				rawEffect,
-			);
-
-	return effect.pipe(
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		pathnameFilter || bucket === "hour" ? undefined : aggregatedSql,
+	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,
@@ -786,6 +815,7 @@ const queryDevices = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -817,15 +847,11 @@ const queryDevices = (
 	`;
 
 	type Row = { name: string; views: number };
-	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
-	const effect = pathnameFilter
-		? rawEffect
-		: fallbackIfEmpty(
-				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-				rawEffect,
-			);
-
-	return effect.pipe(
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		pathnameFilter || bucket === "hour" ? undefined : aggregatedSql,
+	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,
@@ -840,6 +866,7 @@ const queryOperatingSystems = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -871,15 +898,11 @@ const queryOperatingSystems = (
 	`;
 
 	type Row = { name: string; views: number };
-	const rawEffect = withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql));
-	const effect = pathnameFilter
-		? rawEffect
-		: fallbackIfEmpty(
-				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-				rawEffect,
-			);
-
-	return effect.pipe(
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		pathnameFilter || bucket === "hour" ? undefined : aggregatedSql,
+	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows.map((row: Row) => ({
 				name: row.name,
@@ -894,6 +917,7 @@ const queryTopCaps = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	bucket: "hour" | "day",
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
@@ -927,9 +951,10 @@ const queryTopCaps = (
 	`;
 
 	type Row = { pathname: string; views: number };
-	return fallbackIfEmpty(
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
+	return queryWithFallback<Row>(
+		tinybird,
+		rawSql,
+		bucket === "hour" ? undefined : aggregatedSql,
 	).pipe(
 		Effect.map((rows: Row[]) =>
 			rows
