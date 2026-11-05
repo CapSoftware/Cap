@@ -8,6 +8,7 @@ import {
 	sanitizeBrowserEvent,
 } from "./browser-evidence.mjs";
 import { durableJson } from "./checkpoint-store.mjs";
+import { walkModeName } from "./walk-brand.mjs";
 
 const local = new URL("./src/config.mjs", import.meta.url);
 const engine = fs.existsSync(local)
@@ -330,7 +331,7 @@ export async function runNativeBrowser(captureId, workDir) {
 			"cache-control": "no-store",
 		});
 		response.end(
-			`<!doctype html><title>${marker}</title><body style="font:18px system-ui;padding:48px">Opening your UX Walk…`,
+			`<!doctype html><title>${marker}</title><body style="font:18px system-ui;padding:48px">Opening ${walkModeName}…`,
 		);
 	});
 	await new Promise((resolve) => bootstrap.listen(0, "127.0.0.1", resolve));

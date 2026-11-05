@@ -308,8 +308,9 @@ mod owned {
 
     pub fn open() -> Result<crate::devices::WindowOption, String> {
         let settings = crate::ux_walk::load()?;
-        let url = reqwest::Url::parse(crate::ux_walk::text(&settings, "url"))
-            .map_err(|_| "Enter a valid start page in UX Walk settings.")?;
+        let url = reqwest::Url::parse(crate::ux_walk::text(&settings, "url")).map_err(|_| {
+            fork_brand::mode_text_static("Enter a valid start page in %walk% settings.")
+        })?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err("Use an http or https start page.".into());
         }
@@ -346,7 +347,11 @@ mod owned {
                     json!({ "op": "navigate", "url": url.as_str() }),
                     Duration::from_secs(15),
                 )?;
-                window.label = format!("UX Walk · {}", url.host_str().unwrap_or("Chrome"));
+                window.label = format!(
+                    "{} · {}",
+                    fork_brand::WALK_MODE_NAME,
+                    url.host_str().unwrap_or("Chrome")
+                );
                 browsers()
                     .lock()
                     .map_err(|_| "Browser ownership is unavailable.")?

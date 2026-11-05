@@ -10,7 +10,7 @@ answer = "Cap is open source under AGPLv3, including for personal and commercial
 
 [onboarding.faq.instant_vs_studio]
 question = "How do the recording modes differ?"
-answer = "Instant records a ready-to-play local video. Studio records locally for editing. Screenshot captures a still image. UX Walk opens a fresh browser window and keeps its recording, notes, chapters and transcripts together."
+answer = "Instant records a ready-to-play local video. Studio records locally for editing. Screenshot captures a still image. %walk% opens a fresh browser window and keeps its recording, notes, chapters and transcripts together."
 
 [onboarding.faq.storage]
 answer = "All recordings stay on your computer. Nothing uploads automatically. Choose a server in Settings → Sharing, then share individual videos or screenshots."
@@ -36,10 +36,10 @@ path_missing = "Add {path} to your PATH to use %cli% from a new terminal."
 description = "Only change this if you are running your own instance of the upstream web service."
 
 [settings.shortcuts.effect]
-cycle_mode = "switch between Studio, Instant, Screenshot and UX Walk mode"
+cycle_mode = "switch between Studio, Instant, Screenshot and %walk%"
 
 [settings.shortcuts.sentence]
-cycle_mode = "Switch between Studio, Instant, Screenshot and UX Walk mode."
+cycle_mode = "Switch between Studio, Instant, Screenshot and %walk%."
 
 [settings.feedback.diagnostic]
 send = "Send to upstream"

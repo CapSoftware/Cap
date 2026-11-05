@@ -208,6 +208,7 @@ fn brand_table(table: &mut Table, prefix: &str) {
                     .replace(UPSTREAM_TOKEN, fork_brand::UPSTREAM_NAME)
                     .replace(RELEASES_TOKEN, fork_brand::RELEASES_URL)
                     .replace(CLI_TOKEN, fork_brand::CLI_NAME);
+                *text = fork_brand::mode_text(text);
             }
             Value::Table(inner) => brand_table(inner, &key),
             _ => {}

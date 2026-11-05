@@ -136,14 +136,14 @@ impl ModeChoice {
     pub(super) fn hover_title(self) -> &'static str {
         match self {
             Self::Capture(mode) => mode.hover_title(),
-            Self::UxWalk => "UX Walk mode",
+            Self::UxWalk => fork_brand::WALK_MODE_NAME,
         }
     }
 
     pub(super) fn header_title(self) -> &'static str {
         match self {
             Self::Capture(mode) => mode.header_title(),
-            Self::UxWalk => "UX Walk Mode",
+            Self::UxWalk => fork_brand::WALK_MODE_NAME,
         }
     }
 }

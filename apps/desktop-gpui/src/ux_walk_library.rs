@@ -126,7 +126,7 @@ pub fn read_walk(file: &Path) -> Result<(WalkSummary, crate::ux_walk_journal::Jo
         .file_name()
         .is_none_or(|name| name != "native-walk.json")
     {
-        return Err("This is not a native UX Walk journal.".into());
+        return Err("This is not a native walk journal.".into());
     }
     let journal: crate::ux_walk_journal::Journal =
         serde_json::from_slice(&fs::read(&file).map_err(|e| e.to_string())?)

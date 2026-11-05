@@ -370,7 +370,7 @@ impl RecordingsTab {
             Self::Instant => "Instant",
             Self::Studio => "Studio",
             #[cfg(all(target_os = "macos", feature = "ux-walk"))]
-            Self::UxWalk => "UX Walk",
+            Self::UxWalk => fork_brand::WALK_MODE_NAME,
         }
     }
 
@@ -630,9 +630,11 @@ fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> &'stati
         (RecordingsTab::Studio, true) => tr::settings::recordings::empty::studio(),
         (RecordingsTab::Studio, false) => tr::settings::recordings::empty::studio_matching(),
         #[cfg(all(target_os = "macos", feature = "ux-walk"))]
-        (RecordingsTab::UxWalk, true) => "No UX Walk recordings",
+        (RecordingsTab::UxWalk, true) => fork_brand::mode_text_static("No %walk% recordings"),
         #[cfg(all(target_os = "macos", feature = "ux-walk"))]
-        (RecordingsTab::UxWalk, false) => "No matching UX Walk recordings",
+        (RecordingsTab::UxWalk, false) => {
+            fork_brand::mode_text_static("No matching %walk% recordings")
+        }
     }
 }
 

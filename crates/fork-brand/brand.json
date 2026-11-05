@@ -20,7 +20,8 @@
 	"status_url": "",
 	"community_url": "",
 	"default_server_url": "",
-	"long_description": "%app% combines Cap screen recording and editing with UX Walk notes, chapters, transcripts and agent-ready evidence.",
+	"walk_mode_name": "%app% Mode",
+	"long_description": "%app% combines Cap screen recording and editing with %walk% notes, chapters, transcripts and agent-ready evidence.",
 	"palette": {
 		"field": "#FAFAFB",
 		"edge": "#D5D9E0",

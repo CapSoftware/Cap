@@ -5,7 +5,7 @@ use crate::{mode_choice::ModeChoice, theme::Theme};
 
 pub(super) const DETAIL: ModeDetail = ModeDetail {
     mode: ModeChoice::UxWalk,
-    title: || "UX Walk Mode",
+    title: || fork_brand::WALK_MODE_NAME,
     tagline: || "Record, note & review",
     description: || "Open a fresh browser window, already selected for recording. Walk through your product with native capture controls, notes, chapters and transcripts.",
     icon: "icons/ux-walk.svg",

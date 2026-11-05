@@ -230,7 +230,7 @@ impl SettingsWindow {
             .text_size(px(12.))
             .text_color(self.theme.settings_muted())
             .child(self.ux_walk.notice.clone().unwrap_or_else(|| {
-                "Shared with the UX Walk recorder and CLI. Environment variables and command-line options override these defaults.".into()
+                fork_brand::mode_text("Shared with %walk% and the UX Walk CLI. Environment variables and command-line options override these defaults.").into()
             }))
             .into_any_element()
     }
@@ -241,13 +241,13 @@ impl SettingsWindow {
             .find(|(value, _)| *value == ux_walk::text(&self.ux_walk.values, "agent"))
             .map_or("Choose an action", |(_, label)| *label);
         self.section(
-            "UX Walk",
+            fork_brand::WALK_MODE_NAME,
             Some("Defaults for narrated walkthroughs, notes and agent handoffs."),
             Some(
                 self.button(
                     "ux-walk-start",
                     (ui::ButtonVariant::Primary, None),
-                    "Open UX Walk",
+                    fork_brand::mode_text_static("Open %walk%"),
                     false,
                     cx,
                     |_, _, cx| ux_walk::start(cx),
@@ -289,7 +289,7 @@ impl SettingsWindow {
 
     pub(crate) fn render_ux_walk_recordings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.section(
-            "UX Walk recordings",
+            fork_brand::mode_text_static("%walk% recordings"),
             Some("Walks keep their video, notes, chapters and reports together in this folder."),
             None,
             vec![
@@ -307,7 +307,7 @@ impl SettingsWindow {
         let mut rows = vec![
             self.setting_row(
                 "Provider",
-                Some("Used for UX Walk recordings."),
+                Some(fork_brand::mode_text_static("Used for %walk% recordings.")),
                 self.select("ux-walk-provider", label, MenuKind::UxWalkProvider, cx)
                     .into_any_element(),
             ),
@@ -339,7 +339,7 @@ impl SettingsWindow {
             ));
         }
         self.section(
-            "UX Walk transcription",
+            fork_brand::mode_text_static("%walk% transcription"),
             Some(fork_brand::text_static("Cloud providers receive recording audio when transcription runs. Cap editor captions keep their existing local models.")),
             None,
             vec![self.rows(rows).into_any_element(), self.ux_walk_notice()],

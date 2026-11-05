@@ -4,7 +4,7 @@ Worm owns its recording workflow, identity and cloud protocol. Local recording w
 
 ## Shipping foundation
 
-The native GPUI recorder/editor, UX Walk evidence collector, provider configuration and library stay in their existing paths. The new Sharing settings and shared Rust client extend those paths. Instant records locally, with its existing capture/finalization pipeline and recovery ownership; it no longer needs a remote video reservation. Share is an explicit action after capture/export.
+The native GPUI recorder/editor, Worm Mode evidence collector, provider configuration and library stay in their existing paths. The new Sharing settings and shared Rust client extend those paths. Instant records locally, with its existing capture/finalization pipeline and recovery ownership; it no longer needs a remote video reservation. Share is an explicit action after capture/export.
 
 The standalone apps/cloud service uses Workers for the API, private R2 for media and metadata, and Workers Static Assets for the viewer. The Jacks Unlimited, Inc. project keeps its original deployment name. Its current origin is https://capux.jaxtrell.workers.dev. demo.jacks.med is a possible future custom domain; no existing demo route or DNS record is changed by this implementation.
 
@@ -20,7 +20,7 @@ Before opening registration, implement user-scoped credentials, quotas, abuse/ra
 
 ## One recording to one handoff
 
-The current UX Walk journal, browser capture, native processor, local report and agent prompt are the foundation. Extend them rather than introducing another recorder or separate transcript application.
+The current Worm Mode journal, browser capture, native processor, local report and agent prompt are the foundation. Extend them rather than introducing another recorder or separate transcript application.
 
 Feedback from using a real meeting recording and external transcript exposed clock resets, mixed audio, speaker merges, inconsistent name spellings and missing screen context. The next capture contract is:
 

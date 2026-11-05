@@ -65,14 +65,23 @@ fn read_file(path: &Path) -> Result<Map<String, Value>, String> {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
         Err(_) => {
-            return Err("Could not read UX Walk settings. Check the file permissions.".into());
+            return Err(fork_brand::mode_text_static(
+                "Could not read %walk% settings. Check the file permissions.",
+            )
+            .into());
         }
     };
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        "UX Walk settings contain invalid JSON. Repair the file before saving.".to_string()
+        fork_brand::mode_text_static(
+            "%walk% settings contain invalid JSON. Repair the file before saving.",
+        )
+        .to_string()
     })?;
     value.as_object().cloned().ok_or_else(|| {
-        "UX Walk settings must contain a JSON object. The file was left unchanged.".into()
+        fork_brand::mode_text_static(
+            "%walk% settings must contain a JSON object. The file was left unchanged.",
+        )
+        .into()
     })
 }
 
@@ -127,7 +136,7 @@ fn validate(key: &str, value: &Value) -> Result<(), String> {
     if valid {
         Ok(())
     } else {
-        Err("That UX Walk setting or value is not supported.".into())
+        Err(fork_brand::mode_text_static("That %walk% setting or value is not supported.").into())
     }
 }
 
@@ -137,10 +146,12 @@ fn update_file(path: &Path, key: &str, value: Value) -> Result<Map<String, Value
     validate(key, &value)?;
     let mut settings = read_file(path)?;
     settings.insert(key.into(), value);
-    let parent = path
-        .parent()
-        .ok_or("UX Walk settings have no parent folder.")?;
-    fs::create_dir_all(parent).map_err(|_| "Could not create the UX Walk settings folder.")?;
+    let parent = path.parent().ok_or(fork_brand::mode_text_static(
+        "%walk% settings have no parent folder.",
+    ))?;
+    fs::create_dir_all(parent).map_err(|_| {
+        fork_brand::mode_text_static("Could not create the %walk% settings folder.")
+    })?;
     let temporary = parent.join(format!(
         ".config-{}-{}.tmp",
         std::process::id(),
@@ -156,14 +167,15 @@ fn update_file(path: &Path, key: &str, value: Value) -> Result<Map<String, Value
         }
         let mut file = options
             .open(&temporary)
-            .map_err(|_| "Could not stage UX Walk settings.")?;
+            .map_err(|_| fork_brand::mode_text_static("Could not stage %walk% settings."))?;
         let mut bytes = serde_json::to_vec_pretty(&settings)
-            .map_err(|_| "Could not encode UX Walk settings.")?;
+            .map_err(|_| fork_brand::mode_text_static("Could not encode %walk% settings."))?;
         bytes.push(b'\n');
         file.write_all(&bytes)
             .and_then(|()| file.sync_all())
-            .map_err(|_| "Could not save UX Walk settings.")?;
-        fs::rename(&temporary, path).map_err(|_| "Could not replace UX Walk settings.")?;
+            .map_err(|_| fork_brand::mode_text_static("Could not save %walk% settings."))?;
+        fs::rename(&temporary, path)
+            .map_err(|_| fork_brand::mode_text_static("Could not replace %walk% settings."))?;
         Ok(())
     })();
     if result.is_err() {

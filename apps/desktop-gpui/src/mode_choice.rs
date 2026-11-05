@@ -25,7 +25,7 @@ impl ModeChoice {
     pub fn title(self) -> &'static str {
         match self {
             Self::Capture(mode) => mode.panel_title(),
-            Self::UxWalk => "UX Walk",
+            Self::UxWalk => fork_brand::WALK_MODE_NAME,
         }
     }
 
@@ -104,14 +104,14 @@ impl ModeChoice {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Capture(mode) => mode.display_name(),
-            Self::UxWalk => "UX Walk",
+            Self::UxWalk => fork_brand::WALK_MODE_NAME,
         }
     }
 
     pub fn settings_label(self) -> &'static str {
         match self {
             Self::Capture(_) => tr::main::mode::hover::quality_settings(),
-            Self::UxWalk => "UX Walk settings",
+            Self::UxWalk => fork_brand::mode_text_static("%walk% settings"),
         }
     }
 
