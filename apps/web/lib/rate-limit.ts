@@ -226,6 +226,10 @@ const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
 	windowMs: MINUTE_MS,
 };
 
+// Off Vercel the app may be reached without a proxy, where every forwarded
+// address is client-supplied, so keyless requests there also share one bucket
+// per rule. A client behind a proxy cannot change the last forwarded entry, so
+// it reaches its own limit before adding more than a tenth of that bucket.
 const SHARED_LIMIT_MULTIPLIER = 10;
 const MAX_LOCAL_BUCKETS = 10_000;
 const LOCAL_BUCKET_SWEEP_INTERVAL_MS = 10_000;
@@ -250,11 +254,13 @@ async function isLocallyRateLimited(
 
 	const address = rateLimitClientAddress(headersList);
 	if (address) {
-		return countLocalRequest(
+		const addressLimited = countLocalRequest(
 			`${ruleId}|ip|${await compactBucketKey(address)}`,
 			rule.limit,
 			rule.windowMs,
 		);
+		if (addressLimited) return true;
+		if (process.env.VERCEL === "1") return false;
 	}
 
 	return countLocalRequest(
