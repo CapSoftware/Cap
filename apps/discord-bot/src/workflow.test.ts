@@ -1,7 +1,7 @@
 import { env, fetchMock } from "cloudflare:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import worker from "./index";
 
 declare module "cloudflare:test" {
 	interface ProvidedEnv extends Env {}
