@@ -8255,6 +8255,11 @@ mod tests {
                     assert_eq!(store::hotkeys_raw(), original);
                     assert_eq!(settings.pages.hotkeys, original, "{key}");
                     assert!(settings.pages.shortcut_saved.is_none());
+                    assert_eq!(
+                        settings.pages.shortcut_save_failed,
+                        Some("screenshotArea"),
+                        "{key}"
+                    );
                 }
                 std::fs::remove_dir(path.with_extension("gpui-tmp")).unwrap();
                 settings.shortcuts_start_listening("screenshotArea", window, cx);
@@ -8268,11 +8273,13 @@ mod tests {
                 let saved = settings.pages.shortcut_saved.as_ref().unwrap();
                 assert_eq!(saved.action, "screenshotArea");
                 assert_eq!(saved.moved_from, Some("stopRecording"));
+                assert!(settings.pages.shortcut_save_failed.is_none());
 
                 settings.shortcuts_start_listening("screenshotArea", window, cx);
                 settings.shortcuts_capture_key(&gpui::Keystroke::parse("delete").unwrap(), cx);
                 assert!(settings.pages.hotkeys.is_empty());
                 assert!(store::hotkeys_raw().is_empty());
+                assert!(settings.pages.shortcut_save_failed.is_none());
             })
             .unwrap();
         store::set_test_tauri_store_path(None);
