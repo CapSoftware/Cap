@@ -6,7 +6,7 @@
 //! calling process, the same arrangement `scap-targets`' window discovery test
 //! uses.
 
-use scap_direct3d::{Capturer, PixelFormat, Settings};
+use scap_direct3d::{Capturer, PixelFormat, ReadbackError, Settings};
 use scap_targets::{Window, WindowId};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -360,7 +360,12 @@ fn capture_samples_on(
             }
             let content = frame.inner().ContentSize()?;
             let content = (content.Width.max(0) as u32, content.Height.max(0) as u32);
-            let buffer = frame.as_buffer()?;
+            let buffer = frame.as_buffer().map_err(|error| match error {
+                ReadbackError::D3D11(error) => error,
+                error => {
+                    windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
+                }
+            })?;
             let (width, height, stride) = (
                 buffer.width() as usize,
                 buffer.height() as usize,

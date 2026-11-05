@@ -370,6 +370,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                 let mut last_timestamp: Option<Duration> = None;
                 let mut first_timestamp: Option<Duration> = None;
                 let mut total_frames = 0u64;
+                let mut readback_misses = 0u64;
                 let mut duplicated_frames = 0u64;
                 let mut slow_convert_count = 0u32;
                 let mut slow_encode_count = 0u32;
@@ -471,7 +472,24 @@ impl WindowsOOPFragmentedM4SMuxer {
                                     (Some(f), ts)
                                 }
                                 Err(e) => {
-                                    warn!("Windows OOP failed to convert D3D11 frame: {e:?}");
+                                    let readback_miss = matches!(
+                                        e,
+                                        scap_ffmpeg::AsFFmpegError::NotReady
+                                            | scap_ffmpeg::AsFFmpegError::StagingBusy
+                                    );
+                                    if !readback_miss {
+                                        warn!("Windows OOP failed to convert D3D11 frame: {e:?}");
+                                    } else {
+                                        readback_misses += 1;
+                                        if readback_misses == 1
+                                            || readback_misses.is_multiple_of(90)
+                                        {
+                                            warn!(
+                                                readback_misses,
+                                                "Screen readback is missing deadlines; the encoder is duplicating the last frame"
+                                            );
+                                        }
+                                    }
                                     duplicated_frames += 1;
                                     (last_ffmpeg_frame.as_ref().map(reference_video_frame), ts)
                                 }
