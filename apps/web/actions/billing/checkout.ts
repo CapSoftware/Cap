@@ -106,10 +106,11 @@ export async function createProCheckout(input: {
 
 	if (user && userIsPro(user)) return { ok: false, reason: "already_pro" };
 	if (
-		!user &&
-		(await isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT, {
-			headers: requestHeaders,
-		}))
+		await (user
+			? isRateLimited(RATE_LIMIT_IDS.CHECKOUT, { key: `checkout:${user.id}` })
+			: isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT, {
+					headers: requestHeaders,
+				}))
 	) {
 		return { ok: false, reason: "rate_limited" };
 	}
