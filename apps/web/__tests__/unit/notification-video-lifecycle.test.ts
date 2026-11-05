@@ -1,3 +1,4 @@
+import { agentApiOperations } from "@cap/database/schema";
 import {
 	Comment,
 	CurrentUser,
@@ -5,6 +6,7 @@ import {
 	User,
 	Video,
 } from "@cap/web-domain";
+import { getTableColumns } from "drizzle-orm";
 import { drizzle, type RemoteCallback } from "drizzle-orm/mysql-proxy";
 import { Effect, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -41,6 +43,18 @@ vi.mock("@cap/web-backend/src/Tinybird/index.ts", async () => {
 	return { Tinybird };
 });
 
+vi.mock("@cap/web-backend/src/Storage/index", () => ({
+	Storage: {
+		getAccessForVideo: () =>
+			Effect.succeed([{ listObjects: () => Effect.succeed({ Contents: [] }) }]),
+	},
+}));
+vi.mock("@/actions/organization/domain-utils", () => ({}));
+vi.mock("@/lib/sync-video-storage-names", () => ({}));
+vi.mock("@/lib/workflow-runtime", () => ({
+	runWorkflowPromise: Effect.runPromise,
+}));
+
 import { Database } from "@cap/web-backend/src/Database";
 import { ImageUploads } from "@cap/web-backend/src/ImageUploads";
 import { Organisations } from "@cap/web-backend/src/Organisations";
@@ -52,6 +66,7 @@ import {
 	createAnonymousViewNotification,
 	createNotification,
 } from "@/lib/Notification";
+import { agentCapOperationWorkflow } from "@/workflows/agent-cap-operation";
 
 const videoId = Video.VideoId.make("video");
 
@@ -60,6 +75,8 @@ function fixture(hasVideo = true) {
 	const entries: unknown[] = [];
 	let beforeNotificationWrite: (() => Promise<void>) | undefined;
 	let beforeInsert: (() => Promise<void>) | undefined;
+	let afterVideoLock: (() => Promise<void>) | undefined;
+	const operationStates: unknown[] = [];
 	let lockTail = Promise.resolve();
 	const queries: string[] = [];
 	const queryFor = () => {
@@ -75,7 +92,12 @@ function fixture(hasVideo = true) {
 		const query: RemoteCallback = async (sql, params) => {
 			queries.push(sql);
 			if (sql.startsWith("select") && sql.includes("from `videos`")) {
-				if (sql.endsWith("for update")) await lock();
+				if (sql.endsWith("for update")) {
+					await lock();
+					const callback = afterVideoLock;
+					afterVideoLock = undefined;
+					await callback?.();
+				}
 				if (!videoExists) return { rows: [] };
 				if (sql.includes("`bucket`"))
 					return { rows: [[videoId, "owner", null, null]] };
@@ -85,6 +107,35 @@ function fixture(hasVideo = true) {
 				if (sql.startsWith("select `id` from")) return { rows: [[videoId]] };
 				return { rows: [[videoId, "owner"]] };
 			}
+			if (
+				sql.startsWith("select") &&
+				sql.includes("from `agent_api_operations`")
+			) {
+				const operation: Record<string, unknown> = {
+					id: "operation",
+					kind: "delete_cap",
+					state: "queued",
+					payload: {
+						snapshot: {
+							id: videoId,
+							ownerId: "owner",
+							orgId: "org",
+							name: "Recording",
+							public: true,
+							source: { type: "desktopMP4" },
+						},
+					},
+				};
+				return {
+					rows: [
+						Object.keys(getTableColumns(agentApiOperations)).map(
+							(key) => operation[key] ?? null,
+						),
+					],
+				};
+			}
+			if (sql.startsWith("update `agent_api_operations`"))
+				operationStates.push(params[0]);
 			if (sql.startsWith("select") && sql.includes("from `organizations`"))
 				return { rows: sql.includes("left join") ? [] : [["org", "owner"]] };
 			if (
@@ -135,6 +186,10 @@ function fixture(hasVideo = true) {
 	return {
 		entries,
 		queries,
+		operationStates,
+		afterVideoLock: (callback: () => Promise<void>) => {
+			afterVideoLock = callback;
+		},
 		beforeInsert: (callback: () => Promise<void>) => {
 			beforeInsert = callback;
 		},
@@ -331,5 +386,94 @@ describe("notifications during organization deletion", () => {
 		expect(database.queries).toContain(
 			"delete from `organizations` where `organizations`.`id` = ?",
 		);
+	});
+});
+
+describe("agent recording deletion", () => {
+	const deleteByAgent = () =>
+		agentCapOperationWorkflow({ operationId: "operation" });
+
+	it.each(["organization", "agent"] as const)(
+		"serializes feedback cleanup when %s deletion locks the recording first",
+		async (first) => {
+			const database = fixture();
+			const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+			const afterVideoLock = vi.fn(() => gate);
+			database.afterVideoLock(afterVideoLock);
+			const deletion =
+				first === "organization" ? deleteOrganisation() : deleteByAgent();
+			let concurrentDeletion: Promise<unknown> | undefined;
+			try {
+				await vi.waitFor(() => expect(afterVideoLock).toHaveBeenCalledOnce());
+				concurrentDeletion =
+					first === "organization" ? deleteByAgent() : deleteOrganisation();
+				await vi.waitFor(() =>
+					expect(
+						database.queries.some((sql) =>
+							sql.startsWith("delete from `comments`"),
+						) ||
+							database.queries.filter(
+								(sql) =>
+									sql.includes("from `videos`") && sql.endsWith("for update"),
+							).length === 2,
+					).toBe(true),
+				);
+				expect(
+					database.queries.some(
+						(sql) =>
+							sql.startsWith("delete from `comments`") ||
+							sql.startsWith("delete from `notifications`"),
+					),
+				).toBe(false);
+			} finally {
+				release();
+				await Promise.all([deletion, concurrentDeletion]);
+			}
+			expect(database.operationStates).toEqual(["running", "succeeded"]);
+			expect(database.entries).toEqual([]);
+		},
+	);
+
+	it("waits for an in-flight notification before deleting feedback", async () => {
+		const database = fixture();
+		const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+		const beforeInsert = vi.fn(() => gate);
+		database.beforeInsert(beforeInsert);
+		const notification = notify("view");
+		await vi.waitFor(() => expect(beforeInsert).toHaveBeenCalledOnce());
+		const deletion = deleteByAgent();
+		try {
+			await vi.waitFor(() =>
+				expect(
+					database.queries.some((sql) =>
+						sql.startsWith("delete from `comments`"),
+					) ||
+						database.queries.filter(
+							(sql) =>
+								sql.includes("from `videos`") && sql.endsWith("for update"),
+						).length === 2,
+				).toBe(true),
+			);
+			expect(
+				database.queries.some(
+					(sql) =>
+						sql.startsWith("delete from `comments`") ||
+						sql.startsWith("delete from `notifications`"),
+				),
+			).toBe(false);
+		} finally {
+			release();
+			await Promise.all([notification, deletion]);
+		}
+		expect(database.operationStates).toEqual(["running", "succeeded"]);
+		expect(database.entries).toEqual([]);
+	});
+
+	it("finishes when the recording is already gone", async () => {
+		const database = fixture(false);
+
+		await expect(deleteByAgent()).resolves.toBeUndefined();
+
+		expect(database.operationStates).toEqual(["running", "succeeded"]);
 	});
 });
