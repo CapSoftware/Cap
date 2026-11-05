@@ -10,10 +10,7 @@ async function newestMtimeMs(targetPath) {
 		const current = pending.pop();
 		const stat = await fs.stat(current).catch(() => null);
 		if (!stat) continue;
-		if (stat.isFile()) {
-			newest = Math.max(newest, stat.mtimeMs);
-			continue;
-		}
+		newest = Math.max(newest, stat.mtimeMs);
 		if (stat.isDirectory()) {
 			const entries = await fs.readdir(current);
 			for (const name of entries) pending.push(path.join(current, name));
