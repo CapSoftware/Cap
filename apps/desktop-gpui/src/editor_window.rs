@@ -7647,7 +7647,7 @@ impl EditorWindow {
                 let Some(next) = OPTIONS.get(index).cloned() else {
                     return;
                 };
-                self.edit_project("aspect-ratio", window, cx, move |project| {
+                self.edit_global_project("aspect-ratio", window, cx, move |project| {
                     if aspect_ratio_eq(&project.aspect_ratio, &next) {
                         return false;
                     }
@@ -13316,6 +13316,109 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn aspect_ratio_toolbar_edits_the_project_while_inspecting_a_style(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::editor_sidebar::StyleGroup;
+        use cap_verify::{catalog, fixture, report::Tier};
+
+        cap_verify::media::init();
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("aspect.cap");
+        let mut spec = catalog::basic(Tier::Fast);
+        spec.segments[0].mic = None;
+        spec.segments[0].system_audio = None;
+        fixture::write_fixture(&spec, &path).unwrap();
+        let summary = preflight(&path).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let audio = cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}));
+        let instance = runtime
+            .block_on(EditorInstance::new_with_audio_output(
+                path.clone(),
+                |_| {},
+                Box::new(|_, _| {}),
+                None,
+                Arc::new(audio),
+            ))
+            .unwrap();
+        let mut project = instance.project_config.1.borrow().clone();
+        project.timeline.as_mut().unwrap().style_segments = vec![cap_project::StyleSegment {
+            start: 0.,
+            end: 3.,
+            overrides: cap_project::StyleOverrides {
+                background: Some(project.background.clone()),
+                camera: Some(project.camera.clone()),
+                cursor: Some(project.cursor.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        struct TestView(Entity<EditorWindow>);
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+            }
+        }
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            TestView(cx.new(|cx| {
+                let mut editor = EditorWindow::new(path, window, cx);
+                editor.set_summary(summary, window, cx);
+                editor.set_project(project, window, cx);
+                editor
+            }))
+        });
+        let editor = view.read_with(cx, |view, _| view.0.clone());
+        editor.update(cx, |editor, _| editor.set_instance(instance.clone()));
+        for group in [
+            None,
+            Some(StyleGroup::Background),
+            Some(StyleGroup::Camera),
+            Some(StyleGroup::Cursor),
+        ] {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.sidebar.style_target = group.map(|group| (0, group));
+                let before = serde_json::to_value(&editor.project).unwrap();
+                editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 2, window, cx);
+                assert!(
+                    matches!(
+                        editor.project.aspect_ratio,
+                        Some(cap_project::AspectRatio::Vertical)
+                    ),
+                    "{group:?}"
+                );
+                let after = serde_json::to_value(&editor.project).unwrap();
+                assert_eq!(before["timeline"], after["timeline"]);
+                assert_eq!(before["background"], after["background"]);
+                assert_eq!(before["camera"], after["camera"]);
+                assert_eq!(before["cursor"], after["cursor"]);
+                let published = instance.project_config.1.borrow().clone();
+                assert!(matches!(
+                    published.aspect_ratio,
+                    Some(cap_project::AspectRatio::Vertical)
+                ));
+                editor.undo(window, cx);
+                assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
+                editor.redo(window, cx);
+                assert_eq!(serde_json::to_value(&editor.project).unwrap(), after);
+                editor.sidebar.style_target = group.map(|group| (0, group));
+                editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 2, window, cx);
+                editor.undo(window, cx);
+                assert_eq!(serde_json::to_value(&editor.project).unwrap(), before);
+                editor.redo(window, cx);
+                assert_eq!(serde_json::to_value(&editor.project).unwrap(), after);
+                editor.sidebar.style_target = group.map(|group| (0, group));
+                editor.choose_toolbar_menu(ToolbarMenu::AspectRatio, 0, window, cx);
+                assert!(editor.project.aspect_ratio.is_none());
+            });
+        }
+        runtime.block_on(instance.dispose());
+    }
 
     #[cfg(target_os = "linux")]
     mod side_panel {
