@@ -182,6 +182,20 @@ impl SettingsWindow {
                 cx.defer(move |cx| crate::ux_walk_window::open_saved(file, cx));
             },
         ));
+        if walk.items_editable() {
+            let items = walk.file.clone();
+            actions = actions.child(self.row_button(
+                "recording-walk-items",
+                "icons/pencil.svg",
+                "Edit items",
+                false,
+                cx,
+                move |_, _, cx| {
+                    let file = items.clone();
+                    cx.defer(move |cx| crate::ux_walk_window::open_saved_items(file, cx));
+                },
+            ));
+        }
         let prompt = walk.file.clone();
         actions.child(self.row_button(
             "recording-walk-copy",

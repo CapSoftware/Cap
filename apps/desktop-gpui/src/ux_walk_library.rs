@@ -100,6 +100,10 @@ impl WalkSummary {
         self.status == WalkStatus::Ready
     }
 
+    pub fn items_editable(&self) -> bool {
+        self.report_ready()
+    }
+
     pub fn is_active(&self) -> bool {
         matches!(
             self.status,
