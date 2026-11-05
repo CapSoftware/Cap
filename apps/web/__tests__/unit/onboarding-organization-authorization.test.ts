@@ -188,6 +188,52 @@ function makeFixture(
 }
 
 describe("onboarding organization authorization", () => {
+	it.each([
+		{ name: "Jane", welcome: false, expectedName: "Jane" },
+		{ name: "Jane", welcome: true, expectedName: "Jane" },
+		{ name: null, welcome: false, expectedName: "Your name" },
+		{ name: null, welcome: true, expectedName: "Your name" },
+		{ name: "", welcome: true, expectedName: "Your name" },
+		{ name: "   ", welcome: true, expectedName: "Your name" },
+	])(
+		"keeps a usable name when skipping with name=$name and welcome=$welcome",
+		async ({ name, welcome, expectedName }) => {
+			const fixture = makeFixture({
+				user: { name, onboardingSteps: { welcome } },
+			});
+
+			await fixture.run((service) => service.skipToDashboard());
+
+			expect(fixture.user.name).toBe(expectedName);
+			expect(fixture.user.onboardingSteps).toEqual({
+				welcome: true,
+				organizationSetup: true,
+				customDomain: true,
+				inviteTeam: true,
+				download: true,
+			});
+			expect(fixture.organization.name).toBe("Company");
+			expect(fixture.organizations).toHaveLength(1);
+			expect(fixture.memberships).toEqual([]);
+		},
+	);
+
+	it("can skip to the dashboard after welcome saves an empty trimmed name", async () => {
+		const fixture = makeFixture({
+			user: { name: null, onboardingSteps: null },
+		});
+
+		await fixture.run((service) => service.welcome({ firstName: "   " }));
+		expect(fixture.user).toMatchObject({
+			name: "",
+			onboardingSteps: { welcome: true },
+		});
+
+		await fixture.run((service) => service.skipToDashboard());
+
+		expect(fixture.user.name).toBe("Your name");
+	});
+
 	it("lets members complete setup without changing organization metadata or their default", async () => {
 		const fixture = makeFixture();
 
