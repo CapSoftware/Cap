@@ -2629,6 +2629,153 @@ mod tests {
         );
     }
 
+    const ALL_TURNS: [SourceRotation; 3] = [
+        SourceRotation::Clockwise90,
+        SourceRotation::Clockwise180,
+        SourceRotation::Clockwise270,
+    ];
+
+    /// The source position whose sample lands at (x, y) of a plane turned
+    /// clockwise, written from the output side so it does not mirror
+    /// `rotate_samples`.
+    fn source_position(
+        rotation: SourceRotation,
+        source_width: usize,
+        source_height: usize,
+        x: usize,
+        y: usize,
+    ) -> (usize, usize) {
+        match rotation {
+            SourceRotation::None => (x, y),
+            SourceRotation::Clockwise90 => (y, source_height - 1 - x),
+            SourceRotation::Clockwise180 => (source_width - 1 - x, source_height - 1 - y),
+            SourceRotation::Clockwise270 => (source_width - 1 - y, x),
+        }
+    }
+
+    /// Every sample in every plane gets its own value, and U never equals V,
+    /// so a misplaced, swapped or split chroma sample changes the result.
+    fn distinct_sample(plane: usize, channel: usize, x: usize, y: usize) -> u8 {
+        let base = [0, 64, 160][plane + channel];
+        (base + y * 8 + x) as u8
+    }
+
+    /// 8x6 luma with 4x3 chroma: small enough that every sample value above
+    /// stays distinct within its plane.
+    fn distinct_frame(format: avformat::Pixel) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, 8, 6);
+        frame.set_pts(Some(42));
+        for plane in 0..frame.planes() {
+            let channels = if format == avformat::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
+            let (width, height) = (frame.plane_width(plane), frame.plane_height(plane));
+            let stride = frame.stride(plane);
+            let data = frame.data_mut(plane);
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    for channel in 0..channels {
+                        data[y * stride + x * channels + channel] =
+                            distinct_sample(plane, channel, x, y);
+                    }
+                }
+            }
+        }
+        frame
+    }
+
+    /// (plane, channel) for U and V in each supported layout.
+    fn chroma_channels(format: avformat::Pixel) -> [(usize, usize); 2] {
+        if format == avformat::Pixel::NV12 {
+            [(1, 0), (1, 1)]
+        } else {
+            [(1, 0), (2, 0)]
+        }
+    }
+
+    fn assert_turned_exactly(format: avformat::Pixel, rotation: SourceRotation) {
+        let rotated = rotation.apply(distinct_frame(format)).unwrap();
+        let (expected_width, expected_height) = rotation.rotated_size(8, 6);
+        assert_eq!(
+            (rotated.format(), rotated.width(), rotated.height()),
+            (format, expected_width, expected_height),
+            "{format:?} {rotation:?}"
+        );
+        assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
+
+        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
+        let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+        for (plane, channel, channels, source_width, source_height) in [
+            (0, 0, 1, 8, 6),
+            (u_plane, u_channel, chroma_samples, 4, 3),
+            (v_plane, v_channel, chroma_samples, 4, 3),
+        ] {
+            let (width, height) = rotation.rotated_size(source_width as u32, source_height as u32);
+            assert_eq!(
+                (rotated.plane_width(plane), rotated.plane_height(plane)),
+                (width, height),
+                "{format:?} {rotation:?} plane {plane}"
+            );
+            let (width, height) = (width as usize, height as usize);
+            let stride = rotated.stride(plane);
+            for y in 0..height {
+                for x in 0..width {
+                    let (source_x, source_y) =
+                        source_position(rotation, source_width, source_height, x, y);
+                    assert_eq!(
+                        rotated.data(plane)[y * stride + x * channels + channel],
+                        distinct_sample(plane, channel, source_x, source_y),
+                        "{format:?} {rotation:?} plane {plane} channel {channel} at ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn planar_chroma_lands_where_each_turn_puts_it() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::YUV420P, rotation);
+        }
+    }
+
+    #[test]
+    fn interleaved_nv12_chroma_pairs_turn_together_in_order() {
+        for rotation in ALL_TURNS {
+            assert_turned_exactly(avformat::Pixel::NV12, rotation);
+        }
+    }
+
+    #[test]
+    fn turned_chroma_corners_match_hand_worked_positions() {
+        // Source chroma is 4x3. A clockwise quarter turn moves the source's
+        // bottom-left sample to the top-left, so U there is distinct_sample
+        // at (0, 2); a counterclockwise one moves the top-right there.
+        for format in [avformat::Pixel::YUV420P, avformat::Pixel::NV12] {
+            let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
+            for (rotation, (source_x, source_y)) in [
+                (SourceRotation::Clockwise90, (0, 2)),
+                (SourceRotation::Clockwise180, (3, 2)),
+                (SourceRotation::Clockwise270, (3, 0)),
+            ] {
+                let rotated = rotation.apply(distinct_frame(format)).unwrap();
+                assert_eq!(
+                    (
+                        rotated.data(u_plane)[u_channel],
+                        rotated.data(v_plane)[v_channel],
+                    ),
+                    (
+                        distinct_sample(1, 0, source_x, source_y),
+                        distinct_sample(1, 1, source_x, source_y),
+                    ),
+                    "{format:?} {rotation:?}"
+                );
+            }
+        }
+    }
+
     /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`
     #[test]
     #[ignore = "benchmark: transcodes the videos named by CAP_IMPORT_BENCH_SOURCES"]
