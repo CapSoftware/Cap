@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	heldMarkerReads: 0,
 	beforeMarkerRead: null as (() => void) | null,
 	claimWrites: 0,
+	storageReads: 0,
 	generateText: vi.fn(),
 	isRateLimited: vi.fn(async () => false),
 }));
@@ -42,6 +43,7 @@ const afterStorageRoundTrip = <A>(key: string, read: () => A) =>
 	Effect.promise(
 		() =>
 			new Promise<void>((resolve) => {
+				mocks.storageReads += 1;
 				if (key.includes("/translation-status/") && mocks.heldMarkerReads > 0) {
 					markerReadsHeld.push(resolve);
 					if (markerReadsHeld.length === mocks.heldMarkerReads) {
@@ -216,6 +218,7 @@ beforeEach(() => {
 	mocks.objects = new Map();
 	mocks.nextETag = 0;
 	mocks.claimWrites = 0;
+	mocks.storageReads = 0;
 	mocks.heldMarkerReads = 0;
 	mocks.beforeMarkerRead = null;
 	store(sourceKey, source);
@@ -355,7 +358,7 @@ describe("translateTranscript runs one translation pass per video and language",
 		expect(mocks.objects.has(markerKey(edited))).toBe(false);
 	});
 
-	it("waits for a pass already running elsewhere instead of starting another", async () => {
+	it("hands a request back while another instance is translating instead of starting another", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
 		succeed();
 		const runningInstance = await loadAction();
@@ -375,24 +378,91 @@ describe("translateTranscript runs one translation pass per video and language",
 
 		const waitingInstance = await loadAction();
 		let waitingResult: unknown;
-		const waiting = waitingInstance(videoId, "ja").then((result) => {
+		void waitingInstance(videoId, "ja").then((result) => {
 			waitingResult = result;
-			return result;
 		});
-		await vi.advanceTimersByTimeAsync(60_000);
-		expect(waitingResult).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(waitingResult).toEqual({
+			success: false,
+			inProgress: true,
+			message: "Translation in progress",
+		});
 		expect(mocks.generateText).toHaveBeenCalledTimes(1);
 
 		releaseModel();
 		await vi.advanceTimersByTimeAsync(10_000);
-		const [first, second] = await Promise.all([running, waiting]);
+		const first = await running;
+		const retry = waitingInstance(videoId, "ja");
+		await vi.advanceTimersByTimeAsync(10);
 
 		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
 		expect(first.success).toBe(true);
-		expect(second).toMatchObject({
+		await expect(retry).resolves.toMatchObject({
 			success: true,
 			translatedVtt: first.translatedVtt,
 		});
+	});
+
+	it("bounds the storage reads of a request waiting on another instance", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+		store(
+			markerKey(source),
+			JSON.stringify({
+				state: "pending",
+				source: sourceDigest(source),
+				at: Date.now(),
+			}),
+		);
+		succeed();
+		const translateTranscript = await loadAction();
+		mocks.storageReads = 0;
+		let result: unknown;
+		void translateTranscript(videoId, "ja").then((value) => {
+			result = value;
+		});
+		await vi.advanceTimersByTimeAsync(25_000);
+
+		expect(result).toEqual({
+			success: false,
+			inProgress: true,
+			message: "Translation in progress",
+		});
+		expect(mocks.storageReads).toBeLessThanOrEqual(12);
+		expect(mocks.generateText).not.toHaveBeenCalled();
+	});
+
+	it("hands back a request that joins a pass already running in this instance", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+		succeed();
+		const translateTranscript = await loadAction();
+		let releaseModel = () => {};
+		const modelGate = new Promise<void>((resolve) => {
+			releaseModel = resolve;
+		});
+		mocks.generateText.mockImplementationOnce(
+			async ({ prompt }: { prompt: string }) => {
+				await modelGate;
+				return { text: translatedChunk(prompt), finishReason: "stop" };
+			},
+		);
+		const running = translateTranscript(videoId, "ja");
+		await vi.advanceTimersByTimeAsync(10);
+
+		let joinedResult: unknown;
+		void translateTranscript(videoId, "ja").then((result) => {
+			joinedResult = result;
+		});
+		await vi.advanceTimersByTimeAsync(25_000);
+		expect(joinedResult).toEqual({
+			success: false,
+			inProgress: true,
+			message: "Translation in progress",
+		});
+
+		releaseModel();
+		await vi.advanceTimersByTimeAsync(10_000);
+		await expect(running).resolves.toMatchObject({ success: true });
+		expect(mocks.generateText).toHaveBeenCalledTimes(chunkCount);
 	});
 
 	it("takes over a pass whose claim has expired", async () => {

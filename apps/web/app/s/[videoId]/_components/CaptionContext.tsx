@@ -21,7 +21,7 @@ import {
 
 export type CaptionLanguage = LanguageCode | "original" | "off";
 
-const TRANSLATION_RETRY_LIMIT = 3;
+const TRANSLATION_RETRY_WINDOW_MS = 6 * 60 * 1000;
 const TRANSLATION_RETRY_DELAY_MS = 5_000;
 
 interface AvailableTranslation {
@@ -116,11 +116,12 @@ function CaptionProviderForVideo({
 		async (language: LanguageCode) => {
 			const isStillWanted = () =>
 				mounted.current && selectedLanguageRef.current === language;
-			for (let retries = 0; ; retries++) {
+			const startedAt = Date.now();
+			for (;;) {
 				const result = await translateTranscript(videoId, language);
 				if (
 					!result.inProgress ||
-					retries >= TRANSLATION_RETRY_LIMIT ||
+					Date.now() - startedAt >= TRANSLATION_RETRY_WINDOW_MS ||
 					!isStillWanted()
 				) {
 					return result;

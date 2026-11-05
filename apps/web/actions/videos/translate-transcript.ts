@@ -97,7 +97,7 @@ export async function translateTranscript(
 	const digest = sourceDigest(originalVtt.value);
 	const pairKey = `${videoId}:${targetLanguage}:${digest}`;
 	const running = translationsInFlight.get(pairKey);
-	if (running) return running;
+	if (running) return waitForRunningTranslation(running);
 
 	const translation = translateOnce({
 		bucket,
@@ -136,22 +136,26 @@ type TranslationClaim =
 	| { kind: "owned"; eTag: string | undefined }
 	| { kind: "untracked" }
 	| { kind: "busy" }
-	| { kind: "late" }
 	| { kind: "failed"; at: number };
 
 // The owner renews its pending marker after every chunk, so the lease only has
 // to outlast one chunk's model calls; an older marker belongs to a stopped pass.
 const PENDING_TRANSLATION_LEASE_MS = 5 * 60 * 1000;
 const FAILED_TRANSLATION_RETRY_MS = 10 * 60 * 1000;
-// Waiting viewers stay inside the default 300 s function duration, and only a
-// request that still has most of that budget left starts a pass.
-const TRANSLATION_WAIT_MS = 4 * 60 * 1000;
-const TRANSLATION_WAIT_POLL_MS = 3 * 1000;
-const TRANSLATION_START_WINDOW_MS = 30 * 1000;
+// A request that finds another pass running waits briefly and then hands back
+// to the share page, which asks again until the translation is stored.
+const TRANSLATION_WAIT_MS = 20 * 1000;
+const TRANSLATION_WAIT_POLL_MS = 5 * 1000;
 
 const TRANSLATION_FAILED: TranslateResult = {
 	success: false,
 	message: "Translation failed",
+};
+
+const TRANSLATION_IN_PROGRESS: TranslateResult = {
+	success: false,
+	inProgress: true,
+	message: "Translation in progress",
 };
 
 const translationsInFlight = new Map<string, Promise<TranslateResult>>();
@@ -235,11 +239,8 @@ function isClaimConflict(error: unknown) {
 
 async function claimTranslation(
 	translation: PairTranslation,
-	canStart: boolean,
 ): Promise<TranslationClaim> {
-	const unclaimed: TranslationClaim = canStart
-		? { kind: "untracked" }
-		: { kind: "late" };
+	const unclaimed: TranslationClaim = { kind: "untracked" };
 	const { bucket } = translation;
 	if (bucket.provider !== "s3") return unclaimed;
 
@@ -259,7 +260,6 @@ async function claimTranslation(
 				return { kind: "busy" };
 			}
 		}
-		if (!canStart) return { kind: "late" };
 		if (Option.isSome(current) && !current.value.eTag) return unclaimed;
 
 		const written = await bucket
@@ -321,6 +321,23 @@ async function releaseClaim(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function waitForRunningTranslation(
+	running: Promise<TranslateResult>,
+): Promise<TranslateResult> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const waitLimit = new Promise<TranslateResult>((resolve) => {
+		timer = setTimeout(
+			() => resolve(TRANSLATION_IN_PROGRESS),
+			TRANSLATION_WAIT_MS,
+		);
+	});
+	try {
+		return await Promise.race([running, waitLimit]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 async function translateOnce(
 	translation: PairTranslation,
 ): Promise<TranslateResult> {
@@ -339,10 +356,7 @@ async function translateOnce(
 
 		if (hasRecentFailure(translation.pairKey)) return TRANSLATION_FAILED;
 
-		const claim = await claimTranslation(
-			translation,
-			Date.now() - startedAt < TRANSLATION_START_WINDOW_MS,
-		);
+		const claim = await claimTranslation(translation);
 		if (claim.kind === "failed") {
 			recordFailure(translation.pairKey, claim.at);
 			return TRANSLATION_FAILED;
@@ -361,15 +375,8 @@ async function translateOnce(
 		if (claim.kind === "owned" || claim.kind === "untracked") {
 			return runTranslation(translation, claim);
 		}
-		if (
-			claim.kind === "late" ||
-			Date.now() - startedAt >= TRANSLATION_WAIT_MS
-		) {
-			return {
-				success: false,
-				inProgress: true,
-				message: "Translation in progress",
-			};
+		if (Date.now() - startedAt >= TRANSLATION_WAIT_MS) {
+			return TRANSLATION_IN_PROGRESS;
 		}
 	}
 }
