@@ -225,7 +225,7 @@ describe("tools given a WebM without a duration", () => {
 		expect(container.textContent).toContain("Estimated output duration: 0:02");
 	});
 
-	it("keeps the speed tool recording until the video ends", async () => {
+	it("keeps the speed tool to one recording until the video ends", async () => {
 		root.render(createElement(SpeedController));
 		await selectFile();
 		await vi.waitFor(() =>
@@ -238,10 +238,13 @@ describe("tools given a WebM without a duration", () => {
 			(v) => v.preload !== "metadata",
 		) as HTMLVideoElement;
 		video.dispatchEvent(new Event("canplay"));
+		// Seeking to read the duration makes the browser fire canplay again.
+		video.dispatchEvent(new Event("canplay"));
 
 		await vi.waitFor(() =>
 			expect(Recorder.instances[0]?.state).toBe("recording"),
 		);
+		video.dispatchEvent(new Event("canplay"));
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(Recorder.instances[0]?.state).toBe("recording");
 		expect(Recorder.instances).toHaveLength(1);
