@@ -1041,6 +1041,7 @@ pub struct H264Encoder {
 struct InjectedCodecFailure {
     frames_until_failure: usize,
     error: ffmpeg::Error,
+    healthy_frames_between_failures: Option<usize>,
 }
 
 pub struct ConversionRequirements {
@@ -1153,6 +1154,7 @@ impl H264Encoder {
         self.injected_failure = Some(InjectedCodecFailure {
             frames_until_failure: frames,
             error,
+            healthy_frames_between_failures: None,
         });
         let builder = self.software_fallback.take();
         self.software_fallback = replacement_preset
@@ -1161,9 +1163,25 @@ impl H264Encoder {
     }
 
     #[cfg(test)]
+    pub(crate) fn inject_intermittent_codec_failures(
+        &mut self,
+        healthy_frames_between_failures: usize,
+        error: ffmpeg::Error,
+        replacement_preset: Option<H264Preset>,
+    ) {
+        self.inject_codec_failure_after(healthy_frames_between_failures, error, replacement_preset);
+        if let Some(failure) = &mut self.injected_failure {
+            failure.healthy_frames_between_failures = Some(healthy_frames_between_failures);
+        }
+    }
+
+    #[cfg(test)]
     fn injected_codec_failure(&mut self) -> Option<ffmpeg::Error> {
         let failure = self.injected_failure.as_mut()?;
         if failure.frames_until_failure == 0 {
+            if let Some(healthy) = failure.healthy_frames_between_failures {
+                failure.frames_until_failure = healthy;
+            }
             return Some(failure.error);
         }
         failure.frames_until_failure -= 1;
