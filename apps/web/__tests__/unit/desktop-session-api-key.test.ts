@@ -13,14 +13,18 @@ const state = vi.hoisted(() => ({
 	rows: [] as KeyRow[],
 	clock: 0,
 	userId: "user-1",
+	events: [] as string[],
 }));
 
 const dialect = new MySqlDialect();
 const params = (condition: SQL) => dialect.sqlToQuery(condition).params;
+const sortsNewestFirst = (ordering: SQL) =>
+	/`createdAt` desc$/.test(dialect.sqlToQuery(ordering).sql);
 
 function keysTable() {
 	const insert = () => ({
 		values: async (value: Omit<KeyRow, "createdAt">) => {
+			state.events.push("insert");
 			state.clock += 1;
 			state.rows.push({ ...value, createdAt: new Date(state.clock * 1000) });
 		},
@@ -28,10 +32,15 @@ function keysTable() {
 	const select = () => ({
 		from: () => ({
 			where: (condition: SQL) => ({
-				orderBy: () => ({
+				for: async (strength: string) => {
+					state.events.push(`lock:${strength}:${params(condition).join(",")}`);
+					return [{ id: params(condition)[0] }];
+				},
+				orderBy: (ordering: SQL) => ({
 					limit: (limit: number) => ({
 						offset: async (offset: number) => {
 							const [userId, source, excludedId] = params(condition);
+							const direction = sortsNewestFirst(ordering) ? -1 : 1;
 							return state.rows
 								.filter(
 									(row) =>
@@ -39,7 +48,10 @@ function keysTable() {
 										row.source === source &&
 										row.id !== excludedId,
 								)
-								.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+								.sort(
+									(a, b) =>
+										direction * (a.createdAt.getTime() - b.createdAt.getTime()),
+								)
 								.slice(offset, offset + limit)
 								.map((row) => ({ id: row.id }));
 						},
@@ -98,6 +110,7 @@ describe("desktop api key sign-in", () => {
 		state.rows = [];
 		state.clock = 0;
 		state.userId = "user-1";
+		state.events = [];
 	});
 
 	it("returns a new key that stays stored for the signed-in user", async () => {
@@ -137,5 +150,29 @@ describe("desktop api key sign-in", () => {
 		expect(state.rows.map((row) => row.id)).toEqual(
 			expect.arrayContaining(["mobile-key", "other-user-key"]),
 		);
+	});
+
+	it("trims a long key history down to the 20 newest", async () => {
+		for (let index = 0; index < 1030; index++) {
+			state.rows.push({
+				id: `old-${index}`,
+				userId: "user-1",
+				source: "desktop",
+				createdAt: new Date(-1_000_000 + index),
+			});
+		}
+
+		const apiKey = await requestApiKey();
+
+		expect(desktopKeys("user-1").map((row) => row.id)).toEqual([
+			...Array.from({ length: 19 }, (_, index) => `old-${1011 + index}`),
+			apiKey,
+		]);
+	});
+
+	it("locks the user's row before adding a key", async () => {
+		await requestApiKey();
+
+		expect(state.events).toEqual(["lock:update:user-1", "insert"]);
 	});
 });
