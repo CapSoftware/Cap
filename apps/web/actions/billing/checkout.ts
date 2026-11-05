@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
-import { isProSubscription, userIsPro } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { cookies, headers } from "next/headers";
 import { ensureStripeCustomerId } from "@/lib/checkout/customer";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
@@ -27,6 +27,7 @@ import {
 	referralDiscountParams,
 } from "@/lib/checkout/referral";
 import { checkoutStripe } from "@/lib/checkout/stripe";
+import { hasLiveProSubscription } from "@/lib/checkout/subscriptions";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
@@ -35,7 +36,6 @@ import { currencyForCountry } from "@/utils/currency";
 
 const INTEGRATION_IDENTIFIER = "cap_pro_checkout_rqmvbkzt";
 const PRICE_CURRENCY_TTL_MS = 10 * 60 * 1000;
-const LIVE_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 export type CreateCheckoutResult =
 	| { ok: true; clientSecret: string }
@@ -75,16 +75,12 @@ async function planCurrencies(environment: CheckoutEnvironment) {
 	return byPlan;
 }
 
-async function hasLiveProSubscription(customerId: string) {
+async function customerHasLiveProSubscription(customerId: string) {
 	const subscriptions = await checkoutStripe().subscriptions.list({
 		customer: customerId,
 		limit: 100,
 	});
-	return subscriptions.data.some(
-		(subscription) =>
-			isProSubscription(subscription) &&
-			LIVE_SUBSCRIPTION_STATUSES.has(subscription.status),
-	);
+	return hasLiveProSubscription(subscriptions.data);
 }
 
 export async function createProCheckout(input: {
@@ -121,7 +117,9 @@ export async function createProCheckout(input: {
 		const [customerId, alreadySubscribed, currencies, referralDiscount] =
 			await Promise.all([
 				customerLookup,
-				customerLookup.then((id) => (id ? hasLiveProSubscription(id) : false)),
+				customerLookup.then((id) =>
+					id ? customerHasLiveProSubscription(id) : false,
+				),
 				planCurrencies(environment),
 				user
 					? referralDiscountForCheckout(user, referralClickId)

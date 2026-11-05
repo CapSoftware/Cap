@@ -35,6 +35,7 @@ vi.mock("@cap/utils", async (importOriginal) => {
 				create: vi.fn().mockResolvedValue({ id: "cus_new" }),
 				update: vi.fn().mockResolvedValue({ id: "cus_new" }),
 			},
+			subscriptions: { list: vi.fn().mockResolvedValue({ data: [] }) },
 			checkout: { sessions: { create: mocks.create } },
 		}),
 		userIsPro: vi.fn().mockReturnValue(false),

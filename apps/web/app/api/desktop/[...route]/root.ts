@@ -32,6 +32,7 @@ import {
 	referralDiscountMetadata,
 	referralDiscountParams,
 } from "@/lib/checkout/referral";
+import { hasLiveProSubscription } from "@/lib/checkout/subscriptions";
 import {
 	confirmedDesktopLogWebhookUrl,
 	createDesktopLogUpload,
@@ -609,7 +610,7 @@ app.post(
 
 		let customerId = user.stripeCustomerId;
 
-		if (user.stripeCustomerId === null) {
+		if (customerId === null) {
 			console.log(
 				"[POST] Checking for existing Stripe customer for email:",
 				user.email,
@@ -649,6 +650,14 @@ app.post(
 			customerId = customer.id;
 		}
 
+		const subscriptions = await stripe().subscriptions.list({
+			customer: customerId,
+			limit: 100,
+		});
+		if (hasLiveProSubscription(subscriptions.data)) {
+			return c.json({ error: true, subscription: true }, { status: 400 });
+		}
+
 		console.log("[POST] Creating checkout session");
 		const referralDiscount = await referralDiscountLookup;
 		const redirects = getCheckoutRedirectUrls(
@@ -659,7 +668,7 @@ app.post(
 			referralDiscount,
 			(discount) =>
 				stripe().checkout.sessions.create({
-					customer: customerId as string,
+					customer: customerId,
 					line_items: [{ price: priceId, quantity: 1 }],
 					mode: "subscription",
 					success_url: redirects.successUrl,

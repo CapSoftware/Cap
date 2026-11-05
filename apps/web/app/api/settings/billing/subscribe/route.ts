@@ -13,6 +13,7 @@ import {
 	referralDiscountMetadata,
 	referralDiscountParams,
 } from "@/lib/checkout/referral";
+import { hasLiveProSubscription } from "@/lib/checkout/subscriptions";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
@@ -84,6 +85,17 @@ export async function POST(request: NextRequest) {
 				request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
 			),
 		]);
+
+		const subscriptions = await stripe().subscriptions.list({
+			customer: customerId,
+			limit: 100,
+		});
+		if (hasLiveProSubscription(subscriptions.data)) {
+			return Response.json(
+				{ error: true, subscription: true },
+				{ status: 400 },
+			);
+		}
 
 		const checkoutSession = await createWithReferralDiscount(
 			referralDiscount,

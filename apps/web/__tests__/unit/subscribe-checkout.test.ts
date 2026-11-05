@@ -5,6 +5,7 @@ import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
+	listSubscriptions: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
 	getCurrentUser: vi.fn(),
 	dbUpdate: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("@cap/utils", async (importOriginal) => {
 				create: vi.fn().mockResolvedValue({ id: "cus_new" }),
 				update: vi.fn().mockResolvedValue({ id: "cus_new" }),
 			},
+			subscriptions: { list: checkoutMocks.listSubscriptions },
 			checkout: {
 				sessions: { create: checkoutMocks.create },
 			},
@@ -122,6 +124,8 @@ describe("POST /api/settings/billing/subscribe", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		checkoutMocks.env = { WEB_URL: "https://cap.so" };
+		checkoutMocks.listSubscriptions.mockReset();
+		checkoutMocks.listSubscriptions.mockResolvedValue({ data: [] });
 		checkoutMocks.getCurrentUser.mockResolvedValue({
 			id: "user_123",
 			email: "user@example.test",
@@ -131,6 +135,73 @@ describe("POST /api/settings/billing/subscribe", () => {
 			id: "cs_test",
 			url: "https://pay.cap.so/session",
 		});
+	});
+
+	it.each(["active", "trialing", "past_due"])(
+		"rejects hosted checkout when Stripe already has a %s Pro subscription before local state syncs",
+		async (status) => {
+			checkoutMocks.listSubscriptions.mockResolvedValue({
+				data: [{ status, metadata: {} }],
+			});
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 1,
+					hosted: true,
+				}),
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error: true,
+				subscription: true,
+			});
+			expect(checkoutMocks.listSubscriptions).toHaveBeenCalledWith({
+				customer: "cus_123",
+				limit: 100,
+			});
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("does not open hosted checkout when the Stripe subscription check fails", async () => {
+		checkoutMocks.listSubscriptions.mockRejectedValue(
+			new Error("Stripe unavailable"),
+		);
+
+		const response = await subscribe(
+			makeSubscribeRequest({
+				priceId: STRIPE_PLAN_IDS.development.monthly,
+				quantity: 1,
+				hosted: true,
+			}),
+		);
+
+		expect(response.status).toBe(500);
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
+	});
+
+	it("allows hosted checkout after Pro ends or when only add-ons remain", async () => {
+		checkoutMocks.listSubscriptions.mockResolvedValue({
+			data: [
+				{ status: "canceled", metadata: {} },
+				{ status: "incomplete_expired", metadata: {} },
+				{ status: "active", metadata: { type: "signed_baa" } },
+				{ status: "active", metadata: { type: "saml_sso" } },
+			],
+		});
+
+		const response = await subscribe(
+			makeSubscribeRequest({
+				priceId: STRIPE_PLAN_IDS.development.monthly,
+				quantity: 1,
+				hosted: true,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.create).toHaveBeenCalledOnce();
 	});
 
 	it("rejects arbitrary price IDs with 400", async () => {
