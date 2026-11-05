@@ -90,12 +90,52 @@ async function checkFirewallRateLimit(
 	}
 }
 
-function clientAddress(headersList: Headers): string | undefined {
-	return (
-		headersList.get("x-real-ip")?.trim() ||
-		headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-		undefined
-	);
+// Vercel overwrites x-real-ip and x-forwarded-for with the connecting address.
+// Self-hosted proxies (nginx, Caddy, Traefik) append it to x-forwarded-for, so
+// there only the last entry comes from infrastructure. IPv6 is grouped by /64,
+// the block one host is normally assigned.
+export function rateLimitClientAddress(
+	headersList: Headers,
+): string | undefined {
+	const forwardedFor = headersList
+		.get("x-forwarded-for")
+		?.split(",")
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+	const realIp = headersList.get("x-real-ip")?.trim();
+	const address =
+		process.env.VERCEL === "1"
+			? realIp || forwardedFor?.[0]
+			: forwardedFor?.at(-1) || realIp;
+	return address ? clientNetwork(address) : undefined;
+}
+
+const IPV6_GROUP = /^[0-9a-f]{1,4}$/;
+const IPV4_MAPPED_IPV6 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
+
+function clientNetwork(address: string): string {
+	const value = address.toLowerCase();
+	if (!value.includes(":")) return value;
+
+	const mappedIpv4 = value.match(IPV4_MAPPED_IPV6)?.[1];
+	if (mappedIpv4) return mappedIpv4;
+
+	const halves = value.split("::");
+	if (halves.length > 2) return value;
+	const head = halves[0] ? halves[0].split(":") : [];
+	const tail = halves[1] ? halves[1].split(":") : [];
+	const elided = halves.length === 2 ? 8 - head.length - tail.length : 0;
+	if (elided < 0 || (halves.length === 2 && elided === 0)) return value;
+
+	const groups = [...head, ...Array<string>(elided).fill("0"), ...tail];
+	if (groups.length !== 8 || !groups.every((group) => IPV6_GROUP.test(group)))
+		return value;
+
+	const network = groups
+		.slice(0, 4)
+		.map((group) => group.replace(/^0+(?=.)/, ""))
+		.join(":");
+	return `${network}::/64`;
 }
 
 /**
@@ -186,11 +226,10 @@ const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
 	windowMs: MINUTE_MS,
 };
 
-// Keyless requests also count against one bucket per rule, sized as a multiple
-// of the per-client limit. It catches callers with no client address (a proxy
-// that forwards none) and, off Vercel, callers that rotate x-real-ip or
-// x-forwarded-for themselves, without letting one client lock out a whole
-// self-hosted deploy.
+// Off Vercel the app may be reached without a proxy, where every forwarded
+// address is client-supplied, so keyless requests there also share one bucket
+// per rule. A client behind a proxy cannot change the last forwarded entry, so
+// it reaches its own limit before adding more than a tenth of that bucket.
 const SHARED_LIMIT_MULTIPLIER = 10;
 const MAX_LOCAL_BUCKETS = 10_000;
 const LOCAL_BUCKET_SWEEP_INTERVAL_MS = 10_000;
@@ -213,7 +252,7 @@ async function isLocallyRateLimited(
 		);
 	}
 
-	const address = clientAddress(headersList);
+	const address = rateLimitClientAddress(headersList);
 	if (address) {
 		const addressLimited = countLocalRequest(
 			`${ruleId}|ip|${await compactBucketKey(address)}`,
