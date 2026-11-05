@@ -16,6 +16,7 @@ import {
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
+import { getLoomImportSignalToken } from "@/lib/loom-import-signal-token";
 import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
 import {
 	MEDIA_INPUT_POLICY_ERROR_CODE,
@@ -121,6 +122,28 @@ export async function POST(request: NextRequest) {
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
 		const payload = body as ProgressWebhookPayload;
+		const signalToken = request.nextUrl.searchParams.get("signal");
+		if (signalToken !== null) {
+			const [video] = await db()
+				.select({ metadata: videos.metadata })
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+			const run = video?.metadata?.loomImportRun;
+			const dispatch = run?.mediaDispatch;
+			if (
+				!run ||
+				run.dispatch === "rejected" ||
+				!dispatch ||
+				dispatch.state === "rejected" ||
+				dispatch.videoId !== payload.videoId ||
+				!dispatch.attemptId.startsWith(`${run.runId}:`) ||
+				signalToken !==
+					getLoomImportSignalToken(payload.videoId, dispatch.attemptId) ||
+				(dispatch.jobId && dispatch.jobId !== payload.jobId)
+			) {
+				return NextResponse.json({ success: true });
+			}
+		}
 		const isInputPolicyViolation =
 			payload.phase === "error" &&
 			payload.errorCode === MEDIA_INPUT_POLICY_ERROR_CODE;
@@ -407,7 +430,7 @@ export async function POST(request: NextRequest) {
 
 		if (dbPhase === "complete" || dbPhase === "error")
 			await signalLoomImportFinished(
-				request.nextUrl.searchParams.get("signal"),
+				signalToken,
 				payload.videoId,
 				payload.phase,
 			);
