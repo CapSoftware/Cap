@@ -15,6 +15,22 @@ const mocks = vi.hoisted(() => ({
 	lookup: vi.fn(),
 	collection: null as PublicCollection | null,
 	pageData: vi.fn<() => Promise<PublicCollectionPageData | null>>(),
+	resetRequestCache: [] as (() => void)[],
+}));
+
+vi.mock("react", async (importOriginal) => ({
+	...(await importOriginal<typeof import("react")>()),
+	cache: <T>(load: (hostname: string) => T) => {
+		const values = new Map<string, T>();
+		mocks.resetRequestCache.push(() => values.clear());
+		return (hostname: string) => {
+			const cached = values.get(hostname);
+			if (cached !== undefined) return cached;
+			const value = load(hostname);
+			values.set(hostname, value);
+			return value;
+		};
+	},
 }));
 
 vi.mock("@cap/database", () => ({
@@ -71,6 +87,7 @@ const props = () => ({
 });
 
 beforeEach(() => {
+	for (const reset of mocks.resetRequestCache) reset();
 	mocks.host = "videos.customer.example";
 	mocks.organizations = [{ id: "domain-org", domainVerified: new Date() }];
 	mocks.collection = {
@@ -102,6 +119,49 @@ beforeEach(() => {
 				}
 			: null,
 	);
+});
+
+describe("collection domain lookup caching", () => {
+	it.each([
+		["a verified host", [{ id: "domain-org", domainVerified: new Date() }]],
+		["an unknown host", []],
+		["an unverified host", [{ id: "domain-org", domainVerified: null }]],
+	] as const)(
+		"shares one lookup for %s across metadata and page",
+		async (_label, organizations) => {
+			if (!mocks.collection) throw new Error("Missing fixture");
+			mocks.collection.organizationId =
+				Organisation.OrganisationId.make("domain-org");
+			mocks.organizations = [...organizations];
+			await Promise.all([
+				generateMetadata(props()),
+				PublicCollectionPage(props()),
+			]);
+			expect(mocks.lookup).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("checks each hostname separately", async () => {
+		if (!mocks.collection) throw new Error("Missing fixture");
+		mocks.collection.organizationId =
+			Organisation.OrganisationId.make("domain-org");
+		await expect(generateMetadata(props())).resolves.toBeTruthy();
+		mocks.host = "videos.other.example";
+		mocks.organizations = [{ id: "other-org", domainVerified: new Date() }];
+		await expect(PublicCollectionPage(props())).rejects.toThrow("REDIRECT");
+		expect(mocks.lookup).toHaveBeenCalledTimes(2);
+	});
+
+	it("rechecks domain ownership on a new request", async () => {
+		if (!mocks.collection) throw new Error("Missing fixture");
+		mocks.collection.organizationId =
+			Organisation.OrganisationId.make("domain-org");
+		await expect(generateMetadata(props())).resolves.toBeTruthy();
+		for (const reset of mocks.resetRequestCache) reset();
+		mocks.organizations = [{ id: "other-org", domainVerified: new Date() }];
+		await expect(PublicCollectionPage(props())).rejects.toThrow("REDIRECT");
+		expect(mocks.lookup).toHaveBeenCalledTimes(2);
+	});
 });
 
 describe.each([

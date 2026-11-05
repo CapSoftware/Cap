@@ -3,6 +3,7 @@ import { organizations, videos } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
+import { cache } from "react";
 import { videoBelongsToOrganization } from "@/lib/cap-analytics-access";
 import type { PublicCollection } from "@/lib/public-collections";
 
@@ -89,7 +90,7 @@ export const resolveShareWebUrl = async (
 	}
 };
 
-const findVerifiedDomainOrganization = async (hostname: string) => {
+const findVerifiedDomainOrganization = cache(async (hostname: string) => {
 	const [organization] = await db()
 		.select({
 			id: organizations.id,
@@ -100,7 +101,7 @@ const findVerifiedDomainOrganization = async (hostname: string) => {
 		.limit(1);
 
 	return organization?.domainVerified ? organization : null;
-};
+});
 
 const mainOriginUrl = (
 	path: string,
