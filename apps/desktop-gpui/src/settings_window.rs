@@ -3687,7 +3687,7 @@ impl SettingsWindow {
             .find(|(value, _)| *value == settings.max_fps)
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
-        let zoom = settings.default_zoom_amount.unwrap_or(1.5);
+        let zoom = settings.new_zoom_amount();
 
         self.section(
             tr::settings::general::recording::title(),
@@ -4973,7 +4973,7 @@ impl SettingsWindow {
                     this.slider_dragging = false;
                     // `onChangeEnd` -- the store write happens once, at the
                     // end of the drag.
-                    let value = this.settings.default_zoom_amount.unwrap_or(1.5);
+                    let value = this.settings.new_zoom_amount();
                     this.write(
                         "defaultZoomAmount",
                         Value::from(f64::from(ui::snap_to_step(value, ZOOM_MIN, ZOOM_MAX, 0.1))),
