@@ -234,7 +234,6 @@ fn render_chunk<F: FnMut(u32) -> bool + Send + 'static>(
                     Some(frames),
                     None,
                     None,
-                    true,
                     {
                         let progress = progress.clone();
                         move |frame| {
@@ -853,11 +852,12 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
     let output_path = base.output_path.clone();
     let mut streaming_audio = base.streaming_audio.take();
     let audio_control = base.audio_cancellation.take();
-    let temporary_output = match base.streaming_output.take() {
-        Some(staged) => Some(staged),
-        None => crate::prepare_new_output(&base.output_path).ok().flatten(),
-    }
-    .map(Arc::new);
+    let replace_output =
+        base.streaming_output.is_none() && std::fs::symlink_metadata(&output_path).is_ok();
+    let temporary_output = Arc::new(match base.streaming_output.take() {
+        Some(staged) => staged,
+        None => temporary_export_output(&output_path)?,
+    });
     let user_cancellation = base.user_cancellation.clone();
     let stop = audio_control
         .as_ref()
@@ -994,10 +994,7 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
         later_chunks.push((frames.start, result_rx));
     }
 
-    let encoder_output_path = temporary_output
-        .as_ref()
-        .map(|path| path.to_path_buf())
-        .unwrap_or_else(|| output_path.clone());
+    let encoder_output_path = temporary_output.to_path_buf();
     let stitch_input = StitchInput {
         path: encoder_output_path,
         settings: encoder_settings,
@@ -1073,12 +1070,14 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
             "Turbo export stopped before it finished".to_string(),
         ));
     }
-    if let Some(temporary_output) = temporary_output {
-        Arc::try_unwrap(temporary_output)
-            .map_err(|_| TurboError::Failed("Export output is still in use".to_string()))?
-            .persist_noclobber(&output_path)
-            .map_err(|error| TurboError::Publish(error.to_string()))?;
+    let temporary_output = Arc::try_unwrap(temporary_output)
+        .map_err(|_| TurboError::Failed("Export output is still in use".to_string()))?;
+    if replace_output {
+        temporary_output.persist_replace(&output_path)
+    } else {
+        temporary_output.persist_noclobber(&output_path)
     }
+    .map_err(|error| TurboError::Publish(error.to_string()))?;
     drop(audio_control);
     Ok(output_path)
 }

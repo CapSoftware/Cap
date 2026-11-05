@@ -241,9 +241,8 @@ impl Mp4ExportSettings {
             Err(turbo::TurboError::Failed(error)) => {
                 warn!(%error, "Turbo export failed, exporting with the standard pipeline");
                 base.reopen_streaming(user_cancellation).await?;
-                // Turbo staged its output, but a standard export that is not
-                // staged writes in place and would truncate a file created
-                // at the destination meanwhile.
+                // Fallback prepares its output again, so a destination created
+                // while Turbo ran must not become an allowed replacement.
                 if destination_was_free
                     && base.streaming_output.is_none()
                     && destination_exists(&base.output_path)
@@ -457,7 +456,12 @@ impl Mp4ExportSettings {
         let audio_control = base.audio_cancellation.take();
         let audio_cancellation = audio_control.as_ref().map(|control| control.stop.clone());
         let user_cancellation = audio_control.as_ref().map(|control| control.user.clone());
-        let temporary_output = base.streaming_output.take().map(Arc::new);
+        let replace_output =
+            base.streaming_output.is_none() && std::fs::symlink_metadata(&output_path).is_ok();
+        let temporary_output = Arc::new(match base.streaming_output.take() {
+            Some(staged) => staged,
+            None => temporary_export_output(&output_path)?,
+        });
         let unused_audio = streaming_audio
             .as_mut()
             .and_then(|audio| audio.take_unused_sources(&base.project_config));
@@ -479,10 +483,7 @@ impl Mp4ExportSettings {
             });
             (task, abort, failure)
         });
-        let encoder_output_path = temporary_output
-            .as_ref()
-            .map(|path| path.to_path_buf())
-            .unwrap_or_else(|| output_path.clone());
+        let encoder_output_path = temporary_output.to_path_buf();
         let meta = &base.studio_meta;
 
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<ExportFrame>(4);
@@ -816,7 +817,6 @@ impl Mp4ExportSettings {
             base.sample_windows.clone(),
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
-            audio_cancellation.is_some(),
             on_progress,
             base.sample_windows
                 .is_none()
@@ -866,16 +866,20 @@ impl Mp4ExportSettings {
             {
                 return Err("Export cancelled".to_string());
             }
-            if let Some(temporary_output) = temporary_output {
-                Arc::try_unwrap(temporary_output)
-                    .map_err(|_| "Export output is still in use".to_string())?
-                    .persist_noclobber(&output_path)
-                    .map_err(|error| error.to_string())?;
-            }
         } else {
-            tokio::try_join!(encoder_thread, render_video_task)
-                .map_err(Mp4PipelineError::message)?;
+            let (encoder_result, render_result) = tokio::join!(encoder_thread, render_video_task);
+            encoder_result.map_err(Mp4PipelineError::message)?;
+            render_result.map_err(Mp4PipelineError::message)?;
         }
+
+        let temporary_output = Arc::try_unwrap(temporary_output)
+            .map_err(|_| "Export output is still in use".to_string())?;
+        if replace_output {
+            temporary_output.persist_replace(&output_path)
+        } else {
+            temporary_output.persist_noclobber(&output_path)
+        }
+        .map_err(|error| error.to_string())?;
 
         Ok(output_path)
     }
@@ -1639,7 +1643,6 @@ async fn export_render_to_channel(
     frame_windows: Option<cap_rendering::FrameWindows>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
-    stop_on_encoder_drop: bool,
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     screenshot_project_path: Option<PathBuf>,
 ) -> Result<(), cap_rendering::RenderingError> {
@@ -1735,12 +1738,9 @@ async fn export_render_to_channel(
                 encoder_blocked += send_started.elapsed();
                 if sent.is_err() {
                     warn!("Encoder dropped, stopping render forwarding");
-                    if stop_on_encoder_drop {
-                        return Err(cap_rendering::RenderingError::ImageLoadError(
-                            "Export cancelled".to_string(),
-                        ));
-                    }
-                    break;
+                    return Err(cap_rendering::RenderingError::ImageLoadError(
+                        "Export cancelled".to_string(),
+                    ));
                 }
 
                 frame_count += 1;
