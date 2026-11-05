@@ -108,7 +108,7 @@ By default, login links are printed to the server logs. To send emails:
 
 ## Media Server Tuning
 
-The media server converts uploads in parallel based on the CPUs it can use: half the available CPUs, at least 1 and at most 4. It still turns work away when CPU or memory pressure is high. The CPU quota and assigned CPU set both limit this default. To override it in the bundled Compose deployments, add these values to `.env` (the media-server service forwards them):
+The media server allows one direct video conversion at a time by default. It still turns work away when CPU or memory pressure is high. To raise the limit after measuring CPU and memory usage on your deployment, add these values to `.env` in the bundled Compose deployments (the media-server service forwards them):
 
 ```bash
 MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS=2   # direct /video/convert requests
