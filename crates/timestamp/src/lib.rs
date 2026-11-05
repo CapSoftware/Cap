@@ -208,7 +208,12 @@ mod tests {
     #[test]
     fn duration_since_saturates_to_zero_when_the_clock_stepped_backwards() {
         let reference = reference();
-        let instant = Timestamp::Instant(reference.instant - Duration::from_secs(1));
+        let instant = Timestamp::Instant(
+            reference
+                .instant
+                .checked_sub(Duration::from_secs(1))
+                .expect("reference supports subtraction"),
+        );
         let system_time = Timestamp::SystemTime(reference.system_time - Duration::from_secs(1));
 
         assert_eq!(instant.duration_since(reference), Duration::ZERO);
