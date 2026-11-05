@@ -9,8 +9,12 @@ export class PhotosPermissionDeniedError extends Error {
 	}
 }
 
-const safeFileName = (fileName: string) =>
-	fileName.replace(/[^\w.\- ]+/g, "").trim() || "Cap.mp4";
+const safeFileName = (fileName: string) => {
+	const name = fileName.replace(/[^\w.\- ]+/g, "").trim();
+	return !name || name === "." || name === ".." ? "Cap.mp4" : name;
+};
+
+let downloadSequence = 0;
 
 export const saveCapVideoToPhotos = async (
 	client: MobileApiClient,
@@ -20,14 +24,23 @@ export const saveCapVideoToPhotos = async (
 	if (!permission.granted) throw new PhotosPermissionDeniedError();
 
 	const download = await client.getDownload(capId);
-	const target = `${FileSystem.documentDirectory}${safeFileName(
-		download.fileName,
-	)}`;
-	const result = await FileSystem.downloadAsync(download.url, target);
+	const directory = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+	if (!directory) throw new Error("Temporary download storage is unavailable");
+	const temporaryDirectory = `${directory}cap-download-${Date.now()}-${downloadSequence++}/`;
+	const target = `${temporaryDirectory}${safeFileName(download.fileName)}`;
 	try {
+		await FileSystem.makeDirectoryAsync(temporaryDirectory, {
+			intermediates: true,
+		});
+		const result = await FileSystem.downloadAsync(download.url, target);
+		if (result.status < 200 || result.status >= 300) {
+			throw new Error(`Video download failed: HTTP ${result.status}`);
+		}
 		await MediaLibrary.saveToLibraryAsync(result.uri);
 	} finally {
-		await FileSystem.deleteAsync(result.uri, { idempotent: true });
+		await FileSystem.deleteAsync(temporaryDirectory, {
+			idempotent: true,
+		}).catch(() => {});
 	}
 
 	return download.fileName;

@@ -63,6 +63,7 @@ export async function observeDesktopRecordingJob({
 			{
 				headers,
 				signal: AbortSignal.timeout(10_000),
+				redirect: "error",
 			},
 		);
 		if (!response.ok) return unavailable;
@@ -93,6 +94,7 @@ export async function observeDesktopRecordingJob({
 			headers: { ...headers, "Content-Type": "application/json" },
 			body: JSON.stringify(job.data),
 			signal: AbortSignal.timeout(30_000),
+			redirect: "error",
 		});
 		if (!delivered.ok || !job.data.recordingWorker) {
 			return { status: "terminal", delivered: delivered.ok };

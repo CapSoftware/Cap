@@ -7,6 +7,7 @@ pub(super) fn is_editor_panels_surface_key(key: &str) -> bool {
         "editor.color.",
         "editor.audio.",
         "editor.crop.",
+        "editor.shape.",
     ]
     .iter()
     .any(|prefix| key.starts_with(prefix))
@@ -22,6 +23,7 @@ const FORMATTED: &[&str] = &[
     "editor.panel.mask.title",
     "editor.panel.mask.tracking_progress",
     "editor.panel.mask.pick_point",
+    "editor.shape.title",
     "editor.panel.camera3d.shots",
     "editor.panel.camera3d.pose_start",
     "editor.panel.camera3d.pose_end",
@@ -32,6 +34,16 @@ const FORMATTED: &[&str] = &[
     "editor.crop.hint",
     "editor.crop.editing_style",
     "editor.crop.editing_style_override",
+    "editor.panel.style_presets.delete_confirm",
+    "editor.panel.style_presets.font_missing",
+    "editor.panel.style_presets.mask.applied_all",
+    "editor.panel.style_presets.mask.apply_all",
+    "editor.panel.style_presets.shape.applied_all",
+    "editor.panel.style_presets.shape.apply_all",
+    "editor.panel.style_presets.style.applied_all",
+    "editor.panel.style_presets.style.apply_all",
+    "editor.panel.style_presets.text_segment.applied_all",
+    "editor.panel.style_presets.text_segment.apply_all",
 ];
 
 #[test]
@@ -820,6 +832,173 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::crop::full(), "Full"),
         (tr::editor::crop::loading_frame(), "Loading frame…"),
         (tr::editor::crop::rendering_preview(), "Rendering preview…"),
+        (
+            tr::editor::panel::style_presets::apply(),
+            "Apply",
+        ),
+        (
+            tr::editor::panel::style_presets::create(),
+            "Save",
+        ),
+        (
+            tr::editor::panel::style_presets::create_title(),
+            "Save Style Preset",
+        ),
+        (
+            tr::editor::panel::style_presets::custom(),
+            "Custom style",
+        ),
+        (
+            tr::editor::panel::style_presets::default_badge(),
+            "Default",
+        ),
+        (
+            tr::editor::panel::style_presets::delete(),
+            "Delete",
+        ),
+        (
+            tr::editor::panel::style_presets::delete_title(),
+            "Delete Style Preset",
+        ),
+        (
+            tr::editor::panel::style_presets::empty(),
+            "No saved presets yet",
+        ),
+        (
+            tr::editor::panel::style_presets::empty_help(),
+            "Save a style to reuse it in any project.",
+        ),
+        (
+            tr::editor::panel::style_presets::move_down(),
+            "Move down",
+        ),
+        (
+            tr::editor::panel::style_presets::move_up(),
+            "Move up",
+        ),
+        (
+            tr::editor::panel::style_presets::remove_default(),
+            "Remove as default",
+        ),
+        (
+            tr::editor::panel::style_presets::rename(),
+            "Rename",
+        ),
+        (
+            tr::editor::panel::style_presets::rename_title(),
+            "Rename Style Preset",
+        ),
+        (
+            tr::editor::panel::style_presets::save(),
+            "Save style as preset",
+        ),
+        (
+            tr::editor::panel::style_presets::save_failed(),
+            "Couldn't save presets. Cap can't write its settings file.",
+        ),
+        (
+            tr::editor::panel::style_presets::set_default(),
+            "Set as default",
+        ),
+        (
+            tr::editor::panel::style_presets::tooltip(),
+            "Style presets",
+        ),
+        (
+            tr::editor::panel::style_presets::update(),
+            "Update with current style",
+        ),
+        (
+            tr::editor::panel::style_presets::captions::default_name(),
+            "My caption style",
+        ),
+        (
+            tr::editor::panel::style_presets::captions::use_for_new(),
+            "Use for new captions",
+        ),
+        (
+            tr::editor::panel::style_presets::captions::used_for_new(),
+            "New captions use this style",
+        ),
+        (
+            tr::editor::panel::style_presets::mask::default_name(),
+            "My mask style",
+        ),
+        (
+            tr::editor::panel::style_presets::mask::use_for_new(),
+            "Use for new masks",
+        ),
+        (
+            tr::editor::panel::style_presets::mask::used_for_new(),
+            "New masks use this style",
+        ),
+        (
+            tr::editor::panel::style_presets::style::default_name(),
+            "My style",
+        ),
+        (
+            tr::editor::panel::style_presets::style::use_for_new(),
+            "Use for new style segments",
+        ),
+        (
+            tr::editor::panel::style_presets::style::used_for_new(),
+            "New style segments use this style",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::default_name(),
+            "My shape style",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::use_for_new(),
+            "Use for new shapes",
+        ),
+        (
+            tr::editor::panel::style_presets::shape::used_for_new(),
+            "New shapes use this style",
+        ),
+        (
+            tr::editor::panel::style_presets::text_segment::default_name(),
+            "My text style",
+        ),
+        (
+            tr::editor::panel::style_presets::text_segment::use_for_new(),
+            "Use for new text",
+        ),
+        (
+            tr::editor::panel::style_presets::text_segment::used_for_new(),
+            "New text uses this style",
+        ),
+        (tr::editor::shape::stroke(), "Stroke"),
+        (tr::editor::shape::width(), "Width"),
+        (tr::editor::shape::fill(), "Fill"),
+        (tr::editor::shape::fill_opacity(), "Fill Opacity"),
+        (tr::editor::shape::corner_radius(), "Corner Radius"),
+        (tr::editor::shape::arrowhead(), "Arrowhead"),
+        (tr::editor::shape::number(), "Number"),
+        (tr::editor::shape::look(), "Look"),
+        (tr::editor::shape::shadow(), "Shadow"),
+        (tr::editor::shape::animation(), "Animation"),
+        (tr::editor::shape::draw(), "Draw a shape"),
+        (tr::editor::shape::toolbar(), "Shapes"),
+        (
+            tr::editor::shape::draw_hint(),
+            "Drag on the preview to draw. Click to place one.",
+        ),
+        (tr::editor::shape::decrease(), "Decrease"),
+        (tr::editor::shape::increase(), "Increase"),
+        (tr::editor::shape::kinds::arrow(), "Arrow"),
+        (tr::editor::shape::kinds::line(), "Line"),
+        (tr::editor::shape::kinds::rectangle(), "Rectangle"),
+        (tr::editor::shape::kinds::ellipse(), "Ellipse"),
+        (tr::editor::shape::kinds::highlight(), "Highlight"),
+        (tr::editor::shape::kinds::badge(), "Step"),
+        (tr::editor::shape::heads::filled(), "Filled"),
+        (tr::editor::shape::heads::open(), "Open"),
+        (tr::editor::shape::heads::double(), "Double"),
+        (tr::editor::shape::animations::none(), "None"),
+        (tr::editor::shape::animations::fade(), "Fade"),
+        (tr::editor::shape::animations::scale(), "Scale"),
+        (tr::editor::shape::animations::draw(), "Draw on"),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -837,6 +1016,50 @@ fn editor_panels_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+}
+
+#[test]
+fn style_preset_messages_format_their_arguments() {
+    assert_eq!(
+        tr::editor::panel::style_presets::delete_confirm("Lower third"),
+        "Delete \"Lower third\"? Items that already use this style keep it."
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::font_missing("Inter", "System Sans"),
+        "Inter is not installed on this computer, so System Sans is used instead."
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::text_segment::apply_all(4),
+        "Apply to all text segments (4)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::text_segment::applied_all(4),
+        "Applied to all text segments (4)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::mask::apply_all(2),
+        "Apply to all masks (2)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::mask::applied_all(2),
+        "Applied to all masks (2)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::style::apply_all(3),
+        "Apply to all style segments (3)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::style::applied_all(3),
+        "Applied to all style segments (3)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::apply_all(5),
+        "Apply to all shapes (5)"
+    );
+    assert_eq!(
+        tr::editor::panel::style_presets::shape::applied_all(5),
+        "Applied to all shapes (5)"
+    );
 }
 
 #[test]
@@ -874,6 +1097,10 @@ fn editor_panel_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::panel::mask::pick_point(number),
             format!("Click point {} of 4", index + 1)
+        );
+        assert_eq!(
+            tr::editor::shape::title(number),
+            format!("Shape {}", index + 1)
         );
         assert_eq!(
             tr::editor::crop::editing_style(number),

@@ -38,6 +38,7 @@ import {
 	planFillerCuts,
 	planTranscriptCut,
 } from "@/lib/edit-transcript";
+import { formatClock } from "@/lib/player-time";
 import { useActiveTranscriptWordIndex } from "./use-active-transcript-word-index";
 
 type TranscriptResponse = Awaited<ReturnType<typeof getEditTranscript>>;
@@ -60,13 +61,6 @@ const SKELETON_LINE_WIDTHS = [
 	["w-full", "w-3/4"],
 	["w-10/12", "w-1/2"],
 ];
-
-function formatTimestamp(milliseconds: number) {
-	const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
 
 function isTimeKept(timeMs: number, keepRanges: readonly VideoEditRange[]) {
 	const timeSeconds = timeMs / 1000;
@@ -155,10 +149,10 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
 			<button
 				type="button"
 				onClick={() => onSeek(group.startIndex)}
-				title={`Play from ${formatTimestamp(group.startMs)}`}
+				title={`Play from ${formatClock(group.startMs / 1000)}`}
 				className="w-9 shrink-0 text-left font-mono text-[10px] leading-none tabular-nums text-gray-8 transition-colors hover:text-blue-500"
 			>
-				{formatTimestamp(group.startMs)}
+				{formatClock(group.startMs / 1000)}
 			</button>
 			<p className="min-w-0 flex-1 select-none text-[13.5px] leading-[26px] text-gray-11">
 				{words
@@ -643,7 +637,7 @@ export function TranscriptSidebar({
 							Transcript
 						</h2>
 						<p className="mt-0.5 text-[11px] tabular-nums text-gray-9">
-							{formatTimestamp(transcript.durationMs)} ·{" "}
+							{formatClock(transcript.durationMs / 1000)} ·{" "}
 							{transcript.words.length} words
 						</p>
 					</div>

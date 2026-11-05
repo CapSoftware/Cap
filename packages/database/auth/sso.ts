@@ -237,25 +237,34 @@ export async function provisionSsoMembership(
 				),
 			)
 			.limit(1);
+		const pendingInvites = and(
+			eq(organizationInvites.organizationId, identity.organizationId),
+			eq(organizationInvites.invitedEmail, identity.email),
+			eq(organizationInvites.status, "pending"),
+		);
 		if (!member) {
+			const [adminInvite] = await tx
+				.select({ id: organizationInvites.id })
+				.from(organizationInvites)
+				.where(and(pendingInvites, eq(organizationInvites.role, "admin")))
+				.for("update");
 			await tx.insert(organizationMembers).values({
 				id: nanoId(),
 				userId,
 				organizationId: identity.organizationId,
-				role: organization.ownerId === userId ? "owner" : "member",
+				role:
+					organization.ownerId === userId
+						? "owner"
+						: adminInvite
+							? "admin"
+							: "member",
 				hasProSeat: false,
 			});
 		}
 		await tx
 			.update(organizationInvites)
 			.set({ status: "accepted" })
-			.where(
-				and(
-					eq(organizationInvites.organizationId, identity.organizationId),
-					eq(organizationInvites.invitedEmail, identity.email),
-					eq(organizationInvites.status, "pending"),
-				),
-			);
+			.where(pendingInvites);
 		await tx
 			.update(users)
 			.set({

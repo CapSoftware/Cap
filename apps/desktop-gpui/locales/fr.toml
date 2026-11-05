@@ -206,6 +206,10 @@ fps_30 = "30 i/s"
 fps_60 = "60 i/s (recommandé)"
 label = "Fréquence d'images maximale"
 
+[settings.general.recording.marker_sound]
+description = "Émet un son bref lorsque vous ajoutez un repère pendant un enregistrement Studio. Votre micro ou le son du système peuvent l'enregistrer."
+label = "Émettre un son pour les repères"
+
 [settings.general.storage]
 choose_folder = "Choisir un dossier"
 default_location = "Par défaut (Application Support)"
@@ -382,6 +386,8 @@ quarter = "Quart"
 
 [settings.shortcuts]
 blocked_while_recording = "Impossible de modifier les raccourcis tant que cet enregistrement utilise sa touche d'arrêt. Arrêtez d'abord l'enregistrement."
+cancelling_description = "Pour les captures et les enregistrements lancés depuis un raccourci ou l'icône de Cap."
+cancelling_title = "Annulation"
 needs_modifier_macos = "Incluez ⌘, ⌃ ou ⌥ pour que le raccourci ne gêne pas la saisie."
 needs_modifier_other = "Incluez Ctrl, Alt ou Win pour que le raccourci ne gêne pas la saisie."
 record_shortcut = "Définir un raccourci"
@@ -409,7 +415,15 @@ title = "Après un enregistrement Studio"
 hint = "Le lien de partage est toujours copié"
 title = "Après un enregistrement Instant"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc ou fermeture du sélecteur"
+title = "Quand vous annulez"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Afficher Cap"
+cancel_show_cap_hint = "Retour à l'enregistreur"
+cancel_stay_hidden = "Rester masqué"
+cancel_stay_hidden_hint = "Sauf si Cap était ouvert"
 instant_copy_link = "Copier le lien seulement"
 instant_copy_link_hint = "Rien ne s'ouvre"
 instant_open_link = "Ouvrir le lien"
@@ -431,6 +445,7 @@ studio_show_cap = "Afficher Cap"
 studio_show_cap_hint = "Retour à l'enregistreur"
 
 [settings.shortcuts.label]
+add_marker = "Ajouter un repère"
 cycle_mode = "Changer de mode d'enregistrement"
 fallback = "Raccourci"
 open_picker = "Ouvrir le sélecteur d'enregistrement"
@@ -447,6 +462,7 @@ start_studio = "Démarrer un enregistrement Studio"
 stop = "Arrêter l'enregistrement"
 
 [settings.shortcuts.effect]
+add_marker = "marquer ce moment dans un enregistrement Studio"
 cycle_mode = "passer d'un mode à l'autre : Studio, Instant et Capture d'écran"
 instant_copy = "enregistrer l'écran ou la fenêtre sélectionnés en mode Instant, puis copier le lien de partage à l'arrêt"
 instant_copy_and_open = "enregistrer l'écran ou la fenêtre sélectionnés en mode Instant, puis copier et ouvrir le lien de partage à l'arrêt"
@@ -479,6 +495,7 @@ studio = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio"
 studio_open_editor = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt"
 
 [settings.shortcuts.sentence]
+add_marker = "Marquer ce moment dans un enregistrement Studio."
 cycle_mode = "Passer d'un mode à l'autre : Studio, Instant et Capture d'écran."
 instant_copy = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Instant, puis copier le lien de partage à l'arrêt."
 instant_copy_and_open = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Instant, puis copier et ouvrir le lien de partage à l'arrêt."
@@ -1084,6 +1101,11 @@ segments = { one = "{count} segment", many = "{count} de segments", other = "{co
 segments_with_duration = { one = "{count} segment · {duration}", many = "{count} de segments · {duration}", other = "{count} segments · {duration}" }
 title = "Enregistrement incomplet"
 
+[main.recovery.error]
+nothing_saved = "Aucune vidéo n'a été enregistrée avant l'arrêt de cet enregistrement, il n'y a donc rien à récupérer. Ses fichiers se trouvent toujours dans {path}."
+rebuild_failed = "Cap n'a pas pu reconstruire cet enregistrement ({error}). Rien n'a été supprimé et les fichiers d'origine se trouvent dans {path}."
+storage = "L'espace libre est insuffisant pour récupérer cet enregistrement ({error}). Libérez de l'espace puis cliquez à nouveau sur Récupérer. Rien n'a été supprimé et les fichiers se trouvent dans {path}."
+
 [main.sign_in]
 message = "Le mode Instant met en ligne pendant l'enregistrement : votre lien de partage est prêt dès l'arrêt."
 not_now = "Pas maintenant"
@@ -1118,6 +1140,7 @@ window = "Fenêtre"
 [controls]
 disk_full_resume = "Espace disque insuffisant pour reprendre. Libérez de l'espace et réessayez, ou appuyez sur Arrêter pour enregistrer."
 low_storage = "Espace de stockage faible. Cap va bientôt s'arrêter pour préserver votre enregistrement."
+paused_for_sleep = "L'enregistrement a été mis en pause car votre Mac s'est mis en veille. Reprenez-le quand vous êtes prêt, ou cliquez sur Arrêter pour l'enregistrer."
 
 [controls.confirm]
 delete = "Supprimer"
@@ -1141,6 +1164,9 @@ pausing = "Pause…"
 resuming = "Reprise…"
 saving = "Arrêt…"
 starting = "Début"
+
+[controls.marker]
+add = "Ajouter un repère"
 
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
@@ -2000,6 +2026,62 @@ edit_cursor = "Modifier le curseur"
 help = "Les remplacements ne s'appliquent que pendant ce segment. Activez un groupe pour copier ses paramètres globaux."
 reset_crop = "Réinitialiser le recadrage"
 
+[editor.panel.style_presets]
+apply = "Appliquer"
+create = "Enregistrer"
+create_title = "Enregistrer le préréglage de style"
+custom = "Style personnalisé"
+default_badge = "Par défaut"
+delete = "Supprimer"
+delete_confirm = "Supprimer « {name} » ? Les éléments qui utilisent déjà ce style le conservent."
+delete_title = "Supprimer le préréglage de style"
+empty = "Aucun préréglage enregistré pour l'instant"
+empty_help = "Enregistrez un style pour le réutiliser dans n'importe quel projet."
+font_missing = "{font} n'est pas installée sur cet ordinateur, {fallback} est donc utilisée à la place."
+move_down = "Descendre"
+move_up = "Monter"
+remove_default = "Ne plus utiliser par défaut"
+rename = "Renommer"
+rename_title = "Renommer le préréglage de style"
+save = "Enregistrer le style comme préréglage"
+save_failed = "Impossible d'enregistrer les préréglages. Cap ne peut pas écrire son fichier de réglages."
+set_default = "Définir par défaut"
+tooltip = "Préréglages de style"
+update = "Mettre à jour avec le style actuel"
+
+[editor.panel.style_presets.captions]
+default_name = "Mon style de sous-titres"
+use_for_new = "Utiliser pour les nouveaux sous-titres"
+used_for_new = "Les nouveaux sous-titres utilisent ce style"
+
+[editor.panel.style_presets.mask]
+applied_all = "Appliqué à tous les masques ({number})"
+apply_all = "Appliquer à tous les masques ({number})"
+default_name = "Mon style de masque"
+use_for_new = "Utiliser pour les nouveaux masques"
+used_for_new = "Les nouveaux masques utilisent ce style"
+
+[editor.panel.style_presets.shape]
+applied_all = "Appliqué à toutes les formes ({number})"
+apply_all = "Appliquer à toutes les formes ({number})"
+default_name = "Mon style de forme"
+use_for_new = "Utiliser pour les nouvelles formes"
+used_for_new = "Les nouvelles formes utilisent ce style"
+
+[editor.panel.style_presets.style]
+applied_all = "Appliqué à tous les segments de style ({number})"
+apply_all = "Appliquer à tous les segments de style ({number})"
+default_name = "Mon style"
+use_for_new = "Utiliser pour les nouveaux segments de style"
+used_for_new = "Les nouveaux segments de style utilisent ce style"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "Appliqué à tous les segments de texte ({number})"
+apply_all = "Appliquer à tous les segments de texte ({number})"
+default_name = "Mon style de texte"
+use_for_new = "Utiliser pour le nouveau texte"
+used_for_new = "Le nouveau texte utilise ce style"
+
 [editor.panel.text_animation]
 bounce = "Rebond"
 fade = "Fondu"
@@ -2256,11 +2338,13 @@ purple = "Violet"
 [editor.canvas]
 camera = "Caméra"
 camera_follows_zoom = "La taille de la caméra suit le zoom ; faites glisser pour la déplacer"
+captions = "Sous-titres"
 edit_zoom = "Modifier le zoom"
 image = "Image"
 mask = "Masque"
 screen = "Écran"
 screen_locked = "L'écran est verrouillé tant qu'un zoom est actif"
+shape = "Forme"
 text_item = "Texte"
 
 [editor.clips]
@@ -2513,7 +2597,10 @@ language_label = "Langue"
 model_downloaded = "Modèle {model} téléchargé"
 model_label = "Modèle"
 position = "Position"
+refining_word_timings = "Affinage du minutage des mots…"
 regenerate = "Régénérer les sous-titres"
+reset_position = "Réinitialiser la position"
+show_filler_words = "Afficher les mots de remplissage"
 size_label = "Taille"
 style = "Style"
 text_color = "Couleur du texte"
@@ -2668,6 +2755,43 @@ system_sans_serif = "Sans-serif système"
 system_serif = "Serif système"
 system_monospace = "Monospace système"
 
+[editor.shape]
+title = "Forme {number}"
+stroke = "Contour"
+width = "Épaisseur"
+fill = "Remplissage"
+fill_opacity = "Opacité du remplissage"
+corner_radius = "Arrondi des coins"
+arrowhead = "Pointe de flèche"
+number = "Numéro"
+look = "Apparence"
+shadow = "Ombre"
+animation = "Animation"
+draw = "Dessiner une forme"
+toolbar = "Formes"
+draw_hint = "Faites glisser sur l’aperçu pour dessiner. Cliquez pour en placer une."
+decrease = "Diminuer"
+increase = "Augmenter"
+
+[editor.shape.kinds]
+arrow = "Flèche"
+line = "Ligne"
+rectangle = "Rectangle"
+ellipse = "Ellipse"
+highlight = "Surlignage"
+badge = "Étape"
+
+[editor.shape.heads]
+filled = "Pleine"
+open = "Ouverte"
+double = "Double"
+
+[editor.shape.animations]
+none = "Aucune"
+fade = "Fondu"
+scale = "Échelle"
+draw = "Tracé"
+
 [editor.timeline]
 add_shot = "Ajouter un plan"
 add_shot_with_look = "Ajouter un plan · {look} · {seconds} s"
@@ -2691,6 +2815,7 @@ keyboard = "Affichez les touches à l'écran pendant que vous tapez."
 mask = "Floutez ou noircissez les zones privées de l'écran."
 scene = "Alternez les dispositions entre votre écran et votre caméra."
 scene_unavailable = "Enregistrez avec une caméra pour utiliser les scènes."
+shape = "Dessinez des flèches, des cadres, des cercles et des surlignages sur votre enregistrement."
 style = "Modifiez l'arrière-plan, la caméra et le curseur au fil du temps."
 text_overlay = "Ajoutez des textes et des titres personnalisés sur le canevas."
 three_d = "Inclinez la scène en perspective 3D."
@@ -2704,6 +2829,7 @@ image = "Supprimer la piste Image."
 keyboard = "Supprimer la piste Clavier."
 mask = "Supprimer la piste Masque."
 scene = "Supprimer la piste Scène."
+shape = "Supprimer la piste Formes."
 style = "Supprimer la piste Style."
 text_track = "Supprimer la piste Texte."
 three_d = "Supprimer la piste 3D."
@@ -2737,10 +2863,64 @@ image = "Image"
 keyboard = "Clavier"
 mask = "Masque"
 scene = "Scène"
+shape = "Forme"
 style = "Style"
 text_track = "Texte"
 video = "Vidéo"
 zoom = "Zoom"
+
+[editor.transcript]
+cleanup = "Nettoyer"
+cleanup_tooltip = "Supprimer les mots de remplissage et raccourcir les pauses"
+delete_matches = "Tout supprimer"
+delete_matches_tooltip = "Couper chaque résultat de la vidéo"
+empty_description = "Transcrivez cet enregistrement sur cet ordinateur, puis modifiez la vidéo en modifiant son texte."
+empty_title = "Pas encore de transcription"
+hint = "Cliquez sur un mot pour y aller. Sélectionnez des mots et appuyez sur la touche Supprimer pour les couper de la vidéo."
+next_match = "Résultat suivant"
+no_audio = "Cet enregistrement n'a pas d'audio à transcrire."
+previous_match = "Résultat précédent"
+restore_blocked = "Cette partie a été coupée dans la timeline. Utilisez Annuler ou faites glisser le bord du clip pour la récupérer."
+restore_hint = { one = "Cliquez pour restaurer {count} mot", many = "Cliquez pour restaurer {count} de mots", other = "Cliquez pour restaurer {count} mots" }
+restore_transition = "Supprimez la transition à côté de cette coupe pour la restaurer."
+search = "Rechercher"
+search_count = "{current} sur {total}"
+search_none = "Aucun résultat"
+search_placeholder = "Rechercher dans la transcription"
+seconds = "{value} s"
+selection = { one = "{count} mot sélectionné, {seconds} s", many = "{count} de mots sélectionnés, {seconds} s", other = "{count} mots sélectionnés, {seconds} s" }
+selection_cut = { one = "{count} mot coupé sélectionné. Appuyez sur la touche Supprimer pour le restaurer.", many = "{count} de mots coupés sélectionnés. Appuyez sur la touche Supprimer pour les restaurer.", other = "{count} mots coupés sélectionnés. Appuyez sur la touche Supprimer pour les restaurer." }
+skipped_hold = { one = "{count} coupe ignorée, car une carte de texte plein écran fige cette image", many = "{count} de coupes ignorées, car des cartes de texte plein écran figent ces images", other = "{count} coupes ignorées, car des cartes de texte plein écran figent ces images" }
+skipped_last_clip = "Le dernier clip ne peut pas être coupé."
+skipped_transition = { one = "{count} coupe ignorée, car elle touche une transition", many = "{count} de coupes ignorées, car elles touchent des transitions", other = "{count} coupes ignorées, car elles touchent des transitions" }
+title = "Transcription"
+transcribe = "Transcrire"
+transcribing = "Transcription…"
+words = { one = "{count} mot", many = "{count} de mots", other = "{count} mots" }
+
+[editor.transcript.fillers]
+discourse = "Expressions de remplissage"
+discourse_hint = "like, you know, so"
+false_start = "Faux départs"
+false_start_hint = "we should, we need"
+hesitation = "Hésitations"
+hesitation_hint = "um, uh, hmm"
+keep = "Garder celui-ci"
+listen = "Écouter"
+none = "Plus de mots de remplissage dans ces catégories"
+remove = "Supprimer celui-ci"
+remove_all = { one = "Supprimer {count}", many = "Supprimer {count}", other = "Supprimer {count}" }
+repetition = "Mots répétés"
+repetition_hint = "the the, I I"
+title = "Mots de remplissage"
+
+[editor.transcript.pauses]
+apply = "Raccourcir"
+keep = "Raccourcir à"
+longer_than = "Pauses de plus de"
+none = "Aucune pause aussi longue"
+summary = { one = "{count} pause, gagne {seconds} s", many = "{count} de pauses, gagnent {seconds} s", other = "{count} pauses, gagnent {seconds} s" }
+title = "Pauses"
 
 [editor.window]
 audio_filter = "Audio"
@@ -2811,8 +2991,6 @@ split_hint = "Placez la tête de lecture dans ce clip"
 volume = "Volume"
 transition = "TRANSITION"
 transition_none = "Aucune"
-transition_crossfade = "Fondu enchaîné"
-transition_fade = "Fondu"
 transition_seconds = "{seconds} s"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2844,11 +3022,12 @@ window_title_placeholder = "Titre de la fenêtre"
 windows_description = "Barre de titre avec boutons de fenêtre"
 
 [editor.window.header]
-captions = "Sous-titres"
 delete_recording = "Supprimer l'enregistrement"
 export = "Exporter"
 open_bundle = "Ouvrir le dossier de l'enregistrement"
 presets = "Préréglages"
+transcript = "Transcription"
+transcript_tooltip = "Modifier via la transcription"
 
 [editor.window.image]
 changed = "Cette image a changé pendant le choix d'un remplacement. Sélectionnez-la et réessayez."
@@ -2907,9 +3086,29 @@ save_failed = "Impossible d'enregistrer le titre de l'enregistrement pour {path}
 clear_all = "Tout effacer"
 delete = "Supprimer"
 
+[editor.window.transition]
+title = "Transition"
+add = "Ajouter une transition"
+duration = "Durée"
+seconds_unit = "s"
+remove = "Supprimer la transition"
+cross_fade = "Fondu enchaîné"
+fade_through_black = "Fondu au noir"
+fade_through_white = "Fondu au blanc"
+push_left = "Pousser vers la gauche"
+push_right = "Pousser vers la droite"
+push_up = "Pousser vers le haut"
+push_down = "Pousser vers le bas"
+wipe_left = "Volet vers la gauche"
+wipe_right = "Volet vers la droite"
+wipe_up = "Volet vers le haut"
+wipe_down = "Volet vers le bas"
+zoom = "Zoom"
+
 [editor.window.transport]
 done_splitting = "Terminer la découpe"
 play_pause = "Lire/mettre en pause la vidéo"
+speed = "Vitesse de l'aperçu"
 split = "Couper"
 split_tooltip = "Cliquez sur un segment pour le couper. Échap pour terminer."
 zoom_in = "Zoom avant"
@@ -2920,6 +3119,21 @@ generate = "Générer"
 generating = "Génération…"
 no_clicks = "Aucun clic trouvé pour zoomer. Faites glisser sur la piste pour en ajouter un."
 prompt = "Ajouter des zooms automatiquement"
+
+[editor.markers]
+add = "Ajouter un repère"
+button = { one = "{count} repère", other = "{count} repères" }
+default_name = "Repère {number}"
+delete = "Supprimer le repère"
+done = "OK"
+edit = "Modifier le repère"
+empty = "Aucun repère pour l'instant. Appuyez sur M pour marquer la tête de lecture, ou ajoutez des repères pendant l'enregistrement."
+hidden = { one = "{count} repère se trouve dans une partie coupée.", other = "{count} repères se trouvent dans des parties coupées." }
+next = "Repère suivant"
+previous = "Repère précédent"
+split = "Couper les clips aux repères"
+stack = { one = "{count} repère. Cliquez pour le voir.", other = "{count} repères rapprochés. Cliquez pour les voir." }
+title = "Repères"
 
 [ui]
 coming_soon = "Bientôt disponible"
@@ -2935,6 +3149,7 @@ mask = { one = "{count} segment de masque sélectionné", other = "{count} segme
 scene = { one = "{count} segment de scène sélectionné", other = "{count} segments de scène sélectionnés" }
 segments = { one = "{count} segment sélectionné", other = "{count} segments sélectionnés" }
 select_all = "Tout sélectionner"
+shape = { one = "{count} forme sélectionnée", other = "{count} formes sélectionnées" }
 style = { one = "{count} segment de style sélectionné", other = "{count} segments de style sélectionnés" }
 text_segments = { one = "{count} segment de texte sélectionné", other = "{count} segments de texte sélectionnés" }
 three_d = { one = "{count} segment 3D sélectionné", other = "{count} segments 3D sélectionnés" }
@@ -2944,7 +3159,10 @@ zoom_some = { one = "{count} sur {total} sélectionné", other = "{count} sur {t
 
 [dialog.quit]
 canceled = "Fermeture annulée : {error}. Cap reste ouvert pour que vous puissiez terminer ou récupérer l'enregistrement."
+files_kept = "Tout ce qui a été enregistré jusqu'ici reste dans le dossier de l'enregistrement."
+keep_open = "Garder Cap ouvert"
 pending = "Fermeture annulée, car l'arrêt de l'enregistrement est toujours en cours. Cap reste ouvert. Utilisez Arrêter dès que possible, puis quittez à nouveau."
+quit_anyway = "Quitter quand même"
 still_open = "Cap est toujours ouvert"
 unconfirmed = "Fermeture annulée, car l'arrêt de l'enregistrement n'a pas pu être confirmé. Cap reste ouvert. Utilisez Arrêter, puis quittez à nouveau."
 

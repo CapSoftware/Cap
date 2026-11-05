@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type Subprocess, spawn } from "bun";
+import type { Subprocess } from "bun";
 import { z } from "zod";
 import { withTimeout } from "./media-common";
 import {
@@ -10,6 +10,7 @@ import {
 	unregisterMediaOperation,
 	withMediaOperation,
 } from "./media-operations";
+import { spawn } from "./media-spawn";
 import { materializeStreamingInput } from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";

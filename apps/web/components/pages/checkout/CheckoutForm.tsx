@@ -412,12 +412,10 @@ function SeatControl({
 	const valid =
 		Number.isInteger(seats) && seats >= 1 && seats <= MAX_CHECKOUT_QUANTITY;
 
-	useEffect(() => {
-		setDraft(String(quantity));
-	}, [quantity]);
-
 	// A chosen count only reaches Stripe after the debounce and the update
-	// request, so payment waits until the session's quantity matches it.
+	// request, so payment waits until the session's quantity matches it. The
+	// draft never follows the session's quantity: an update landing while the
+	// buyer is still picking would undo their newer pick.
 	const pending = valid && seats !== quantity;
 	useEffect(() => {
 		onPendingChange(pending);
@@ -431,7 +429,11 @@ function SeatControl({
 				quantity: seats,
 			});
 			setFailed(result.type === "error");
-			if (result.type === "error") setDraft(String(quantity));
+			if (result.type === "error") {
+				setDraft((current) =>
+					Number(current) === seats ? String(quantity) : current,
+				);
+			}
 		}, SEAT_COMMIT_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [checkout, lineItemId, quantity, seats, valid]);
@@ -504,6 +506,10 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 	const [code, setCode] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	// A partner referral discount is applied as a coupon. Stripe won't stack a
+	// promotion code on top of it, so there is nothing to offer here.
+	if (!applied && checkout.discountAmounts?.length) return null;
 
 	if (applied?.promotionCode) {
 		return (
