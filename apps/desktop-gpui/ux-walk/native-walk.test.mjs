@@ -1436,3 +1436,341 @@ test("the agent prompt points at the edited items for the walk folder", (t) => {
 	assert.equal(read.status, 0, read.stderr);
 	assert.equal(JSON.parse(read.stdout).chapters[0].items.length, 2);
 });
+
+// A config dir with projects, and a fake `bd` that records each create and prints an issue id.
+function trackerWorld(t) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ux-walk-filing-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const config = path.join(root, "config");
+	const bin = path.join(root, "bin");
+	const repo = path.join(root, "repo");
+	const calls = path.join(root, "bd-calls.jsonl");
+	for (const dir of [path.join(config, "projects"), bin, repo])
+		fs.mkdirSync(dir, { recursive: true });
+	const bd = path.join(bin, "bd");
+	fs.writeFileSync(
+		bd,
+		`#!${process.execPath}
+const fs = require("node:fs");
+let body = "";
+process.stdin.on("data", (d) => (body += d));
+process.stdin.on("end", () => {
+	const args = process.argv.slice(2);
+	if (args[0] !== "create") return;
+	const title = args[args.indexOf("--title") + 1];
+	if (title.includes("FAIL")) { console.error("bd refused " + title); process.exit(1); }
+	const n = fs.existsSync(${JSON.stringify(calls)}) ? fs.readFileSync(${JSON.stringify(calls)}, "utf8").split("\\n").filter(Boolean).length + 1 : 1;
+	fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, cwd: process.cwd(), body }) + "\\n");
+	console.log(JSON.stringify({ id: "wk-" + n }));
+});
+`,
+		{ mode: 0o755 },
+	);
+	const glossary = path.join(root, "checkout.txt");
+	const project = (id, extra = {}) =>
+		fs.writeFileSync(
+			path.join(config, "projects", `${id}.json`),
+			JSON.stringify({ version: 1, id, name: id.toUpperCase(), ...extra }),
+		);
+	project("shop", {
+		name: "Shop",
+		glossary,
+		tracker: { provider: "beads", target: repo, targetName: "shop repo" },
+	});
+	project("plain", { name: "Plain" });
+	fs.writeFileSync(path.join(config, "projects", "broken.json"), "{");
+	const env = {
+		...process.env,
+		CAP_UX_WALK_CONFIG_DIR: config,
+		PATH: `${bin}:${process.env.PATH}`,
+	};
+	const command = (args) =>
+		spawnSync(
+			process.execPath,
+			[fileURLToPath(new URL("./native-walk.mjs", import.meta.url)), ...args],
+			{ encoding: "utf8", timeout: 20000, env },
+		);
+	const request = (dir, name, body) => {
+		const file = path.join(dir, `${name}.json`);
+		fs.writeFileSync(file, JSON.stringify(body));
+		return file;
+	};
+	const created = () =>
+		fs.existsSync(calls)
+			? fs
+					.readFileSync(calls, "utf8")
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+			: [];
+	return { root, config, repo, glossary, command, request, created };
+}
+
+function inProject(f, id) {
+	const file = path.join(f.directory, "session.json");
+	const session = JSON.parse(fs.readFileSync(file, "utf8"));
+	fs.writeFileSync(file, JSON.stringify({ ...session, project: id }));
+}
+
+test("file previews, then files the chosen items once and links them", (t) => {
+	const w = trackerWorld(t);
+	const f = fixture(t);
+	processedItems(f);
+	inProject(f, "shop");
+	const keys = ["c1-clipped", "c1-copy"];
+	const preview = w.command([
+		"file",
+		w.request(f.directory, "dry", { journal: f.file, keys, dryRun: true }),
+	]);
+	assert.equal(preview.status, 0, preview.stderr);
+	const dry = JSON.parse(preview.stdout);
+	assert.equal(dry.dryRun, true);
+	assert.equal(dry.tracker, "beads");
+	assert.equal(dry.targetName, "shop repo");
+	assert.deepEqual(
+		dry.filed.map((item) => [item.key, item.title]),
+		[
+			["c1-clipped", "Pay button is clipped"],
+			["c1-copy", "Rename the total"],
+		],
+	);
+	assert.equal(dry.filed[0].issue, undefined);
+	assert.equal(w.created().length, 0, "a dry run creates nothing");
+	assert.equal(fs.existsSync(path.join(f.directory, "ledger.json")), false);
+
+	const real = w.command([
+		"file",
+		w.request(f.directory, "real", { journal: f.file, keys }),
+	]);
+	assert.equal(real.status, 0, real.stderr);
+	const filed = JSON.parse(real.stdout);
+	assert.deepEqual(
+		filed.filed.map((item) => [item.key, item.ref, item.tracker]),
+		[
+			["c1-clipped", "wk-1", "beads"],
+			["c1-copy", "wk-2", "beads"],
+		],
+	);
+	assert.deepEqual(filed.failed, []);
+	assert.equal(w.created().length, 2);
+	assert.equal(w.created()[0].cwd, fs.realpathSync(w.repo));
+	const items = JSON.parse(w.command(["items", f.file]).stdout).chapters[0]
+		.items;
+	assert.deepEqual(
+		items.map((item) => item.refs.map((ref) => [ref.ref, ref.tracker])),
+		[[["wk-1", "beads"]], [["wk-2", "beads"]]],
+	);
+
+	const again = w.command([
+		"file",
+		w.request(f.directory, "again", { journal: f.file, keys }),
+	]);
+	assert.equal(again.status, 0, again.stderr);
+	const second = JSON.parse(again.stdout);
+	assert.deepEqual(second.filed, []);
+	assert.deepEqual(
+		second.skipped.map((item) => item.key),
+		keys,
+	);
+	assert.equal(w.created().length, 2, "a second run files nothing twice");
+});
+
+test("file reports per-item failures, refuses an empty choice and needs a tracker", (t) => {
+	const w = trackerWorld(t);
+	const f = fixture(t);
+	processedItems(f);
+	inProject(f, "shop");
+	const edits = w.request(f.directory, "edits", {
+		journal: f.file,
+		edits: {
+			version: 1,
+			items: { "c1-copy": { title: "FAIL the total" } },
+			added: [],
+		},
+	});
+	assert.equal(w.command(["save-items", edits]).status, 0);
+	const mixed = JSON.parse(
+		w.command([
+			"file",
+			w.request(f.directory, "mixed", {
+				journal: f.file,
+				keys: ["c1-clipped", "c1-copy"],
+			}),
+		]).stdout,
+	);
+	assert.deepEqual(
+		mixed.filed.map((item) => item.key),
+		["c1-clipped"],
+	);
+	assert.equal(mixed.failed[0].key, "c1-copy");
+	assert.match(mixed.failed[0].error, /bd refused FAIL the total/);
+
+	const empty = w.command([
+		"file",
+		w.request(f.directory, "empty", { journal: f.file, keys: [] }),
+	]);
+	assert.equal(empty.status, 1);
+	assert.match(empty.stderr, /Choose the items to file/);
+
+	inProject(f, "plain");
+	const none = w.command([
+		"file",
+		w.request(f.directory, "none", { journal: f.file, keys: ["c1-copy"] }),
+	]);
+	assert.equal(none.status, 1);
+	assert.match(none.stderr, /no project with a tracker/);
+	assert.equal(w.created().length, 1);
+});
+
+test("glossary suggestions are listed, accepted into the project glossary and rejected", (t) => {
+	const w = trackerWorld(t);
+	const f = fixture(t);
+	processedItems(f);
+	inProject(f, "shop");
+	const suggestion = (term, wrongs) => ({
+		term,
+		wrongs,
+		source: "fixer",
+		evidence: { chapter: 1, when: "00:04", said: `the ${wrongs[0]} page` },
+		status: "pending",
+	});
+	fs.writeFileSync(
+		path.join(f.directory, "glossary-suggestions.json"),
+		JSON.stringify({
+			version: 1,
+			suggestions: [
+				suggestion("Stripe", ["stripey"]),
+				suggestion("Klarna", ["clarna"]),
+				suggestion("Adyen", ["a yen"]),
+			],
+		}),
+	);
+	const listed = JSON.parse(w.command(["glossary-suggestions", f.file]).stdout);
+	assert.equal(listed.acceptTarget, w.glossary);
+	assert.deepEqual(
+		listed.suggestions.map((s) => [s.term, s.status]),
+		[
+			["Stripe", "pending"],
+			["Klarna", "pending"],
+			["Adyen", "pending"],
+		],
+	);
+	assert.equal(listed.suggestions[0].evidence.said, "the stripey page");
+
+	const accepted = w.command([
+		"glossary-accept",
+		w.request(f.directory, "accept", { journal: f.file, terms: ["Stripe"] }),
+	]);
+	assert.equal(accepted.status, 0, accepted.stderr);
+	assert.deepEqual(JSON.parse(accepted.stdout).accepted, ["Stripe"]);
+	assert.match(fs.readFileSync(w.glossary, "utf8"), /^Stripe: stripey$/m);
+
+	const rejected = JSON.parse(
+		w.command([
+			"glossary-reject",
+			w.request(f.directory, "reject", { journal: f.file, terms: ["Klarna"] }),
+		]).stdout,
+	);
+	assert.deepEqual(rejected.rejected, ["Klarna"]);
+
+	const rest = JSON.parse(
+		w.command([
+			"glossary-accept",
+			w.request(f.directory, "all", { journal: f.file, terms: "all" }),
+		]).stdout,
+	);
+	assert.deepEqual(rest.accepted, ["Adyen"]);
+	assert.deepEqual(
+		rest.suggestions.map((s) => [s.term, s.status]),
+		[
+			["Stripe", "accepted"],
+			["Klarna", "rejected"],
+			["Adyen", "accepted"],
+		],
+	);
+	const glossary = fs.readFileSync(w.glossary, "utf8");
+	assert.doesNotMatch(glossary, /Klarna/);
+	assert.match(glossary, /^Adyen: a yen$/m);
+
+	const nothing = w.command([
+		"glossary-accept",
+		w.request(f.directory, "nothing", { journal: f.file, terms: [] }),
+	]);
+	assert.equal(nothing.status, 1);
+});
+
+test("handoff-ask and the agent prompt name the project's tracker only when it has one", (t) => {
+	const w = trackerWorld(t);
+	const f = diatribeFixture(t);
+	processedItems(f, "diatribe");
+	const cfg = { configDir: w.config };
+	const bare = JSON.parse(w.command(["handoff-ask", f.file]).stdout);
+	assert.equal(bare.project, null);
+	assert.equal(bare.tracker, null);
+	const plain = nativeWalkPrompt(f.file, { cfg });
+	assert.match(plain, /^Turn the action items into beads \(or issues\)/);
+	assert.doesNotMatch(plain, / file '.*' --keys/);
+	assert.match(plain, / items '.*' --json/);
+
+	inProject(f, "shop");
+	const ask = JSON.parse(w.command(["handoff-ask", f.file]).stdout);
+	assert.deepEqual(ask.project, { id: "shop", name: "Shop" });
+	assert.equal(ask.tracker.label, "beads (shop repo)");
+	const prompt = nativeWalkPrompt(f.file, { cfg });
+	assert.match(prompt, /^File the action items in beads \(shop repo\) from/);
+	assert.match(prompt, /project "Shop" files to beads \(shop repo\)/);
+	assert.ok(prompt.includes(`file '${f.directory}' --keys <key,...>`), prompt);
+	assert.match(prompt, / items '.*' --json/, "keeps the items guidance");
+
+	const walk = fixture(t);
+	processedItems(walk);
+	assert.doesNotMatch(nativeWalkPrompt(walk.file, { cfg }), /files to/);
+	inProject(walk, "shop");
+	const walkPrompt = nativeWalkPrompt(walk.file, { cfg });
+	assert.match(walkPrompt, /^Review this /);
+	assert.match(walkPrompt, /files to beads \(shop repo\)/);
+	inProject(walk, "plain");
+	assert.doesNotMatch(nativeWalkPrompt(walk.file, { cfg }), /files to/);
+});
+
+test("assign-project moves a recording between projects and out of them", (t) => {
+	const w = trackerWorld(t);
+	const f = fixture(t);
+	processedItems(f);
+	fs.writeFileSync(w.glossary, "Stripe: stripey\n");
+	const moved = w.command([
+		"assign-project",
+		w.request(f.directory, "assign", { journal: f.file, project: "shop" }),
+	]);
+	assert.equal(moved.status, 0, moved.stderr);
+	assert.equal(JSON.parse(moved.stdout).tracker.provider, "beads");
+	const session = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "session.json"), "utf8"),
+	);
+	assert.equal(session.project, "shop");
+	assert.deepEqual(session.glossaries, [w.glossary]);
+	const chapter = JSON.parse(
+		fs.readFileSync(path.join(f.directory, "01-intro/chapter.json"), "utf8"),
+	);
+	assert.equal(chapter.project, "shop");
+
+	const missing = w.command([
+		"assign-project",
+		w.request(f.directory, "missing", { journal: f.file, project: "nope" }),
+	]);
+	assert.equal(missing.status, 1);
+	assert.match(missing.stderr, /No project "nope"/);
+
+	const cleared = JSON.parse(
+		w.command([
+			"assign-project",
+			w.request(f.directory, "clear", { journal: f.file, project: null }),
+		]).stdout,
+	);
+	assert.equal(cleared.project, null);
+	assert.equal(
+		JSON.parse(fs.readFileSync(path.join(f.directory, "session.json"), "utf8"))
+			.project,
+		null,
+	);
+});
