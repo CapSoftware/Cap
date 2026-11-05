@@ -2078,6 +2078,13 @@ mod colour_matrix_tests {
 
     #[test]
     fn gl_decode_shaders_apply_each_requested_matrix() {
+        let Some((device, queue)) = gl_device() else {
+            return;
+        };
+        assert_decode_matrices(&device, &queue);
+    }
+
+    fn gl_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::GL,
             ..Default::default()
@@ -2086,12 +2093,86 @@ mod colour_matrix_tests {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
         else {
             eprintln!("no GL adapter available, skipping");
-            return;
+            return None;
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .expect("GL test device");
-        assert_decode_matrices(&device, &queue);
+        Some((device, queue))
+    }
+
+    #[test]
+    fn gl_program_cache_reuses_matching_constants() {
+        use wgpu_hal::Device as _;
+
+        let Some((device, _queue)) = gl_device() else {
+            return;
+        };
+        let module = naga::front::wgsl::parse_str(
+            "override x: u32; override y: u32; @compute @workgroup_size(x, y) fn main() {}",
+        )
+        .expect("parse shader");
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("validate shader");
+        unsafe {
+            device.as_hal::<wgpu_hal::api::Gles, _, _>(|device| {
+                let device = device.expect("GL device");
+                let shader = device
+                    .create_shader_module(
+                        &wgpu_hal::ShaderModuleDescriptor {
+                            label: None,
+                            runtime_checks: wgpu::ShaderRuntimeChecks::default(),
+                        },
+                        wgpu_hal::ShaderInput::Naga(wgpu_hal::NagaShader {
+                            module: std::borrow::Cow::Owned(module),
+                            info,
+                            debug_source: None,
+                        }),
+                    )
+                    .expect("shader module");
+                let layout = device
+                    .create_pipeline_layout(&wgpu_hal::PipelineLayoutDescriptor {
+                        label: None,
+                        flags: wgpu_hal::PipelineLayoutFlags::empty(),
+                        bind_group_layouts: &[],
+                        push_constant_ranges: &[],
+                    })
+                    .expect("pipeline layout");
+                let create = |values: [(&str, f64); 2]| {
+                    let constants = values
+                        .into_iter()
+                        .map(|(name, value)| (name.into(), value))
+                        .collect();
+                    device
+                        .create_compute_pipeline(&wgpu_hal::ComputePipelineDescriptor {
+                            label: None,
+                            layout: &layout,
+                            stage: wgpu_hal::ProgrammableStage {
+                                module: &shader,
+                                entry_point: "main",
+                                constants: &constants,
+                                zero_initialize_workgroup_memory: true,
+                            },
+                            cache: None,
+                        })
+                        .expect("compute pipeline")
+                };
+                let first = create([("x", 1.0), ("y", 2.0)]);
+                let different = create([("x", 2.0), ("y", 2.0)]);
+                let repeated = create([("y", 2.0), ("x", 1.0)]);
+                assert_ne!(first.raw_program(), different.raw_program());
+                assert_eq!(first.raw_program(), repeated.raw_program());
+                device.destroy_compute_pipeline(repeated);
+                device.destroy_compute_pipeline(different);
+                device.destroy_compute_pipeline(first);
+                device.destroy_pipeline_layout(layout);
+                device.destroy_shader_module(shader);
+            });
+        }
     }
 
     fn assert_decode_matrices(device: &wgpu::Device, queue: &wgpu::Queue) {
