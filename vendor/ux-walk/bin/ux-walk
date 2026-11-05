@@ -59,6 +59,21 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
   ux-walk frame <chapter> <mm:ss>...
                                    save the video frame at those times to shots/ and print the paths
   ux-walk glossary [new <name>]    list glossaries, or create one
+  ux-walk glossary suggestions <session> [--json]   terms this recording's transcript got wrong (pending/accepted/rejected)
+  ux-walk glossary accept <session> <term...|--all> [--to <glossary>] [--json]   add them to the project's glossary
+  ux-walk glossary reject <session> <term...> [--json]
+  ux-walk projects [--json]        list projects (glossary, tracker + target, source folder, notes); --project <id>
+                                   on record/import/process puts a recording in one (config "project": the default)
+  ux-walk projects show <id> | save <file|->
+                                   print one project, or save one (validated JSON, see README)
+  ux-walk trackers [--json]        the issue tracker plugins (beads, github, linear) and whether each is ready
+  ux-walk trackers targets <id> [--json]
+                                   where that tracker can file: folders, owner/repo, Linear teams and projects
+  ux-walk file <folder> [--keys k1,k2 | --all] [--types action,bug] [--tracker id --target t] [--dry-run] [--json]
+                                   file items as issues in the recording's project tracker and link each in the
+                                   ledger (default: a diatribe's actions, a walk's bugs and asks; linked ones skipped)
+  ux-walk handoff <folder> [--json]
+                                   the agent line and context for a recording (names its project's tracker)
   ux-walk windows                  list windows that can be recorded
   ux-walk setup                    pick the transcriber and store its key, check permissions, write a config file
   ux-walk app                      open the menu bar app (built by install.sh)
@@ -125,7 +140,7 @@ function parse(argv) {
 }
 
 const { pos, flags } = parse(process.argv.slice(2));
-const commands = new Set(['start', 'record', 'import', 'call', 'video', 'process', 'timeline', 'brief', 'link', 'items', 'status', 'search', 'speakers', 'frame', 'glossary', 'windows', 'setup', 'app', 'agent', 'report', 'cap', 'help']);
+const commands = new Set(['start', 'record', 'import', 'call', 'video', 'process', 'timeline', 'brief', 'link', 'items', 'status', 'search', 'speakers', 'frame', 'glossary', 'windows', 'setup', 'app', 'agent', 'report', 'cap', 'help', 'projects', 'trackers', 'file', 'handoff']);
 const selected = commands.has(pos[0]) ? pos.shift() : 'record';
 const cmd = selected === 'start' ? 'record' : selected;
 
@@ -145,6 +160,8 @@ if (flags.speakers) overrides.speakers = flags.speakers;
 if (flags.out) overrides.outDir = flags.out;
 if (flags.brief) overrides.brief = true;
 if (flags['no-brief']) overrides.brief = false;
+// The recording's own switch: written to session.json when --brief or --no-brief is given.
+const briefFlag = flags.brief ? true : flags['no-brief'] ? false : undefined;
 if (flags['evidence-only']) Object.assign(overrides, { evidenceOnly: true, transcriber: 'none', brief: false, sections: false, agent: null, callAudio: false, noMic: true, askSpeakers: false, trace: false });
 // The speakers screen: who is at this Mac's mic and who is on the call; which call app to record (none = mic only).
 const people = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -152,7 +169,7 @@ const sources = flags['mic-people'] || flags['call-people'] ? { mic: people(flag
 if (sources) overrides.speakers = [...sources.mic, ...sources.call].join(',');
 if (flags['call-app'] === 'none') overrides.callAudio = false;
 else if (flags['call-app']) overrides.callApp = flags['call-app'];
-const cfg = loadConfig(overrides);
+let cfg = loadConfig(overrides);
 
 // A path, or a recording's folder name (or a unique end of one) in outDir.
 const dirArg = async (d) => {
@@ -171,6 +188,21 @@ const chapterDirs = (p) => {
   }
   return [p];
 };
+
+// Projects (src/projects.mjs): a new recording takes --project <id> or config "project", and that project's
+// glossary, source folder, notes and url; an existing one runs with the project named in its session.json
+// (process --project <id> moves it into that project first).
+const projects = await import(path.join(ROOT, 'src/projects.mjs'));
+const sessionOf = (d) => (fs.existsSync(path.join(d, 'session.json')) ? d : path.dirname(d));
+const cfgFor = (d) => projects.withProject(cfg, projects.sessionProject(sessionOf(d), cfg));
+if (['record', 'video', 'call', 'import'].includes(cmd)) {
+  try { cfg = projects.withProject(cfg, projects.projectFor(cfg, flags.project)); } catch (e) { console.error(e.message); process.exit(2); }
+} else if (cmd === 'process' && flags.project) {
+  let p;
+  try { p = projects.readProject(cfg, flags.project); } catch (e) { console.error(e.message); process.exit(2); }
+  if (!p) { console.error(`no project "${flags.project}" in ${projects.projectsDir(cfg)} (ux-walk projects lists them)`); process.exit(2); }
+  for (const d of pos.length ? pos : [undefined]) projects.assignProject(sessionOf(await dirArg(d)), p);
+}
 
 if (cmd === 'cap') {
   const { CapClient, prepareCapEdit } = await import(path.join(ROOT, 'src/cap.mjs'));
@@ -222,7 +254,7 @@ if (cmd === 'cap') {
   const urlArg = pos.find(isUrl);
   const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
   try {
-    await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'walk', url: startUrl, app: flags.app, title: flags.title, windowId: flags['window-id'], noBrowser: !!flags['no-browser'], glossary: flags.glossary, script: flags.script, ipc: !!flags.ipc, sources, bubbleWindow: flags['bubble-window'] });
+    await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'walk', url: startUrl, app: flags.app, title: flags.title, windowId: flags['window-id'], noBrowser: !!flags['no-browser'], glossary: flags.glossary, script: flags.script, ipc: !!flags.ipc, sources, brief: briefFlag, bubbleWindow: flags['bubble-window'] });
   } catch (e) {
     if (!flags.ipc) throw e;
     (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: e.message });
@@ -238,7 +270,7 @@ if (cmd === 'cap') {
   const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
   try {
     await record({ ...cfg, fps: flags.fps ? Number(flags.fps) : 30 }, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'video', url: startUrl, kind: 'video',
-      display: flags.display != null ? Number(flags.display) : undefined, bubbleWindow: flags['bubble-window'], glossary: flags.glossary, ipc: !!flags.ipc, sources });
+      display: flags.display != null ? Number(flags.display) : undefined, bubbleWindow: flags['bubble-window'], glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag });
   } catch (e) {
     if (!flags.ipc) throw e;
     (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: e.message });
@@ -266,12 +298,12 @@ if (cmd === 'cap') {
       // every click, console message and request; the mic and the call's sound go on their own tracks.
       // --conversation records the call app's own window instead (a call with nothing to show).
       if (flags.conversation) {
-        await record(cfg, { topic: pos.join(' ') || 'call', url: null, app: c.window, title: c.title || undefined, callApp: c.id, kind: 'call', noBrowser: true, glossary: flags.glossary, ipc: !!flags.ipc, sources });
+        await record(cfg, { topic: pos.join(' ') || 'call', url: null, app: c.window, title: c.title || undefined, callApp: c.id, kind: 'call', noBrowser: true, glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag });
       } else {
         const isUrl = (w) => /^(https?:\/\/|\/|localhost)|^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?(\/|$)/i.test(w);
         const urlArg = pos.find(isUrl);
         const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
-        await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'call', url: startUrl, callApp: c.id, kind: 'call', glossary: flags.glossary, ipc: !!flags.ipc, sources, bubbleWindow: flags['bubble-window'] });
+        await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'call', url: startUrl, callApp: c.id, kind: 'call', glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag, bubbleWindow: flags['bubble-window'] });
       }
     } catch (e) {
       if (!flags.ipc) throw e;
@@ -287,9 +319,9 @@ if (cmd === 'cap') {
   const { handoffLine } = await import(path.join(ROOT, 'src/naming.mjs'));
   let r;
   try {
-    r = await importRecording(path.resolve(file), cfg, { topic: words.join(' '), ask: flags.ask, start: flags.start, brief: !flags['no-brief'], glossary: flags.glossary, kind: flags.diatribe ? 'diatribe' : 'import' });
+    r = await importRecording(path.resolve(file), cfg, { topic: words.join(' '), ask: flags.ask, start: flags.start, brief: briefFlag, glossary: flags.glossary, kind: flags.diatribe ? 'diatribe' : 'import' });
   } catch (e) { console.error(e.message); process.exit(1); }
-  const line = handoffLine(r.dir, r.session.ask, { kind: r.session.kind });
+  const line = handoffLine(r.dir, r.session.ask, { kind: r.session.kind, project: projects.sessionProject(r.dir, cfg) });
   const copied = !cfg.evidenceOnly && !process.env.UXW_NO_COPY && spawnSync('pbcopy', { input: line }).status === 0;
   console.log(`Folder: ${r.dir}`);
   console.log(cfg.evidenceOnly ? `Report: ${path.join(r.dir, 'report.html')}` : r.brief ? `Brief: ${r.brief}` : `No brief${r.summary?.transcriptError ? ' (no transcript)' : flags['no-brief'] ? ' (--no-brief)' : ''}; timeline: ${path.join(r.chapterDir, 'timeline-short.md')}`);
@@ -299,8 +331,8 @@ if (cmd === 'cap') {
   const dir = await dirArg(pos[0]);
   const { handoffLine, openInCmux } = await import(path.join(ROOT, 'src/record.mjs'));
   const s = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
-  const line = handoffLine(dir, pos.slice(1).join(' ') || s.ask, { kind: s.kind });
-  const why = openInCmux(dir, line, cfg, s.topic || path.basename(dir));
+  const line = handoffLine(dir, pos.slice(1).join(' ') || s.ask, { kind: s.kind, project: projects.sessionProject(dir, cfg) });
+  const why = openInCmux(dir, line, cfgFor(dir), s.topic || path.basename(dir));
   if (why) { console.error(`Could not open the agent in cmux: ${why}`); process.exit(1); }
   console.log(`Opened a Claude Code session in cmux: ${line}`);
 } else if (cmd === 'process' && flags.stale) {
@@ -310,7 +342,7 @@ if (cmd === 'cap') {
   if (!list.length) console.log('Nothing stale.');
   for (const { dir, why } of list) {
     console.log(`${dir}: ${why}`);
-    if (!flags['dry-run']) await processChapter(dir, cfg, { quiet: true, brief: !!flags.brief }).catch((e) => console.error(`${dir}: ${e.message}`));
+    if (!flags['dry-run']) await processChapter(dir, cfgFor(dir), { quiet: true, brief: !!flags.brief }).catch((e) => console.error(`${dir}: ${e.message}`));
   }
 } else if (cmd === 'process') {
   const { processChapter } = await import(path.join(ROOT, 'src/process.mjs'));
@@ -318,7 +350,7 @@ if (cmd === 'cap') {
   let failed = 0, untranscribed = 0;
   for (const p of pos.length ? pos : [undefined]) {
     for (const d of chapterDirs(await dirArg(p))) {
-      const sum = await processChapter(d, cfg, { force, speakers: flags.speakers, glossary: flags.glossary, brief: flags.brief ? true : flags['no-brief'] ? false : undefined, quiet: !!flags.quiet }).catch((e) => { failed++; console.error(`${d}: ${e.message}`); });
+      const sum = await processChapter(d, cfgFor(d), { force, speakers: flags.speakers, glossary: flags.glossary, brief: flags.brief ? true : flags['no-brief'] ? false : undefined, quiet: !!flags.quiet }).catch((e) => { failed++; console.error(`${d}: ${e.message}`); });
       if (sum?.transcriptError) { untranscribed++; console.error(`${d}: no transcript: ${sum.transcriptError}`); }
     }
   }
@@ -337,7 +369,7 @@ if (cmd === 'cap') {
   const { runBrief } = await import(path.join(ROOT, 'src/brief.mjs'));
   for (const d of chapterDirs(await dirArg(pos[0]))) {
     console.log(`writing brief for ${path.basename(d)}...`);
-    console.log(await runBrief(d, cfg, { log: console.log }).catch((e) => `failed: ${e.message}`));
+    console.log(await runBrief(d, cfgFor(d), { log: console.log }).catch((e) => `failed: ${e.message}`));
   }
 } else if (cmd === 'link') {
   const { link, resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
@@ -375,6 +407,75 @@ if (cmd === 'cap') {
     }
   }
   for (const o of m.orphans) console.log(`  Orphaned edit ${o.key}: ${JSON.stringify(o.edit || o.added)} (its item is gone after a re-brief)`);
+} else if (cmd === 'projects') {
+  // Projects for the desktop and the CLI. 0 ok; 1 bad input (a JSON error on stderr with --json).
+  const fail = (msg) => { console.error(flags.json ? JSON.stringify({ error: msg }) : msg); process.exit(1); };
+  const [action, arg] = pos;
+  if (!action) {
+    const problems = [];
+    const list = projects.listProjects(cfg, { onProblem: (p) => problems.push(p) });
+    if (flags.json) console.log(JSON.stringify({ version: 1, dir: projects.projectsDir(cfg), default: cfg.project || null, projects: list, problems }, null, 2));
+    else {
+      if (!list.length) console.log(`no projects in ${projects.projectsDir(cfg)} (ux-walk projects save <file>)`);
+      const { trackerLabel } = await import(path.join(ROOT, 'src/trackers/index.mjs'));
+      for (const p of list) console.log(`${p.id === cfg.project ? '*' : ' '} ${p.id.padEnd(20)} ${p.name}${p.tracker ? `  -> ${trackerLabel(p.tracker)}` : ''}${p.glossary ? `  glossary: ${p.glossary}` : ''}`);
+      for (const p of problems) console.error(`skipped ${p.file}: ${p.error}`);
+    }
+  } else if (action === 'show') {
+    let p;
+    try { p = projects.readProject(cfg, arg); } catch (e) { fail(e.message); }
+    if (!p) fail(`no project "${arg || ''}" in ${projects.projectsDir(cfg)}`);
+    console.log(JSON.stringify(p, null, 2));
+  } else if (action === 'save') {
+    if (!arg) fail('usage: ux-walk projects save <file|->');
+    let j;
+    try { j = JSON.parse(fs.readFileSync(arg === '-' ? 0 : path.resolve(arg), 'utf8')); } catch (e) { fail(e instanceof SyntaxError ? `not JSON (${e.message})` : e.message); }
+    try { console.log(JSON.stringify(projects.saveProject(cfg, j), null, 2)); } catch (e) { fail(e.message); }
+  } else fail('usage: ux-walk projects [--json] | projects show <id> | projects save <file|->');
+} else if (cmd === 'trackers') {
+  const { getTracker, trackerStatus } = await import(path.join(ROOT, 'src/trackers/index.mjs'));
+  const fail = (msg) => { console.error(flags.json ? JSON.stringify({ error: msg }) : msg); process.exit(1); };
+  const [action, id] = pos;
+  if (!action) {
+    const list = await trackerStatus(cfg);
+    if (flags.json) console.log(JSON.stringify({ version: 1, trackers: list }, null, 2));
+    else for (const t of list) console.log(`${t.id.padEnd(8)} ${t.name.padEnd(14)} ${t.ok ? `ready${t.via ? ` (${t.via})` : ''}` : `not ready: ${t.problem}`}`);
+  } else if (action === 'targets') {
+    let t, targets;
+    try { t = getTracker(id); targets = await t.listTargets(cfg); } catch (e) { fail(e.message); }
+    if (flags.json) console.log(JSON.stringify({ version: 1, tracker: t.id, targetKind: t.targetKind, targets }, null, 2));
+    else { if (!targets.length) console.log(`no ${t.name} targets found`); for (const x of targets) console.log(`${x.id}${x.name !== x.id ? `  ${x.name}` : ''}`); }
+  } else fail('usage: ux-walk trackers [--json] | trackers targets <id> [--json]');
+} else if (cmd === 'file') {
+  // Items become issues in the tracker; each is linked in ledger.json. 0 all filed (or nothing to do); 1 bad input
+  // ({"error"} on stderr); 3 some items failed (the rest were filed; see "failed").
+  const fail = (msg) => { console.error(JSON.stringify({ error: msg })); process.exit(1); };
+  const { resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
+  const { fileItems } = await import(path.join(ROOT, 'src/file.mjs'));
+  if (!pos[0]) fail('usage: ux-walk file <folder> [--keys k1,k2 | --all] [--types action,bug] [--tracker id --target t] [--dry-run] [--json]');
+  if (flags.keys && flags.all) fail('give --keys or --all, not both');
+  for (const k of ['keys', 'types', 'tracker', 'target']) if (k in flags && (typeof flags[k] !== 'string' || !flags[k])) fail(`--${k} needs a value`);
+  if (flags.types) { const { TYPES } = await import(path.join(ROOT, 'src/edits.mjs')); const bad = flags.types.split(',').map((x) => x.trim()).filter((x) => x && !TYPES.includes(x)); if (bad.length) fail(`--types: not a type: ${bad.join(', ')} (${TYPES.join(', ')})`); }
+  let r;
+  try {
+    const s = resolveSession(pos[0], cfg.outDir);
+    r = await fileItems(s, cfg, { keys: flags.keys, all: !!flags.all, types: flags.types, tracker: flags.tracker, target: flags.target, dryRun: !!flags['dry-run'] });
+  } catch (e) { fail(e.message); }
+  if (flags.json) console.log(JSON.stringify(r, null, 2));
+  else {
+    console.log(`${path.basename(r.session)} -> ${r.tracker} ${r.targetName}${r.dryRun ? ' (dry run: nothing filed)' : ''}`);
+    for (const f of r.filed) console.log(`  ${r.dryRun ? 'would file' : 'filed'} ${f.key.padEnd(12)} ${String(f.type).padEnd(8)} ${f.title}${f.ref ? `  -> ${f.ref}${f.url ? ` ${f.url}` : ''}` : ''}`);
+    for (const f of r.skipped) console.log(`  skipped ${f.key.padEnd(12)} already linked: ${f.refs.map((x) => x.ref).join(', ')}`);
+    for (const f of r.failed) console.error(`  failed  ${f.key.padEnd(12)} ${f.error}`);
+    if (!r.filed.length && !r.skipped.length && !r.failed.length) console.log('  nothing to file (ux-walk items lists the items; --types or --keys pick others)');
+  }
+  process.exit(r.failed.length ? 3 : 0);
+} else if (cmd === 'handoff') {
+  const { handoffAsk } = await import(path.join(ROOT, 'src/naming.mjs'));
+  const { resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
+  let h;
+  try { h = handoffAsk(resolveSession(pos[0], cfg.outDir), cfg); } catch (e) { console.error(flags.json ? JSON.stringify({ error: e.message }) : e.message); process.exit(1); }
+  console.log(flags.json ? JSON.stringify(h, null, 2) : `${h.line}\n\n${h.context}`);
 } else if (cmd === 'status') {
   const { status, resolveSession, recentSessions } = await import(path.join(ROOT, 'src/ledger.mjs'));
   try {
@@ -420,7 +521,33 @@ if (cmd === 'cap') {
   }
 } else if (cmd === 'glossary') {
   const { listGlossaries, glossaryPath, GLOSSARY_DIR, DEFAULT_GLOSSARY } = await import(path.join(ROOT, 'src/glossary.mjs'));
-  if (pos[0] === 'new' && pos[1]) {
+  if (['suggestions', 'accept', 'reject'].includes(pos[0])) {
+    // Glossary suggestions from a recording: list them, or accept (writes the glossary) or reject some.
+    const G = await import(path.join(ROOT, 'src/glossary-suggestions.mjs'));
+    const { resolveSession } = await import(path.join(ROOT, 'src/ledger.mjs'));
+    const fail = (msg) => { console.error(flags.json ? JSON.stringify({ error: msg }) : msg); process.exit(1); };
+    const [sub, folder, ...terms] = pos;
+    let s;
+    try { s = resolveSession(folder, cfg.outDir); } catch (e) { fail(e.message); }
+    const show = (list) => list.map((x) => `  ${x.status.padEnd(8)} ${x.term}${x.wrongs.length ? `: ${x.wrongs.join(', ')}` : ''}  (${x.source}${x.evidence?.when ? `, ch${x.evidence.chapter} ${x.evidence.when}` : x.evidence?.chapter ? `, ch${x.evidence.chapter}` : ''})`).join('\n');
+    try {
+      if (sub === 'suggestions') {
+        const r = { session: s, file: path.join(s, G.SUGGESTIONS_FILE), target: G.acceptTarget(s, cfg), suggestions: G.readSuggestions(s).suggestions };
+        if (flags.json) console.log(JSON.stringify(r, null, 2));
+        else console.log(r.suggestions.length ? `${show(r.suggestions)}\naccept goes to ${r.target}` : 'no glossary suggestions');
+      } else if (sub === 'accept') {
+        if (!flags.all && !terms.length) fail('usage: ux-walk glossary accept <session> <term...|--all> [--to <glossary>] [--json]');
+        const r = { session: s, ...G.acceptSuggestions(s, flags.all ? 'all' : terms, { cfg, to: typeof flags.to === 'string' ? flags.to : null }) };
+        if (flags.json) console.log(JSON.stringify(r, null, 2));
+        else console.log(r.accepted.length ? `added to ${r.target}: ${r.accepted.join(', ')}` : 'nothing pending to accept');
+      } else {
+        if (!terms.length) fail('usage: ux-walk glossary reject <session> <term...> [--json]');
+        const r = { session: s, ...G.rejectSuggestions(s, terms) };
+        if (flags.json) console.log(JSON.stringify(r, null, 2));
+        else console.log(`rejected: ${r.rejected.join(', ')}`);
+      }
+    } catch (e) { fail(e.message); }
+  } else if (pos[0] === 'new' && pos[1]) {
     const f = glossaryPath(pos[1]);
     fs.mkdirSync(path.dirname(f), { recursive: true });
     if (!fs.existsSync(f)) fs.writeFileSync(f, '# Names the transcript gets wrong. One per line: Right spelling: wrong one, wrong two\n');
@@ -468,6 +595,24 @@ if (cmd === 'cap') {
       execFileSync('security', ['add-generic-password', '-U', '-a', process.env.USER, '-s', item, '-w', token.trim()]);
       console.log(`saved to Keychain item "${item}"`);
     }
+  }
+  // Issue tracker for `ux-walk file` (optional): its key goes to the Keychain like the transcriber's.
+  const { TRACKERS, trackerKeyPresent, storeTrackerKey, trackerStatus } = await import(path.join(ROOT, 'src/trackers/index.mjs'));
+  const tids = [...Object.keys(TRACKERS), 'none'];
+  const tpick = (await rl.question(`Issue tracker for filing items (${tids.join(', ')}) [none]: `)).trim().toLowerCase() || 'none';
+  if (!tids.includes(tpick)) { console.error(`not a tracker: ${tpick}`); process.exit(2); }
+  if (tpick !== 'none') {
+    const t = TRACKERS[tpick];
+    const ready = (await trackerStatus(cfg)).find((x) => x.id === tpick);
+    if (t.keychainItem(cfg) && !(t.id === 'github' && ready.via === 'gh')) {
+      const has = trackerKeyPresent(cfg, tpick);
+      const ans = await rl.question(has ? `${t.name} key is set. Replace it? [y/N] ` : `Paste your ${t.name} key (${t.keyUrl}; empty to skip): `);
+      const token = has ? (/^y/i.test(ans) ? await rl.question('New key: ') : '') : ans;
+      if (token.trim()) console.log(`saved to Keychain item "${storeTrackerKey(cfg, tpick, token.trim())}"`);
+    }
+    const now = (await trackerStatus(cfg)).find((x) => x.id === tpick);
+    console.log(now.ok ? `${t.name}: ready${now.via ? ` (${now.via})` : ''}.` : `${t.name}: not ready: ${now.problem}`);
+    console.log(`Pick where items go: ux-walk trackers targets ${tpick}; then put it in a project (ux-walk projects save <file>).`);
   }
   rl.close();
   const r = spawnSync(path.join(ROOT, 'bin', 'uxw-capture'), ['--list'], { encoding: 'utf8' });

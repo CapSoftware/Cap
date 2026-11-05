@@ -8,9 +8,11 @@ import { PROVIDERS, transcribe, transcribeSplit } from './transcribe.mjs';
 import { guessVoices, readSplit, splitNames } from './speakers.mjs';
 import { callSpan, clipPath, readCalled, readClip, saveCalled, stripPrefix, writeClipInfo } from './rollcall.mjs';
 import { captionSpans, namesFromMeet, readMeet } from './meet.mjs';
-import { chapterKind, runBrief } from './brief.mjs';
-import { DIATRIBE_ASK } from './naming.mjs';
-import { glossaryTerms, nameFixer, readGlossaries, resolveGlossaries, screenNames } from './glossary.mjs';
+import { chapterKind, runBrief, wantsBrief } from './brief.mjs';
+import { handoffLine } from './naming.mjs';
+import { sessionProject } from './projects.mjs';
+import { dictionary, glossaryTerms, nameFixer, readGlossaries, resolveGlossaries, screenNames } from './glossary.mjs';
+import { fixerSuggestions, mergeSuggestions, screenSuggestions, sessionOf } from './glossary-suggestions.mjs';
 import { ROOT, expand } from './config.mjs';
 import { topicSections } from './sections.mjs';
 import { callLoudness, nameByCall } from './voices.mjs';
@@ -282,17 +284,29 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
       step(`named ${Object.keys(fromMeet).length} voice(s) from Meet captions: ${Object.entries(fromMeet).map(([k, v]) => `${k} = ${v}`).join(', ')}`);
     }
   }
+  const fixed = [];
   const cues = fs.existsSync(srtFile) ? parseSrt(fs.readFileSync(srtFile, 'utf8'), glossaryRules(readGlossaries(files)), who) : [];
   // After the glossary: names the screen spells right and the transcript does not.
   if (cues.length && cfg.screenNames !== false && cfg.screenNames !== 'false') {
     const fix = nameFixer(names);
-    for (const c of cues) c.text = fix(c.text);
+    // Each correction's first cue is its evidence for the glossary suggestions.
+    for (const c of cues) {
+      const heard = c.text, before = new Set(fix.log.keys());
+      c.text = fix(c.text);
+      for (const k of fix.log.keys()) if (!before.has(k)) { const [from, to] = k.split(' -> '); fixed.push({ from, to, start: c.start, heard }); }
+    }
     if (fix.log.size) {
       const list = [...fix.log].map(([k, n]) => `${k}${n > 1 ? ` x${n}` : ''}`);
       fs.appendFileSync(path.join(dir, 'process.log'), `[${new Date().toISOString()}] [${ch.name}] names from the screen (${names.length} on screen): ${list.join(', ')}\n`);
       step(`fixed ${[...fix.log.values()].reduce((a, b) => a + b, 0)} names from the screen (${fix.log.size} kinds; see process.log)`);
     }
   }
+  // Glossary suggestions from this chapter (the user accepts or rejects them; no glossary is written here).
+  try {
+    const exclude = [...list(ch.speakers ?? cfg.speakers), ...(Array.isArray(who) ? who : Object.values(who || {})), cfg.me].filter(Boolean).flatMap((x) => String(x).split(/\s+/));
+    const found = [...fixerSuggestions(fixed, ch.n || 1), ...(cues.length && dictionary().size ? screenSuggestions(names, cues, { chapter: ch.n || 1, exclude: [...exclude, ...fixed.map((f) => f.to)] }) : [])];
+    if (found.length) mergeSuggestions(sessionOf(dir), found, { cfg, glossaries: files });
+  } catch (e) { step(`glossary suggestions skipped: ${e.message}`); }
   // With a call track, the audio says who is on the call; it beats voice guessing.
   const people = Array.isArray(who) ? who : list(ch.speakers ?? cfg.speakers);
   const byCall = !split?.split && audioTracks > 1 && cues.length ? nameByCall(cues, callDb, people) : false;
@@ -342,7 +356,8 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
   // A chapter of a few seconds (a stray pause or next) is not worth a Claude brief. A diatribe always gets one
   // (its notes are the point), unless the caller says no.
   const diatribe = chapterKind(dir, ch) === 'diatribe';
-  const wantBrief = brief ?? (diatribe || cfg.brief);
+  // The recording's own switch ("Notes & action items") beats the config; an explicit --brief/--no-brief beats both.
+  const wantBrief = wantsBrief(brief, ch, readSession(dir), diatribe, cfg);
   if (wantBrief && dur < 20 && !diatribe) step('no brief: under 20 s');
   else if (wantBrief) {
     step('writing brief (Claude)');
@@ -350,6 +365,8 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
   }
   return summary;
 }
+
+const readSession = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(dir), 'session.json'), 'utf8')); } catch { return {}; } };
 
 // index.md for a session folder: one row per chapter.
 export function writeIndex(sessionDir) {
@@ -372,7 +389,7 @@ export function writeIndex(sessionDir) {
     return l.length > 1 ? [`- ${c.n} ${c.name}: ${l.map((x) => `${String(Math.floor(x.at / 60)).padStart(2, '0')}:${String(Math.floor(x.at % 60)).padStart(2, '0')} ${x.title}`).join(' · ')}`] : [];
   });
   const text = [`# ${s.topic || 'walkthrough'}`, '', `Started ${new Date(s.startedAt).toLocaleString()}.${s.url ? ` URL ${s.url}` : ''}${s.source ? ` Imported from ${s.source.file} (no click log).` : ''}`, '',
-    `For agents: \`/ux-walk ${sessionDir}${s.ask ? ` ${s.ask}` : s.kind === 'diatribe' ? ` ${DIATRIBE_ASK}` : ''}\``, '',
+    `For agents: \`${handoffLine(sessionDir, s.ask, { kind: s.kind, project: sessionProject(sessionDir) })}\``, '',
     '| # | Chapter | Length | Status | SAY / NAV / WRITE / RISK / ERROR | Timeline |', '|---|---|---|---|---|---|', ...rows, '',
     ...(secs.length ? ['Sections (also `## mm:ss` headers in each timeline):', '', ...secs, ''] : [])].join('\n');
   const tmp = path.join(sessionDir, `.index.${process.pid}.md`);

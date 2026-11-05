@@ -27,6 +27,9 @@ const DEFAULTS = {
   elevenlabsKeychainItem: 'ux-walk-elevenlabs',
   assemblyaiKeychainItem: 'ux-walk-assemblyai',
   descriptKeychainItem: 'descript-mcp-token',
+  project: '', // default project id (<configDir>/projects/<id>.json): its glossary, tracker, source folder and notes
+  githubKeychainItem: 'ux-walk-github', // issue trackers (src/trackers/): GITHUB_TOKEN / LINEAR_API_KEY win
+  linearKeychainItem: 'ux-walk-linear',
   language: 'en',
   glossary: '', // extra glossaries always used: names in ~/.config/ux-walk/glossaries/ or paths, comma-separated
   me: '', // your first name, used as the first speaker; default: your macOS account name
@@ -72,6 +75,7 @@ export function loadConfig(flags = {}) {
   cfg.outDir = expand(cfg.outDir);
   cfg.authFile = expand(cfg.authFile);
   cfg.sourceRoot = expand(cfg.sourceRoot);
+  cfg.configDir = CONFIG_DIR;
   if (typeof cfg.contextSelectors === 'string') { try { cfg.contextSelectors = JSON.parse(cfg.contextSelectors || '{}'); } catch { cfg.contextSelectors = {}; } }
   const bool = (v) => v !== false && v !== 'false' && v !== '0';
   cfg.trace = bool(cfg.trace);

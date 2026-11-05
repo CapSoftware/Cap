@@ -5,10 +5,10 @@
 //   descript    a private Descript project per chapter (src/descript.mjs)
 // Keys: env (ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY, DESCRIPT_API_TOKEN), else the login Keychain item named in
 // config, stored by `ux-walk setup` or the menu bar app's Settings.
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as descript from './descript.mjs';
+import { keyFor, keyPresent } from './keys.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,25 +17,17 @@ export const PROVIDERS = {
   assemblyai: { name: 'AssemblyAI', env: 'ASSEMBLYAI_API_KEY', item: (cfg) => cfg.assemblyaiKeychainItem, keyUrl: 'https://www.assemblyai.com/dashboard/api-keys' },
   descript: { name: 'Descript', env: 'DESCRIPT_API_TOKEN', item: (cfg) => cfg.descriptKeychainItem, keyUrl: 'Descript > Settings > API' },
 };
+for (const p of Object.values(PROVIDERS)) p.keychainItem = p.item;
 
 export function providerKey(cfg, id = cfg.transcriber) {
   const p = PROVIDERS[id];
   if (!p) throw new Error(`unknown transcriber "${id}" (use ${Object.keys(PROVIDERS).join(', ')} or none)`);
-  if (process.env[p.env]) return process.env[p.env];
-  try {
-    return execFileSync('security', ['find-generic-password', '-a', process.env.USER, '-s', p.item(cfg), '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch {
-    throw new Error(`no ${p.name} key: run "ux-walk setup" or the menu bar app's Settings (Keychain item "${p.item(cfg)}"), or set ${p.env}`);
-  }
+  return keyFor(p, cfg);
 }
 
-// Presence only: without -w, security does not return the secret.
 export function providerKeyPresent(cfg, id = cfg.transcriber) {
   const p = PROVIDERS[id];
-  if (!p) return false;
-  if (process.env[p.env]) return true;
-  try { execFileSync('security', ['find-generic-password', '-a', process.env.USER, '-s', p.item(cfg)], { stdio: 'ignore' }); return true; }
-  catch { return false; }
+  return !!p && keyPresent(p, cfg);
 }
 
 // Before recording: say now, not after the walk, when the chapters would get no transcript. null when fine.
