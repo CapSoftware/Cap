@@ -207,6 +207,7 @@ const CommentComposer = memo(function CommentComposer({
 	title,
 }: CommentComposerProps) {
 	const [comment, setComment] = useState("");
+	const submitting = useRef(false);
 	const trimmedComment = comment.trim();
 	const commentHint = isPosting
 		? "Comment is being sent"
@@ -226,8 +227,13 @@ const CommentComposer = memo(function CommentComposer({
 	const canSendComment = Boolean(trimmedComment) && !disabled;
 
 	const submit = useCallback(async () => {
-		if (!trimmedComment || disabled) return;
-		if (await onSubmit(trimmedComment)) setComment("");
+		if (!trimmedComment || disabled || submitting.current) return;
+		submitting.current = true;
+		try {
+			if (await onSubmit(trimmedComment)) setComment("");
+		} finally {
+			submitting.current = false;
+		}
 	}, [disabled, onSubmit, trimmedComment]);
 
 	return (
