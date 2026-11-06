@@ -425,7 +425,9 @@ async function addOrganizationDomain(domain: string) {
 			throw new FatalError(response.error.message ?? "Could not add domain");
 		}
 	}
-	return checkDomainStatus(domain);
+	const status = await checkDomainStatus(domain);
+	if (status.error) throw new Error(status.error);
+	return status;
 }
 
 async function removeOrganizationDomainFromVercel(domain: string) {
@@ -448,7 +450,9 @@ async function removeOrganizationDomainFromVercel(domain: string) {
 async function verifyOrganizationDomainStatus(domain: string) {
 	"use step";
 
-	return checkDomainStatus(domain);
+	const status = await checkDomainStatus(domain);
+	if (status.error) throw new Error(status.error);
+	return status;
 }
 
 async function finishOrganizationDomain(
