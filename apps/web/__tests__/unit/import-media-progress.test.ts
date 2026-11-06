@@ -316,6 +316,18 @@ describe("dashboard video import progress", () => {
 			);
 		});
 
+		it("sends no progress after a failed upload is cancelled", async () => {
+			mocks.finalize.mockRejectedValue(new Error("Failed to upload part 3"));
+			mocks.cancel.mockImplementation(async () => {
+				mocks.uploader.mock.lastCall?.[0].onChunkStateChange([]);
+			});
+
+			expect(await importVideo()).toBe(false);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(mocks.progress).not.toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		});
+
 		it("deletes the Cap when the video upload cannot start", async () => {
 			mocks.initiate.mockRejectedValue(new Error("initiate failed"));
 

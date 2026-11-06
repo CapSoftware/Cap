@@ -276,6 +276,8 @@ async function uploadVideoForServerProcessing(
 				setUploadStatus: () => {},
 				sendProgressUpdate: async () => {},
 				onChunkStateChange: (chunks) => {
+					// cancel() clears the chunk list; that is not progress.
+					if (chunks.length === 0) return;
 					const loaded = chunks.reduce(
 						(sent, chunk) => sent + chunk.uploadedBytes,
 						0,
