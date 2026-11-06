@@ -279,7 +279,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 
-					const shouldUsePlaceholder = !user.onboardingSteps?.welcome;
+					const shouldUsePlaceholder = !user.name?.trim();
 					const userName = shouldUsePlaceholder ? "Your name" : user.name;
 					const orgName = shouldUsePlaceholder
 						? "Your Organization"
