@@ -9,6 +9,7 @@ import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
 	accounts,
+	directoryUsers,
 	organizationInvites,
 	organizationMembers,
 	organizationSso,
@@ -243,6 +244,23 @@ export async function provisionSsoMembership(
 			eq(organizationInvites.status, "pending"),
 		);
 		if (!member) {
+			const directoryLinks = await tx
+				.select({ active: directoryUsers.active })
+				.from(directoryUsers)
+				.where(
+					and(
+						eq(directoryUsers.organizationId, identity.organizationId),
+						eq(directoryUsers.userId, userId),
+					),
+				);
+			if (
+				directoryLinks.length > 0 &&
+				!directoryLinks.some((link) => link.active)
+			) {
+				throw new Error(
+					"Your directory no longer grants access to this organization.",
+				);
+			}
 			const [adminInvite] = await tx
 				.select({ id: organizationInvites.id })
 				.from(organizationInvites)
