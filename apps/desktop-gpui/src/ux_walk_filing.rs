@@ -237,42 +237,36 @@ impl FileOutcome {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|item| {
-                    Some(Filed {
-                        key: key(item)?,
-                        title: title(item),
-                        reference: text(&item["ref"]),
-                        url: text(&item["url"]),
-                    })
+                .map(|item| Filed {
+                    key: key(item).unwrap_or_default(),
+                    title: title(item),
+                    reference: text(&item["ref"]),
+                    url: text(&item["url"]),
                 })
                 .collect(),
             skipped: value["skipped"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|item| {
-                    Some(Skipped {
-                        key: key(item)?,
-                        title: title(item),
-                        refs: item["refs"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|reference| text(&reference["ref"]))
-                            .collect(),
-                    })
+                .map(|item| Skipped {
+                    key: key(item).unwrap_or_default(),
+                    title: title(item),
+                    refs: item["refs"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|reference| text(&reference["ref"]))
+                        .collect(),
                 })
                 .collect(),
             failed: value["failed"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|item| {
-                    Some(Failed {
-                        key: key(item)?,
-                        title: title(item),
-                        error: text(&item["error"]).unwrap_or_else(|| "Unknown error".into()),
-                    })
+                .map(|item| Failed {
+                    key: key(item).unwrap_or_default(),
+                    title: title(item),
+                    error: text(&item["error"]).unwrap_or_else(|| "Unknown error".into()),
                 })
                 .collect(),
             tracker,

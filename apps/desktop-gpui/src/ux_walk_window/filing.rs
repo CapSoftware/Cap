@@ -35,7 +35,11 @@ pub(super) struct FilingState {
     notice: Option<String>,
     reprocess_hint: Option<String>,
     menu: Option<ProjectMenu>,
+    /// Changes when the shown recording changes; filing actions check it before landing.
     revision: u64,
+    /// Changes on every load, so only the newest load lands. A reload of the same recording
+    /// leaves `revision` alone, so a filing action in flight still lands and clears `busy`.
+    loads: u64,
 }
 
 impl FilingState {
@@ -99,8 +103,8 @@ impl WalkWindow {
         if !self.filing.shows(&file) {
             self.filing.reset(file.clone());
         }
-        self.filing.revision = self.filing.revision.wrapping_add(1);
-        let revision = self.filing.revision;
+        self.filing.loads = self.filing.loads.wrapping_add(1);
+        let (revision, loads) = (self.filing.revision, self.filing.loads);
         self.filing.loading = true;
         cx.spawn_in(window, async move |this, cx| {
             let requested = file.clone();
@@ -117,7 +121,10 @@ impl WalkWindow {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                if this.filing.revision != revision || !this.filing.shows(&requested) {
+                if this.filing.revision != revision
+                    || this.filing.loads != loads
+                    || !this.filing.shows(&requested)
+                {
                     return;
                 }
                 this.filing.loading = false;
@@ -781,7 +788,7 @@ impl WalkWindow {
                         })),
                     ),
             )
-            .children(outcome.filed.iter().map(|item| {
+            .children(outcome.filed.iter().enumerate().map(|(index, item)| {
                 let reference = item.reference.clone().unwrap_or_default();
                 div()
                     .flex()
@@ -790,7 +797,7 @@ impl WalkWindow {
                     .child(div().text_color(theme.gray_11).child("Filed"))
                     .child(ref_link(
                         &theme,
-                        format!("walk-filed-{}", item.key),
+                        format!("walk-filed-{index}"),
                         reference,
                         item.link().map(str::to_string),
                     ))
