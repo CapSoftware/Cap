@@ -11788,28 +11788,17 @@ mod dx12_compiler_fallback_tests {
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .expect("FXC instance has a DX12 adapter");
-        let (device, _queue) =
+        let (device, queue) =
             pollster::block_on(request_rendering_device(&adapter)).expect("device on FXC");
 
-        // FXC compiles at pipeline creation, so build one to prove it works.
+        // FXC compiles at pipeline creation, so build every production
+        // rendering pipeline on the fallback device.
         device.push_error_scope(wgpu::ErrorFilter::Internal);
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(
-                "@group(0) @binding(0) var<storage, read_write> out: array<u32>;\n\
-                 @compute @workgroup_size(1) fn main() { out[0] = 7u; }"
-                    .into(),
-            ),
-        });
-        let _pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: None,
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let started = Instant::now();
+        let _layers = RendererLayers::new(&device, &queue);
+        let _transitions = TransitionCompositor::new(&device);
+        let compile_time = started.elapsed();
         let validation = pollster::block_on(device.pop_error_scope());
         let internal = pollster::block_on(device.pop_error_scope());
         assert!(
@@ -11819,7 +11808,7 @@ mod dx12_compiler_fallback_tests {
 
         let info = adapter.get_info();
         println!(
-            "device created on FXC: adapter={} backend={:?} type={:?}",
+            "device created on FXC: adapter={} backend={:?} type={:?} pipelines={compile_time:?}",
             info.name, info.backend, info.device_type
         );
     }
