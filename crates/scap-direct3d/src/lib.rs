@@ -622,15 +622,15 @@ impl Capturer {
         let crop_data = settings
             .crop
             .map(|crop| {
-                let texture = create_copy_texture(
-                    &d3d_device,
-                    crop.right - crop.left,
-                    crop.bottom - crop.top,
-                    settings.pixel_format,
-                )
-                .map_err(NewCapturerError::CropTexture)?;
+                let width = crop.right - crop.left;
+                let height = crop.bottom - crop.top;
+                let texture =
+                    create_copy_texture(&d3d_device, width, height, settings.pixel_format)
+                        .map_err(NewCapturerError::CropTexture)?;
+                let crop_pool = Arc::new(TrimPool::default());
+                crop_pool.give(texture, width, height);
 
-                Ok::<_, NewCapturerError>((texture, crop))
+                Ok::<_, NewCapturerError>((crop_pool, crop, width, height))
             })
             .transpose()?;
 
@@ -737,7 +737,9 @@ impl Capturer {
                             return Ok(());
                         }
 
-                        let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                        let frame = if let Some((crop_pool, crop, crop_width, crop_height)) =
+                            crop_data.clone()
+                        {
                             // A shrunk item leaves the crop box hanging off the
                             // edge of the source texture, which copies nothing
                             // and would vend a stale surface as if it were live.
@@ -749,6 +751,13 @@ impl Capturer {
                             {
                                 return Ok(());
                             }
+
+                            let cropped_texture = crop_pool.take(
+                                &d3d_device,
+                                crop_width,
+                                crop_height,
+                                pixel_format,
+                            )?;
 
                             unsafe {
                                 d3d_context.CopySubresourceRegion(
@@ -764,15 +773,15 @@ impl Capturer {
                             }
 
                             Frame {
-                                width: crop.right - crop.left,
-                                height: crop.bottom - crop.top,
+                                width: crop_width,
+                                height: crop_height,
                                 pixel_format: settings.pixel_format,
                                 inner: frame,
                                 texture: cropped_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),
-                                recycle: None,
+                                recycle: Some(crop_pool),
                             }
                         } else {
                             // The frame is the content bounded by its surface,
@@ -979,6 +988,10 @@ impl Frame {
 
     pub fn texture(&self) -> &ID3D11Texture2D {
         &self.texture
+    }
+
+    pub fn is_pooled(&self) -> bool {
+        self.recycle.is_some()
     }
 
     pub fn d3d_device(&self) -> &ID3D11Device {
