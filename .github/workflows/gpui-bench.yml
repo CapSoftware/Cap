@@ -1,11 +1,5 @@
 name: GPUI frame benchmarks
 
-# Builds Cap's GPUI frame benchmarks (apps/desktop-gpui/gpui-benches) twice on
-# each platform — against the base patch stack and against this commit's — and
-# runs the two builds interleaved on the same machine. A change to the GPUI
-# patch stack shows up as a per-benchmark head/base ratio in the job summary.
-# The same jobs run gpui's own test suites against this commit's stack.
-
 on:
   pull_request:
     paths:
@@ -154,9 +148,8 @@ jobs:
             --label "${{ matrix.settings.name }}" \
             --summary "$GITHUB_STEP_SUMMARY"
 
-      # Every frame both builds submit to the renderer is hashed and compared;
-      # identical scenes mean identical pixels. Only macOS has a headless
-      # renderer to observe submitted frames, so the step is a no-op elsewhere.
+      # Only macOS has a headless renderer that sees submitted frames; the
+      # step reports a skip elsewhere.
       - name: Scene equivalence
         shell: bash
         run: |

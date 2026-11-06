@@ -1,18 +1,6 @@
-//! Whole-frame benchmarks for Cap's GPUI fork.
-//!
-//! Every benchmark drives real frames through `Window::draw` (render, layout,
-//! prepaint, paint, scene finish) on the platform's own text system; on macOS
-//! the frame is also submitted to Metal through the headless renderer. The
-//! workloads mirror the shapes Cap's windows draw: cards with borders and
-//! shadows, label-heavy rows, a recordings list that scrolls, a timer whose
-//! text changes every frame, hover over many hitboxes, and cached panels where
-//! only one view changes per frame.
-//!
-//! With `GPUI_SCENE_DIGEST=<file>` set, every frame a benchmark submits is
-//! also hashed (every primitive, in the order the renderer receives them, and
-//! the pixels uploaded into each atlas tile its sprites show) and one line per
-//! frame is appended to `<file>`. Two builds that produce the same digests drew
-//! the same scenes, so they render the same pixels.
+//! `GPUI_SCENE_DIGEST=<file>` appends one hash per submitted frame (primitives in
+//! renderer order plus the atlas pixels their sprites show) for
+//! `scripts/gpui-scene-digest.py` to compare between builds.
 
 use std::{
     borrow::Cow,
@@ -128,8 +116,6 @@ impl Render for Cards {
     }
 }
 
-/// Full re-render of a wrapping grid of styled cards (borders, rounded corners,
-/// shadows, two labels each): layout-, style- and scene-heavy.
 fn cards(count: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -191,8 +177,6 @@ impl Render for TextRows {
     }
 }
 
-/// Label-heavy rows whose text is identical every frame: exercises the line
-/// layout cache hit path and glyph painting.
 fn text_rows_static(rows: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -209,8 +193,6 @@ fn text_rows_static(rows: usize, cx: &mut BenchAppContext) {
         .bench_renderer(view, |_, _, cx| cx.notify());
 }
 
-/// The same rows with a timestamp column that changes every frame, like a
-/// recording timer or a timeline ruler: one fresh shaping per row per frame.
 fn text_rows_changing(rows: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -252,8 +234,6 @@ impl Render for Paragraphs {
     }
 }
 
-/// Wrapped paragraphs in columns of several widths: line wrapping and
-/// multi-line text layout.
 fn paragraphs(count: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -312,7 +292,6 @@ impl Render for Recordings {
     }
 }
 
-/// A 10 000-row virtualized list scrolled a few pixels every frame.
 fn recordings_scroll(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -335,9 +314,6 @@ fn recordings_scroll(cx: &mut BenchAppContext) {
     });
 }
 
-/// Pointer moves across a grid of hoverable cards; every move changes the
-/// hovered card, so each one dispatches through every mouse listener, hit
-/// tests every hitbox and redraws.
 fn hover_cards(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -349,7 +325,6 @@ fn hover_cards(cx: &mut BenchAppContext) {
     let mut step = 0usize;
     window.app_context().bench_iter(move |cx| {
         step += 1;
-        // Alternate between the centres of the first cards of two rows.
         let x = 16. + 90. + (step % 8) as f32 * 188.;
         let y = 16. + 32. + (step % 2) as f32 * 72.;
         cx.update(|cx| {
@@ -429,8 +404,6 @@ impl Render for Panels {
     }
 }
 
-/// Forty cached panels where one changes per frame: the view-cache reuse path
-/// (`reuse_prepaint` / `reuse_paint`) that most interactive frames take.
 fn cached_panels(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -519,8 +492,6 @@ impl Render for Primitives {
     }
 }
 
-/// Thousands of quads, shadows and paths painted straight from a canvas:
-/// scene insertion, sorting, batching and (on macOS) GPU submission.
 fn primitives(quads: usize, cx: &mut BenchAppContext) {
     let mut window = cx.add_empty_window();
     let view = window
@@ -580,13 +551,10 @@ fn primitives_8192(cx: &mut BenchAppContext) {
     primitives(8192, cx);
 }
 
-/// Frames hashed per benchmark when `GPUI_SCENE_DIGEST` is set; enough to
-/// cover the warm-up frames every run draws, whatever Criterion's timing.
 const DIGEST_FRAMES: usize = 64;
 
-/// Wraps the platform's sprite atlas and records a hash of the pixels uploaded
-/// into each tile, so a scene digest covers what its sprites show, not just
-/// which tiles they reference.
+// Sprites only reference tiles by id; without the uploaded pixels a
+// rasterization change would leave the digest unchanged.
 struct DigestAtlas {
     inner: Arc<dyn PlatformAtlas>,
     contents: Mutex<HashMap<(AtlasTextureId, u32), u64>>,
@@ -648,7 +616,6 @@ impl PlatformAtlas for DigestAtlas {
     }
 }
 
-/// Wraps the platform's headless renderer and hashes each scene it submits.
 struct SceneDigestRenderer {
     inner: Box<dyn PlatformHeadlessRenderer>,
     atlas: Arc<DigestAtlas>,
@@ -741,7 +708,6 @@ impl PlatformHeadlessRenderer for SceneDigestRenderer {
     }
 }
 
-/// What `#[gpui::bench]` generates, plus the optional scene digest.
 fn run(criterion: &mut Criterion, name: &'static str, benchmark: fn(&mut BenchAppContext)) {
     let report = BenchReport::default();
     let digest = std::env::var_os("GPUI_SCENE_DIGEST").map(PathBuf::from);

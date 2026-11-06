@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""Checks that two builds of the GPUI frame benchmarks draw identical scenes.
+"""Usage: gpui-scene-digest.py --base <dir> --head <dir> --out <dir>
 
-    python scripts/gpui-scene-digest.py --base <dir> --head <dir> --out <dir>
-
-Runs each `frame` executable briefly with GPUI_SCENE_DIGEST set, so every
-frame a benchmark submits to the renderer is hashed (all primitives, in the
-order the renderer receives them), then compares the digests frame by frame.
-Criterion starts a benchmark several times and each start counts frames from
-zero, so frames are compared as the set of digests seen at each
-(benchmark, frame) position. Criterion runs for a fixed time, so a faster build
-draws more frames: each benchmark is compared over the frames both builds
-reached, and must reach at least MIN_FRAMES on each side. Exits non-zero if any
-frame differs, if a benchmark is missing or drew too few frames on either
-side, or if a build that should have a headless renderer (macOS) digested
-nothing.
+Criterion restarts each benchmark several times with the frame counter at zero,
+so frames are compared as the set of digests per (benchmark, frame) position,
+and only over the frames both builds reached: in Criterion's fixed time a
+faster build draws more of them.
 """
 
 import argparse

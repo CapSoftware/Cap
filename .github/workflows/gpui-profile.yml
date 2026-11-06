@@ -1,10 +1,5 @@
 name: GPUI frame profile
 
-# Runs each GPUI frame benchmark under callgrind on Linux and publishes the
-# hottest functions (inclusive and self cost). An investigation aid for the
-# GPUI patch stack; it measures instructions, not time, so it is stable from
-# run to run.
-
 on:
   push:
     branches:

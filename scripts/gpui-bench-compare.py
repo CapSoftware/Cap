@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Interleaved A/B run of two builds of Cap's GPUI frame benchmarks.
+"""Usage: gpui-bench-compare.py --base <dir> --head <dir> --out <dir> [--rounds N]
 
-    python scripts/gpui-bench-compare.py --base <dir> --head <dir> --out <dir>
-        [--rounds 5] [--measurement-time 2] [--sample-size 20] [--filter REGEX]
-        [--summary FILE]
-
-<dir> holds the `frame` (or `frame.exe`) executable built by
-scripts/gpui-bench-build.sh. Both executables run on the same machine in
-alternating order (base, head, head, base, ...) so drift in machine state lands
-on both sides. Every run writes Criterion's estimates under its own
-CRITERION_HOME; each benchmark is compared by the per-round ratio of Criterion
-median times (head / base), paired by round.
+Base and head alternate (base, head, head, base, ...) and are compared per
+round, because machine state on CI VMs drifts between and within jobs.
 """
 
 import argparse
@@ -27,7 +19,6 @@ def executable(directory: Path) -> Path:
     for name in ("frame.exe", "frame"):
         candidate = directory / name
         if candidate.exists():
-            # Each run executes from its own CRITERION_HOME.
             return candidate.resolve()
     sys.exit(f"error: no frame benchmark executable in {directory}")
 
@@ -71,13 +62,9 @@ REPORT = re.compile(r"^GPUI bench report \(all observed iterations\): (\S+)$")
 
 
 def draw_means(log: Path) -> dict:
-    """Mean `Window::draw` time per benchmark report, in nanoseconds.
-
-    Criterion times a whole iteration, which on macOS includes waiting for the
-    headless GPU to hand back an instance buffer; light frames end up bound by
-    the GPU. The bench report's `window draw` histogram is the CPU cost of the
-    frame alone. Reports cover every input of a benchmark group together.
-    """
+    """Criterion's time includes waiting for the headless GPU to return an
+    instance buffer, which on macOS bounds light frames; the bench report's
+    `window draw` histogram is the frame's CPU cost alone."""
     means = {}
     name = None
     in_draw = False

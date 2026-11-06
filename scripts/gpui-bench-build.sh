@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
-# Builds Cap's GPUI frame benchmarks (apps/desktop-gpui/gpui-benches) against
-# a prepared zed checkout and copies the benchmark executable to <out-dir>.
+# Usage: scripts/gpui-bench-build.sh <zed-dir> <out-dir>
 #
-#   scripts/gpui-bench-build.sh <zed-dir> <out-dir>
-#
-# The bench crate is copied into <zed-dir>/crates/gpui_cap_benches and added to
-# that workspace, so it compiles against exactly the patched gpui in <zed-dir>
-# and Zed's own lockfile. Set CARGO_TARGET_DIR to share dependency builds
-# between checkouts.
+# The bench crate is built inside the zed workspace so it compiles against
+# exactly the patched gpui there and Zed's own lockfile.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,6 +12,7 @@ bench_src="$repo_root/apps/desktop-gpui/gpui-benches"
 bench_dst="$zed_dir/crates/gpui_cap_benches"
 
 mkdir -p "$bench_dst" "$out_dir"
+out_dir="$(cd "$out_dir" && pwd)"
 cp -R "$bench_src/." "$bench_dst/"
 
 python_bin="$(command -v python3 || command -v python)"

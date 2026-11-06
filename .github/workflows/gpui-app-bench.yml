@@ -1,12 +1,5 @@
 name: GPUI app benchmark
 
-# Builds the real Cap app (cap-gpui) twice on macOS — against the base GPUI
-# patch stack and against this commit's — and runs the editor's own timeline
-# benchmark (src/editor_bench.rs) with each build, interleaved, on the
-# reference recording from CapSoftware/cap-performance-fixtures. A change to the
-# GPUI patch stack shows up as a per-scenario `Window::draw` ratio in the job
-# summary.
-
 on:
   pull_request:
     paths:

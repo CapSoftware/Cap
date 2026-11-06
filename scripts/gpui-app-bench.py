@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Interleaved A/B run of Cap's in-app editor timeline benchmark.
+"""Usage: gpui-app-bench.py --base <cap-gpui> --head <cap-gpui> --fixture <studio .cap> --out <dir>
 
-    python scripts/gpui-app-bench.py --base <cap-gpui> --head <cap-gpui> \
-        --fixture <studio .cap> --out <dir> [--rounds 3] [--summary FILE]
-
-Each run launches the real app on a fresh profile and a fresh copy of the
-fixture project with CAP_GPUI_AUTO_TIMELINE_BENCH=1 (src/editor_bench.rs),
-which times `Window::draw` across the editor's scenarios and exits. Base and
-head alternate (base, head, head, base, ...) on the same machine; scenarios
-are compared by the per-round ratio of median (p50) draw times, head / base.
-The editor decodes video while it plays, so means and tails swing with the
-decoder; the median is the stable statistic.
+Medians are compared rather than means: the editor decodes video while it
+plays, so means and tails swing with the decoder.
 """
 
 import argparse
