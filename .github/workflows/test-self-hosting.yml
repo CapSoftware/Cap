@@ -7,14 +7,18 @@ on:
       - main
     paths:
       - "docker-compose.yml"
+      - "docker-compose.template.yml"
       - "docker-compose.coolify.yml"
+      - ".env.self-hosting.example"
       - "apps/media-server/**"
       - "apps/web/Dockerfile"
       - ".github/workflows/test-self-hosting.yml"
   pull_request:
     paths:
       - "docker-compose.yml"
+      - "docker-compose.template.yml"
       - "docker-compose.coolify.yml"
+      - ".env.self-hosting.example"
       - "apps/media-server/**"
       - "apps/web/Dockerfile"
       - ".github/workflows/test-self-hosting.yml"
@@ -28,6 +32,32 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Configure self-hosting secrets
+        run: |
+          cp .env.self-hosting.example .env
+          for name in NEXTAUTH_SECRET DATABASE_ENCRYPTION_KEY MEDIA_SERVER_WEBHOOK_SECRET; do
+            secret=$(openssl rand -hex 32)
+            echo "::add-mask::$secret"
+            sed -i.bak "s/^$name=.*/$name=$secret/" .env
+          done
+          rm .env.bak
+
+      - name: Validate required Compose secrets
+        run: |
+          for file in docker-compose.yml docker-compose.template.yml; do
+            docker compose -f "$file" config --quiet
+            for name in NEXTAUTH_SECRET DATABASE_ENCRYPTION_KEY MEDIA_SERVER_WEBHOOK_SECRET; do
+              if env "$name=" docker compose -f "$file" config --quiet > "$RUNNER_TEMP/cap-compose-validation.log" 2>&1; then
+                echo "Expected $file to reject an empty $name"
+                exit 1
+              fi
+              if ! grep -q "$name" "$RUNNER_TEMP/cap-compose-validation.log"; then
+                echo "$file did not identify the missing $name"
+                exit 1
+              fi
+            done
+          done
 
       - name: Start Cap with Docker Compose
         run: |
