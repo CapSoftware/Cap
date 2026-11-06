@@ -676,7 +676,8 @@ struct QuitCoordinator {
 }
 
 fn quit_stop_failed(error: Option<&str>, error_at_request: Option<&str>) -> bool {
-    error.is_some() && error != error_at_request
+    let _ = error_at_request;
+    error.is_some()
 }
 
 impl Global for QuitCoordinator {}
