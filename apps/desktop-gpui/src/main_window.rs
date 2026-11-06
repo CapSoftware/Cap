@@ -2269,6 +2269,24 @@ impl MainWindow {
                 tracing::error!("auto-record could not start");
                 return;
             }
+            if delete {
+                // Delete does nothing until the recording is running, so a
+                // slow start would swallow it: the seconds count from there.
+                let recording = |cx: &gpui::AsyncApp| {
+                    cx.update(|cx| matches!(session.read(cx).phase, Phase::Recording { .. }))
+                };
+                let mut polls = 0;
+                while !recording(cx) {
+                    if polls == 300 {
+                        tracing::error!("auto-record never reached Recording to Delete");
+                        return;
+                    }
+                    polls += 1;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |cx: &gpui::AsyncApp| {
