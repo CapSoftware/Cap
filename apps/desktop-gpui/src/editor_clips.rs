@@ -577,7 +577,7 @@ fn card_bg(theme: &Theme) -> Hsla {
 }
 
 impl EditorWindow {
-    fn clip_segments(&self) -> &[TimelineSegment] {
+    pub(crate) fn clip_segments(&self) -> &[TimelineSegment] {
         self.project
             .timeline
             .as_ref()

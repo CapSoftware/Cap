@@ -1302,6 +1302,16 @@ pub fn delete_clip_segments(timeline: &mut TimelineConfiguration, indices: &[usi
     deleted
 }
 
+pub fn keep_only_clip_segment(timeline: &mut TimelineConfiguration, index: usize) -> bool {
+    if index >= timeline.segments.len() || timeline.segments.len() < 2 {
+        return false;
+    }
+    let other_indices: Vec<usize> = (0..timeline.segments.len())
+        .filter(|&candidate| candidate != index)
+        .collect();
+    delete_clip_segments(timeline, &other_indices)
+}
+
 pub(crate) fn effective_to_output_end(holds: &[(f64, f64)], effective: f64) -> f64 {
     let mut output = effective;
     for (start, finish) in holds {
@@ -4636,6 +4646,366 @@ mod tests {
         assert_eq!(
             (audio.start, audio.end, audio.trim_start),
             (10.0, 13.0, 9.0)
+        );
+    }
+
+    #[test]
+    fn keep_only_clip_segment_rejects_single_clip_empty_and_out_of_bounds_indices() {
+        let mut empty = config(serde_json::json!({
+            "timeline": { "segments": [], "zoomSegments": [] }
+        }));
+        assert!(!keep_only_clip_segment(
+            empty.timeline.as_mut().unwrap(),
+            0
+        ));
+
+        let mut single = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.25, "start": 2.0, "end": 7.0 }
+                ],
+                "zoomSegments": [{ "start": 0.5, "end": 2.5, "amount": 1.5, "mode": "auto" }]
+            }
+        }));
+        let snapshot = single.clone();
+        assert!(!keep_only_clip_segment(
+            single.timeline.as_mut().unwrap(),
+            0
+        ));
+        assert!(!keep_only_clip_segment(
+            single.timeline.as_mut().unwrap(),
+            1
+        ));
+        assert_eq!(
+            serde_json::to_value(&single).unwrap(),
+            serde_json::to_value(&snapshot).unwrap()
+        );
+
+        let mut multi = two_clip_config();
+        let multi_snapshot = multi.clone();
+        assert!(!keep_only_clip_segment(
+            multi.timeline.as_mut().unwrap(),
+            2
+        ));
+        assert_eq!(
+            serde_json::to_value(&multi).unwrap(),
+            serde_json::to_value(&multi_snapshot).unwrap()
+        );
+    }
+
+    #[test]
+    fn keep_only_clip_segment_rebases_middle_clip_tracks_captions_and_restores_on_single_undo() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    {
+                        "recordingSegment": 0,
+                        "timescale": 1.0,
+                        "start": 4.0,
+                        "end": 7.0,
+                        "name": "Highlight",
+                        "speedAudioMode": "maintainPitch",
+                        "hideCursor": true,
+                        "volume": 0.8
+                    },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 7.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 12.0 }
+                ],
+                "transitions": [
+                    { "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 },
+                    { "segmentIndex": 2, "type": "cross-fade", "duration": 0.5 }
+                ],
+                "zoomSegments": [
+                    { "start": 0.5, "end": 2.0, "amount": 1.4, "mode": "auto" },
+                    { "start": 4.0, "end": 5.5, "amount": 1.8, "mode": "auto" },
+                    { "start": 7.0, "end": 8.5, "amount": 1.6, "mode": "auto" }
+                ],
+                "sceneSegments": [
+                    { "start": 0.0, "end": 3.5, "mode": "default" },
+                    { "start": 3.5, "end": 6.5, "mode": "cameraOnly" },
+                    { "start": 6.5, "end": 11.0, "mode": "hideCamera" }
+                ],
+                "textSegments": [
+                    { "start": 1.0, "end": 2.0, "track": 0, "content": "Before" },
+                    { "start": 3.0, "end": 7.0, "track": 0, "content": "Spanning" },
+                    { "start": 8.0, "end": 9.0, "track": 0, "content": "After" }
+                ],
+                "keyboardSegments": [{
+                    "id": "kb-all",
+                    "start": 2.5,
+                    "end": 7.5,
+                    "displayText": "xyz",
+                    "keys": [
+                        { "key": "x", "timeOffset": 0.0 },
+                        { "key": "y", "timeOffset": 2000.0 },
+                        { "key": "z", "timeOffset": 4500.0 }
+                    ]
+                }],
+                "audioSegments": [{
+                    "start": 1.0,
+                    "end": 9.0,
+                    "track": 0,
+                    "path": "/tmp/music.mp3",
+                    "trimStart": 2.0
+                }],
+                "styleSegments": [
+                    { "start": 4.0, "end": 6.0, "track": 0, "overrides": {} }
+                ],
+                "imageSegments": [
+                    {
+                        "start": 4.25,
+                        "end": 5.75,
+                        "track": 0,
+                        "path": "content/images/callout.png",
+                        "name": "Callout"
+                    }
+                ]
+            }
+        }));
+        project.captions = Some(cap_project::CaptionsData {
+            source_timed: true,
+            segments: vec![
+                cap_project::CaptionSegment {
+                    id: "cap-intro".into(),
+                    start: 0.5,
+                    end: 2.0,
+                    text: "Intro".into(),
+                    words: vec![cap_project::CaptionWord {
+                        text: "Intro".into(),
+                        start: 0.5,
+                        end: 2.0,
+                    }],
+                    ..Default::default()
+                },
+                cap_project::CaptionSegment {
+                    id: "cap-keep".into(),
+                    start: 4.5,
+                    end: 6.5,
+                    text: "Main point".into(),
+                    words: vec![
+                        cap_project::CaptionWord {
+                            text: "Main".into(),
+                            start: 4.5,
+                            end: 5.4,
+                        },
+                        cap_project::CaptionWord {
+                            text: "point".into(),
+                            start: 5.5,
+                            end: 6.5,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                cap_project::CaptionSegment {
+                    id: "cap-outro".into(),
+                    start: 8.0,
+                    end: 9.5,
+                    text: "Outro".into(),
+                    words: vec![cap_project::CaptionWord {
+                        text: "Outro".into(),
+                        start: 8.0,
+                        end: 9.5,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let recording_durations = [12.0];
+        cap_project::synchronize_captions(&mut project, &recording_durations);
+        {
+            let timeline = project.timeline.as_mut().unwrap();
+            let mut mask = default_mask_segment(3.0, 6.0, 0);
+            mask.keyframes.position = vec![
+                cap_project::MaskVectorKeyframe {
+                    time: 0.2,
+                    x: 0.1,
+                    y: 0.2,
+                },
+                cap_project::MaskVectorKeyframe {
+                    time: 1.5,
+                    x: 0.5,
+                    y: 0.6,
+                },
+            ];
+            timeline.mask_segments.push(mask);
+            timeline.camera3d_segments = vec![
+                default_camera3d_segment(0.5, 2.0),
+                default_camera3d_segment(4.0, 6.0),
+                default_camera3d_segment(7.5, 9.5),
+            ];
+        }
+        let before = serde_json::to_value(&project).unwrap();
+        let mut history = ProjectHistory::new(project.clone());
+
+        assert!(keep_only_clip_segment(
+            project.timeline.as_mut().unwrap(),
+            1
+        ));
+        cap_project::synchronize_captions(&mut project, &recording_durations);
+        history.record(&project);
+
+        let model = editor_timeline::TimelineModel::build(&project, true, false);
+        assert!((model.total_duration - 3.0).abs() < 1e-9);
+        assert_eq!(model.clips.len(), 1);
+        assert!((model.clips[0].start - 0.0).abs() < 1e-9);
+        assert!((model.clips[0].end - 3.0).abs() < 1e-9);
+
+        let timeline = project.timeline.as_ref().unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        let kept = &timeline.segments[0];
+        assert_eq!(kept.recording_clip, 0);
+        assert_eq!((kept.start, kept.end, kept.timescale), (4.0, 7.0, 1.0));
+        assert_eq!(kept.name.as_deref(), Some("Highlight"));
+        assert_eq!(
+            kept.speed_audio_mode,
+            Some(cap_project::ClipSpeedAudioMode::MaintainPitch)
+        );
+        assert_eq!(kept.hide_cursor, Some(true));
+        assert_eq!(kept.volume, Some(0.8));
+        assert!(timeline.transitions.is_empty());
+
+        assert_eq!(timeline.zoom_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.zoom_segments[0].start,
+                timeline.zoom_segments[0].end,
+                timeline.zoom_segments[0].amount
+            ),
+            (0.5, 2.0, 1.8)
+        );
+        assert_eq!(timeline.scene_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.scene_segments[0].start,
+                timeline.scene_segments[0].end,
+            ),
+            (0.0, 3.0)
+        );
+        assert!(matches!(
+            timeline.scene_segments[0].mode,
+            cap_project::SceneMode::CameraOnly
+        ));
+        assert_eq!(timeline.text_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.text_segments[0].start,
+                timeline.text_segments[0].end,
+                timeline.text_segments[0].content.as_str()
+            ),
+            (0.0, 3.0, "Spanning")
+        );
+        assert_eq!(timeline.keyboard_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.keyboard_segments[0].start,
+                timeline.keyboard_segments[0].end,
+                timeline.keyboard_segments[0].display_text.as_str()
+            ),
+            (0.0, 3.0, "y")
+        );
+        assert_eq!(timeline.keyboard_segments[0].keys.len(), 1);
+        assert_eq!(timeline.keyboard_segments[0].keys[0].time_offset, 1000.0);
+
+        let audio = &timeline.audio_segments[0];
+        assert_eq!(
+            (audio.start, audio.end, audio.trim_start),
+            (0.0, 3.0, 4.5)
+        );
+        assert_eq!(
+            (
+                timeline.style_segments[0].start,
+                timeline.style_segments[0].end
+            ),
+            (0.5, 2.5)
+        );
+        assert_eq!(
+            (
+                timeline.image_segments[0].start,
+                timeline.image_segments[0].end
+            ),
+            (0.75, 2.25)
+        );
+        assert_eq!(timeline.mask_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.mask_segments[0].start,
+                timeline.mask_segments[0].end
+            ),
+            (0.0, 2.5)
+        );
+        assert_eq!(timeline.mask_segments[0].keyframes.position.len(), 1);
+        assert!((timeline.mask_segments[0].keyframes.position[0].time - 1.0).abs() < 1e-9);
+        assert_eq!(timeline.camera3d_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.camera3d_segments[0].start,
+                timeline.camera3d_segments[0].end
+            ),
+            (0.5, 2.5)
+        );
+        assert_eq!(timeline.caption_segments.len(), 1);
+        assert_eq!(timeline.caption_segments[0].text, "Main point");
+        assert!((timeline.caption_segments[0].start - 0.5).abs() < 1e-9);
+        assert!((timeline.caption_segments[0].end - 2.5).abs() < 1e-9);
+
+        let after_keep = serde_json::to_value(&project).unwrap();
+        let restored = history.undo().unwrap().clone();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), before);
+        let reapplied = history.redo().unwrap().clone();
+        assert_eq!(serde_json::to_value(&reapplied).unwrap(), after_keep);
+    }
+
+    #[test]
+    fn keep_only_clip_segment_supports_keeping_first_or_last_clip() {
+        let base = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 3.0, "name": "First" },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 3.0, "end": 6.0, "name": "Middle" },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 6.0, "end": 10.0, "name": "Last" }
+                ],
+                "zoomSegments": [
+                    { "start": 0.5, "end": 2.0, "amount": 1.3, "mode": "auto" },
+                    { "start": 6.5, "end": 7.5, "amount": 1.7, "mode": "auto" }
+                ]
+            }
+        }));
+
+        let mut keep_first = base.clone();
+        assert!(keep_only_clip_segment(
+            keep_first.timeline.as_mut().unwrap(),
+            0
+        ));
+        let first_timeline = keep_first.timeline.as_ref().unwrap();
+        assert_eq!(first_timeline.segments.len(), 1);
+        assert_eq!(first_timeline.segments[0].name.as_deref(), Some("First"));
+        assert_eq!(
+            (
+                first_timeline.zoom_segments[0].start,
+                first_timeline.zoom_segments[0].end
+            ),
+            (0.5, 2.0)
+        );
+        assert_eq!(first_timeline.zoom_segments.len(), 1);
+
+        let mut keep_last = base;
+        assert!(keep_only_clip_segment(
+            keep_last.timeline.as_mut().unwrap(),
+            2
+        ));
+        let last_timeline = keep_last.timeline.as_ref().unwrap();
+        assert_eq!(last_timeline.segments.len(), 1);
+        assert_eq!(last_timeline.segments[0].name.as_deref(), Some("Last"));
+        assert_eq!(last_timeline.segments[0].duration(), 2.0);
+        assert_eq!(last_timeline.zoom_segments.len(), 1);
+        assert_eq!(
+            (
+                last_timeline.zoom_segments[0].start,
+                last_timeline.zoom_segments[0].end
+            ),
+            (0.5, 1.5)
         );
     }
 

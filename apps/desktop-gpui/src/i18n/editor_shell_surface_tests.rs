@@ -977,6 +977,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::clip_menu::hide_cursor_description(),
             "Fades out while this clip plays",
         ),
+        (
+            tr::editor::window::clip_menu::keep_only(),
+            "Keep only this clip",
+        ),
+        (
+            tr::editor::window::clip_menu::keep_only_single_clip(),
+            "Already the only clip",
+        ),
         (tr::editor::window::clip_menu::keep_pitch(), "Keep pitch"),
         (tr::editor::window::clip_menu::match_speed(), "Match speed"),
         (

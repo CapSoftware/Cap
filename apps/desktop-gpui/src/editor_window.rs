@@ -307,6 +307,39 @@ fn playhead_past_end(playhead: f64, total: f64) -> Option<f64> {
     (total > 0.0 && playhead > total).then_some(total)
 }
 
+fn keep_only_playhead(
+    previous_playhead: f64,
+    clip_bounds: Option<(f64, f64)>,
+    new_clip_start: f64,
+    new_total: f64,
+) -> f64 {
+    match clip_bounds {
+        Some((start, end)) if previous_playhead > start && previous_playhead < end => {
+            (new_clip_start + (previous_playhead - start)).clamp(0.0, new_total.max(0.0))
+        }
+        _ => 0.0,
+    }
+}
+
+fn transform_after_keep_only(
+    mut transform: Transform,
+    shift: f64,
+    target_playhead: f64,
+    new_total: f64,
+) -> Transform {
+    if new_total <= 0.0 || transform.zoom <= 0.0 {
+        return transform;
+    }
+    transform.position = (transform.position - shift).max(0.0);
+    transform.update_zoom(transform.zoom, target_playhead, new_total);
+    if target_playhead < transform.position
+        || target_playhead > transform.position + transform.zoom
+    {
+        transform.set_position(target_playhead - transform.zoom * 0.5, new_total);
+    }
+    transform
+}
+
 /// Where a seek leaves the playhead. Paused, the engine echoes the seek back
 /// as `playhead_changed(frame)`; storing the frame's own time makes that echo
 /// a no-op instead of a second whole-editor rebuild for every scrub step.
@@ -1782,7 +1815,7 @@ fn transition_clip_keys(
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
-const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 440.;
+const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 474.;
 
 /// The clip settings menu (`ClipSettingsControl`, `TL/ClipTrack.tsx`), opened
 /// from the clip's cog or by right-clicking the clip.
@@ -9159,6 +9192,56 @@ impl EditorWindow {
         cx.notify();
     }
 
+    pub(crate) fn keep_only_clip(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clip_speed = None;
+        if !self.project_ready()
+            || self.clip_segments().len() < 2
+            || index >= self.clip_segments().len()
+        {
+            cx.notify();
+            return;
+        }
+        let clip_bounds = self
+            .timeline
+            .clips
+            .get(index)
+            .map(|clip| (clip.start, clip.end));
+        let previous_playhead = self.playhead;
+        let previous_transform = self.view.transform;
+        self.view.preview_time = None;
+        self.scene_preview_time = None;
+        if !self.edit(
+            |timeline| edits::keep_only_clip_segment(timeline, index),
+            window,
+            cx,
+        ) {
+            cx.notify();
+            return;
+        }
+        let old_clip_start = clip_bounds.map_or(0.0, |(start, _)| start);
+        let new_clip_start = self.timeline.clips.first().map_or(0.0, |clip| clip.start);
+        let target_playhead =
+            keep_only_playhead(previous_playhead, clip_bounds, new_clip_start, self.total);
+        self.apply_seek(target_playhead);
+        let shift = (old_clip_start - new_clip_start).max(0.0);
+        self.view.transform = transform_after_keep_only(
+            previous_transform,
+            shift,
+            target_playhead,
+            self.total,
+        );
+        if self.view.transform != previous_transform {
+            self.note_transform("clip-keep-only", Some(target_playhead));
+        }
+        self.note_edit("clip-keep-only", Some(TrackKind::Clip));
+        cx.notify();
+    }
+
     fn render_clip_speed_overlays(
         &self,
         model: &timeline::TimelineModel,
@@ -9606,26 +9689,56 @@ impl EditorWindow {
             )
             .child(divider())
             .child(
-                clip_menu_row(
-                    &theme,
-                    "clip-menu-delete",
-                    "icons/trash.svg",
-                    tr::editor::window::clip_menu::delete(),
-                    if can_delete {
-                        ClipMenuTrailing::Kbd("backspace")
-                    } else {
-                        ClipMenuTrailing::Hint(tr::editor::window::clip_menu::delete_only_clip())
-                    },
-                    can_delete,
-                    true,
-                )
-                .when(can_delete, |this| {
-                    this.on_click(cx.listener(move |this, _, window, cx| {
-                        this.clip_speed = None;
-                        this.delete_clip(index, window, cx);
-                        cx.notify();
-                    }))
-                }),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        clip_menu_row(
+                            &theme,
+                            "clip-menu-keep-only",
+                            "icons/film.svg",
+                            tr::editor::window::clip_menu::keep_only(),
+                            if can_delete {
+                                ClipMenuTrailing::None
+                            } else {
+                                ClipMenuTrailing::Hint(
+                                    tr::editor::window::clip_menu::keep_only_single_clip(),
+                                )
+                            },
+                            can_delete,
+                            false,
+                        )
+                        .when(can_delete, |this| {
+                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                this.keep_only_clip(index, window, cx);
+                            }))
+                        }),
+                    )
+                    .child(
+                        clip_menu_row(
+                            &theme,
+                            "clip-menu-delete",
+                            "icons/trash.svg",
+                            tr::editor::window::clip_menu::delete(),
+                            if can_delete {
+                                ClipMenuTrailing::Kbd("backspace")
+                            } else {
+                                ClipMenuTrailing::Hint(
+                                    tr::editor::window::clip_menu::delete_only_clip(),
+                                )
+                            },
+                            can_delete,
+                            true,
+                        )
+                        .when(can_delete, |this| {
+                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                this.clip_speed = None;
+                                this.delete_clip(index, window, cx);
+                                cx.notify();
+                            }))
+                        }),
+                    ),
             );
 
         Some(
@@ -13769,6 +13882,72 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    #[test]
+    fn keep_only_playhead_rebases_interior_playhead_and_resets_exterior_to_start() {
+        assert_eq!(keep_only_playhead(7.0, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(3.5, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(1.2, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert_eq!(keep_only_playhead(8.8, Some((3.5, 7.0)), 0.0, 3.5), 0.0);
+        assert!((keep_only_playhead(5.0, Some((3.5, 7.0)), 0.0, 3.5) - 1.5).abs() < 1e-9);
+        assert_eq!(keep_only_playhead(5.0, None, 0.0, 3.5), 0.0);
+    }
+
+    #[test]
+    fn keep_only_playhead_accounts_for_retained_titles_before_clip() {
+        assert!((keep_only_playhead(15.0, Some((12.0, 22.0)), 2.0, 12.0) - 5.0).abs() < 1e-9);
+        assert_eq!(keep_only_playhead(10.5, Some((12.0, 22.0)), 2.0, 12.0), 0.0);
+        assert_eq!(keep_only_playhead(23.0, Some((12.0, 22.0)), 2.0, 12.0), 0.0);
+    }
+
+    #[test]
+    fn transform_after_keep_only_reanchors_viewport_over_retained_clip() {
+        let full = Transform::initial(10.0);
+        let kept_middle = transform_after_keep_only(full, 3.5, 0.0, 3.5);
+        assert_eq!(
+            kept_middle,
+            Transform {
+                zoom: 3.5,
+                position: 0.0,
+            }
+        );
+
+        let distant = Transform {
+            zoom: 15.0,
+            position: 40.0,
+        };
+        assert_eq!(
+            transform_after_keep_only(distant, 45.0, 0.0, 5.0),
+            Transform {
+                zoom: 5.0,
+                position: 0.0,
+            }
+        );
+
+        let zoomed_inside = Transform {
+            zoom: 4.0,
+            position: 44.0,
+        };
+        assert_eq!(
+            transform_after_keep_only(zoomed_inside, 42.0, 3.5, 10.0),
+            Transform {
+                zoom: 4.0,
+                position: 2.0,
+            }
+        );
+
+        let with_title_shift = Transform {
+            zoom: 6.0,
+            position: 12.0,
+        };
+        assert_eq!(
+            transform_after_keep_only(with_title_shift, 10.0, 5.0, 12.0),
+            Transform {
+                zoom: 6.0,
+                position: 2.0,
+            }
+        );
     }
 
     #[cfg(target_os = "linux")]
