@@ -482,7 +482,6 @@
     "packages/web-api-contract": {
       "name": "@cap/web-api-contract",
       "dependencies": {
-        "@ts-rest/core": "^3.52.1",
         "zod": "^3.25.76",
       },
     },
@@ -1963,8 +1962,6 @@
     "@tokenizer/inflate": ["@tokenizer/inflate@0.4.1", "", { "dependencies": { "debug": "4.4.3", "token-types": "6.1.2" } }, "sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA=="],
 
     "@tokenizer/token": ["@tokenizer/token@0.3.0", "", {}, "sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A=="],
-
-    "@ts-rest/core": ["@ts-rest/core@3.52.1", "", { "peerDependencies": { "@types/node": "^18.18.7 || >=20.8.4", "zod": "^3.22.3" }, "optionalPeers": ["@types/node", "zod"] }, "sha512-tAjz7Kxq/grJodcTA1Anop4AVRDlD40fkksEV5Mmal88VoZeRKAG8oMHsDwdwPZz+B/zgnz0q2sF+cm5M7Bc7g=="],
 
     "@tsc-rs/darwin-arm64": ["@tsc-rs/darwin-arm64@0.6.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-9aToB7RVGciaousuImyOqAx2xGiE9g+kCqrQaoR2uiGKxItPcRY+V/bsCP/VIg4O/qWrz6EU128gbyoxG5SKDA=="],
 

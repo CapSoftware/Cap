@@ -5,7 +5,6 @@
 	"types": "./src/index.ts",
 	"type": "module",
 	"dependencies": {
-		"@ts-rest/core": "^3.52.1",
 		"zod": "^3.25.76"
 	}
 }
