@@ -277,6 +277,9 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     static TEST_STORE_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static TEST_AFTER_AUTH_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
 }
 
 #[cfg(test)]
@@ -1372,6 +1375,12 @@ impl GeneralSettings {
         }
     }
 
+    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
+    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    pub fn new_zoom_amount(&self) -> f32 {
+        self.default_zoom_amount.unwrap_or(1.5)
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1689,6 +1698,7 @@ pub fn transcription_hints() -> Vec<String> {
 /// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
+    pub server_url: String,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
@@ -1714,7 +1724,20 @@ impl AuthSnapshot {
 /// `maybeProtectedHeaders` (`utils/web-api.ts:64-75`): `secret.api_key` wins
 /// over `secret.token`, and `plan.upgraded` is the Pro gate.
 pub fn auth_snapshot() -> AuthSnapshot {
-    let auth = store_section("auth");
+    let store = cached_store(&tauri_store_path()).unwrap_or_default();
+    let empty = Map::new();
+    let auth = store
+        .get("auth")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let server_url = string_at(
+        store
+            .get(GENERAL_SETTINGS)
+            .and_then(Value::as_object)
+            .unwrap_or(&empty),
+        "serverUrl",
+        DEFAULT_SERVER_URL,
+    );
     let token = auth
         .get("secret")
         .and_then(Value::as_object)
@@ -1754,7 +1777,12 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .collect()
         })
         .unwrap_or_default();
+    #[cfg(test)]
+    if let Some(after_snapshot) = TEST_AFTER_AUTH_SNAPSHOT.with(|hook| hook.take()) {
+        after_snapshot();
+    }
     AuthSnapshot {
+        server_url,
         token,
         plan_upgraded,
         plan_manual,
@@ -3090,6 +3118,7 @@ mod tests {
         assert_eq!(settings.recording_countdown, Some(5));
         assert!(!settings.custom_cursor_capture);
         assert_eq!(settings.default_zoom_amount, Some(2.5));
+        assert_eq!(settings.new_zoom_amount(), 2.5);
         assert_eq!(settings.max_fps, 120);
         assert_eq!(settings.server_url, "https://cap.example.com");
         assert_eq!(settings.excluded_windows.len(), 1);
@@ -3100,6 +3129,7 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key

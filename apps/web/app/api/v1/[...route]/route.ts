@@ -117,6 +117,7 @@ import {
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { withJsonNotFound } from "@/lib/api-errors";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { getClientIp } from "@/lib/client-ip";
 import {
 	type CustomStorageAttemptAction,
@@ -4491,6 +4492,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										providerIdempotencyKey,
 										requestId,
 									);
+									if (
+										yield* Effect.tryPromise(() =>
+											hasLiveProSubscription(customerId),
+										)
+									) {
+										return yield* badRequest(
+											requestId,
+											"The organization owner already has Cap Pro",
+										);
+									}
 									const environment =
 										serverEnv().VERCEL_ENV === "production"
 											? "production"
@@ -4998,37 +5009,54 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								Agent.AgentOrganizationInviteResponse,
 							),
 							execute: (providerIdempotencyKey) =>
-								Effect.tryPromise({
-									try: async () => {
-										const delivery = await sendEmail({
-											email,
-											subject: `Invitation to join ${organization.name} on Cap`,
-											react: OrganizationInvite({
-												email,
-												url: invitation.inviteUrl,
-												organizationName: organization.name,
-											}),
-											idempotencyKey: providerIdempotencyKey,
-										});
-										if (delivery?.error) {
-											if (delivery.error.name === "email_not_configured") {
-												return {
-													...invitation,
-													emailDelivery: "not_configured" as const,
-												};
-											}
-											throw new Error(delivery.error.message);
-										}
-										return {
-											...invitation,
-											emailDelivery: "accepted" as const,
-										};
-									},
-									catch: () =>
-										temporarilyUnavailable(
-											requestId,
-											"The organization invite email could not be delivered",
+								Effect.gen(function* () {
+									const inviteLimits = yield* Effect.promise(() =>
+										Promise.all(
+											[
+												`organization-invite:organization:${path.organizationId}`,
+												`organization-invite:user:${principal.id}`,
+											].map((key) =>
+												isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
+													key,
+												}),
+											),
 										),
+									);
+									if (inviteLimits.some(Boolean)) {
+										return yield* rateLimited(requestId);
+									}
+									return yield* Effect.tryPromise({
+										try: async () => {
+											const delivery = await sendEmail({
+												email,
+												subject: `Invitation to join ${organization.name} on Cap`,
+												react: OrganizationInvite({
+													email,
+													url: invitation.inviteUrl,
+													organizationName: organization.name,
+												}),
+												idempotencyKey: providerIdempotencyKey,
+											});
+											if (delivery?.error) {
+												if (delivery.error.name === "email_not_configured") {
+													return {
+														...invitation,
+														emailDelivery: "not_configured" as const,
+													};
+												}
+												throw new Error(delivery.error.message);
+											}
+											return {
+												...invitation,
+												emailDelivery: "accepted" as const,
+											};
+										},
+										catch: () =>
+											temporarilyUnavailable(
+												requestId,
+												"The organization invite email could not be delivered",
+											),
+									});
 								}),
 						});
 					}),

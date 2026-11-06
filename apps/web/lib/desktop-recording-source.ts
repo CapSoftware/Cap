@@ -31,6 +31,7 @@ import {
 } from "@/lib/desktop-recording-verification";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
+import { integer } from "@/utils/zod";
 
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const identifierSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
@@ -41,7 +42,7 @@ const sourceObjectSchema = z.object({
 	objectIdentity: recordingObjectIdentitySchema,
 	size: z.number().int().positive().safe(),
 	track: z.enum(["video", "audio", "mp4"]),
-	index: z.number().int().nonnegative(),
+	index: integer().nonnegative(),
 });
 
 export const desktopRecordingSourceSchema = z.object({
@@ -221,8 +222,8 @@ const sourcePlanSchema = z.object({
 	manifestKey: z.string().optional(),
 	originalManifestKey: z.string().optional(),
 	requiredAudio: z.boolean(),
-	videoCount: z.number().int().nonnegative(),
-	audioCount: z.number().int().nonnegative(),
+	videoCount: integer().nonnegative(),
+	audioCount: integer().nonnegative(),
 	objectCount: z.number().int().positive().max(SOURCE_COMMIT_MAX_OBJECTS),
 	sourcePreparation: z.boolean().optional(),
 	mp4: z
@@ -240,7 +241,7 @@ const treePageSchema = z.discriminatedUnion("type", [
 		type: z.literal("leaf"),
 		kind: z.enum(["plan", "objects", "parts"]),
 		scope: z.string(),
-		start: z.number().int().nonnegative(),
+		start: integer().nonnegative(),
 		entries: z
 			.array(z.unknown())
 			.min(1)
