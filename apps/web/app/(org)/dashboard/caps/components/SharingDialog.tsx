@@ -166,18 +166,20 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			spaceIds: Space.SpaceIdOrOrganisationId[];
 			public: boolean;
 		}) => {
+			if (passwordEnabled && passwordValue.trim()) {
+				const pwResult = await setVideoPassword(capId, passwordValue);
+				if (!pwResult.success) {
+					throw new Error(pwResult.error || "Failed to set password");
+				}
+			}
+
 			const result = await shareCap({ capId, spaceIds, public: isPublic });
 
 			if (!result.success) {
 				throw new Error(result.error || "Failed to update sharing settings");
 			}
 
-			if (passwordEnabled && passwordValue.trim()) {
-				const pwResult = await setVideoPassword(capId, passwordValue);
-				if (!pwResult.success) {
-					throw new Error(pwResult.error || "Failed to set password");
-				}
-			} else if (!passwordEnabled && initialPasswordEnabled) {
+			if (!passwordEnabled && initialPasswordEnabled) {
 				const pwResult = await removeVideoPassword(capId);
 				if (!pwResult.success) {
 					throw new Error(pwResult.error || "Failed to remove password");
