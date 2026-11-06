@@ -23,7 +23,7 @@ on:
         default: ""
       rounds:
         description: "Interleaved rounds per side"
-        default: "3"
+        default: "5"
 
 concurrency:
   group: gpui-app-bench-${{ github.event.pull_request.number || github.ref }}
@@ -126,7 +126,7 @@ jobs:
       - name: Measure
         shell: bash
         env:
-          ROUNDS: ${{ inputs.rounds || '3' }}
+          ROUNDS: ${{ inputs.rounds || '5' }}
         run: |
           bin_dir="$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug"
           python3 scripts/gpui-app-bench.py \

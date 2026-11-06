@@ -8,7 +8,9 @@ Each run launches the real app on a fresh profile and a fresh copy of the
 fixture project with CAP_GPUI_AUTO_TIMELINE_BENCH=1 (src/editor_bench.rs),
 which times `Window::draw` across the editor's scenarios and exits. Base and
 head alternate (base, head, head, base, ...) on the same machine; scenarios
-are compared by the per-round ratio of mean draw times (head / base).
+are compared by the per-round ratio of median (p50) draw times, head / base.
+The editor decodes video while it plays, so means and tails swing with the
+decoder; the median is the stable statistic.
 """
 
 import argparse
@@ -92,7 +94,7 @@ def main() -> None:
     parser.add_argument("--head", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--label", default="")
     parser.add_argument("--summary", type=Path)
@@ -125,8 +127,11 @@ def main() -> None:
                 "head_mean_us": statistics.median(s[label]["mean"] for s in samples["head"]),
                 "base_p95_us": statistics.median(s[label]["p95"] for s in samples["base"]),
                 "head_p95_us": statistics.median(s[label]["p95"] for s in samples["head"]),
+                "base_p50_us": statistics.median(s[label]["p50"] for s in samples["base"]),
+                "head_p50_us": statistics.median(s[label]["p50"] for s in samples["head"]),
+                "p50_ratio": statistics.median(ratios["p50"]),
+                "p50_ratio_range": [min(ratios["p50"]), max(ratios["p50"])],
                 "mean_ratio": statistics.median(ratios["mean"]),
-                "mean_ratio_range": [min(ratios["mean"]), max(ratios["mean"])],
                 "p95_ratio": statistics.median(ratios["p95"]),
             }
         )
@@ -137,19 +142,19 @@ def main() -> None:
         f"### {title}",
         "",
         f"`Window::draw` in the real editor (src/editor_bench.rs), {args.rounds} interleaved "
-        "rounds; head/base ratio of each round's mean, paired by round. "
+        "rounds; head/base ratio of each round's median draw, paired by round. "
         "**faster**/**slower** only when every round agrees.",
         "",
-        "| Scenario | Base mean | Head mean | Change | Round range | Base p95 | Head p95 | |",
+        "| Scenario | Base p50 | Head p50 | Change | Round range | Mean change | p95 change | |",
         "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
-        low, high = row["mean_ratio_range"]
+        low, high = row["p50_ratio_range"]
         verdict = "**faster**" if high < 1 else "**slower**" if low > 1 else ""
         lines.append(
-            f"| `{row['scenario']}` | {row['base_mean_us']:.1f} µs | {row['head_mean_us']:.1f} µs "
-            f"| {(row['mean_ratio'] - 1) * 100:+.1f}% | {(low - 1) * 100:+.1f}% … {(high - 1) * 100:+.1f}% "
-            f"| {row['base_p95_us']:.1f} µs | {row['head_p95_us']:.1f} µs | {verdict} |"
+            f"| `{row['scenario']}` | {row['base_p50_us']:.1f} µs | {row['head_p50_us']:.1f} µs "
+            f"| {(row['p50_ratio'] - 1) * 100:+.1f}% | {(low - 1) * 100:+.1f}% … {(high - 1) * 100:+.1f}% "
+            f"| {(row['mean_ratio'] - 1) * 100:+.1f}% | {(row['p95_ratio'] - 1) * 100:+.1f}% | {verdict} |"
         )
     report = "\n".join(lines) + "\n"
     print(report)
