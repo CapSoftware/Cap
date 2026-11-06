@@ -458,11 +458,14 @@ impl PendingConfigSave {
     }
 
     pub fn flush(&mut self) {
-        let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
+        let (Some(path), Some(config)) = (self.path.as_ref(), self.config.as_ref()) else {
             return;
         };
-        match config.write(&path) {
-            Ok(()) => tracing::debug!(path = %path.display(), "screenshot config written"),
+        match config.write(path) {
+            Ok(()) => {
+                self.config = None;
+                tracing::debug!(path = %path.display(), "screenshot config written");
+            }
             Err(error) => {
                 tracing::error!(path = %path.display(), "failed to persist screenshot config: {error}")
             }
@@ -877,6 +880,7 @@ struct Toast {
 struct PanDrag {
     start: Point<Pixels>,
     origin: (f32, f32),
+    button: MouseButton,
 }
 
 /// The measured geometry `Preview.tsx` derives from the container's bounds.
@@ -1251,6 +1255,8 @@ impl ScreenshotEditorWindow {
     // -- History ---------------------------------------------------------------
 
     fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_slider(cx);
+        self.finish_annotation_history_edit(window, cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -1258,6 +1264,8 @@ impl ScreenshotEditorWindow {
     }
 
     fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_slider(cx);
+        self.finish_annotation_history_edit(window, cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -1898,6 +1906,7 @@ impl ScreenshotEditorWindow {
         self.panning = Some(PanDrag {
             start: event.position,
             origin: self.pan,
+            button: event.button,
         });
         cx.notify();
     }
@@ -4564,9 +4573,10 @@ impl Render for ScreenshotEditorWindow {
                     }),
                 ))
             })
-            .when(self.panning.is_some(), |root| {
-                root.child(ui::Slider::drag_layer(
+            .when_some(self.panning.map(|drag| drag.button), |root, button| {
+                root.child(ui::Slider::drag_layer_for(
                     "screenshot-pan-drag",
+                    button,
                     cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                         this.preview_mouse_move(event, window, cx);
                     }),
@@ -5229,6 +5239,43 @@ mod tests {
         assert_eq!(ctrl_wheel_zoom_step(-1.), -8. * 0.005);
     }
 
+    #[test]
+    fn failed_screenshot_save_keeps_edits_for_the_close_time_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("project-config.json");
+        let original = ProjectConfiguration::default();
+        original.write(root.path()).unwrap();
+        let mut edited = original.clone();
+        edited.background.padding = 42.;
+        let mut pending = PendingConfigSave {
+            path: Some(root.path().to_path_buf()),
+            config: Some(edited.clone()),
+        };
+        let backup = root.path().join("saved-config.json");
+        std::fs::rename(&config_path, &backup).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+
+        pending.flush();
+        assert!(pending.config.is_some(), "failed saves must stay pending");
+        assert_eq!(
+            serde_json::to_value(pending.config.as_ref().unwrap()).unwrap(),
+            serde_json::to_value(&edited).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            serde_json::to_vec_pretty(&original).unwrap()
+        );
+
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::rename(&backup, &config_path).unwrap();
+        pending.flush();
+        assert!(pending.config.is_none());
+        assert_eq!(
+            std::fs::read(&config_path).unwrap(),
+            serde_json::to_vec_pretty(&edited).unwrap()
+        );
+    }
+
     fn new_screenshot_config() -> ProjectConfiguration {
         let mut config = ProjectConfiguration::default();
         config.background.source = BackgroundSource::Color {
@@ -5511,6 +5558,263 @@ mod tests {
                     result.cpu_ms / TICKS as f64,
                     median(&mut result.render_ms),
                 );
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod history_interruption {
+        use super::*;
+        use gpui::point;
+
+        struct HistoryView {
+            editor: Entity<ScreenshotEditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(ScreenshotEditorWindow::on_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (
+            Entity<ScreenshotEditorWindow>,
+            tokio::sync::watch::Receiver<ConfigUpdate>,
+            &mut gpui::VisualTestContext,
+        ) {
+            let project = tempfile::tempdir().unwrap();
+            let config = ProjectConfiguration {
+                background: cap_project::BackgroundConfiguration {
+                    source: BackgroundSource::Color {
+                        value: [255, 255, 255],
+                        alpha: 255,
+                    },
+                    rounding: 0.,
+                    blur: 0.,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
+                revision: 0,
+                config: config.clone(),
+            });
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor =
+                    cx.new(|cx| ScreenshotEditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| {
+                    editor.history = ProjectHistory::new(config.clone());
+                    editor.project = config;
+                    editor.render_gate = RenderInputGate::published(&mut editor.project);
+                    editor.config_tx = Some(config_tx);
+                    editor.track(StyleSlider::Rounding).set(Some(Bounds {
+                        origin: point(px(0.), px(0.)),
+                        size: gpui::size(px(100.), px(4.)),
+                    }));
+                    window.focus(&editor.focus, cx);
+                });
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (
+                view.read_with(cx, |view, _| view.editor.clone()),
+                config_rx,
+                cx,
+            )
+        }
+
+        fn assert_synchronized(
+            editor: &ScreenshotEditorWindow,
+            updates: &tokio::sync::watch::Receiver<ConfigUpdate>,
+        ) {
+            assert!(editor.active_slider.is_none());
+            let expected = serde_json::to_value(&editor.project).unwrap();
+            let pending = editor.pending_save.borrow();
+            assert_eq!(
+                serde_json::to_value(pending.config.as_ref().unwrap()).unwrap(),
+                expected
+            );
+            let published = updates.borrow();
+            assert_eq!(published.revision, editor.revision);
+            assert!(published.revision > 0);
+            assert_eq!(serde_json::to_value(&published.config).unwrap(), expected);
+        }
+
+        #[gpui::test]
+        fn first_active_style_edit_undo_redo_updates_save_and_renderer(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for (undo, redo) in [("ctrl-z", "ctrl-shift-z"), ("cmd-z", "cmd-y")] {
+                let (editor, updates, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.begin_slider(StyleSlider::Rounding, point(px(30.), px(0.)), window, cx);
+                    editor.apply_slider(StyleSlider::Rounding, point(px(50.), px(0.)), window, cx);
+                    assert!(!editor.history.can_undo());
+                });
+                cx.simulate_keystrokes(undo);
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 0.);
+                    assert!(editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update(cx, |editor, cx| editor.end_slider(cx));
+                cx.simulate_keystrokes(redo);
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 50.);
+                    assert!(!editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn active_style_undo_preserves_prior_edit_and_noop_redo(cx: &mut gpui::TestAppContext) {
+            for return_to_origin in [false, true] {
+                let (editor, updates, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.edit_project(
+                        |project| StyleSlider::Rounding.apply(project, 20.),
+                        window,
+                        cx,
+                    );
+                    editor.begin_slider(StyleSlider::Rounding, point(px(60.), px(0.)), window, cx);
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 20.);
+                    assert!(editor.history.can_redo());
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    let start = if return_to_origin { 40. } else { 20. };
+                    editor.begin_slider(
+                        StyleSlider::Rounding,
+                        point(px(start), px(0.)),
+                        window,
+                        cx,
+                    );
+                    editor.apply_slider(StyleSlider::Rounding, point(px(20.), px(0.)), window, cx);
+                });
+                cx.simulate_keystrokes("ctrl-y");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 60.);
+                    assert_synchronized(editor, &updates);
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.end_slider(cx);
+                    editor.end_slider(cx);
+                    editor.edit_project(
+                        |project| StyleSlider::Blur.apply(project, 12.),
+                        window,
+                        cx,
+                    );
+                });
+                cx.simulate_keystrokes("ctrl-z");
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.project.background.rounding, 60.);
+                    assert_eq!(editor.project.background.blur, 0.);
+                    assert_synchronized(editor, &updates);
+                });
+            }
+        }
+
+        #[gpui::test]
+        fn changed_active_style_edit_replaces_the_redo_branch(cx: &mut gpui::TestAppContext) {
+            let (editor, updates, cx) = fixture(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                editor.edit_project(
+                    |project| StyleSlider::Rounding.apply(project, 20.),
+                    window,
+                    cx,
+                );
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.update_in(cx, |editor, window, cx| {
+                editor.begin_slider(StyleSlider::Rounding, point(px(40.), px(0.)), window, cx);
+            });
+            cx.simulate_keystrokes("ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.rounding, 40.);
+                assert!(!editor.history.can_redo());
+                assert_synchronized(editor, &updates);
+            });
+            editor.update(cx, |editor, cx| editor.end_slider(cx));
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.background.rounding, 0.);
+                assert!(editor.history.can_redo());
+                assert_synchronized(editor, &updates);
+            });
+        }
+    }
+
+    /// A pan follows and ends with the button that started it. The pan's
+    /// drag layer only tracked left-button drags, so a middle-button pan never
+    /// moved the image and stayed live until the next left release.
+    #[cfg(target_os = "linux")]
+    mod preview_pan {
+        use super::*;
+        use gpui::{Modifiers, VisualTestContext, point};
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+        }
+
+        #[gpui::test]
+        fn a_pan_follows_and_ends_with_the_button_that_started_it(cx: &mut gpui::TestAppContext) {
+            for button in [MouseButton::Left, MouseButton::Middle] {
+                let project = tempfile::tempdir().unwrap();
+                let bundle = project.path().to_path_buf();
+                let (editor, cx) = cx.add_window_view(move |window, cx| {
+                    ScreenshotEditorWindow::new(bundle.clone(), window, cx)
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    // Past the loading skeleton, which has no drag layer.
+                    editor.ready = true;
+                    editor.preview_mouse_down(
+                        &MouseDownEvent {
+                            button,
+                            position: point(px(100.), px(100.)),
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        },
+                        window,
+                        cx,
+                    );
+                });
+                draw(cx);
+                let origin = editor.read_with(cx, |editor, _| editor.pan);
+                let moved = (origin.0 + 30., origin.1 - 10.);
+
+                cx.simulate_mouse_move(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?}");
+                });
+
+                cx.simulate_mouse_up(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert!(editor.panning.is_none(), "{button:?} release");
+                });
+                draw(cx);
+                cx.simulate_mouse_move(point(px(160.), px(120.)), None, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?} after release");
+                });
+                drop(project);
             }
         }
     }

@@ -27,6 +27,7 @@ export const formatTimeAgo = (date: Date) => {
 	const diffInMonths = Math.floor(diffInDays / 30);
 	if (diffInMonths < 12) return `${diffInMonths}mo ago`;
 
-	const diffInYears = Math.floor(diffInDays / 365);
+	// 12 thirty-day months is 360 days, five days short of a 365-day year.
+	const diffInYears = Math.max(1, Math.floor(diffInDays / 365));
 	return `${diffInYears}y ago`;
 };

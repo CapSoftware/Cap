@@ -27,7 +27,7 @@ describe("sendDownloadLink", () => {
 		headersMock.mockResolvedValue(
 			new Headers({ host: "cap.test", "x-real-ip": "127.0.0.1" }),
 		);
-		sendEmailMock.mockResolvedValue(undefined);
+		sendEmailMock.mockResolvedValue({ data: { id: "email-1" }, error: null });
 	});
 
 	it("sends the email when the rate limit check passes", async () => {
@@ -37,6 +37,47 @@ describe("sendDownloadLink", () => {
 
 		expect(result).toEqual({ success: true });
 		expect(sendEmailMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{
+			data: null,
+			error: {
+				name: "validation_error",
+				message: "Sender domain is not verified",
+			},
+		},
+		{
+			data: null,
+			error: {
+				name: "email_not_configured",
+				message: "Email is not configured",
+			},
+		},
+		undefined,
+		{ data: null, error: null },
+	])(
+		"reports unsuccessful delivery instead of claiming the email was sent: %j",
+		async (delivery) => {
+			sendEmailMock.mockResolvedValueOnce(delivery);
+			const { sendDownloadLink } = await import("@/actions/send-download-link");
+
+			expect(await sendDownloadLink("user@example.com")).toEqual({
+				success: false,
+				error: "Something went wrong. Please try again.",
+			});
+			expect(sendEmailMock).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("reports a delivery exception", async () => {
+		sendEmailMock.mockRejectedValueOnce(new Error("Network failure"));
+		const { sendDownloadLink } = await import("@/actions/send-download-link");
+
+		expect(await sendDownloadLink("user@example.com")).toEqual({
+			success: false,
+			error: "Something went wrong. Please try again.",
+		});
 	});
 
 	it("rejects the request when rate limited", async () => {

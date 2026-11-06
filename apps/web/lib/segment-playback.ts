@@ -1,16 +1,11 @@
 import { Video } from "@cap/web-domain";
-import { readCompletedRecordingManifest } from "./desktop-recording-verification";
+import { isCompletedRecordingManifest } from "./desktop-recording-verification";
 
 export function getSegmentPlaybackState(
 	manifest: Video.SegmentManifestType,
 ): "ready" | "uploading" | "incomplete" {
 	if (!manifest.is_complete) return "uploading";
-	try {
-		readCompletedRecordingManifest(JSON.stringify(manifest));
-		return "ready";
-	} catch {
-		return "incomplete";
-	}
+	return isCompletedRecordingManifest(manifest) ? "ready" : "incomplete";
 }
 
 type SegmentEntry = { index: number; duration: number };

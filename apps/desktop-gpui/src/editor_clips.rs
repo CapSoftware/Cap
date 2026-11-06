@@ -280,6 +280,50 @@ pub(crate) fn max_transition_duration(
     }
 }
 
+pub(crate) fn can_add_transition(timeline: &TimelineConfiguration, segment_index: usize) -> bool {
+    segment_index > 0
+        && max_transition_duration(timeline, segment_index)
+            >= cap_project::MIN_CLIP_TRANSITION_DURATION
+}
+
+/// The length a transition drag asks for: the duration it started from, grown
+/// by `grow_by` output seconds and held to the room the two clips have. Below
+/// half the minimum the drag removes the transition (`None`), the threshold
+/// the clip body drag has always used.
+pub(crate) fn dragged_transition_duration(initial: f64, grow_by: f64, maximum: f64) -> Option<f64> {
+    if !maximum.is_finite() || maximum < cap_project::MIN_CLIP_TRANSITION_DURATION {
+        return None;
+    }
+    let requested = initial + grow_by;
+    if !requested.is_finite() || requested < cap_project::MIN_CLIP_TRANSITION_DURATION / 2.0 {
+        return None;
+    }
+    Some(requested.clamp(cap_project::MIN_CLIP_TRANSITION_DURATION, maximum))
+}
+
+/// One step of a transition drag. It always starts again from `base`, the
+/// timeline as it was when the drag began, so the other tracks are rippled
+/// once by the net change rather than by every pointer move in turn: a
+/// shrinking ripple clamps segments it straddles, which is not undone by
+/// growing again.
+pub(crate) fn apply_dragged_transition(
+    base: &TimelineConfiguration,
+    segment_index: usize,
+    kind: cap_project::ClipTransitionType,
+    duration: Option<f64>,
+) -> TimelineConfiguration {
+    let mut timeline = base.clone();
+    match duration {
+        Some(duration) => {
+            set_clip_transition(&mut timeline, segment_index, kind, duration);
+        }
+        None => {
+            drop_clip_transition(&mut timeline, segment_index);
+        }
+    }
+    timeline
+}
+
 /// The output times of a transition that overlaps `segment_index` with the
 /// clip before it by `overlap`: where the incoming clip starts, and where the
 /// outgoing one ends (the ripple boundary).
@@ -324,6 +368,7 @@ fn ripple_every_track(timeline: &mut TimelineConfiguration, edges: TransitionEdg
     ripple(&mut timeline.scene_segments, edges, shift);
     ripple(&mut timeline.mask_segments, edges, shift);
     ripple(&mut timeline.text_segments, edges, shift);
+    ripple(&mut timeline.shape_segments, edges, shift);
     ripple(&mut timeline.caption_segments, edges, shift);
     ripple(&mut timeline.camera3d_segments, edges, shift);
     for segment in &mut timeline.keyboard_segments {
@@ -568,6 +613,7 @@ impl EditorWindow {
             self.close_clips(window, cx);
         } else {
             self.clips.open = true;
+            self.transcript.open = false;
         }
         cx.notify();
     }
@@ -719,6 +765,9 @@ impl EditorWindow {
         if self.clip_segments().len() < 2 {
             return;
         }
+        // The trash button stops the press that would blur the rename input,
+        // and deleting shifts every later index under the draft.
+        self.commit_clip_rename(window, cx);
         self.edit_project("clip-delete", window, cx, move |project| {
             project
                 .timeline
@@ -2621,6 +2670,7 @@ fn ensure_project_timeline<'a>(
             camera3d_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
         });
     }
 
@@ -3221,6 +3271,26 @@ fn get_source_video_duration_secs(
 /// `source_timeline_segments_for_import` (`import.rs:862-931`): the source's
 /// own edited timeline, clamped and cleaned, or a full-length timeline per
 /// segment when it has none.
+/// A source project's markers, moved onto the segments they were copied to.
+/// Each gets a fresh id so it can never collide with one already in the
+/// target project.
+fn imported_markers(
+    markers: &[cap_project::TimelineMarker],
+    source_to_target_index: &HashMap<u32, u32>,
+) -> Vec<cap_project::TimelineMarker> {
+    markers
+        .iter()
+        .filter_map(|marker| {
+            let target = *source_to_target_index.get(&marker.recording_clip)?;
+            Some(cap_project::TimelineMarker {
+                label: marker.label.clone(),
+                color: marker.color.clone(),
+                ..cap_project::TimelineMarker::new(target, marker.time)
+            })
+        })
+        .collect()
+}
+
 fn source_timeline_segments_for_import(
     source_meta: &RecordingMeta,
     source_segments: &[MultipleSegment],
@@ -3521,6 +3591,12 @@ pub(crate) fn append_cap_project_to_editor(
     }
 
     add_clip_configs(&mut config, base_index, &copied_segments);
+    config.markers.extend(imported_markers(
+        &ProjectConfiguration::load(source_path)
+            .unwrap_or_default()
+            .markers,
+        &source_to_target_index,
+    ));
 
     target_meta
         .save_for_project()
@@ -3536,6 +3612,98 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[cfg(target_os = "linux")]
+    mod rename_and_delete {
+        use super::*;
+        use gpui::Render;
+
+        struct ClipsView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipsView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                ClipsView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn three_clips(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 4.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 6.0}
+                    ],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+        }
+
+        /// Deleting shifts every later clip down one index, so a rename still
+        /// bound to an index when the delete lands would commit its draft
+        /// onto a different clip. Without a loaded recording `edit_project`
+        /// applies neither edit here; what this checks is that the delete
+        /// closes the rename before it runs, through the same commit a press
+        /// on another card uses.
+        #[gpui::test]
+        fn deleting_a_clip_ends_a_live_rename_first(cx: &mut gpui::TestAppContext) {
+            for (renamed, deleted) in [(1, 0), (2, 1), (2, 2), (0, 2)] {
+                let (editor, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    three_clips(editor);
+                    editor.start_clip_rename(renamed, window, cx);
+                    assert_eq!(editor.clips.editing, Some(renamed));
+                    let input = editor.clips.rename_input.clone().unwrap();
+                    input.update(cx, |input, cx| input.set_text("Intro".to_string(), cx));
+                    editor.delete_clip(deleted, window, cx);
+                    assert_eq!(
+                        editor.clips.editing, None,
+                        "rename of clip {renamed} still live after deleting clip {deleted}"
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn appended_recordings_bring_their_markers_onto_the_copied_segments() {
+        let markers = vec![
+            cap_project::TimelineMarker {
+                label: "Intro".into(),
+                color: Some("#22c55e".into()),
+                ..cap_project::TimelineMarker::new(0, 1.5)
+            },
+            cap_project::TimelineMarker::new(1, 0.25),
+            cap_project::TimelineMarker::new(7, 3.0),
+        ];
+        let index = HashMap::from([(0, 4), (1, 5)]);
+        let imported = imported_markers(&markers, &index);
+        assert_eq!(imported.len(), 2);
+        assert_eq!((imported[0].recording_clip, imported[0].time), (4, 1.5));
+        assert_eq!(imported[0].label, "Intro");
+        assert_eq!(imported[0].color.as_deref(), Some("#22c55e"));
+        assert_ne!(imported[0].id, markers[0].id);
+        assert_eq!((imported[1].recording_clip, imported[1].time), (5, 0.25));
+    }
 
     #[test]
     fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
@@ -4099,6 +4267,134 @@ mod tests {
             instant_animation: false,
             edge_snap_ratio: 0.25,
         }
+    }
+
+    #[test]
+    fn a_transition_drag_grows_from_nothing_and_is_held_to_the_room() {
+        let min = cap_project::MIN_CLIP_TRANSITION_DURATION;
+        assert_eq!(dragged_transition_duration(0.0, 0.3, 2.0), Some(0.3));
+        assert_eq!(dragged_transition_duration(0.5, 0.25, 2.0), Some(0.75));
+        assert_eq!(dragged_transition_duration(0.5, 9.0, 2.0), Some(2.0));
+        assert_eq!(dragged_transition_duration(0.0, min * 0.6, 2.0), Some(min));
+        assert_eq!(dragged_transition_duration(0.0, min * 0.4, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.5, -0.49, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.5, -3.0, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.0, 0.3, min * 0.9), None);
+        assert_eq!(dragged_transition_duration(0.0, f64::NAN, 2.0), None);
+        assert_eq!(dragged_transition_duration(0.0, 0.3, f64::NAN), None);
+    }
+
+    /// The reported bug: after splitting a clip, dragging one half onto the
+    /// other did nothing. Both halves come from one recording and sit end to
+    /// end in it, which is exactly the pair every other path must accept too.
+    #[test]
+    fn the_two_halves_of_a_split_clip_take_a_transition() {
+        let mut config = timeline(vec![segment(0, 0.0, 10.0)]);
+        assert!(edits::split_clip_segment(&mut config, 4.0, None));
+        assert_eq!(config.segments.len(), 2);
+        assert_eq!(config.segments[0].end, config.segments[1].start);
+        assert!(can_add_transition(&config, 1));
+        assert!(!can_add_transition(&config, 0));
+
+        let kind = cap_project::ClipTransitionType::PushLeft;
+        let dragged = apply_dragged_transition(&config, 1, kind, Some(0.5));
+        let transition = dragged.effective_transition(1).unwrap();
+        assert_eq!((transition.kind, transition.duration), (kind, 0.5));
+        assert_eq!(dragged.duration(), 9.5);
+        match dragged.get_frame_mapping(3.75) {
+            Some(cap_project::TimelineFrameMapping::Transition {
+                outgoing, incoming, ..
+            }) => {
+                assert_eq!(outgoing.segment_index, 0);
+                assert_eq!(incoming.segment_index, 1);
+                assert_eq!(outgoing.source_time, 3.75);
+                assert_eq!(incoming.source_time, 4.25);
+            }
+            other => panic!("expected a transition, got {other:?}"),
+        }
+
+        // Splitting the incoming half again keeps the transition on its cut.
+        assert!(edits::split_clip_segment(&mut config, 7.0, None));
+        let mut split_again = apply_dragged_transition(&config, 1, kind, Some(0.5));
+        assert!(edits::split_clip_segment(&mut split_again, 7.0, None));
+        assert_eq!(split_again.transitions.len(), 1);
+        assert_eq!(split_again.transitions[0].segment_index, 1);
+        assert!(can_add_transition(&split_again, 2));
+    }
+
+    #[test]
+    fn clips_from_different_recordings_and_reordered_clips_take_a_transition() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 6.0),
+            segment(1, 0.0, 6.0),
+            segment(2, 2.0, 9.0),
+        ]);
+        let kind = cap_project::ClipTransitionType::WipeRight;
+        for index in [1, 2] {
+            assert!(can_add_transition(&config, index));
+            let dragged = apply_dragged_transition(&config, index, kind, Some(1.0));
+            assert_eq!(dragged.effective_transition(index).unwrap().kind, kind);
+        }
+        assert!(move_clip(&mut config, 2, 0));
+        assert_eq!(config.segments[0].recording_clip, 2);
+        for index in [1, 2] {
+            assert!(can_add_transition(&config, index));
+            let dragged = apply_dragged_transition(&config, index, kind, Some(1.0));
+            assert_eq!(dragged.effective_transition(index).unwrap().duration, 1.0);
+        }
+    }
+
+    /// Every step of a drag starts again from the timeline the drag began
+    /// with, so a drag that overshoots and comes back lands exactly where a
+    /// single change to its final length would.
+    #[test]
+    fn a_wandering_transition_drag_lands_like_one_change() {
+        let mut base = timeline(vec![segment(0, 0.0, 10.0), segment(1, 0.0, 10.0)]);
+        base.zoom_segments = vec![zoom_at(9.8, 11.0), zoom_at(15.0, 18.0)];
+        base.scene_segments = vec![cap_project::SceneSegment {
+            start: 10.0,
+            end: 14.0,
+            mode: cap_project::SceneMode::CameraOnly,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }];
+        let kind = cap_project::ClipTransitionType::Zoom;
+        let mut live = base.clone();
+        for step in [0.2, 1.4, 3.0, 4.5, 0.1, 0.7] {
+            live = apply_dragged_transition(&base, 1, kind, Some(step));
+        }
+        let mut direct = base.clone();
+        assert!(set_clip_transition(&mut direct, 1, kind, 0.7));
+        let bounds = |config: &TimelineConfiguration| {
+            (
+                config
+                    .zoom_segments
+                    .iter()
+                    .map(|zoom| (zoom.start, zoom.end))
+                    .collect::<Vec<_>>(),
+                config
+                    .scene_segments
+                    .iter()
+                    .map(|scene| (scene.start, scene.end))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(bounds(&live), bounds(&direct));
+        assert_eq!(live.transitions, direct.transitions);
+
+        // The zoom crossing the cut and the scene starting on the incoming
+        // clip stay well formed, and the scene keeps its first frame.
+        let (zooms, scenes) = bounds(&live);
+        assert!(zooms.iter().all(|(start, end)| end > start));
+        assert_eq!(scenes.len(), 1);
+        assert!((scenes[0].0 - 9.3).abs() < 1e-9 && (scenes[0].1 - 13.3).abs() < 1e-9);
+
+        // Dragging all the way back removes it and gives everything back.
+        let removed = apply_dragged_transition(&live, 1, kind, None);
+        assert!(removed.transitions.is_empty());
+        let restored = apply_dragged_transition(&base, 1, kind, None);
+        assert_eq!(bounds(&restored), bounds(&base));
     }
 
     #[test]

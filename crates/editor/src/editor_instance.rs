@@ -7,15 +7,16 @@ use cap_project::{
     TimelineFrameMapping, TimelineSegment, XY,
 };
 use cap_rendering::{
-    PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, RendererLayers, SegmentVideoPaths, SharedWgpuDevice, Video,
-    ZoomTransformTimeline, get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
+    CursorEventOrder, PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms,
+    RecordingSegmentDecoders, RenderVideoConstants, RendererLayers, SegmentVideoPaths,
+    SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
+    spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -70,6 +71,12 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
     entries: Vec<PreviewCursorCacheEntry>,
+    event_orders: Vec<PreviewCursorOrderEntry>,
+}
+
+struct PreviewCursorOrderEntry {
+    cursor: Weak<CursorEvents>,
+    order: CursorEventOrder,
 }
 
 struct PreviewCursorCacheEntry {
@@ -80,6 +87,29 @@ struct PreviewCursorCacheEntry {
 }
 
 impl PreviewCursorCache {
+    pub(super) fn event_order(&mut self, cursor: &Arc<CursorEvents>) -> CursorEventOrder {
+        if let Some(index) = self
+            .event_orders
+            .iter()
+            .position(|entry| std::ptr::eq(entry.cursor.as_ptr(), Arc::as_ptr(cursor)))
+        {
+            let entry = self.event_orders.remove(index);
+            let order = entry.order;
+            self.event_orders.push(entry);
+            return order;
+        }
+
+        if self.event_orders.len() == PREVIEW_CURSOR_CACHE_CAPACITY {
+            self.event_orders.remove(0);
+        }
+        let order = CursorEventOrder::new(cursor);
+        self.event_orders.push(PreviewCursorOrderEntry {
+            cursor: Arc::downgrade(cursor),
+            order,
+        });
+        order
+    }
+
     pub(super) fn get(
         &mut self,
         recording_clip: u32,
@@ -251,6 +281,7 @@ pub struct EditorInstance {
     pub preview_layers: std::sync::Mutex<Option<RendererLayers>>,
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
+    preview_speed: crate::PreviewSpeedHandle,
 }
 
 impl EditorInstance {
@@ -476,6 +507,7 @@ impl EditorInstance {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -660,6 +692,7 @@ impl EditorInstance {
             playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
+            preview_speed: crate::PreviewSpeedHandle::default(),
         });
 
         this.state.lock().await.preview_task =
@@ -786,6 +819,7 @@ impl EditorInstance {
             preview_layers: std::sync::Mutex::new(None),
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
+            preview_speed: self.preview_speed.clone(),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
@@ -951,6 +985,7 @@ impl EditorInstance {
                 project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
+                preview_speed: self.preview_speed.clone(),
             };
             let playback_handle = if let Some(adoption) = adoption {
                 playback
@@ -1021,6 +1056,16 @@ impl EditorInstance {
             prev.stop();
         }
         Ok(owned_handle)
+    }
+
+    /// Sets how fast the preview plays. A running playback picks it up on its
+    /// next frame without restarting; export and the project never see it.
+    pub fn set_preview_speed(&self, speed: crate::PreviewSpeed) {
+        self.preview_speed.set(speed);
+    }
+
+    pub fn preview_speed(&self) -> crate::PreviewSpeed {
+        self.preview_speed.get()
     }
 
     /// True while a playback engine is live. Epoch-guarded against restart
@@ -1261,7 +1306,7 @@ impl EditorInstance {
                                             cursor_timeline,
                                         )
                                     } else {
-                                        ProjectUniforms::new(
+                                        ProjectUniforms::new_with_cursor_event_order(
                                             &self.render_constants,
                                             &project,
                                             frame_number,
@@ -1271,6 +1316,7 @@ impl EditorInstance {
                                             &outgoing_frames,
                                             total_duration,
                                             outgoing_zoom,
+                                            cursor_cache.event_order(&outgoing_media.cursor),
                                         )
                                     };
                                     Some((
@@ -1322,7 +1368,7 @@ impl EditorInstance {
                                         cursor_timeline,
                                     )
                                 } else {
-                                    ProjectUniforms::new(
+                                    ProjectUniforms::new_with_cursor_event_order(
                                         &self.render_constants,
                                         &project,
                                         frame_number,
@@ -1332,6 +1378,7 @@ impl EditorInstance {
                                         &segment_frames,
                                         total_duration,
                                         zoom_timeline,
+                                        cursor_cache.event_order(&segment_medias.cursor),
                                     )
                                 };
 
@@ -2182,6 +2229,20 @@ mod tests {
         assert!(cache.entries.is_empty());
         assert!(smoothed_weak.upgrade().is_none());
         assert_eq!(Arc::strong_count(&cursor), 1);
+        let order = cache.event_order(&cursor);
+        assert_eq!(order, CursorEventOrder::new(&cursor));
+        assert_ne!(order, CursorEventOrder::default());
+        assert_eq!(cache.event_order(&cursor), order);
+        assert_eq!(cache.event_orders.len(), 1);
+        assert_eq!(Arc::strong_count(&cursor), 1);
+
+        let mut reversed = CursorEvents::clone(&cursor);
+        reversed.moves.reverse();
+        reversed.clicks.reverse();
+        let replaced = Arc::new(reversed);
+        assert_eq!(cache.event_order(&replaced), CursorEventOrder::default());
+        assert_eq!(cache.event_orders.len(), 2);
+        assert_eq!(Arc::strong_count(&replaced), 1);
 
         project.cursor.tension += 1.0;
         project.cursor.click_spring = Some(cap_project::ClickSpringConfig {

@@ -13,6 +13,10 @@
 		{
 			"path": "/api/cron/recover-failed-video-processing",
 			"schedule": "7,22,37,52 * * * *"
+		},
+		{
+			"path": "/api/cron/developer-upload-cleanup",
+			"schedule": "29 * * * *"
 		}
 	],
 	"functions": {

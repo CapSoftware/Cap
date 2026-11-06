@@ -277,6 +277,9 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     static TEST_STORE_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static TEST_AFTER_AUTH_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
 }
 
 #[cfg(test)]
@@ -307,8 +310,8 @@ static STORE_UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The whole store as raw JSON.
 ///
-/// A missing file is an empty store. A file that exists but does not parse is
-/// *not*: it is returned as `None` so no write path can silently replace
+/// A missing or whitespace-only file is an empty store. Nonempty invalid JSON
+/// is returned as `None` so no write path can silently replace
 /// someone's settings with a fresh object.
 fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
     #[cfg(test)]
@@ -321,6 +324,9 @@ fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
             return None;
         }
     };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Some(Map::new());
+    }
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(Value::Object(map)) => Some(map),
         Ok(_) => {
@@ -969,6 +975,9 @@ pub struct GeneralSettings {
     pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
+    /// GPUI-only: a cancelled picker leaves the main window hidden unless it
+    /// was on screen when the picker opened.
+    pub keep_main_hidden_on_cancel: bool,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -977,6 +986,10 @@ pub struct GeneralSettings {
     pub default_zoom_amount: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
+    /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
+    /// during a Studio recording. Off by default, because a microphone or
+    /// system audio capture can record the cue.
+    pub recording_marker_sound: bool,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -991,6 +1004,9 @@ pub struct GeneralSettings {
     pub server_url: String,
     pub enable_telemetry: bool,
     pub editor_preview_quality: EditorPreviewQuality,
+    /// How fast the editor preview plays. Preview only: export and the
+    /// project never see it. Anything but one of the offered steps reads as 1x.
+    pub editor_preview_speed: cap_editor::PreviewSpeed,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1007,6 +1023,22 @@ pub struct GeneralSettings {
 }
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
+pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+
+pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+
+/// Read on every marker press, so it goes through the cached store rather
+/// than a full [`GeneralSettings::load`].
+pub fn recording_marker_sound_enabled() -> bool {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| bool_at(settings, RECORDING_MARKER_SOUND_KEY, false))
+        })
+        .unwrap_or(false)
+}
 
 /// What follows a cleanly stopped Instant recording, the link always copied.
 /// Not one key: `disableAutoOpenLinks` (shared with the Tauri app) decides
@@ -1343,6 +1375,12 @@ impl GeneralSettings {
         }
     }
 
+    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
+    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    pub fn new_zoom_amount(&self) -> f32 {
+        self.default_zoom_amount.unwrap_or(1.5)
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1379,6 +1417,7 @@ impl GeneralSettings {
             focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
+            keep_main_hidden_on_cancel: bool_at(general, "keepMainHiddenOnCancel", false),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
@@ -1395,6 +1434,7 @@ impl GeneralSettings {
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
+            recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
@@ -1417,6 +1457,11 @@ impl GeneralSettings {
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            editor_preview_speed: general
+                .get(EDITOR_PREVIEW_SPEED_KEY)
+                .and_then(Value::as_f64)
+                .and_then(cap_editor::PreviewSpeed::from_f64)
+                .unwrap_or_default(),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
@@ -1556,6 +1601,54 @@ pub fn hotkey_from_value(value: &Value) -> Option<Hotkey> {
     serde_json::from_value(value.clone()).ok()
 }
 
+pub const RECORDING_MARKER_HOTKEY: &str = "addRecordingMarker";
+
+/// Set once the marker shortcut's default has been offered, so clearing the
+/// shortcut in Settings sticks across launches.
+const RECORDING_MARKER_HOTKEY_SEEDED: &str = "recordingMarkerSeeded";
+
+/// ⌃⌘M on macOS. Elsewhere Ctrl+Alt is AltGr on many layouts (AltGr+M types
+/// µ in German), so Alt+Shift+M instead.
+pub fn default_recording_marker_hotkey() -> Hotkey {
+    let macos = cfg!(target_os = "macos");
+    Hotkey {
+        code: "KeyM".into(),
+        meta: macos,
+        ctrl: macos,
+        alt: !macos,
+        shift: !macos,
+    }
+}
+
+/// Gives the marker shortcut its default the first time this build runs,
+/// unless the user already bound it, or bound something else to the default
+/// combo. Later launches leave the map alone.
+pub fn seed_recording_marker_hotkey() {
+    if store_section(HOTKEYS)
+        .get(RECORDING_MARKER_HOTKEY_SEEDED)
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return;
+    }
+    let mut map = hotkeys_raw();
+    let default = default_recording_marker_hotkey();
+    let taken = map
+        .values()
+        .filter_map(hotkey_from_value)
+        .any(|hotkey| hotkey == default);
+    if !map.contains_key(RECORDING_MARKER_HOTKEY) && !taken {
+        let Ok(value) = serde_json::to_value(&default) else {
+            return;
+        };
+        map.insert(RECORDING_MARKER_HOTKEY.into(), value);
+        if !set_hotkeys_raw(&map) {
+            return;
+        }
+    }
+    set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
+}
+
 // -- Transcription hints --------------------------------------------------------
 
 /// `DEFAULT_TRANSCRIPTION_HINTS` (`apps/desktop/src/utils/general-settings.ts`).
@@ -1605,6 +1698,7 @@ pub fn transcription_hints() -> Vec<String> {
 /// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
+    pub server_url: String,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
@@ -1630,7 +1724,20 @@ impl AuthSnapshot {
 /// `maybeProtectedHeaders` (`utils/web-api.ts:64-75`): `secret.api_key` wins
 /// over `secret.token`, and `plan.upgraded` is the Pro gate.
 pub fn auth_snapshot() -> AuthSnapshot {
-    let auth = store_section("auth");
+    let store = cached_store(&tauri_store_path()).unwrap_or_default();
+    let empty = Map::new();
+    let auth = store
+        .get("auth")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let server_url = string_at(
+        store
+            .get(GENERAL_SETTINGS)
+            .and_then(Value::as_object)
+            .unwrap_or(&empty),
+        "serverUrl",
+        DEFAULT_SERVER_URL,
+    );
     let token = auth
         .get("secret")
         .and_then(Value::as_object)
@@ -1670,7 +1777,12 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .collect()
         })
         .unwrap_or_default();
+    #[cfg(test)]
+    if let Some(after_snapshot) = TEST_AFTER_AUTH_SNAPSHOT.with(|hook| hook.take()) {
+        after_snapshot();
+    }
     AuthSnapshot {
+        server_url,
         token,
         plan_upgraded,
         plan_manual,
@@ -2936,16 +3048,39 @@ mod tests {
     /// token and every preset.
     #[test]
     fn a_corrupt_store_is_never_overwritten() {
-        let store = TempStore::new("corrupt", Some("{ this is not json"));
-        assert!(!super::set_store_setting(
-            GENERAL_SETTINGS,
-            "hideDockIcon",
-            Value::Bool(true)
-        ));
-        assert_eq!(
-            std::fs::read_to_string(&store.path).unwrap(),
-            "{ this is not json"
-        );
+        for contents in ["{ this is not json", r#"{"auth":"token""#, "null", "[]"] {
+            let store = TempStore::new("corrupt", Some(contents));
+            assert!(!super::set_store_setting(
+                GENERAL_SETTINGS,
+                "hideDockIcon",
+                Value::Bool(true)
+            ));
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn onboarding_progress_recovers_an_empty_store() {
+        for contents in ["", " \t\r\n"] {
+            let store = TempStore::new("empty-onboarding", Some(contents));
+            assert_eq!(GeneralSettings::load(), GeneralSettings::default());
+            assert!(!has_completed_startup());
+            assert!(!has_completed_onboarding());
+
+            assert!(set_has_completed_startup(true));
+            assert!(has_completed_startup());
+            assert!(set_has_completed_onboarding(true));
+            assert!(has_completed_onboarding());
+            assert_eq!(
+                store.read(),
+                serde_json::json!({
+                    "general_settings": {
+                        "hasCompletedStartup": true,
+                        "hasCompletedOnboarding": true
+                    }
+                })
+            );
+        }
     }
 
     /// Every value the page can read back has to survive the round trip, and
@@ -2983,6 +3118,7 @@ mod tests {
         assert_eq!(settings.recording_countdown, Some(5));
         assert!(!settings.custom_cursor_capture);
         assert_eq!(settings.default_zoom_amount, Some(2.5));
+        assert_eq!(settings.new_zoom_amount(), 2.5);
         assert_eq!(settings.max_fps, 120);
         assert_eq!(settings.server_url, "https://cap.example.com");
         assert_eq!(settings.excluded_windows.len(), 1);
@@ -2993,6 +3129,7 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key
@@ -3165,6 +3302,58 @@ mod tests {
         assert_eq!(after["hotkeys"]["hotkeys"]["someFutureAction"]["extra"], 1);
     }
 
+    #[test]
+    fn the_marker_shortcut_default_is_offered_once() {
+        let store = TempStore::new("marker-seed", Some(r#"{ "hotkeys": { "hotkeys": {} } }"#));
+        seed_recording_marker_hotkey();
+        let default = default_recording_marker_hotkey();
+        assert_eq!(
+            hotkey_from_value(&hotkeys_raw()[RECORDING_MARKER_HOTKEY]),
+            Some(default.clone())
+        );
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+
+        let mut cleared = hotkeys_raw();
+        cleared.remove(RECORDING_MARKER_HOTKEY);
+        assert!(set_hotkeys_raw(&cleared));
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+    }
+
+    #[test]
+    fn the_marker_shortcut_default_never_takes_a_combo_in_use() {
+        let default = serde_json::to_string(&default_recording_marker_hotkey()).unwrap();
+        let store = TempStore::new(
+            "marker-seed-taken",
+            Some(&format!(
+                r#"{{ "hotkeys": {{ "hotkeys": {{ "stopRecording": {default} }} }} }}"#
+            )),
+        );
+        seed_recording_marker_hotkey();
+        assert!(!hotkeys_raw().contains_key(RECORDING_MARKER_HOTKEY));
+        assert_eq!(
+            store.read()["hotkeys"][RECORDING_MARKER_HOTKEY_SEEDED],
+            true
+        );
+    }
+
+    #[test]
+    fn the_marker_sound_is_off_until_turned_on() {
+        let _store = TempStore::new("marker-sound", Some(r#"{ "general_settings": {} }"#));
+        assert!(!recording_marker_sound_enabled());
+        assert!(!GeneralSettings::load().recording_marker_sound);
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            RECORDING_MARKER_SOUND_KEY,
+            Value::Bool(true)
+        ));
+        assert!(recording_marker_sound_enabled());
+        assert!(GeneralSettings::load().recording_marker_sound);
+    }
+
     /// The automations model against the JSON `crates/automation/src/types.rs`
     /// serializes: camelCase everywhere, `type`-tagged conditions/actions, and
     /// the whole key written wholesale.
@@ -3309,6 +3498,31 @@ mod tests {
             ..Default::default()
         };
         assert!(bundle_first.matches(Some("com.cap.desktop"), None, Some("Wrong")));
+    }
+
+    #[test]
+    fn editor_preview_speed_reads_offered_steps_and_falls_back_to_normal() {
+        let read = |value: Option<Value>| {
+            let mut general = Map::new();
+            if let Some(value) = value {
+                general.insert(EDITOR_PREVIEW_SPEED_KEY.to_string(), value);
+            }
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .editor_preview_speed
+                .as_f64()
+        };
+        assert_eq!(read(None), 1.0);
+        for speed in cap_editor::PreviewSpeed::ALL {
+            assert_eq!(
+                read(Some(serde_json::json!(speed.as_f64()))),
+                speed.as_f64()
+            );
+        }
+        assert_eq!(read(Some(serde_json::json!(2))), 2.0);
+        assert_eq!(read(Some(serde_json::json!(2.5))), 1.0);
+        assert_eq!(read(Some(serde_json::json!(-1))), 1.0);
+        assert_eq!(read(Some(serde_json::json!("2"))), 1.0);
+        assert_eq!(read(Some(Value::Null)), 1.0);
     }
 
     /// Key absent -> the default exclusion list (the Rust struct's serde

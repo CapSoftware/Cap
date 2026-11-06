@@ -14,6 +14,7 @@ const startLoomFileProcessingWorkflowMock = vi.hoisted(() => vi.fn());
 const uploadedFileHeadMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
+const isRateLimitedMock = vi.hoisted(() => vi.fn(async () => false));
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
 const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
 const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
@@ -229,6 +230,11 @@ vi.mock("next/headers", () => ({
 
 vi.mock("@vercel/firewall", () => ({
 	checkRateLimit: checkRateLimitMock,
+}));
+
+vi.mock("@/lib/rate-limit", () => ({
+	RATE_LIMIT_IDS: { LOOM_DOWNLOAD: "rl_loom_download" },
+	isRateLimited: isRateLimitedMock,
 }));
 
 vi.mock("@/lib/server", async () => {
@@ -1994,5 +2000,122 @@ describe("resuming an uploaded concierge Loom file", () => {
 		);
 		expect(mockDb.select).not.toHaveBeenCalled();
 		expect(startVideoProcessingWorkflowMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("downloadLoomVideo request limits", () => {
+	const LOOM_URL = "https://www.loom.com/share/loom-abc1234567";
+
+	const respondWithDirectMp4 = () =>
+		vi.mocked(fetch).mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			}
+			if (url === "https://www.loom.com/graphql") {
+				return {
+					ok: true,
+					json: async () => ({ data: { getVideo: { name: "Clip" } } }),
+				} as Response;
+			}
+			if (url.includes("/v1/oembed")) {
+				return {
+					ok: true,
+					json: async () => ({ duration: 5, width: 640, height: 360 }),
+				} as Response;
+			}
+			return { ok: false, status: 404, text: async () => "" } as Response;
+		});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.stubGlobal("fetch", vi.fn());
+		isRateLimitedMock.mockReset();
+		isRateLimitedMock.mockResolvedValue(false);
+		mockGetCurrentUser.mockResolvedValue(null);
+		respondWithDirectMp4();
+	});
+
+	it("returns a clear failure without contacting Loom once the limit is reached", async () => {
+		isRateLimitedMock.mockResolvedValue(true);
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo(LOOM_URL);
+
+		expect(result).toEqual({
+			success: false,
+			error: "Too many download requests. Please wait a minute and try again.",
+		});
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("limits anonymous callers by address and signed-in callers by user", async () => {
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		await downloadLoomVideo(LOOM_URL);
+		mockGetCurrentUser.mockResolvedValue({ id: "user-123" });
+		await downloadLoomVideo(LOOM_URL);
+
+		expect(isRateLimitedMock.mock.calls).toEqual([
+			["rl_loom_download", {}],
+			["rl_loom_download", { key: "loom-download:user-123" }],
+		]);
+	});
+
+	it("still succeeds under the limit", async () => {
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo(LOOM_URL);
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				success: true,
+				videoId: "loom-abc1234567",
+				videoName: "Clip",
+				downloadUrl: "https://cdn.loom.com/video.mp4",
+			}),
+		);
+	});
+
+	it("keeps the invalid URL message without consulting the limit", async () => {
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo("https://example.com/not-loom");
+
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/^Invalid Loom URL/);
+		expect(isRateLimitedMock).not.toHaveBeenCalled();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("keeps the private video message", async () => {
+		vi.mocked(fetch).mockResolvedValue({
+			ok: false,
+			status: 404,
+			text: async () => "",
+		} as Response);
+		const { downloadLoomVideo } = await import("@/actions/loom");
+
+		const result = await downloadLoomVideo(LOOM_URL);
+
+		expect(result).toEqual({
+			success: false,
+			error:
+				"Could not retrieve a download URL. The video may be private, password-protected, or the link may have expired.",
+		});
+	});
+
+	it("lets the agent import path resolve downloads without this limit", async () => {
+		const { resolveLoomDownload } = await import("@/lib/loom-csv-import");
+
+		const result = await resolveLoomDownload(LOOM_URL);
+
+		expect(result.success).toBe(true);
+		expect(isRateLimitedMock).not.toHaveBeenCalled();
 	});
 });
