@@ -2134,6 +2134,8 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+        // `CAP_GPUI_AUTO_DELETE=1`: end with the bar's Delete instead of Stop.
+        let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
             || mode == Mode::Screenshot;
@@ -2283,9 +2285,14 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
-            tracing::info!("auto-record stop requested");
             let app: &gpui::AsyncApp = cx;
-            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            if delete {
+                tracing::info!("auto-record delete requested");
+                app.update(|cx| session.update(cx, |session, cx| session.delete(cx)));
+            } else {
+                tracing::info!("auto-record stop requested");
+                app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            }
         })
         .detach();
     }
