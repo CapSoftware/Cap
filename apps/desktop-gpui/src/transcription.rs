@@ -243,6 +243,8 @@ struct Hub {
     deleting: Option<String>,
     generating: HashSet<PathBuf>,
     generation_errors: HashMap<PathBuf, String>,
+    /// Projects whose last transcription worked but heard no words.
+    no_speech: HashSet<PathBuf>,
     /// Word-timing refinements running, with the flag that stops each.
     refining: HashMap<PathBuf, Arc<AtomicBool>>,
 }
@@ -276,6 +278,7 @@ pub struct CaptionsUiSnapshot {
     pub deleting: Option<String>,
     pub generating: bool,
     pub generation_error: Option<String>,
+    pub no_speech: bool,
     pub refining: bool,
 }
 
@@ -287,6 +290,7 @@ pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
         deleting: hub.deleting.clone(),
         generating: hub.generating.contains(project_path),
         generation_error: hub.generation_errors.get(project_path).cloned(),
+        no_speech: hub.no_speech.contains(project_path),
         refining: hub.refining.contains_key(project_path),
     }
 }
@@ -430,6 +434,7 @@ pub fn begin_generation(project_path: &Path) -> bool {
         stop.store(true, Ordering::Relaxed);
     }
     hub.generation_errors.remove(project_path);
+    hub.no_speech.remove(project_path);
     hub.generating.insert(project_path.to_path_buf());
     true
 }
@@ -437,6 +442,7 @@ pub fn begin_generation(project_path: &Path) -> bool {
 pub fn finish_generation(project_path: &Path, error: Option<String>) {
     let mut hub = hub();
     hub.generating.remove(project_path);
+    hub.no_speech.remove(project_path);
     match error {
         Some(message) => {
             hub.generation_errors
@@ -446,6 +452,15 @@ pub fn finish_generation(project_path: &Path, error: Option<String>) {
             hub.generation_errors.remove(project_path);
         }
     }
+}
+
+/// A transcription that worked but heard no words: an empty state, not an
+/// error.
+pub fn finish_generation_without_speech(project_path: &Path) {
+    let mut hub = hub();
+    hub.generating.remove(project_path);
+    hub.generation_errors.remove(project_path);
+    hub.no_speech.insert(project_path.to_path_buf());
 }
 
 /// Claims the project's one refinement slot; `None` while one already runs.
@@ -2321,6 +2336,8 @@ fn with_transcription_audio<T>(
     result
 }
 
+pub const NO_SPEECH: &str = "No speech detected in the audio";
+
 /// [`with_transcription_audio`] over the timeline's ranges, with `engine`'s
 /// segments moved back to source time.
 fn transcribe_project_with(
@@ -2338,7 +2355,7 @@ fn transcribe_project_with(
         |path, offsets| Ok(restore_source_timestamps(engine(path)?, offsets)),
     )?;
     if segments.is_empty() {
-        return Err("No speech detected in the audio".to_string());
+        return Err(NO_SPEECH.to_string());
     }
     Ok(segments)
 }
@@ -3370,6 +3387,24 @@ mod tests {
                 .all(|word| word.text != "um"),
             "the cut word stays cut"
         );
+    }
+
+    #[test]
+    fn hearing_no_speech_is_an_empty_state_not_an_error() {
+        let path = PathBuf::from("/tmp/cap-no-speech-state-test.cap");
+        assert!(begin_generation(&path));
+        finish_generation_without_speech(&path);
+        let snapshot = ui_snapshot(&path);
+        assert!(snapshot.no_speech && !snapshot.generating);
+        assert_eq!(snapshot.generation_error, None);
+
+        assert!(begin_generation(&path));
+        assert!(!ui_snapshot(&path).no_speech);
+        finish_generation(&path, Some("boom".to_string()));
+        let snapshot = ui_snapshot(&path);
+        assert!(!snapshot.no_speech);
+        assert_eq!(snapshot.generation_error.as_deref(), Some("boom"));
+        finish_generation(&path, None);
     }
 
     #[test]

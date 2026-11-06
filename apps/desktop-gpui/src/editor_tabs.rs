@@ -2971,6 +2971,14 @@ impl EditorWindow {
                         .text_color(error_color)
                         .child(error),
                 );
+            } else if snapshot.no_speech {
+                column = column.child(
+                    div()
+                        .id("caption-no-speech")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(tr::editor::transcript::no_speech())),
+                );
             } else if snapshot.refining {
                 column = column.child(
                     div()
@@ -3729,6 +3737,11 @@ impl EditorWindow {
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.refine_caption_timings(window, cx);
                     });
+                }
+                Err(error) if error == transcription::NO_SPEECH => {
+                    tracing::info!("caption generation heard no speech");
+                    transcription::finish_generation_without_speech(&project_path);
+                    let _ = this.update(cx, |_, cx| cx.notify());
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");

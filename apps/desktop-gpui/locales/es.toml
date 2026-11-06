@@ -2865,6 +2865,7 @@ empty_title = "Aún no hay transcripción"
 hint = "Haz clic en una palabra para ir a ella. Selecciona palabras y pulsa la tecla de borrar para cortarlas del vídeo."
 next_match = "Siguiente coincidencia"
 no_audio = "Esta grabación no tiene audio que transcribir."
+no_speech = "No se encontró voz en esta grabación"
 previous_match = "Coincidencia anterior"
 restore_blocked = "Esta parte se cortó en la línea de tiempo. Usa Deshacer o arrastra el borde del clip para recuperarla."
 restore_hint = { one = "Haz clic para restaurar {count} palabra", many = "Haz clic para restaurar {count} de palabras", other = "Haz clic para restaurar {count} palabras" }

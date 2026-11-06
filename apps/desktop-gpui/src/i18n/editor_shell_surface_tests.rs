@@ -1116,6 +1116,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::transcript::no_audio(),
             "This recording has no audio to transcribe.",
         ),
+        (
+            tr::editor::transcript::no_speech(),
+            "No speech found in this recording",
+        ),
         (tr::editor::transcript::pauses::apply(), "Shorten"),
         (tr::editor::transcript::pauses::keep(), "Shorten to"),
         (

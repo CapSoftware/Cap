@@ -2865,6 +2865,7 @@ empty_title = "还没有转写内容"
 hint = "点击单词即可跳转。选中单词后按删除键，即可从视频中剪掉。"
 next_match = "下一个匹配项"
 no_audio = "此录制内容没有可转写的音频。"
+no_speech = "此录制内容中未发现语音"
 previous_match = "上一个匹配项"
 restore_blocked = "这部分已在时间线上剪掉。请使用撤销，或拖动片段边缘将其恢复。"
 restore_hint = { other = "点击恢复 {count} 个词" }

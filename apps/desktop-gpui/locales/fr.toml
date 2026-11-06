@@ -2865,6 +2865,7 @@ empty_title = "Pas encore de transcription"
 hint = "Cliquez sur un mot pour y aller. Sélectionnez des mots et appuyez sur la touche Supprimer pour les couper de la vidéo."
 next_match = "Résultat suivant"
 no_audio = "Cet enregistrement n'a pas d'audio à transcrire."
+no_speech = "Aucune parole trouvée dans cet enregistrement"
 previous_match = "Résultat précédent"
 restore_blocked = "Cette partie a été coupée dans la timeline. Utilisez Annuler ou faites glisser le bord du clip pour la récupérer."
 restore_hint = { one = "Cliquez pour restaurer {count} mot", many = "Cliquez pour restaurer {count} de mots", other = "Cliquez pour restaurer {count} mots" }
