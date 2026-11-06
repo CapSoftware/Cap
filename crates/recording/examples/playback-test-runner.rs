@@ -742,7 +742,7 @@ async fn run_tests_on_recording(
     let start = Instant::now();
 
     let meta = RecordingMeta::load_for_project(recording_path)
-        .map_err(|e| anyhow::anyhow!("Failed to load recording metadata: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to load recording metadata: {e}"))?;
 
     let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
         bail!("Not a studio recording");
@@ -1148,8 +1148,7 @@ fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
 
     if !benchmark_file.exists() {
         bail!(
-            "PLAYBACK-BENCHMARKS.md not found at {:?}. Please ensure the file exists.",
-            benchmark_file
+            "PLAYBACK-BENCHMARKS.md not found at {benchmark_file:?}. Please ensure the file exists."
         );
     }
 
@@ -1230,7 +1229,7 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .init();
 
-    ffmpeg::init().map_err(|e| anyhow::anyhow!("Failed to initialize FFmpeg: {}", e))?;
+    ffmpeg::init().map_err(|e| anyhow::anyhow!("Failed to initialize FFmpeg: {e}"))?;
 
     let cli = Cli::parse();
 

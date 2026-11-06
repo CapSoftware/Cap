@@ -174,8 +174,7 @@ async fn run_single_kill9(
         let _ = child.kill();
         let _ = child.wait();
         anyhow::bail!(
-            "record-harness child never signaled ready within {:?}",
-            READY_WAIT_TIMEOUT
+            "record-harness child never signaled ready within {READY_WAIT_TIMEOUT:?}"
         );
     }
 
