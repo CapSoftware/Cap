@@ -120,6 +120,31 @@ test("the Windows installer compresses with a window large enough to span both b
 	);
 });
 
+test("the Windows installer ends every bundled binary that loads the shared DLLs", () => {
+	const hooks = readFileSync(
+		path.join(gpuiDirectory, gpuiConfig.bundle.windows.nsis.installerHooks),
+		"utf8",
+	);
+	const macro = (name) =>
+		hooks.match(
+			new RegExp(`!macro ${name}\\r?\\n([\\s\\S]*?)!macroend`),
+		)?.[1] ?? "";
+	const checked = (name) =>
+		[...macro(name).matchAll(/CheckIfAppIsRunning "([^"]+)"/g)].map(
+			(match) => match[1],
+		);
+	assert.deepEqual(checked("NSIS_HOOK_PREINSTALL"), [
+		"cap-gpui.exe",
+		"cap-cli.exe",
+	]);
+	assert.deepEqual(checked("NSIS_HOOK_PREUNINSTALL"), ["cap-cli.exe"]);
+	assert.ok(
+		gpuiConfig.bundle.externalBin.some(
+			(binary) => path.basename(binary) === "cap-cli",
+		),
+	);
+});
+
 test("platform resources point at the shared native dependencies", () => {
 	assert.deepEqual(gpuiPlatformConfig("darwin"), {
 		bundle: {
