@@ -147,10 +147,21 @@ describe("dashboard video import progress", () => {
 				return options;
 			});
 
-			uploader.sendProgressUpdate(total / 16, total);
+			const sent = (uploadedBytes: number) =>
+				uploader.onChunkStateChange([
+					{
+						partNumber: 1,
+						sizeBytes: total,
+						uploadedBytes,
+						progress: uploadedBytes / total,
+						status: "uploading",
+					},
+				]);
+
+			sent(total / 16);
 			for (let tick = 1; tick <= 8; tick++) {
 				await vi.advanceTimersByTimeAsync(500);
-				uploader.sendProgressUpdate(((tick + 1) * total) / 16, total);
+				sent(((tick + 1) * total) / 16);
 			}
 
 			expect(mocks.progress.mock.calls).toEqual([
@@ -159,7 +170,7 @@ describe("dashboard video import progress", () => {
 			]);
 
 			if (outcome === "success") {
-				uploader.sendProgressUpdate(total, total);
+				sent(total);
 				await vi.advanceTimersByTimeAsync(2000);
 				expect(mocks.progress).toHaveBeenCalledTimes(2);
 				finishUpload();
@@ -202,6 +213,48 @@ describe("dashboard video import progress", () => {
 			subpath: "raw-upload.mp4",
 		});
 		expect(MockXMLHttpRequest.current).toBeUndefined();
+	});
+
+	it("moves the progress bar while parts are still uploading", async () => {
+		const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+		Object.defineProperty(file, "size", { value: total });
+		const setUploadStatus = vi.fn();
+		mocks.finalize.mockImplementation(async () => {
+			const uploader = mocks.uploader.mock.lastCall?.[0];
+			uploader.setUploadStatus({
+				status: "uploadingVideo",
+				capId: videoId,
+				progress: 5,
+				thumbnailUrl: undefined,
+			});
+			uploader.onChunkStateChange([
+				{
+					partNumber: 1,
+					sizeBytes: total / 2,
+					uploadedBytes: total / 4,
+					progress: 0.5,
+					status: "uploading",
+				},
+				{
+					partNumber: 2,
+					sizeBytes: total / 2,
+					uploadedBytes: total / 8,
+					progress: 0.25,
+					status: "uploading",
+				},
+			]);
+		});
+
+		await importMediaFile({
+			file,
+			orgId: Organisation.OrganisationId.make("org-123"),
+			setUploadStatus,
+		});
+
+		const progress = setUploadStatus.mock.calls
+			.filter(([status]) => status?.status === "uploadingVideo")
+			.map(([status]) => status.progress);
+		expect(progress).toEqual([0, 37.5]);
 	});
 
 	describe("failed uploads", () => {

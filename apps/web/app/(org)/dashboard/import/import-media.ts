@@ -272,9 +272,22 @@ async function uploadVideoForServerProcessing(
 				provider: session.provider,
 				mimeType: RAW_UPLOAD_CONTENT_TYPE,
 				subpath: RAW_UPLOAD_SUBPATH,
-				setUploadStatus,
-				sendProgressUpdate: async (uploaded, total) =>
-					progressTracker.scheduleProgressUpdate(uploaded, total),
+				// The uploader reports only finished parts; follow the bytes in flight.
+				setUploadStatus: () => {},
+				sendProgressUpdate: async () => {},
+				onChunkStateChange: (chunks) => {
+					const loaded = chunks.reduce(
+						(sent, chunk) => sent + chunk.uploadedBytes,
+						0,
+					);
+					setUploadStatus({
+						status: "uploadingVideo",
+						capId: uploadId,
+						progress: (loaded / file.size) * 100,
+						thumbnailUrl: undefined,
+					});
+					progressTracker.scheduleProgressUpdate(loaded, file.size);
+				},
 			});
 		} catch (initiateError) {
 			await deleteFailedImport(uploadId);
