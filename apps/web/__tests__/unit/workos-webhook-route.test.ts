@@ -4,9 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	secret: "whsec_route" as string | undefined,
 	organization: [{ id: "org_cap" }] as { id: string }[],
-	requestDirectorySync: vi.fn(async () => undefined),
-	syncOrganizationDirectory: vi.fn(async () => ({ status: "synced" })),
-	afterTasks: [] as Promise<unknown>[],
+	requestDirectorySync: vi.fn(async (_organizationId: string) => undefined),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -28,15 +26,7 @@ vi.mock("@cap/database", () => ({
 }));
 vi.mock("@/lib/sso/directory-sync", () => ({
 	requestDirectorySync: mocks.requestDirectorySync,
-	syncOrganizationDirectory: mocks.syncOrganizationDirectory,
 }));
-vi.mock("next/server", async (importOriginal) => ({
-	...(await importOriginal<typeof import("next/server")>()),
-	after: (task: () => Promise<unknown>) => {
-		mocks.afterTasks.push(task());
-	},
-}));
-
 vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Layer } = await import("effect");
@@ -78,19 +68,17 @@ describe("WorkOS webhook route", () => {
 	beforeEach(() => {
 		mocks.secret = "whsec_route";
 		mocks.organization = [{ id: "org_cap" }];
-		mocks.afterTasks = [];
 		mocks.requestDirectorySync.mockClear();
-		mocks.syncOrganizationDirectory.mockClear();
 	});
 
-	it("requests and runs a sync for a signed directory event", async () => {
-		const response = await POST(signed(userEvent));
-		expect(response.status).toBe(200);
-		await Promise.all(mocks.afterTasks);
-		expect(mocks.requestDirectorySync).toHaveBeenCalledExactlyOnceWith(
-			"org_cap",
-		);
-		expect(mocks.syncOrganizationDirectory).toHaveBeenCalledOnce();
+	it("only requests a sync for each signed directory event", async () => {
+		for (let index = 0; index < 50; index++) {
+			expect((await POST(signed(userEvent))).status).toBe(200);
+		}
+		expect(mocks.requestDirectorySync).toHaveBeenCalledTimes(50);
+		expect(
+			new Set(mocks.requestDirectorySync.mock.calls.map(([id]) => id)),
+		).toEqual(new Set(["org_cap"]));
 	});
 
 	it("rejects a forged signature without touching directory state", async () => {
