@@ -25,6 +25,7 @@ import { deleteOrganizationMembership } from "@/lib/organization-member-removal"
 
 const LEASE_MS = 10 * 60_000;
 const RETRY_DELAY_MS = 2 * 60_000;
+const SNAPSHOT_RETRY_DELAY_MS = 60 * 60_000;
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 const REMOVAL_APPROVAL_MS = 60 * 60_000;
 const MASS_REMOVAL_MIN = 10;
@@ -57,6 +58,12 @@ export type DirectorySyncResult = {
 
 class DeadlineReached extends Error {}
 
+class SnapshotTooSlow extends Error {
+	constructor() {
+		super("The directory could not be read within one sync.");
+	}
+}
+
 function emptyResult(status: DirectorySyncResult["status"]) {
 	return { status, added: 0, removed: 0, held: 0, skipped: 0 };
 }
@@ -71,7 +78,7 @@ async function collectPages<T>(
 	const items: T[] = [];
 	let after: string | undefined;
 	for (let page = 0; page < MAX_PAGES; page++) {
-		if (Date.now() > deadline) throw new DeadlineReached();
+		if (Date.now() > deadline) throw new SnapshotTooSlow();
 		const result = await fetchPage(after);
 		items.push(...result.data);
 		if (!result.listMetadata.after) return items;
@@ -572,7 +579,12 @@ export async function syncOrganizationDirectory(
 		await db()
 			.update(organizationDirectorySync)
 			.set({
-				leaseExpiresAt: new Date(Date.now() + RETRY_DELAY_MS),
+				leaseExpiresAt: new Date(
+					Date.now() +
+						(error instanceof SnapshotTooSlow
+							? SNAPSHOT_RETRY_DELAY_MS
+							: RETRY_DELAY_MS),
+				),
 				lastError: (error instanceof Error
 					? error.message
 					: "Directory sync failed."
