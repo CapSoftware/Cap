@@ -58,7 +58,7 @@ jobs:
             name="$(echo "$bench" | tr '/' '_')"
             CRITERION_HOME="$RUNNER_TEMP/profile/criterion" valgrind --tool=callgrind \
               --callgrind-out-file="$name.callgrind" --dump-instr=no \
-              "$RUNNER_TEMP/bench/frame" --bench --profile-time 2 "^${bench}\$" > "$name.log" 2>&1 \
+              "$RUNNER_TEMP/bench/frame" --bench --profile-time 15 "^${bench}\$" > "$name.log" 2>&1 \
               || { tail -50 "$name.log"; exit 1; }
             callgrind_annotate --inclusive=yes --threshold=99 "$name.callgrind" > "$name.inclusive.txt" 2>/dev/null || true
             callgrind_annotate --inclusive=no --threshold=99 "$name.callgrind" > "$name.self.txt" 2>/dev/null || true
