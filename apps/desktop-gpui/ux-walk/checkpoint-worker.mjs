@@ -975,10 +975,15 @@ if (
 	const { loadConfig } = await import(new URL("config.mjs", engine));
 	const retryJobId =
 		process.argv[3] === "--retry-job" ? process.argv[4] : undefined;
-	runCheckpointWorker(process.argv[2], loadConfig(), {
-		retryJobId,
-		resume: retryJobId !== undefined,
-	}).catch((error) => {
+	const { withJournalProject } = await import("./walk-project.mjs");
+	runCheckpointWorker(
+		process.argv[2],
+		withJournalProject(process.argv[2], loadConfig()),
+		{
+			retryJobId,
+			resume: retryJobId !== undefined,
+		},
+	).catch((error) => {
 		console.error(error.message);
 		process.exitCode = 1;
 	});

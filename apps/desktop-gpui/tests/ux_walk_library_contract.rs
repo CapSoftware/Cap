@@ -29,6 +29,14 @@ mod ux_walk {
     pub fn text<'a>(_: &'a serde_json::Map<String, serde_json::Value>, _: &str) -> &'a str {
         "~/Movies/ux-walk"
     }
+    pub fn config_path() -> std::path::PathBuf {
+        std::env::temp_dir()
+            .join(format!(
+                "ux-walk-library-contract-config-{}",
+                std::process::id()
+            ))
+            .join("config.json")
+    }
 }
 
 use std::{
@@ -36,7 +44,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-use ux_walk_library::{WalkSelection, WalkStatus, index_in, read_summary};
+use ux_walk_library::{WalkSelection, WalkStatus, index_in, project_name, read_summary};
 
 struct Fixture(PathBuf);
 
@@ -445,4 +453,41 @@ fn a_recordings_notes_attach_to_that_recording_with_notes_labels() {
     let walk = read_summary(&walk).unwrap();
     assert!(!walk.notes);
     assert_eq!(walk.status_label(), "Notes saved");
+}
+
+#[test]
+fn a_recordings_project_badge_follows_session_json_over_its_request() {
+    let f = Fixture::new();
+    let projects = ux_walk::config_path().parent().unwrap().join("projects");
+    fs::create_dir_all(&projects).unwrap();
+    let id = format!("acme-{}", std::process::id());
+    fs::write(
+        projects.join(format!("{id}.json")),
+        serde_json::to_vec(&serde_json::json!({"version":1,"id":id,"name":"Acme Web"})).unwrap(),
+    )
+    .unwrap();
+    let source = f.source("talk");
+    let file = f.journal("projected", &source, 1);
+    let mut journal: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    journal["request"]["project"] = serde_json::json!(id);
+    fs::write(&file, serde_json::to_vec(&journal).unwrap()).unwrap();
+    assert_eq!(
+        read_summary(&file).unwrap().project.as_deref(),
+        Some("Acme Web")
+    );
+    let directory = file.parent().unwrap();
+    // Moved to no project after processing.
+    fs::write(directory.join("session.json"), r#"{"project":null}"#).unwrap();
+    assert_eq!(read_summary(&file).unwrap().project, None);
+    fs::write(
+        directory.join("session.json"),
+        format!(r#"{{"project":"{id}"}}"#),
+    )
+    .unwrap();
+    assert_eq!(project_name(directory, None).as_deref(), Some("Acme Web"));
+    // Older journals and missing projects have no badge.
+    assert_eq!(project_name(&f.0.join("nowhere"), None), None);
+    assert_eq!(project_name(&f.0.join("nowhere"), Some("gone")), None);
+    assert_eq!(project_name(&f.0.join("nowhere"), Some("../escape")), None);
+    fs::remove_dir_all(projects.parent().unwrap()).unwrap();
 }

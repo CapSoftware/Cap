@@ -158,6 +158,7 @@ mod tests {
             url: String::new(),
             speakers: Vec::new(),
             kind: Kind::Notes,
+            project: None,
         };
         assert!(!request.uses_browser());
         assert!(!request.opens_walk_window());

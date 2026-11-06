@@ -27,6 +27,11 @@ pub(super) struct RecorderWalk {
     notes_default: bool,
     /// The recorder's own flip of that default, for the next recording only.
     notes_choice: Option<bool>,
+    /// Saved projects as (id, name), refreshed while idle.
+    projects: Vec<(String, String)>,
+    /// The project new walks and notes start in: the last one picked, else the default.
+    project: Option<String>,
+    project_menu: Option<ui::MenuState>,
     topic: Entity<ui::TextInputState>,
     speakers: Entity<ui::TextInputState>,
     _topic_events: gpui::Subscription,
@@ -46,7 +51,7 @@ fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
                 return;
             };
             if idle {
-                let (warning, notes_default) = cx
+                let (warning, notes_default, (projects, project)) = cx
                     .background_executor()
                     .spawn(async move {
                         let settings = crate::ux_walk::load().ok();
@@ -58,6 +63,7 @@ fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
                             settings.as_ref().is_some_and(|settings| {
                                 crate::ux_walk::enabled(settings, crate::ux_walk::RECORDING_NOTES)
                             }),
+                            projects_now(),
                         )
                     })
                     .await;
@@ -70,6 +76,13 @@ fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
                         this.walk.notes_default = notes_default;
                         cx.notify();
                     }
+                    if this.walk.project_menu.is_none()
+                        && (this.walk.projects != projects || this.walk.project != project)
+                    {
+                        this.walk.projects = projects;
+                        this.walk.project = project;
+                        cx.notify();
+                    }
                 });
                 if updated.is_err() {
                     return;
@@ -78,6 +91,14 @@ fn watch_transcription_key(cx: &mut Context<MainWindow>) -> Task<()> {
             cx.background_executor().timer(Duration::from_secs(5)).await;
         }
     })
+}
+
+/// The saved projects and the one a new recording starts in. Small file reads only.
+fn projects_now() -> (Vec<(String, String)>, Option<String>) {
+    (
+        crate::ux_walk_projects::quick_list(),
+        crate::ux_walk_projects::recording_project(),
+    )
 }
 
 impl RecorderWalk {
@@ -140,6 +161,7 @@ impl RecorderWalk {
         let notes_default = crate::ux_walk::load().is_ok_and(|settings| {
             crate::ux_walk::enabled(&settings, crate::ux_walk::RECORDING_NOTES)
         });
+        let (projects, project) = projects_now();
         Self {
             selected: crate::store::ux_walk_selected(),
             diatribe: crate::store::ux_walk_diatribe(),
@@ -151,6 +173,9 @@ impl RecorderWalk {
             key_warning: None,
             notes_default,
             notes_choice: None,
+            projects,
+            project,
+            project_menu: None,
             topic,
             speakers,
             _topic_events: topic_events,
@@ -467,7 +492,15 @@ impl MainWindow {
             return;
         }
         let request = match crate::ux_walk::diatribe_request() {
-            Ok(request) => request,
+            // The Diatribe choice records into the recorder's picked project; the shortcut
+            // takes the last-used project, else the default, without asking.
+            Ok(mut request) => {
+                request.project = match start {
+                    DiatribeStart::Chosen => self.walk.project.clone(),
+                    DiatribeStart::OneShot => crate::ux_walk_projects::recording_project(),
+                };
+                request
+            }
             Err(error) => {
                 self.session.update(cx, |session, cx| {
                     session.error = Some(error);
@@ -612,7 +645,10 @@ impl MainWindow {
         // The flip covers this one recording; the next one starts from the default again.
         self.walk.notes_choice = None;
         match notes::start_request() {
-            Ok(request) => Some(request),
+            Ok(mut request) => {
+                request.project = self.walk.project.clone();
+                Some(request)
+            }
             Err(error) => {
                 self.walk.notice = Some(format!("Recording without notes: {error}"));
                 None
@@ -630,6 +666,7 @@ impl MainWindow {
         }
         match crate::ux_walk::request(self.walk.topic.read(cx).text()) {
             Ok(mut request) => {
+                request.project = self.walk.project.clone();
                 let settings = crate::ux_walk::load().unwrap_or_default();
                 if crate::ux_walk::enabled(&settings, "askSpeakers") {
                     request.speakers = self
@@ -653,6 +690,101 @@ impl MainWindow {
                 Err(())
             }
         }
+    }
+
+    fn project_label(&self) -> String {
+        self.walk
+            .project
+            .as_deref()
+            .and_then(|id| {
+                self.walk
+                    .projects
+                    .iter()
+                    .find(|(known, _)| known == id)
+                    .map(|(_, name)| name.clone())
+            })
+            .unwrap_or_else(|| crate::ux_walk_projects::NO_PROJECT.into())
+    }
+
+    fn project_items(&self) -> Vec<ui::MenuItem> {
+        std::iter::once(ui::MenuItem::new(
+            crate::ux_walk_projects::NO_PROJECT,
+            self.walk.project.is_none(),
+        ))
+        .chain(self.walk.projects.iter().map(|(id, name)| {
+            ui::MenuItem::new(
+                name.clone(),
+                self.walk.project.as_deref() == Some(id.as_str()),
+            )
+        }))
+        .collect()
+    }
+
+    fn choose_project(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.walk.project_menu = None;
+        let project = match index {
+            0 => None,
+            index => match self.walk.projects.get(index - 1) {
+                Some((id, _)) => Some(id.clone()),
+                None => return,
+            },
+        };
+        crate::ux_walk_projects::remember(project.as_deref());
+        self.walk.project = project;
+        cx.notify();
+    }
+
+    /// A compact project dropdown for the next recording; absent until a project exists.
+    fn project_picker(&self, id: &'static str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.walk.projects.is_empty() {
+            return None;
+        }
+        let theme = self.theme;
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.gray_10)
+                        .child("Project"),
+                )
+                .child(
+                    ui::Select::settings(&theme, id, self.project_label()).on_open(cx.listener(
+                        |this, bounds: &gpui::Bounds<gpui::Pixels>, _, cx| {
+                            let items = this.project_items();
+                            this.walk.project_menu = Some(ui::MenuState::anchored(*bounds, &items));
+                            cx.notify();
+                        },
+                    )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The project dropdown's open menu, drawn over the whole recorder.
+    pub(super) fn ux_walk_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let state = self.walk.project_menu.as_ref()?;
+        Some(
+            ui::Menu::plain(
+                &self.theme,
+                "ux-walk-project-menu",
+                self.project_items(),
+                state,
+            )
+            .on_select(cx.listener(|this, index: &usize, _, cx| {
+                this.choose_project(*index, cx);
+            }))
+            .on_dismiss(cx.listener(|this, _, _, cx| {
+                this.walk.project_menu = None;
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
     }
 
     /// The "Notes & action items" switch for an ordinary recording, and how the latest
@@ -706,6 +838,11 @@ impl MainWindow {
                             ),
                     )
                 })
+                .when_some(
+                    self.project_picker("recording-notes-project", cx)
+                        .filter(|_| offered && on),
+                    |this, picker| this.child(picker),
+                )
                 .when_some(
                     self.walk.key_warning.clone().filter(|_| offered && on),
                     |this, warning| {
@@ -794,6 +931,9 @@ impl MainWindow {
                 .flex_col()
                 .gap(px(8.))
                 .when(selected, |this| this.child(self.walk_choice(cx)))
+                .when(diatribe, |this| {
+                    this.children(self.project_picker("ux-walk-diatribe-project", cx))
+                })
                 .when(selected && !diatribe, |this| {
                     this.child(
                         div()
@@ -820,6 +960,7 @@ impl MainWindow {
                                     )
                                 },
                             )
+                            .children(self.project_picker("ux-walk-project", cx))
                             .child(
                                 ui::Button::body(
                                     &theme,

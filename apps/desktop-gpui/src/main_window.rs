@@ -3024,6 +3024,7 @@ impl Render for MainWindow {
             .child(self.render_header(window, cx))
             .child(self.render_body(cx))
             .children(self.render_mode_hover(cx))
+            .children(self.ux_walk_overlay(cx))
             .when(
                 // The controls bar owns the live-recording UI; this overlay is
                 // the fallback for when the bar window failed to open.

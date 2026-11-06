@@ -23,6 +23,7 @@ fn request() -> Request {
         url: "https://example.com".into(),
         speakers: vec!["Tester".into()],
         kind: Kind::Walk,
+        project: None,
     }
 }
 
@@ -123,6 +124,34 @@ fn journals_written_before_diatribes_read_as_walks() {
     let old: Request = serde_json::from_value(value).unwrap();
     assert_eq!(old.kind, Kind::Walk);
     assert!(old.uses_browser());
+}
+
+#[test]
+fn journals_written_before_projects_load_without_one_and_a_project_survives_reopening() {
+    let mut value = serde_json::to_value(request()).unwrap();
+    assert!(value.get("project").is_none());
+    value.as_object_mut().unwrap().remove("project");
+    let old: Request = serde_json::from_value(value).unwrap();
+    assert_eq!(old.project, None);
+    let old_journal = r#"{"schemaVersion":1,"request":{"directory":"/tmp/walk","topic":"Old","url":"","speakers":[]},"sourceProject":"/tmp/walk.cap","startedAtMs":1,"state":"complete","durationMs":5,"events":[]}"#;
+    let reopened: Journal = serde_json::from_str(old_journal).unwrap();
+    assert_eq!(reopened.request.project, None);
+    assert_eq!(reopened.request.kind, Kind::Walk);
+
+    let req = Request {
+        project: Some("acme".into()),
+        kind: Kind::Diatribe,
+        ..request()
+    };
+    let mut walk =
+        Journal::begin(req.clone(), PathBuf::from("/recordings/talk.cap"), 100_000).unwrap();
+    walk.complete(9_000).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(walk.file()).unwrap()).unwrap();
+    assert_eq!(saved["request"]["project"], "acme");
+    let reopened: Journal = serde_json::from_slice(&fs::read(walk.file()).unwrap()).unwrap();
+    assert_eq!(reopened.request.project.as_deref(), Some("acme"));
+    assert_eq!(req.for_restart("again").project.as_deref(), Some("acme"));
+    fs::remove_dir_all(req.directory).unwrap();
 }
 
 #[test]

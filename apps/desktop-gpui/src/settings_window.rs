@@ -202,6 +202,7 @@ impl Page {
 pub(crate) enum MenuKind {
     UxWalkProvider,
     UxWalkHandoff,
+    UxWalkProjects(crate::settings_ux_walk_projects::ProjectMenu),
     Countdown,
     MainWindowStart,
     WindowCapture,
@@ -1584,7 +1585,9 @@ impl SettingsWindow {
     /// One row per option, check-marked when it is the value in force.
     fn menu_items(&self, kind: MenuKind) -> Vec<ui::MenuItem> {
         match kind {
-            MenuKind::UxWalkProvider | MenuKind::UxWalkHandoff => self.ux_walk_menu_items(kind),
+            MenuKind::UxWalkProvider | MenuKind::UxWalkHandoff | MenuKind::UxWalkProjects(_) => {
+                self.ux_walk_menu_items(kind)
+            }
             MenuKind::Countdown => {
                 let current = self.settings.recording_countdown.unwrap_or(0);
                 COUNTDOWN_OPTIONS
@@ -1625,7 +1628,7 @@ impl SettingsWindow {
     ) {
         self.close_menu(window, cx);
         match kind {
-            MenuKind::UxWalkProvider | MenuKind::UxWalkHandoff => {
+            MenuKind::UxWalkProvider | MenuKind::UxWalkHandoff | MenuKind::UxWalkProjects(_) => {
                 self.ux_walk_choose(kind, index, window, cx);
             }
             MenuKind::Countdown => {
@@ -3075,6 +3078,7 @@ impl SettingsWindow {
                 .child(fork::row_label(item)),
             )
             .children(fork::walk_status(item).map(|label| pill(theme.settings_fill()).child(label)))
+            .children(fork::project_badge(item).map(|name| pill(theme.settings_fill()).child(name)))
             .when_some(item.upload.clone(), |this, upload| {
                 let label = upload.label();
                 let message = upload

@@ -706,6 +706,7 @@ EOF
                     url: "https://example.com".into(),
                     speakers: Vec::new(),
                     kind: crate::ux_walk_journal::Kind::Walk,
+                    project: None,
                 },
                 directory.with_extension("cap"),
                 100000,

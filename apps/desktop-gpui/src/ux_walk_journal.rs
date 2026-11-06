@@ -25,6 +25,10 @@ pub struct Request {
     /// Absent in journals written before diatribes existed: those are walks.
     #[serde(default)]
     pub kind: Kind,
+    /// The project this recording belongs to (`<configDir>/projects/<id>.json`). Absent in
+    /// journals written before projects existed, and when the recording has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 impl Request {

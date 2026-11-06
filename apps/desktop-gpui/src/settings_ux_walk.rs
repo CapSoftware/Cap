@@ -22,6 +22,7 @@ pub(crate) struct UxWalkSettings {
     notice: Option<String>,
     key_status: &'static str,
     key_busy: bool,
+    pub(crate) projects: crate::settings_ux_walk_projects::ProjectsSettings,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -57,6 +58,7 @@ impl UxWalkSettings {
             notice,
             key_status: "Checking Keychain…",
             key_busy: false,
+            projects: crate::settings_ux_walk_projects::ProjectsSettings::new(window, cx),
             _subscriptions: subscriptions,
         }
     }
@@ -76,6 +78,7 @@ impl SettingsWindow {
             Err(error) => self.ux_walk.notice = Some(error),
         }
         self.ux_walk_refresh_key(window, cx);
+        self.ux_walk_projects_refresh(window, cx);
     }
 
     fn ux_walk_refresh_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -154,6 +157,7 @@ impl SettingsWindow {
                     ui::MenuItem::new(*label, *value == ux_walk::text(values, "agent"))
                 })
                 .collect(),
+            MenuKind::UxWalkProjects(menu) => self.ux_walk_projects_menu_items(menu),
             _ => Vec::new(),
         }
     }
@@ -176,6 +180,9 @@ impl SettingsWindow {
                 if let Some((value, _)) = ux_walk::HANDOFFS.get(index) {
                     self.ux_walk_write("agent", Value::String((*value).into()), cx);
                 }
+            }
+            MenuKind::UxWalkProjects(menu) => {
+                self.ux_walk_projects_choose(menu, index, window, cx);
             }
             _ => {}
         }
@@ -244,6 +251,8 @@ impl SettingsWindow {
             .gap(px(28.))
             .child(self.render_ux_walk_defaults(cx))
             .child(self.render_recording_notes(cx))
+            .child(self.render_ux_walk_projects(cx))
+            .child(self.render_ux_walk_trackers(cx))
             .into_any_element()
     }
 

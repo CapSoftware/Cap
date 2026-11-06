@@ -22,6 +22,8 @@ pub mod mode_choice;
 pub mod settings_sharing;
 #[path = "settings_ux_walk.rs"]
 pub mod settings_ux_walk;
+#[path = "settings_ux_walk_projects.rs"]
+pub mod settings_ux_walk_projects;
 #[path = "ux_walk.rs"]
 pub mod ux_walk;
 #[path = "ux_walk_browser.rs"]
@@ -38,5 +40,7 @@ pub mod ux_walk_journal;
 pub mod ux_walk_library;
 #[path = "ux_walk_preferences.rs"]
 pub mod ux_walk_preferences;
+#[path = "ux_walk_projects.rs"]
+pub mod ux_walk_projects;
 #[path = "ux_walk_window.rs"]
 pub mod ux_walk_window;
