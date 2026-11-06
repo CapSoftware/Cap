@@ -71,20 +71,21 @@ struct SourceToEditedMapping {
     source_start: f64,
     source_end: f64,
     edited_start: f64,
+    edited_end: f64,
     timescale: f64,
 }
 
-impl SourceToEditedMapping {
-    fn edited_end(&self) -> f64 {
-        self.edited_start + (self.source_end - self.source_start) / self.timescale
-    }
-}
-
-fn source_time_at(mappings: &[SourceToEditedMapping], effective: f64) -> Option<f32> {
-    let end = mappings.partition_point(|mapping| mapping.edited_start <= effective);
+fn source_time_at(mappings: &[SourceToEditedMapping], effective: f64, is_end: bool) -> Option<f32> {
+    let end = mappings.partition_point(|mapping| {
+        if is_end && effective != 0.0 {
+            mapping.edited_start < effective
+        } else {
+            mapping.edited_start <= effective
+        }
+    });
     let mapping = mappings
         .get(end.checked_sub(1)?)
-        .filter(|mapping| effective <= mapping.edited_end())?;
+        .filter(|mapping| effective <= mapping.edited_end)?;
     Some((mapping.source_start + (effective - mapping.edited_start) * mapping.timescale) as f32)
 }
 
@@ -114,6 +115,7 @@ fn build_source_to_edited_mappings(
                 source_start: recording_offset + segment.start,
                 source_end: recording_offset + segment.end,
                 edited_start,
+                edited_end: edited_start + segment.duration(),
                 timescale: segment.timescale,
             }
         })
@@ -466,31 +468,51 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
         let mappings_ordered = mappings.len() >= 128
             && mappings.iter().all(|mapping| {
                 mapping.edited_start.is_finite()
-                    && mapping.edited_end().is_finite()
-                    && mapping.edited_end() >= mapping.edited_start
+                    && mapping.edited_end.is_finite()
+                    && mapping.edited_end >= mapping.edited_start
             })
             && mappings.windows(2).all(|pair| {
                 pair[0].edited_start <= pair[1].edited_start
-                    && pair[0].edited_end() <= pair[1].edited_end()
+                    && pair[0].edited_end <= pair[1].edited_end
             });
+        let output_starts: Vec<_> = mappings
+            .iter()
+            .map(|mapping| effective_to_output(&holds, mapping.edited_start) as f32)
+            .collect();
         let output_end = timeline.duration() as f32;
-        let to_source = |output: f32| -> Option<f32> {
+        let to_source = |output: f32, is_end: bool| -> Option<f32> {
             if output == output_end {
                 return mappings.last().map(|mapping| mapping.source_end as f32);
             }
-            let output = f64::from(output);
-            let effective = output
+            let output_time = f64::from(output);
+            let effective = output_time
                 - holds
                     .iter()
-                    .map(|(start, end)| (output.min(*end) - start).max(0.0))
+                    .map(|(start, end)| (output_time.min(*end) - start).max(0.0))
                     .sum::<f64>();
+            let effective = if is_end {
+                let boundary = if mappings_ordered {
+                    let end = output_starts.partition_point(|start| *start <= output);
+                    end.checked_sub(1)
+                        .filter(|&index| output_starts[index] == output)
+                } else {
+                    output_starts.iter().rposition(|start| *start == output)
+                };
+                boundary.map_or(effective, |index| mappings[index].edited_start)
+            } else {
+                effective
+            };
             if mappings_ordered {
-                return source_time_at(&mappings, effective);
+                return source_time_at(&mappings, effective, is_end);
             }
             mappings.iter().rev().find_map(|mapping| {
-                let end = mapping.edited_start
-                    + (mapping.source_end - mapping.source_start) / mapping.timescale;
-                (effective >= mapping.edited_start && effective <= end).then_some({
+                let end = mapping.edited_end;
+                let after_start = if is_end && effective != 0.0 {
+                    effective > mapping.edited_start
+                } else {
+                    effective >= mapping.edited_start
+                };
+                (after_start && effective <= end).then_some({
                     (mapping.source_start + (effective - mapping.edited_start) * mapping.timescale)
                         as f32
                 })
@@ -500,16 +522,16 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
             .segments
             .iter()
             .filter_map(|caption| {
-                let start = to_source(caption.start)?;
-                let end = to_source(caption.end)?;
+                let start = to_source(caption.start, false)?;
+                let end = to_source(caption.end, true)?;
                 let words = caption
                     .words
                     .iter()
                     .filter_map(|word| {
                         Some(CaptionWord {
                             text: word.text.clone(),
-                            start: to_source(word.start)?,
-                            end: to_source(word.end)?,
+                            start: to_source(word.start, false)?,
+                            end: to_source(word.end, true)?,
                         })
                     })
                     .collect();
