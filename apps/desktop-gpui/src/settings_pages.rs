@@ -1367,7 +1367,7 @@ fn hotkey_inline_text(hotkey: &Hotkey) -> String {
         .join(separator)
 }
 
-fn hotkey_key_text(key: &str) -> SharedString {
+pub(crate) fn hotkey_key_text(key: &str) -> SharedString {
     if let Some(digit) = key.strip_prefix("Digit") {
         return SharedString::from(digit.to_string());
     }
@@ -8375,7 +8375,7 @@ mod tests {
                 fork_brand::mode_text("open notes for your current or most recent %walk% recording")
             }
             "recordDiatribe" => {
-                "start recording your screen and microphone now, then turn what you say into notes and action items".into()
+                "record your voice and the screen under your pointer now, then get notes and action items".into()
             }
             "openRecordingPicker" => "open Cap so you can choose what to record".into(),
             "cycleRecordingMode" => "switch between Studio, Instant and Screenshot mode".into(),

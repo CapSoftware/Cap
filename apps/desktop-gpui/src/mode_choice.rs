@@ -1,17 +1,19 @@
 use crate::{app_windows, i18n::tr, main_window::Mode, settings_window::Page};
 
-/// "Record Diatribe": start talking right away, get notes and action items. Not a brand word,
-/// so it stays outside the brand door.
-pub const DIATRIBE_NAME: &str = "Record Diatribe";
-pub const DIATRIBE_SHORT_NAME: &str = "Diatribe";
+/// The walk mode's voice-only choice: no browser window or console, just notes and action items
+/// from what you say. Not a brand word, so it stays outside the brand door.
+pub const DIATRIBE_NAME: &str = "Diatribe";
 pub const DIATRIBE_ICON: &str = "icons/microphone.svg";
+
+/// A diatribe's name in the library and the tray: "Diatribe 2026-11-05 18.20".
+pub fn diatribe_title(at: chrono::DateTime<chrono::Local>) -> String {
+    format!("{DIATRIBE_NAME} {}", at.format("%Y-%m-%d %H.%M"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeChoice {
     Capture(Mode),
     UxWalk,
-    /// An action rather than a mode you stay in: it records at once and the mode is unchanged.
-    Diatribe,
 }
 
 impl ModeChoice {
@@ -21,27 +23,19 @@ impl ModeChoice {
         Self::Capture(Mode::Screenshot),
         #[cfg(target_os = "macos")]
         Self::UxWalk,
-        #[cfg(target_os = "macos")]
-        Self::Diatribe,
     ];
 
     pub fn capture_mode(self) -> Option<Mode> {
         match self {
             Self::Capture(mode) => Some(mode),
-            Self::UxWalk | Self::Diatribe => None,
+            Self::UxWalk => None,
         }
-    }
-
-    /// A mode the recorder can be left in. Lists of default modes skip the diatribe action.
-    pub fn selectable(self) -> bool {
-        self != Self::Diatribe
     }
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Capture(mode) => mode.panel_title(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
-            Self::Diatribe => DIATRIBE_NAME,
         }
     }
 
@@ -49,14 +43,13 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.icon(),
             Self::UxWalk => "icons/ux-walk.svg",
-            Self::Diatribe => DIATRIBE_ICON,
         }
     }
 
     pub fn icon_size(self) -> f32 {
         match self {
             Self::Capture(mode) => mode.icon_size(),
-            Self::UxWalk | Self::Diatribe => 16.,
+            Self::UxWalk => 16.,
         }
     }
 
@@ -81,10 +74,7 @@ impl ModeChoice {
                  reports, and visual communication."
             }
             Self::UxWalk => {
-                "Open a new browser window, record a product walkthrough, and keep notes, chapters and transcripts ready for your agent."
-            }
-            Self::Diatribe => {
-                "Talk it through; get notes and action items. Records your screen and microphone at once, then organizes what you said for your agent."
+                "Walk through your product in a fresh browser window, or choose Diatribe and just talk. Either way your agent gets notes and transcripts."
             }
         }
     }
@@ -97,10 +87,7 @@ impl ModeChoice {
             Self::Capture(Mode::Instant) => "Share instantly with a link. Uploads as you record.",
             Self::Capture(Mode::Studio) => "Highest quality local recording for editing later.",
             Self::Capture(Mode::Screenshot) => "Capture and annotate screenshots instantly.",
-            Self::UxWalk => {
-                "Open a new browser window and record a walk with notes, chapters and transcripts."
-            }
-            Self::Diatribe => "Talk it through; get notes and action items.",
+            Self::UxWalk => fork_brand::mode_text_static("Record a %noun% or a diatribe."),
         }
     }
 
@@ -116,12 +103,9 @@ impl ModeChoice {
                 "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
             }
             Self::Capture(Mode::Screenshot) => "Capture and annotate stills.",
-            Self::UxWalk => fork_brand::text_static(
-                "Opens a new browser window and selects it for recording. Keep Cap’s camera, microphone and capture options, then review notes, chapters and transcripts.",
+            Self::UxWalk => fork_brand::mode_text_static(
+                "A %noun% records a fresh Chrome window with its clicks, console and failed requests. A diatribe records your voice and the screen under your pointer, with no browser. Either way your agent gets notes and transcripts.",
             ),
-            Self::Diatribe => {
-                "Talk it through; get notes and action items. Starts recording the screen under your pointer with your microphone right away."
-            }
         }
     }
 
@@ -129,14 +113,13 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.display_name(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
-            Self::Diatribe => DIATRIBE_SHORT_NAME,
         }
     }
 
     pub fn settings_label(self) -> &'static str {
         match self {
             Self::Capture(_) => tr::main::mode::hover::quality_settings(),
-            Self::UxWalk | Self::Diatribe => fork_brand::mode_text_static("%walk% settings"),
+            Self::UxWalk => fork_brand::mode_text_static("%walk% settings"),
         }
     }
 
@@ -155,14 +138,13 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => app_windows::set_recording_mode(mode, cx),
             Self::UxWalk => crate::ux_walk::start(cx),
-            Self::Diatribe => crate::ux_walk::start_diatribe(cx),
         }
     }
 
     pub fn open_settings(self, cx: &mut gpui::App) {
         match self {
             Self::Capture(mode) => app_windows::open_quality_settings(mode, cx),
-            Self::UxWalk | Self::Diatribe => app_windows::open_settings(Page::General, cx),
+            Self::UxWalk => app_windows::open_settings(Page::General, cx),
         }
     }
 }

@@ -117,7 +117,7 @@ fn ensure(show: bool, cx: &mut App) -> Result<isize, String> {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(gpui::TitlebarOptions {
-                            title: Some(fork_brand::text_static("Cap · Walk notes").into()),
+                            title: Some(fork_brand::text_static("Cap · Notes").into()),
                             ..Default::default()
                         }),
                         focus: show,

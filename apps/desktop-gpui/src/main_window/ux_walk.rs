@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    AnyElement, AppContext as _, Context, Entity, IntoElement, ParentElement, Styled, Task, Window,
-    div, prelude::FluentBuilder, px,
+    AnyElement, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement, StatefulInteractiveElement as _, Styled, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::{MainWindow, Mode, TargetType};
@@ -13,6 +15,8 @@ use crate::{
 
 pub(super) struct RecorderWalk {
     pub(super) selected: bool,
+    /// The walk mode's Diatribe choice: voice and screen only, no walk window or console.
+    pub(super) diatribe: bool,
     pub(super) opening: bool,
     replacing_window: bool,
     window_id: Option<String>,
@@ -138,6 +142,7 @@ impl RecorderWalk {
         });
         Self {
             selected: crate::store::ux_walk_selected(),
+            diatribe: crate::store::ux_walk_diatribe(),
             opening: false,
             replacing_window: false,
             window_id: None,
@@ -160,7 +165,6 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.hover_title(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
-            Self::Diatribe => crate::mode_choice::DIATRIBE_NAME,
         }
     }
 
@@ -168,7 +172,6 @@ impl ModeChoice {
         match self {
             Self::Capture(mode) => mode.header_title(),
             Self::UxWalk => fork_brand::WALK_MODE_NAME,
-            Self::Diatribe => crate::mode_choice::DIATRIBE_NAME,
         }
     }
 }
@@ -185,7 +188,75 @@ pub(super) fn system_audio_tooltip(
     }
 }
 
+/// Where a diatribe was started from, which decides what happens to the walk mode around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DiatribeStart {
+    /// The walk mode's Diatribe choice: the Chrome window it kept for walks has no use now.
+    Chosen,
+    /// The Diatribe shortcut: records now and leaves the walk mode exactly as it was.
+    OneShot,
+}
+
+impl DiatribeStart {
+    fn closes_walk_window(self) -> bool {
+        self == Self::Chosen
+    }
+}
+
+/// What switching between walk and Diatribe does to the walk mode's Chrome window.
+#[derive(Debug, PartialEq, Eq)]
+enum WalkWindow {
+    Keep,
+    Reuse(String),
+    Open,
+}
+
+fn walk_window_after_choice(diatribe: bool, opening: bool, prepared: Option<&str>) -> WalkWindow {
+    match prepared {
+        _ if diatribe => WalkWindow::Keep,
+        Some(id) => WalkWindow::Reuse(id.to_string()),
+        None if opening => WalkWindow::Keep,
+        None => WalkWindow::Open,
+    }
+}
+
+/// The microphone a diatribe would record with, as the recorder's microphone row shows it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum DiatribeMicrophone {
+    Selected,
+    Default(String),
+    Pending,
+    Missing,
+}
+
+impl DiatribeMicrophone {
+    pub(super) fn resolve(
+        selected: bool,
+        microphones: &[crate::devices::MicrophoneOption],
+        enumerating: bool,
+    ) -> Self {
+        match microphones.first() {
+            None if enumerating => Self::Pending,
+            None => Self::Missing,
+            Some(_) if selected => Self::Selected,
+            Some(default) => Self::Default(default.name.clone()),
+        }
+    }
+
+    pub(super) fn can_start(&self) -> bool {
+        matches!(self, Self::Selected | Self::Default(_))
+    }
+}
+
 impl MainWindow {
+    pub(super) fn diatribe_microphone(&self) -> DiatribeMicrophone {
+        DiatribeMicrophone::resolve(
+            self.microphone.is_some(),
+            &self.devices.microphones,
+            self.enumerating,
+        )
+    }
+
     pub(crate) fn mode_choice(&self, cx: &gpui::App) -> ModeChoice {
         if self.walk.selected && self.session.read(cx).editor_recording_target().is_none() {
             ModeChoice::UxWalk
@@ -194,6 +265,11 @@ impl MainWindow {
         }
     }
 
+    pub(super) fn diatribe_selected(&self, cx: &gpui::App) -> bool {
+        self.walk.diatribe && self.mode_choice(cx) == ModeChoice::UxWalk
+    }
+
+    /// Selects the walk mode. Its walk choice opens a fresh walk window; Diatribe opens nothing.
     pub(crate) fn set_ux_walk(&mut self, cx: &mut Context<Self>) {
         if self.session.read(cx).phase != Phase::Idle
             || self.is_preparing_recording()
@@ -207,14 +283,19 @@ impl MainWindow {
         self.walk.selected = true;
         crate::store::set_ux_walk_selected(true);
         self.walk.generation = self.walk.generation.wrapping_add(1);
+        cx.defer(crate::app_windows::dismiss_target_overlays);
+        cx.defer(|cx| crate::tray::mode_changed(Mode::Studio, cx));
+        cx.notify();
+        if self.walk.diatribe {
+            self.walk.opening = false;
+            self.walk.notice = None;
+            return;
+        }
         let generation = self.walk.generation;
         self.walk.opening = true;
         self.walk.notice = Some("Opening a new Chrome window…".into());
         self.target = Some(TargetType::Window);
         self.selected_window = None;
-        cx.defer(crate::app_windows::dismiss_target_overlays);
-        cx.defer(|cx| crate::tray::mode_changed(Mode::Studio, cx));
-        cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -281,6 +362,51 @@ impl MainWindow {
         .detach();
     }
 
+    /// The walk mode's choice between walk and Diatribe, remembered for the next time. Switching
+    /// never closes the prepared Chrome window, so switching back to a walk reuses it.
+    pub(super) fn set_walk_diatribe(&mut self, diatribe: bool, cx: &mut Context<Self>) {
+        if self.walk.diatribe == diatribe
+            || self.session.read(cx).phase != Phase::Idle
+            || self.is_preparing_recording()
+        {
+            return;
+        }
+        self.walk.diatribe = diatribe;
+        crate::store::set_ux_walk_diatribe(diatribe);
+        cx.notify();
+        if !self.walk.selected {
+            return;
+        }
+        self.walk_browser_closed();
+        match walk_window_after_choice(diatribe, self.walk.opening, self.walk.window_id.as_deref())
+        {
+            WalkWindow::Keep => {}
+            WalkWindow::Reuse(id) => {
+                let prepared = self
+                    .devices
+                    .windows
+                    .iter()
+                    .find(|window| window.id.to_string() == id)
+                    .cloned();
+                match prepared {
+                    Some(window) => {
+                        self.selected_window = Some(window);
+                        self.target = Some(TargetType::Window);
+                        self.walk.notice = None;
+                    }
+                    None => self.set_ux_walk(cx),
+                }
+            }
+            WalkWindow::Open => self.set_ux_walk(cx),
+        }
+    }
+
+    /// The Diatribe shortcut: a diatribe right now. The walk mode's remembered choice, the
+    /// recorder's mode and any prepared Chrome window stay as they were.
+    pub(crate) fn record_diatribe_now(&mut self, cx: &mut Context<Self>) {
+        self.start_diatribe(DiatribeStart::OneShot, None, cx);
+    }
+
     pub(super) fn walk_browser_closed(&mut self) {
         let Some(id) = self.walk.window_id.as_deref() else {
             return;
@@ -296,8 +422,10 @@ impl MainWindow {
             self.selected_window = None;
             if self.walk.selected {
                 self.walk.notice = Some(
-                    "The walk window closed with the walk. Use New walk window for the next one."
-                        .into(),
+                    fork_brand::mode_text(
+                        "The Chrome window closed with the %noun%. Use New Chrome window for the next one.",
+                    )
+                    .into(),
                 );
             }
         }
@@ -313,10 +441,6 @@ impl MainWindow {
         if let Some(mode) = choice.capture_mode() {
             self.set_mode(mode, cx);
             cx.defer(app_windows::refresh_target_overlays);
-        } else if choice == ModeChoice::Diatribe {
-            self.clear_mode_hover();
-            cx.notify();
-            self.start_diatribe(cx);
         } else {
             self.clear_mode_hover();
             cx.notify();
@@ -330,10 +454,15 @@ impl MainWindow {
             || self.session.read(cx).editor_recording_target().is_some()
     }
 
-    /// Record Diatribe: no setup, an Instant recording of the display under the pointer with
-    /// the selected microphone (else the system default), no camera, and system audio only
-    /// when it is on. The recorder's mode, devices and walk selection stay as they were.
-    pub(crate) fn start_diatribe(&mut self, cx: &mut Context<Self>) {
+    /// A diatribe: an Instant recording of the chosen target (else the display under the
+    /// pointer) with the selected microphone (else the system default), no camera, and system
+    /// audio only when it is on.
+    pub(super) fn start_diatribe(
+        &mut self,
+        start: DiatribeStart,
+        target: Option<(ScreenCaptureTarget, Vec<scap_targets::WindowId>)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.diatribe_blocked(cx) {
             return;
         }
@@ -362,16 +491,20 @@ impl MainWindow {
                     .await
                     .map(|name| (name, false)),
             };
-            this.update(cx, |this, cx| this.begin_diatribe(request, microphone, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.begin_diatribe(start, request, microphone, target, cx)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn begin_diatribe(
         &mut self,
+        start: DiatribeStart,
         request: Request,
         microphone: Option<(String, bool)>,
+        target: Option<(ScreenCaptureTarget, Vec<scap_targets::WindowId>)>,
         cx: &mut Context<Self>,
     ) {
         if self.diatribe_blocked(cx) {
@@ -380,7 +513,7 @@ impl MainWindow {
         let Some((microphone, selected)) = microphone else {
             self.session.update(cx, |session, cx| {
                 session.error = Some(
-                    "Record Diatribe needs a microphone. Connect one or choose it in the recorder, then try again."
+                    "A diatribe needs a microphone. Connect one or choose it in the recorder, then try again."
                         .into(),
                 );
                 cx.notify();
@@ -388,8 +521,14 @@ impl MainWindow {
             cx.defer(app_windows::show_main_window);
             return;
         };
-        let display = scap_targets::Display::get_containing_cursor()
-            .unwrap_or_else(scap_targets::Display::primary);
+        let (target, mut excluded_windows) = target.unwrap_or_else(|| {
+            let display = scap_targets::Display::get_containing_cursor()
+                .unwrap_or_else(scap_targets::Display::primary);
+            (
+                ScreenCaptureTarget::Display { id: display.id() },
+                Vec::new(),
+            )
+        });
         let (mic_feed, mic_meter, mut input_readiness, device_settings) = {
             let feeds = crate::feeds::Feeds::global(cx).read(cx);
             (
@@ -405,16 +544,21 @@ impl MainWindow {
             input_readiness.microphone = None;
         }
         // An open camera bubble would land in an Instant frame; a diatribe has no camera.
-        let excluded_windows = app_windows::camera_window_number(cx)
-            .and_then(|number| number.to_string().parse().ok())
-            .into_iter()
-            .collect();
+        excluded_windows.extend(
+            app_windows::camera_window_number(cx)
+                .and_then(|number| number.to_string().parse().ok()),
+        );
+        if start.closes_walk_window() {
+            self.walk.opening = false;
+            self.walk.generation = self.walk.generation.wrapping_add(1);
+            crate::ux_walk_browser::close_prepared();
+            self.walk_browser_closed();
+            self.walk.notice = None;
+        }
         let config = crate::recording::StartConfig {
             ux_walk: Some(request),
             mode: crate::recording::RecordingMode::Instant,
-            target: cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
-                id: display.id(),
-            },
+            target,
             device_settings,
             input_readiness,
             microphone: Some(microphone),
@@ -625,7 +769,15 @@ impl MainWindow {
                 None => notes,
             });
         }
-        let has_recent = selected && self.session.read(cx).walk.journal.is_some();
+        let recent_diatribe = self
+            .session
+            .read(cx)
+            .walk
+            .journal
+            .as_ref()
+            .filter(|_| selected)
+            .map(|journal| journal.request.is_diatribe());
+        let diatribe = selected && self.walk.diatribe;
         if !selected && self.walk.notice.is_none() {
             return None;
         }
@@ -641,13 +793,14 @@ impl MainWindow {
                 .flex()
                 .flex_col()
                 .gap(px(8.))
-                .when(selected, |this| {
+                .when(selected, |this| this.child(self.walk_choice(cx)))
+                .when(selected && !diatribe, |this| {
                     this.child(
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(4.))
-                            .child(label("Walk topic"))
+                            .child(label("Topic"))
                             .child(ui::TextInput::settings(
                                 &theme,
                                 "ux-walk-topic",
@@ -674,7 +827,7 @@ impl MainWindow {
                                     ui::ButtonVariant::Gray,
                                     ui::ButtonSize::Sm,
                                 )
-                                .label("New walk window ↗")
+                                .label("New Chrome window ↗")
                                 .on_click(cx.listener(|this, _, _, cx| this.set_ux_walk(cx))),
                             ),
                     )
@@ -690,7 +843,7 @@ impl MainWindow {
                         )
                     },
                 )
-                .when(has_recent, |this| {
+                .when_some(recent_diatribe, |this, recent_diatribe| {
                     this.child(
                         ui::Button::body(
                             &theme,
@@ -698,7 +851,11 @@ impl MainWindow {
                             ui::ButtonVariant::Gray,
                             ui::ButtonSize::Sm,
                         )
-                        .label("Open recent walk")
+                        .label(if recent_diatribe {
+                            "Open recent diatribe"
+                        } else {
+                            fork_brand::mode_text_static("Open recent %noun%")
+                        })
                         .on_click(|_, _, cx| cx.defer(crate::ux_walk_window::open)),
                     )
                 })
@@ -714,9 +871,87 @@ impl MainWindow {
         )
     }
 
+    /// The walk mode's one choice: a walk with its browser evidence, or a voice-only diatribe.
+    fn walk_choice(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let diatribe = self.walk.diatribe;
+        // gray_11 measures about 3.5:1 on the recorder's glass; this keeps both lines above 4.5:1.
+        let secondary = Theme::with_alpha(theme.gray_12, 0.85);
+        div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(4.))
+            .child(
+                ui::SegmentedControl::settings(
+                    &theme,
+                    "ux-walk-choice",
+                    vec![
+                        ui::SegmentOption::new(fork_brand::APP_NAME, !diatribe),
+                        ui::SegmentOption::new(crate::mode_choice::DIATRIBE_NAME, diatribe),
+                    ],
+                )
+                .item_height(px(22.))
+                .text_size(px(11.))
+                .idle_text(secondary)
+                .on_select(cx.listener(|this, index: &usize, _, cx| {
+                    this.set_walk_diatribe(*index == 1, cx);
+                })),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .text_size(px(11.))
+                    .line_height(px(15.))
+                    .text_color(secondary)
+                    .child(if diatribe {
+                        "Records your voice and the screen under your pointer. No browser."
+                    } else {
+                        "Records a fresh Chrome window with its clicks, console and failed requests."
+                    }),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn ux_walk_start_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.panel.is_some() || self.mode_choice(cx) != ModeChoice::UxWalk {
             return None;
+        }
+        if self.walk.diatribe {
+            let theme = self.theme;
+            let shortcut =
+                crate::hotkeys::accelerator_keys(crate::hotkeys::HotkeyAction::RecordDiatribe, cx);
+            return Some(
+                div()
+                    .id("ux-walk-start-diatribe")
+                    .w_full()
+                    .child(
+                        ui::Button::plain(
+                            &theme,
+                            "ux-walk-start-recording",
+                            ui::ButtonVariant::Blue,
+                            ui::ButtonSize::Lg,
+                        )
+                        .icon(crate::mode_choice::DIATRIBE_ICON)
+                        .label("Start Recording")
+                        .full_width()
+                        .disabled(
+                            self.is_preparing_recording()
+                                || !self.diatribe_microphone().can_start(),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.start_diatribe(DiatribeStart::Chosen, None, cx)
+                        })),
+                    )
+                    .when_some(shortcut, |this, keys| {
+                        this.tooltip(move |_, cx| {
+                            ui::Tooltip::new(&theme, "Start a diatribe")
+                                .keys(keys.clone())
+                                .view(cx)
+                        })
+                    })
+                    .into_any_element(),
+            );
         }
         Some(
             ui::Button::plain(
@@ -727,7 +962,7 @@ impl MainWindow {
             )
             .icon("icons/ux-walk.svg")
             .label(if self.walk.opening {
-                "Opening walk window…"
+                "Opening Chrome window…"
             } else {
                 "Start Recording"
             })
@@ -736,5 +971,67 @@ impl MainWindow {
             .on_click(cx.listener(|this, _, window, cx| this.start_recording(window, cx)))
             .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::MicrophoneOption;
+
+    fn microphone(name: &str) -> MicrophoneOption {
+        MicrophoneOption {
+            name: name.into(),
+            sample_rate: None,
+            channels: None,
+        }
+    }
+
+    #[test]
+    fn switching_to_diatribe_keeps_the_prepared_window_and_switching_back_reuses_it() {
+        for opening in [false, true] {
+            for prepared in [None, Some("41")] {
+                assert_eq!(
+                    walk_window_after_choice(true, opening, prepared),
+                    WalkWindow::Keep
+                );
+            }
+        }
+        assert_eq!(
+            walk_window_after_choice(false, false, Some("41")),
+            WalkWindow::Reuse("41".into())
+        );
+        assert_eq!(
+            walk_window_after_choice(false, true, None),
+            WalkWindow::Keep
+        );
+        assert_eq!(
+            walk_window_after_choice(false, false, None),
+            WalkWindow::Open
+        );
+    }
+
+    #[test]
+    fn only_a_diatribe_from_the_choice_closes_the_walk_window() {
+        assert!(DiatribeStart::Chosen.closes_walk_window());
+        assert!(!DiatribeStart::OneShot.closes_walk_window());
+    }
+
+    #[test]
+    fn a_diatribe_cannot_start_without_an_input_device() {
+        let missing = DiatribeMicrophone::resolve(false, &[], false);
+        assert_eq!(missing, DiatribeMicrophone::Missing);
+        assert!(!missing.can_start());
+        assert!(!DiatribeMicrophone::resolve(true, &[], false).can_start());
+        assert!(!DiatribeMicrophone::resolve(false, &[], true).can_start());
+
+        let devices = [microphone("MacBook Pro Microphone"), microphone("USB Mic")];
+        let default = DiatribeMicrophone::resolve(false, &devices, false);
+        assert_eq!(
+            default,
+            DiatribeMicrophone::Default("MacBook Pro Microphone".into())
+        );
+        assert!(default.can_start());
+        assert!(DiatribeMicrophone::resolve(true, &devices, false).can_start());
     }
 }

@@ -269,6 +269,26 @@ pub(crate) fn accelerator(action: HotkeyAction, cx: &App) -> Option<HotKey> {
         .map(|(hotkey, _)| *hotkey)
 }
 
+/// The keys of an action's registered shortcut, modifiers in ⌘⌃⌥⇧ order, as a tooltip shows them.
+pub(crate) fn accelerator_keys(action: HotkeyAction, cx: &App) -> Option<Vec<gpui::SharedString>> {
+    let hotkey = accelerator(action, cx)?;
+    let mut keys = Vec::new();
+    for (modifier, name) in [
+        (Modifiers::SUPER | Modifiers::META, "meta"),
+        (Modifiers::CONTROL, "ctrl"),
+        (Modifiers::ALT, "alt"),
+        (Modifiers::SHIFT, "shift"),
+    ] {
+        if hotkey.mods.intersects(modifier) {
+            keys.push(crate::settings_pages::hotkey_key_text(name));
+        }
+    }
+    keys.push(crate::settings_pages::hotkey_key_text(
+        &hotkey.key.to_string(),
+    ));
+    Some(keys)
+}
+
 pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
     cx.try_global::<Hotkeys>()
         .map(|hotkeys| {

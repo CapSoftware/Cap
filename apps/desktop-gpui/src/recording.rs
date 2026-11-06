@@ -2244,7 +2244,11 @@ async fn start_internal(
         return Err(anyhow!("Please sign in to use instant recording"));
     }
 
-    let project_dir = create_project_dir(&config.target, config.mode)?;
+    let diatribe = config
+        .ux_walk
+        .as_ref()
+        .is_some_and(crate::ux_walk_journal::Request::is_diatribe);
+    let project_dir = create_project_dir(&config.target, config.mode, diatribe)?;
     let project_name = project_dir
         .file_stem()
         .and_then(|name| name.to_str())
@@ -2806,6 +2810,7 @@ pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> 
 fn create_project_dir(
     target: &ScreenCaptureTarget,
     recording_mode: RecordingMode,
+    diatribe: bool,
 ) -> anyhow::Result<PathBuf> {
     let base = recordings_dir();
     std::fs::create_dir_all(&base)
@@ -2831,14 +2836,19 @@ fn create_project_dir(
 
     let target_name = target.title().unwrap_or_else(|| "Unknown".into());
     let now = chrono::Local::now();
-    let settings = crate::store::GeneralSettings::load();
-    let name = format_recording_project_name(
-        settings.default_project_name_template.as_deref(),
-        &target_name,
-        target.kind_str(),
-        recording_mode,
-        now,
-    );
+    let name = if diatribe {
+        crate::mode_choice::diatribe_title(now)
+    } else {
+        format_recording_project_name(
+            crate::store::GeneralSettings::load()
+                .default_project_name_template
+                .as_deref(),
+            &target_name,
+            target.kind_str(),
+            recording_mode,
+            now,
+        )
+    };
     let filename = project_bundle_filename(&name);
     let filename = cap_utils::ensure_unique_filename(&filename, &base)
         .map_err(|e| anyhow!("unique filename: {e}"))?;

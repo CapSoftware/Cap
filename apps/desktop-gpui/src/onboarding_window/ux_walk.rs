@@ -7,33 +7,15 @@ pub(super) const DETAIL: ModeDetail = ModeDetail {
     mode: ModeChoice::UxWalk,
     title: || fork_brand::WALK_MODE_NAME,
     tagline: || "Record, note & review",
-    description: || "Open a fresh browser window, already selected for recording. Walk through your product with native capture controls, notes, chapters and transcripts.",
+    description: || "Walk through your product in a fresh browser window, or choose Diatribe and just talk. Either way your agent gets notes and transcripts.",
     icon: "icons/ux-walk.svg",
     features: [
-        || "Fresh browser window, ready to record",
+        || "A fresh browser window",
+        || "Or Diatribe: just talk",
         || "Timestamped notes & chapters",
-        || "Your transcription provider",
-        || "Evidence for your agent",
+        || "Transcripts for your agent",
     ],
 };
-
-/// Mode-info details for actions that are not onboarding cards.
-pub(super) static ACTIONS: &[ModeDetail] = &[
-    #[cfg(target_os = "macos")]
-    ModeDetail {
-        mode: ModeChoice::Diatribe,
-        title: || crate::mode_choice::DIATRIBE_NAME,
-        tagline: || "Talk it through",
-        description: || "Talk it through; get notes and action items. Recording starts at once on the screen under your pointer, with your microphone, and stops when you say so.",
-        icon: crate::mode_choice::DIATRIBE_ICON,
-        features: [
-            || "Starts recording right away",
-            || "Screen and microphone, no camera",
-            || "Notes, decisions and questions",
-            || "Action items for your agent",
-        ],
-    },
-];
 
 pub(super) const CARDS_W: gpui::Pixels = px(if cfg!(target_os = "macos") {
     720.
@@ -81,18 +63,20 @@ pub(super) fn demo(index: usize, theme: &Theme) -> Option<AnyElement> {
                 [
                     (
                         "1",
-                        "Open your walk window",
-                        "A new browser window is selected for recording.",
+                        fork_brand::mode_text_static("Choose %app% or Diatribe"),
+                        fork_brand::mode_text_static(
+                            "%app% opens a fresh browser window. Diatribe just listens.",
+                        ),
                     ),
                     (
                         "2",
-                        "Add notes and chapters",
-                        "Keep observations beside the recording.",
+                        "Walk through it, or just talk",
+                        "Add notes and chapters as you go.",
                     ),
                     (
                         "3",
-                        "Review and hand off",
-                        "Give your agent the evidence and context.",
+                        "Hand off to your agent",
+                        "It gets the notes and transcripts.",
                     ),
                 ]
                 .into_iter()
@@ -131,19 +115,13 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn every_picker_choice_has_its_own_detail_but_only_modes_are_onboarding_cards() {
+    fn every_picker_choice_has_its_own_detail() {
         for choice in ModeChoice::ALL.iter().copied() {
             assert!(
                 super::super::mode_detail(choice).mode == choice,
                 "{choice:?}"
             );
         }
-        assert_eq!(
-            (super::super::mode_detail(ModeChoice::Diatribe).title)(),
-            "Record Diatribe"
-        );
-        assert!(MODES.iter().all(|detail| detail.mode.selectable()));
-        assert!(!ModeChoice::Diatribe.selectable());
     }
 
     #[test]

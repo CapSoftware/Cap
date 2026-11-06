@@ -25,6 +25,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 /// One segment. `selected` is computed by the caller so the control never has
@@ -239,6 +240,11 @@ impl SegmentedControl {
         self
     }
 
+    pub fn idle_text(mut self, color: Hsla) -> Self {
+        self.idle_text = color;
+        self
+    }
+
     pub fn idle_bg(mut self, bg: Hsla) -> Self {
         self.idle_bg = Some(bg);
         self
@@ -251,7 +257,7 @@ impl SegmentedControl {
 }
 
 impl RenderOnce for SegmentedControl {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let SegmentedControl {
             id,
             options,
@@ -283,9 +289,11 @@ impl RenderOnce for SegmentedControl {
             ElementId::Name(name) => name.clone(),
             other => SharedString::from(format!("{other:?}")),
         };
+        let keyboard = keyboard_nav::active(window, cx);
 
         div()
             .id(id)
+            .role(gpui::Role::RadioGroup)
             .flex()
             .flex_row()
             .p(container_padding)
@@ -300,8 +308,20 @@ impl RenderOnce for SegmentedControl {
                 let selected = option.selected;
                 let disabled = option.disabled;
 
+                let label = option.label.clone();
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
+                    .when(
+                        keyboard && !disabled && handler.is_some(),
+                        keyboard_nav::stop,
+                    )
+                    .role(gpui::Role::RadioButton)
+                    .aria_toggled(if selected {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when_some(label, |this, label| this.aria_label(label))
                     .flex()
                     .flex_row()
                     .items_center()

@@ -30,6 +30,9 @@ pub const WALK_MODE_NAME: &str = env!("FORK_BRAND_WALK_MODE_NAME");
 /// Stands for [`WALK_MODE_NAME`] in [`mode_text`], the fork's locale overlay
 /// and brand.json's templates.
 pub const WALK_MODE_TOKEN: &str = "%walk%";
+/// What one walk recording is called in running text (`walk_noun` in
+/// brand.json), spelled by [`mode_text`] for `%noun%`.
+pub const WALK_NOUN: &str = env!("FORK_BRAND_WALK_NOUN");
 pub const AGENT_SKILL: &str = include_str!(concat!(env!("OUT_DIR"), "/SKILL.md"));
 pub const CLI_HELP: &str = include_str!(concat!(env!("OUT_DIR"), "/cli-help.txt"));
 
@@ -180,9 +183,12 @@ pub fn text_static(source: &'static str) -> &'static str {
 }
 
 /// `source` with each mode token spelled out: [`WALK_MODE_TOKEN`] becomes
-/// [`WALK_MODE_NAME`].
+/// [`WALK_MODE_NAME`], `%noun%` [`WALK_NOUN`] and `%app%` [`APP_NAME`].
 pub fn mode_text(source: &str) -> String {
-    source.replace(WALK_MODE_TOKEN, WALK_MODE_NAME)
+    source
+        .replace(WALK_MODE_TOKEN, WALK_MODE_NAME)
+        .replace("%noun%", WALK_NOUN)
+        .replace("%app%", APP_NAME)
 }
 
 /// [`mode_text`] for `&'static str`; each distinct input is filled once and
@@ -333,6 +339,10 @@ mod tests {
         assert_eq!(
             mode_text("Open %walk% settings"),
             format!("Open {WALK_MODE_NAME} settings")
+        );
+        assert_eq!(
+            mode_text("%app% records a %noun%"),
+            format!("{APP_NAME} records a {WALK_NOUN}")
         );
         let first = mode_text_static("No %walk% recordings");
         assert!(std::ptr::eq(

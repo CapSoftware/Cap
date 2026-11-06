@@ -3420,3 +3420,17 @@ pub fn set_ux_walk_selected(selected: bool) {
         tracing::warn!("Could not save UX Walk mode");
     }
 }
+
+/// The walk mode's Diatribe choice: voice and screen only, no walk browser window or console.
+pub fn ux_walk_diatribe() -> bool {
+    store_section(RECORDING_SETTINGS)
+        .get("uxWalkDiatribe")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_ux_walk_diatribe(diatribe: bool) {
+    if !set_store_setting(RECORDING_SETTINGS, "uxWalkDiatribe", Value::Bool(diatribe)) {
+        tracing::warn!("Could not save the Diatribe choice");
+    }
+}

@@ -9,8 +9,10 @@ const WALK_SHORTCUTS: bool = cfg!(all(target_os = "macos", feature = "ux-walk"))
 pub(super) fn shortcut_label(action: &str) -> Option<&'static str> {
     match action {
         "openUxWalk" if WALK_SHORTCUTS => Some(fork_brand::mode_text_static("Open %walk%")),
-        "openUxWalkNotes" if WALK_SHORTCUTS => Some("Open walk notes"),
-        "recordDiatribe" if WALK_SHORTCUTS => Some(crate::mode_choice::DIATRIBE_NAME),
+        "openUxWalkNotes" if WALK_SHORTCUTS => {
+            Some(fork_brand::mode_text_static("Open %noun% notes"))
+        }
+        "recordDiatribe" if WALK_SHORTCUTS => Some("Start a diatribe"),
         _ => None,
     }
 }
@@ -60,8 +62,8 @@ pub(super) fn shortcut_effect(action: &str) -> Option<ShortcutEffect> {
             },
         },
         "recordDiatribe" if WALK_SHORTCUTS => ShortcutEffect {
-            phrase: || "start recording your screen and microphone now, then turn what you say into notes and action items",
-            sentence: || "Start recording your screen and microphone now, then turn what you say into notes and action items.",
+            phrase: || "record your voice and the screen under your pointer now, then get notes and action items",
+            sentence: || "Record your voice and the screen under your pointer now, then get notes and action items.",
         },
         _ => return None,
     })

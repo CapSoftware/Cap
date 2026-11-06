@@ -197,7 +197,6 @@ pub(crate) struct ModeDetail {
 pub(crate) fn mode_detail(mode: ModeChoice) -> &'static ModeDetail {
     MODES
         .iter()
-        .chain(ux_walk::ACTIONS)
         .find(|detail| detail.mode == mode)
         .unwrap_or(&MODES[0])
 }
@@ -819,7 +818,6 @@ pub(crate) fn mode_doodle(mode: ModeChoice) -> &'static crate::doodle::Doodle {
         ModeChoice::Capture(Mode::Studio) => &crate::onboarding_doodles::TRACKS,
         ModeChoice::Capture(Mode::Screenshot) => &crate::onboarding_doodles::SNAP,
         ModeChoice::UxWalk => &crate::onboarding_doodles::UX_WALK,
-        ModeChoice::Diatribe => &crate::onboarding_doodles::MICROPHONE,
     }
 }
 
@@ -1480,16 +1478,19 @@ impl OnboardingWindow {
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
-                                .child(crate::doodle::doodle(
+                                // A long feature line would otherwise squeeze its tick to nothing.
+                                .child(div().flex_none().child(crate::doodle::doodle(
                                     &crate::onboarding_doodles::TICK,
                                     paper.palette(),
                                     self.step_at + Duration::from_millis(400 + i as u64 * 140),
                                     !self.animated,
                                     18.,
                                     18.,
-                                ))
+                                )))
                                 .child(
-                                    copy(feature(), 13., paper.ink).font_weight(FontWeight::NORMAL),
+                                    copy(feature(), 13., paper.ink)
+                                        .min_w_0()
+                                        .font_weight(FontWeight::NORMAL),
                                 )
                         }),
                     )),
