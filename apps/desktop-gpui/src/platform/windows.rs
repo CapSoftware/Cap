@@ -5,12 +5,13 @@ use gpui::{ForegroundExecutor, Window, WindowAppearance};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowRect, HWND_NOTOPMOST,
-    HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow,
-    SetWindowDisplayAffinity, SetWindowPos, ShowWindowAsync, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    WM_CLOSE, WM_NCACTIVATE,
+    DefWindowProcW, GWL_EXSTYLE, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowLongPtrW,
+    GetWindowRect, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
+    PostMessageW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE,
+    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos,
+    ShowWindowAsync, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_CLOSE, WM_NCACTIVATE, WS_EX_LAYERED,
+    WS_EX_TRANSPARENT,
 };
 
 use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -182,8 +183,34 @@ pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     }
 }
 
-pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
-    false
+pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
+    unsafe {
+        let hwnd = native.hwnd();
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if style == 0 {
+            return false;
+        }
+        let target_bits = (WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize;
+        let new_style = if click_through {
+            style | target_bits
+        } else {
+            style & !target_bits
+        };
+        if new_style != style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            SetWindowPos(
+                hwnd,
+                0 as HWND,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        ((current & (WS_EX_TRANSPARENT as isize)) != 0) == click_through
+    }
 }
 
 pub fn restore_borderless_style(_native: &NativeWindow) {}
