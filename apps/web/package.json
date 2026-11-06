@@ -49,8 +49,8 @@
 		"@fortawesome/free-solid-svg-icons": "^6.7.2",
 		"@fortawesome/react-fontawesome": "^0.2.2",
 		"@headlessui/react": "^1.7.17",
-		"@hono/zod-validator": "^0.4.3",
-		"@hookform/resolvers": "^3.3.2",
+		"@hono/zod-validator": "^0.7.1",
+		"@hookform/resolvers": "^5.1.0",
 		"@kubiks/otel-drizzle": "^2.1.0",
 		"@modelcontextprotocol/ext-apps": "2.0.0",
 		"@modelcontextprotocol/server": "2.3.1",
@@ -80,7 +80,7 @@
 		"@sentry/nextjs": "10.75.3",
 		"@stripe/react-stripe-js": "^7.0.1",
 		"@stripe/stripe-js": "^10.2.0",
-		"@t3-oss/env-nextjs": "^0.12.0",
+		"@t3-oss/env-nextjs": "^0.13.0",
 		"@tanstack/react-devtools": "^0.7.0",
 		"@tanstack/react-query": "^5.90.1",
 		"@tanstack/react-query-devtools": "^5.90.1",
@@ -154,7 +154,7 @@
 		"ua-parser-js": "^1.0.38",
 		"uuid": "^11.1.1",
 		"workflow": "4.6.0",
-		"zod": "^3.25.76"
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@smithy/types": "^4.3.1",
