@@ -323,13 +323,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
 		const vttHeader = "WEBVTT\n\n";
 
-		const vttEntries = entries.map((entry, index) => {
-			const startSeconds = entry.startTime;
-			const nextEntry = entries[index + 1];
-			const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
-
-			return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
-				endSeconds,
+		const vttEntries = entries.map((entry) => {
+			return `${entry.id}\n${formatTime(entry.startTime)} --> ${formatTime(
+				entry.endTime,
 			)}\n${entry.text}\n`;
 		});
 
