@@ -688,10 +688,12 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
 }
 
 /// The display sleeping mid-recording makes ScreenCaptureKit report that it
-/// has nothing to capture. That ends the recording with its media on disk
+/// has nothing to capture. That ends the screen track with its media on disk
 /// instead of failing it and leaving Stop and Quit waiting on a capture that
-/// can never confirm cleanup. Sleeping the display disturbs whoever is at the
-/// machine, so this runs only with `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+/// can never confirm cleanup. Instant ends there; Studio keeps its other
+/// tracks until Stop, which the auto-record driver presses at 30 s. Sleeping
+/// the display disturbs whoever is at the machine, so this runs only with
+/// `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
@@ -704,8 +706,12 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         let mock = MockCap::start(Vec::new()).await;
         let sandbox = Sandbox::new(&mock.url, 0);
         let name = format!("display-sleep-{mode}");
-        let auto = format!("{mode}:90");
-        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", auto.as_str())]);
+        let auto = if mode == "studio" {
+            "studio:30"
+        } else {
+            "instant:90"
+        };
+        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", auto)]);
         wait_for_app(
             &sandbox,
             &app,
