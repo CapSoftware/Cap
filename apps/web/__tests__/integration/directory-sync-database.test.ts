@@ -797,6 +797,17 @@ describe.runIf(Boolean(databaseUrl))(
 				await syncOrganizationDirectory(org.organizationId, later()),
 			).toMatchObject({ held: 25, removed: 0 });
 			expect((await memberIds(org.organizationId)).size).toBe(31);
+			const [afterLargerHold] = await database()
+				.select()
+				.from(organizationDirectorySync)
+				.where(
+					eq(organizationDirectorySync.organizationId, org.organizationId),
+				);
+			expect(afterLargerHold?.removalsApprovedAt).toBeNull();
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 25, removed: 0 });
+			expect((await memberIds(org.organizationId)).size).toBe(31);
 		});
 
 		it("keeps SSO from re-adding a member the directory removed", async () => {
