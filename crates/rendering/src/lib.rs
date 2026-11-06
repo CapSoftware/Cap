@@ -11802,7 +11802,7 @@ mod dx12_compiler_fallback_tests {
                     .into(),
             ),
         });
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let _pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
             layout: None,
             module: &module,
