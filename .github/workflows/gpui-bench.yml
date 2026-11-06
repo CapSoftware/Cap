@@ -13,6 +13,7 @@ on:
       - "apps/desktop-gpui/gpui-benches/**"
       - "scripts/prepare-gpui-dependency.sh"
       - "scripts/gpui-bench-*"
+      - "scripts/gpui-scene-digest.py"
       - ".github/workflows/gpui-bench.yml"
   push:
     branches:
@@ -148,6 +149,18 @@ jobs:
             --out "$RUNNER_TEMP/bench/runs" \
             --rounds "$ROUNDS" \
             --label "${{ matrix.settings.name }}" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      # Every frame both builds submit to the renderer is hashed and compared;
+      # identical scenes mean identical pixels. Only macOS has a headless
+      # renderer to observe submitted frames, so the step is a no-op elsewhere.
+      - name: Scene equivalence
+        shell: bash
+        run: |
+          python scripts/gpui-scene-digest.py \
+            --base "$RUNNER_TEMP/bench/base" \
+            --head "$RUNNER_TEMP/bench/head" \
+            --out "$RUNNER_TEMP/bench/digests" \
             --summary "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

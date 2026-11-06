@@ -7,13 +7,28 @@
 //! shadows, label-heavy rows, a recordings list that scrolls, a timer whose
 //! text changes every frame, hover over many hitboxes, and cached panels where
 //! only one view changes per frame.
+//!
+//! With `GPUI_SCENE_DIGEST=<file>` set, every frame a benchmark submits is
+//! also hashed (every primitive, in the order the renderer receives them) and
+//! one line per frame is appended to `<file>`. Two builds that produce the same
+//! digests drew the same scenes, so they render the same pixels.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    collections::hash_map::DefaultHasher,
+    fs::OpenOptions,
+    hash::{Hash, Hasher},
+    io::Write,
+    path::PathBuf,
+    sync::Arc,
+};
 
+use criterion::Criterion;
 use gpui::{
-    AnyView, BenchAppContext, BorderStyle, Bounds, BoxShadow, Corners, Entity, MouseMoveEvent,
-    PathBuilder, PlatformInput, SharedString, StyleRefinement, UniformListScrollHandle, Window,
-    canvas, div, point, prelude::*, px, quad, rgb, size, uniform_list,
+    AnyView, BenchAppContext, BenchReport, BorderStyle, Bounds, BoxShadow, Corners, DevicePixels,
+    Entity, MouseMoveEvent, PathBuilder, PlatformAtlas, PlatformHeadlessRenderer, PlatformInput,
+    Scene, SharedString, StyleRefinement, UniformListScrollHandle, Window, canvas, div, point,
+    prelude::*, px, quad, rgb, size, uniform_list,
 };
 
 const IBM_PLEX: &[u8] =
@@ -296,7 +311,6 @@ impl Render for Recordings {
 }
 
 /// A 10 000-row virtualized list scrolled a few pixels every frame.
-#[gpui::bench]
 fn recordings_scroll(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -322,7 +336,6 @@ fn recordings_scroll(cx: &mut BenchAppContext) {
 /// Pointer moves across a grid of hoverable cards; every move changes the
 /// hovered card, so each one dispatches through every mouse listener, hit
 /// tests every hitbox and redraws.
-#[gpui::bench]
 fn hover_cards(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -416,7 +429,6 @@ impl Render for Panels {
 
 /// Forty cached panels where one changes per frame: the view-cache reuse path
 /// (`reuse_prepaint` / `reuse_paint`) that most interactive frames take.
-#[gpui::bench]
 fn cached_panels(cx: &mut BenchAppContext) {
     load_fonts(cx);
     let mut window = cx.add_empty_window();
@@ -518,80 +530,173 @@ fn primitives(quads: usize, cx: &mut BenchAppContext) {
         .bench_renderer(view, |_, _, cx| cx.notify());
 }
 
-// One benchmark per size rather than `#[gpui::bench(inputs = ...)]`: GPUI's
-// frame report (the `Window::draw` histogram) covers one benchmark function,
-// so separate functions keep each size's frame cost apart.
+// One benchmark per size: GPUI's frame report (the `Window::draw` histogram)
+// covers one benchmark function, so separate functions keep each size's frame
+// cost apart.
 
-#[gpui::bench]
 fn cards_64(cx: &mut BenchAppContext) {
     cards(64, cx);
 }
 
-#[gpui::bench]
 fn cards_256(cx: &mut BenchAppContext) {
     cards(256, cx);
 }
 
-#[gpui::bench]
 fn cards_1024(cx: &mut BenchAppContext) {
     cards(1024, cx);
 }
 
-#[gpui::bench]
 fn text_rows_static_50(cx: &mut BenchAppContext) {
     text_rows_static(50, cx);
 }
 
-#[gpui::bench]
 fn text_rows_static_200(cx: &mut BenchAppContext) {
     text_rows_static(200, cx);
 }
 
-#[gpui::bench]
 fn text_rows_changing_50(cx: &mut BenchAppContext) {
     text_rows_changing(50, cx);
 }
 
-#[gpui::bench]
 fn text_rows_changing_200(cx: &mut BenchAppContext) {
     text_rows_changing(200, cx);
 }
 
-#[gpui::bench]
 fn paragraphs_12(cx: &mut BenchAppContext) {
     paragraphs(12, cx);
 }
 
-#[gpui::bench]
 fn paragraphs_48(cx: &mut BenchAppContext) {
     paragraphs(48, cx);
 }
 
-#[gpui::bench]
 fn primitives_1024(cx: &mut BenchAppContext) {
     primitives(1024, cx);
 }
 
-#[gpui::bench]
 fn primitives_8192(cx: &mut BenchAppContext) {
     primitives(8192, cx);
 }
 
-gpui::bench_group!(
-    benches,
-    cards_64,
-    cards_256,
-    cards_1024,
-    text_rows_static_50,
-    text_rows_static_200,
-    text_rows_changing_50,
-    text_rows_changing_200,
-    paragraphs_12,
-    paragraphs_48,
-    recordings_scroll,
-    hover_cards,
-    cached_panels,
-    primitives_1024,
-    primitives_8192
-);
-gpui::bench_main!(benches);
+/// Frames hashed per benchmark when `GPUI_SCENE_DIGEST` is set; enough to
+/// cover the warm-up frames every run draws, whatever Criterion's timing.
+const DIGEST_FRAMES: usize = 64;
+
+/// Wraps the platform's headless renderer and hashes each scene it submits.
+struct SceneDigestRenderer {
+    inner: Box<dyn PlatformHeadlessRenderer>,
+    benchmark: &'static str,
+    path: PathBuf,
+    frames: usize,
+}
+
+impl SceneDigestRenderer {
+    fn digest(scene: &Scene) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for list in [
+            format!("{:?}", scene.shadows),
+            format!("{:?}", scene.quads),
+            format!("{:?}", scene.paths),
+            format!("{:?}", scene.underlines),
+            format!("{:?}", scene.monochrome_sprites),
+            format!("{:?}", scene.subpixel_sprites),
+            format!("{:?}", scene.polychrome_sprites),
+            format!("{:?}", scene.surfaces),
+            format!("{:?}", scene.backdrop_blurs),
+        ] {
+            list.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+}
+
+impl PlatformHeadlessRenderer for SceneDigestRenderer {
+    fn render_scene_to_image(
+        &mut self,
+        scene: &Scene,
+        size: gpui::Size<DevicePixels>,
+    ) -> anyhow::Result<image::RgbaImage> {
+        self.inner.render_scene_to_image(scene, size)
+    }
+
+    fn render_scene(
+        &mut self,
+        scene: &Scene,
+        size: gpui::Size<DevicePixels>,
+    ) -> anyhow::Result<()> {
+        if self.frames < DIGEST_FRAMES {
+            let line = format!(
+                "{} {:>3} {:016x}\n",
+                self.benchmark,
+                self.frames,
+                Self::digest(scene)
+            );
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+                .and_then(|mut file| file.write_all(line.as_bytes()))
+                .expect("failed to append to GPUI_SCENE_DIGEST");
+        }
+        self.frames += 1;
+        self.inner.render_scene(scene, size)
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+        self.inner.sprite_atlas()
+    }
+}
+
+/// What `#[gpui::bench]` generates, plus the optional scene digest.
+fn run(criterion: &mut Criterion, name: &'static str, benchmark: fn(&mut BenchAppContext)) {
+    let report = BenchReport::default();
+    let digest = std::env::var_os("GPUI_SCENE_DIGEST").map(PathBuf::from);
+    criterion.bench_function(name, |bencher| {
+        let digest = digest.clone();
+        let factory: Box<dyn Fn() -> Option<Box<dyn PlatformHeadlessRenderer>>> =
+            Box::new(move || {
+                let inner = gpui_platform::current_headless_renderer()?;
+                Some(match &digest {
+                    Some(path) => Box::new(SceneDigestRenderer {
+                        inner,
+                        benchmark: name,
+                        path: path.clone(),
+                        frames: 0,
+                    }) as Box<dyn PlatformHeadlessRenderer>,
+                    None => inner,
+                })
+            });
+        let mut cx = BenchAppContext::new_with_platform_and_report(
+            gpui::bench_platform(
+                Some(factory),
+                gpui_platform::current_platform(true).text_system(),
+            ),
+            Some(name),
+            bencher,
+            report.clone(),
+        );
+        benchmark(&mut cx);
+        cx.teardown();
+    });
+    report.print(Some(name));
+}
+
+fn benches(criterion: &mut Criterion) {
+    run(criterion, "cards_64", cards_64);
+    run(criterion, "cards_256", cards_256);
+    run(criterion, "cards_1024", cards_1024);
+    run(criterion, "text_rows_static_50", text_rows_static_50);
+    run(criterion, "text_rows_static_200", text_rows_static_200);
+    run(criterion, "text_rows_changing_50", text_rows_changing_50);
+    run(criterion, "text_rows_changing_200", text_rows_changing_200);
+    run(criterion, "paragraphs_12", paragraphs_12);
+    run(criterion, "paragraphs_48", paragraphs_48);
+    run(criterion, "recordings_scroll", recordings_scroll);
+    run(criterion, "hover_cards", hover_cards);
+    run(criterion, "cached_panels", cached_panels);
+    run(criterion, "primitives_1024", primitives_1024);
+    run(criterion, "primitives_8192", primitives_8192);
+}
+
+criterion::criterion_group!(frame_benches, benches);
+criterion::criterion_main!(frame_benches);

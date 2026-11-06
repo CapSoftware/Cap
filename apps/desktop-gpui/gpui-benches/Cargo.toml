@@ -13,9 +13,11 @@ license = "Apache-2.0"
 path = "src/lib.rs"
 
 [dev-dependencies]
+anyhow.workspace = true
 criterion.workspace = true
 gpui = { workspace = true, features = ["bench"] }
 gpui_platform = { workspace = true, features = ["font-kit", "test-support", "wayland", "x11"] }
+image.workspace = true
 
 [[bench]]
 name = "frame"
