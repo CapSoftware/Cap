@@ -492,9 +492,13 @@ impl MainWindow {
             return;
         }
         let request = match crate::ux_walk::diatribe_request() {
-            // One click: the last-used project, else the default, without asking.
+            // The Diatribe choice records into the recorder's picked project; the shortcut
+            // takes the last-used project, else the default, without asking.
             Ok(mut request) => {
-                request.project = crate::ux_walk_projects::recording_project();
+                request.project = match start {
+                    DiatribeStart::Chosen => self.walk.project.clone(),
+                    DiatribeStart::OneShot => crate::ux_walk_projects::recording_project(),
+                };
                 request
             }
             Err(error) => {
@@ -927,6 +931,9 @@ impl MainWindow {
                 .flex_col()
                 .gap(px(8.))
                 .when(selected, |this| this.child(self.walk_choice(cx)))
+                .when(diatribe, |this| {
+                    this.children(self.project_picker("ux-walk-diatribe-project", cx))
+                })
                 .when(selected && !diatribe, |this| {
                     this.child(
                         div()

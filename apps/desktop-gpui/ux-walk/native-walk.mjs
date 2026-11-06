@@ -1293,4 +1293,13 @@ if (isMainModule()) {
 		console.error(error.message);
 		process.exitCode = 1;
 	}
+	// Settings waits for these to exit. The engine's tracker checks spawn bd and gh with a
+	// timeout, and on Node 22 a spawn that fails (the CLI is not installed) never clears that
+	// timer, so the process would linger for the whole timeout after printing its answer.
+	if (PROJECT_COMMANDS[command]) {
+		const flushed = (stream) =>
+			new Promise((resolve) => stream.write("", () => resolve()));
+		await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
+		process.exit();
+	}
 }
