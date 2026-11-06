@@ -22,6 +22,7 @@ import { hasSsoAccess } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { deleteOrganizationMembership } from "@/lib/organization-member-removal";
+import { hasScimSubscription } from "@/lib/sso/scim-billing";
 
 const LEASE_MS = 10 * 60_000;
 const RETRY_DELAY_MS = 2 * 60_000;
@@ -377,6 +378,9 @@ async function reconcileDirectory(
 		!workosOrganizationId ||
 		!hasSsoAccess(record.billing)
 	) {
+		return emptyResult("inactive");
+	}
+	if (!(await hasScimSubscription(organizationId))) {
 		return emptyResult("inactive");
 	}
 
