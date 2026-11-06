@@ -164,6 +164,8 @@ export const RATE_LIMIT_IDS = {
 	GUEST_CHECKOUT: "rl_guest_checkout",
 	/** Unauthed desktop log → Discord forwarding (spam). Suggested: 10 / 1m per IP. */
 	DESKTOP_LOGS: "rl_desktop_logs",
+	/** Authenticated desktop upload health probes. Suggested: 4 / 1m per key (user). */
+	DESKTOP_UPLOAD_HEALTH: "rl_desktop_upload_health",
 	/** Mobile share password attempts (brute-force guard). Suggested: 20 / 10m per key (user). */
 	MOBILE_VIDEO_PASSWORD: "rl_mobile_video_password",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
@@ -206,6 +208,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.DESKTOP_UPLOAD_HEALTH]: { limit: 4, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_VIDEO_PASSWORD]: {
 		limit: 20,
 		windowMs: 10 * MINUTE_MS,

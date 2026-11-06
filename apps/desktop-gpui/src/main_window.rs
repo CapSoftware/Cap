@@ -3810,6 +3810,27 @@ impl MainWindow {
                 )
         };
 
+        let upload_health = crate::network_health::indicator().map(|health| {
+            let color = if health.failed {
+                theme.red_11
+            } else if health.limited {
+                theme.amber_11
+            } else {
+                theme.gray_11
+            };
+            div()
+                .id("upload-health")
+                .tab_index(0)
+                .flex_shrink_0()
+                .text_size(px(9.))
+                .text_color(color)
+                .cursor_pointer()
+                .child(health.label)
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, health.tooltip.clone()).view(cx))
+                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                .on_click(cx.listener(|_, _, _, cx| crate::network_health::request(cx, true)))
+        });
+
         let actions = div()
             .flex()
             .flex_1()
@@ -3817,6 +3838,7 @@ impl MainWindow {
             .gap(px(4.))
             .mx(px(8.))
             .min_w_0()
+            .children(upload_health)
             .child(
                 icon_button("help", "icons/circle-help.svg", 16.).on_click(cx.listener(
                     |_, _, _window, cx| {
