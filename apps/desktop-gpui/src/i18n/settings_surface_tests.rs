@@ -274,6 +274,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::options::preview_quality::quarter(), "Quarter"),
         (tr::settings::options::preview_quality::half(), "Half"),
         (tr::settings::options::preview_quality::full(), "Full"),
+        (
+            tr::settings::shortcuts::save_failed(),
+            "Couldn't save the shortcut. Try again.",
+        ),
         (tr::settings::shortcuts::screenshots_title(), "Screenshots"),
         (
             tr::settings::shortcuts::screenshots_description(),
