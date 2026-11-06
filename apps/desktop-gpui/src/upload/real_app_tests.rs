@@ -447,6 +447,66 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
     }
 }
 
+/// After deleting a recording decides whether the main window, hidden at
+/// start, comes back once the bar's Delete has removed the recording: only
+/// Reopen recording window takes the reshow. Read from the decisions the app
+/// logs, as above, and macOS only for the same reason.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_post_deletion_behaviour_decides_whether_main_window_returns() {
+    for (mode, behaviour, returns) in [
+        ("studio", "doNothing", false),
+        ("studio", "reopenRecordingWindow", true),
+        ("instant", "doNothing", false),
+        ("instant", "reopenRecordingWindow", true),
+    ] {
+        let name = format!("{mode}-{behaviour}");
+        let record = format!("{mode}:3");
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("postDeletionBehaviour", json!(behaviour));
+        let app = sandbox.launch(
+            &name,
+            &[
+                ("CAP_GPUI_AUTO_RECORD", &record),
+                ("CAP_GPUI_AUTO_DELETE", "1"),
+            ],
+        );
+        let decided = || {
+            without_ansi(&sandbox.log(&name))
+                .split_once("auto-record delete requested")
+                .is_some_and(|(_, after)| {
+                    after.contains("main window kept hidden")
+                        || after.contains("showing the main window")
+                })
+        };
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the deleted recording",
+            Duration::from_secs(120),
+            decided,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(&name));
+        let (_, after) = log
+            .split_once("auto-record delete requested")
+            .expect("the recording was deleted");
+        let kept_hidden = after.contains("main window kept hidden after the recording was deleted");
+        let reshown = after.contains("showing the main window");
+        assert_eq!(kept_hidden, !returns, "{name}: {after}");
+        assert_eq!(reshown, returns, "{name}: {after}");
+        assert!(
+            sandbox.projects().is_empty(),
+            "{name}: {:?}",
+            sandbox.projects()
+        );
+    }
+}
+
 /// Kills the app at points from the server video's creation through the
 /// first seconds of capture, then relaunches long after. Each recording's state
 /// is noted right after its kill, before anything else runs: a recording that

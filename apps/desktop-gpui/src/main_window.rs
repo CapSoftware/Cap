@@ -2134,6 +2134,7 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+        let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
             || mode == Mode::Screenshot;
@@ -2267,6 +2268,24 @@ impl MainWindow {
                 tracing::error!("auto-record could not start");
                 return;
             }
+            if delete {
+                // Delete does nothing until the recording is running, so a
+                // slow start would swallow it: the seconds count from there.
+                let recording = |cx: &gpui::AsyncApp| {
+                    cx.update(|cx| matches!(session.read(cx).phase, Phase::Recording { .. }))
+                };
+                let mut polls = 0;
+                while !recording(cx) {
+                    if polls == 300 {
+                        tracing::error!("auto-record never reached Recording to Delete");
+                        return;
+                    }
+                    polls += 1;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |cx: &gpui::AsyncApp| {
@@ -2283,9 +2302,14 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
-            tracing::info!("auto-record stop requested");
             let app: &gpui::AsyncApp = cx;
-            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            if delete {
+                tracing::info!("auto-record delete requested");
+                app.update(|cx| session.update(cx, |session, cx| session.delete(cx)));
+            } else {
+                tracing::info!("auto-record stop requested");
+                app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            }
         })
         .detach();
     }
