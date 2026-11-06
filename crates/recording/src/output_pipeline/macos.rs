@@ -454,7 +454,8 @@ impl Muxer for AVFoundationMp4Muxer {
                             let mut retry_count = 0;
                             const MAX_RETRIES: u32 = 100;
 
-                            let step_result = cidre::objc::ar_pool(|| {
+                            let mut step_result = Ok(None);
+                            cidre::objc::ar_pool(|| {
                                 loop {
                                     let queue_result = {
                                         let mut encoder = match encoder_clone.lock() {
@@ -462,14 +463,18 @@ impl Muxer for AVFoundationMp4Muxer {
                                             Err(_) => {
                                                 let message = "MP4 encoder mutex poisoned".to_string();
                                                 set_fatal_error(&video_fatal_error, message.clone());
-                                                return Err(anyhow!(message));
+                                                step_result = Err(anyhow!(message));
+                                                return;
                                             }
                                         };
                                         encoder.queue_video_frame(sample_buf.clone(), timestamp)
                                     };
 
                                     match queue_result {
-                                        Ok(()) => break Ok(None),
+                                        Ok(()) => {
+                                            step_result = Ok(None);
+                                            break;
+                                        }
                                         Err(QueueFrameError::NotReadyForMore) => {
                                             retry_count += 1;
                                             if retry_count >= MAX_RETRIES {
@@ -480,7 +485,8 @@ impl Muxer for AVFoundationMp4Muxer {
                                                         "MP4 encoder busy, frame queued after max retries"
                                                     );
                                                 }
-                                                break Ok(None);
+                                                step_result = Ok(None);
+                                                break;
                                             }
                                             std::thread::sleep(Duration::from_micros(500));
                                         }
@@ -488,26 +494,30 @@ impl Muxer for AVFoundationMp4Muxer {
                                             let total = video_count_thread
                                                 .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode video frame: WriterFailed/{err:?} \
-                                                 (frame #{total}, ts={timestamp:?})"
+                                                "Failed to encode video frame: WriterFailed/{err:?}                                                  (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&video_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
+                                            step_result = Err(anyhow!(message));
+                                            return;
                                         }
                                         Err(QueueFrameError::Failed) => {
                                             let total = video_count_thread
                                                 .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode video frame: Failed \
-                                                 (frame #{total}, ts={timestamp:?})"
+                                                "Failed to encode video frame: Failed                                                  (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&video_fatal_error, message.clone());
-                                            return Err(anyhow!(message));
+                                            step_result = Err(anyhow!(message));
+                                            return;
                                         }
-                                        Err(QueueFrameError::Finished) => return Ok(Some(())),
+                                        Err(QueueFrameError::Finished) => {
+                                            step_result = Ok(Some(()));
+                                            return;
+                                        }
                                         Err(e) => {
                                             warn!("Failed to encode video frame: {e}");
-                                            break Ok(None);
+                                            step_result = Ok(None);
+                                            break;
                                         }
                                     }
                                 }

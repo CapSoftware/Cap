@@ -357,7 +357,8 @@ impl MacOSFragmentedM4SMuxer {
                         continue;
                     }
 
-                    let step_result = cidre::objc::ar_pool(|| -> Result<(), anyhow::Error> {
+                    let mut step_result = Ok(());
+                    cidre::objc::ar_pool(|| {
                         if let Some(frame_pool) = frame_pool.as_mut() {
                             let convert_start = std::time::Instant::now();
                             let frame = frame_pool.get_frame();
@@ -389,7 +390,8 @@ impl MacOSFragmentedM4SMuxer {
                                         }
                                         Err(_) => {
                                             error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                            return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                            step_result = Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                            return;
                                         }
                                     }
 
@@ -428,7 +430,8 @@ impl MacOSFragmentedM4SMuxer {
                                         }
                                         Err(_) => {
                                             error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                            return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                            step_result = Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                            return;
                                         }
                                     }
                                 }
@@ -453,7 +456,6 @@ impl MacOSFragmentedM4SMuxer {
                                 }
                             }
                         }
-                        Ok(())
                     });
 
                     if let Err(err) = step_result {
