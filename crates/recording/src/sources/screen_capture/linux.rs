@@ -2259,6 +2259,12 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
     if current_process_source_outputs()
         .is_ok_and(|outputs| source_output_matches_target(&outputs, source_output, source_index))
     {
+        tracing::debug!(
+            stream = source_output,
+            destination = source,
+            source_index,
+            "PulseAudio/PipeWire system-audio stream already routed"
+        );
         return Ok(());
     }
 
@@ -2286,6 +2292,12 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
         if current_process_source_outputs().is_ok_and(|outputs| {
             source_output_route_matches(&outputs, source_output, source_index).unwrap_or(false)
         }) {
+            tracing::info!(
+                stream = source_output,
+                destination = source,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "PulseAudio/PipeWire system-audio route confirmed"
+            );
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -2293,6 +2305,12 @@ fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<
 
     let final_outputs = current_process_source_outputs()?;
     if source_output_route_matches(&final_outputs, source_output, source_index)? {
+        tracing::info!(
+            stream = source_output,
+            destination = source,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "PulseAudio/PipeWire system-audio route confirmed"
+        );
         return Ok(());
     }
 
