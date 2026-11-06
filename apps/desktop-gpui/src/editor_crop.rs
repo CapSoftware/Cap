@@ -3111,15 +3111,9 @@ impl EditorWindow {
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx)))
             })
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(1.))
-                    .bg(gpui::hsla(0., 0., 1., 0.22)),
-            )
+            .shadow(vec![
+                gpui::BoxShadow::new(px(0.), px(1.), gpui::hsla(0., 0., 1., 0.22)).inset(),
+            ])
             .child(tr::common::save())
             .into_any_element()
     }
