@@ -657,8 +657,10 @@ impl Actor {
             std::mem::take(&mut self.segments),
             cursors,
             self.segment_factory.fragmented,
-            self.display_notch,
-            self.pretty_name.as_deref(),
+            RecordingStartDetails {
+                display_notch: self.display_notch,
+                pretty_name: self.pretty_name.as_deref(),
+            },
             known_failure,
             self.markers.snapshot(),
         )
@@ -2753,18 +2755,29 @@ fn snap_nearby_start_time(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What a recording settled when it started, for the metadata written when it
+/// stops.
+#[derive(Default)]
+struct RecordingStartDetails<'a> {
+    display_notch: Option<cap_project::DisplayNotch>,
+    pretty_name: Option<&'a str>,
+}
+
 async fn stop_recording(
     recording_dir: PathBuf,
     segments: Vec<RecordingSegment>,
     cursors: Cursors,
     fragmented: bool,
-    display_notch: Option<cap_project::DisplayNotch>,
-    pretty_name: Option<&str>,
+    start: RecordingStartDetails<'_>,
     known_failure: Option<String>,
     markers: Vec<RecordedMarker>,
 ) -> anyhow::Result<CompletedRecording> {
     use cap_project::*;
+
+    let RecordingStartDetails {
+        display_notch,
+        pretty_name,
+    } = start;
 
     const DEFAULT_FPS: u32 = 30;
 
@@ -5923,8 +5936,7 @@ mod tests {
             vec![segment],
             Default::default(),
             false,
-            None,
-            None,
+            RecordingStartDetails::default(),
             None,
             Vec::new(),
         )
@@ -6141,8 +6153,7 @@ mod tests {
             vec![segment],
             Default::default(),
             false,
-            None,
-            None,
+            RecordingStartDetails::default(),
             None,
             Vec::new(),
         )
@@ -6212,8 +6223,7 @@ mod tests {
                     vec![segment],
                     Default::default(),
                     fragmented,
-                    None,
-                    None,
+                    RecordingStartDetails::default(),
                     None,
                     Vec::new(),
                 )
