@@ -13,19 +13,13 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
-import { after } from "next/server";
 import { apiToHandler } from "@/lib/server";
-import {
-	requestDirectorySync,
-	syncOrganizationDirectory,
-} from "@/lib/sso/directory-sync";
+import { requestDirectorySync } from "@/lib/sso/directory-sync";
 import { verifyWorkosSignature } from "@/lib/sso/workos-webhook";
 
-export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 const MAX_BODY_BYTES = 1_000_000;
-const SYNC_BUDGET_MS = 240_000;
 
 class Api extends HttpApi.make("WorkosWebhookApi").add(
 	HttpApiGroup.make("root").add(
@@ -138,14 +132,6 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						Effect.orElseSucceed(() => false),
 					);
 					if (!requested) return textResponse("Lookup failed", 500);
-					after(() =>
-						syncOrganizationDirectory(
-							organizationId,
-							Date.now() + SYNC_BUDGET_MS,
-						)
-							.then(() => undefined)
-							.catch(() => undefined),
-					);
 					return received();
 				}),
 			),
