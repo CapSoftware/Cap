@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CliApiKeys } from "./components/CliApiKeys";
+import { DefaultCallToAction } from "./components/DefaultCallToAction";
 import { Settings } from "./Settings";
 import { listCliApiKeys } from "./server";
 
@@ -14,6 +15,9 @@ export default async function SettingsPage() {
 	return (
 		<>
 			<Settings />
+			<div className="mt-6">
+				<DefaultCallToAction />
+			</div>
 			<CliApiKeys
 				initialKeys={cliApiKeys ?? []}
 				loadFailed={cliApiKeys === null}
