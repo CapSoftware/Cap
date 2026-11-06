@@ -1843,19 +1843,24 @@ impl ScreenshotEditorWindow {
                 _ => {}
             }
         } else {
+            let rect = normalized_rect(original);
+            x = rect.x;
+            y = rect.y;
+            width = rect.width;
+            height = rect.height;
             if handle.east() {
-                width = original.width + dx;
+                width += dx;
             }
             if handle.south() {
-                height = original.height + dy;
+                height += dy;
             }
             if handle.west() {
-                x = original.x + dx;
-                width = original.width - dx;
+                x += dx;
+                width -= dx;
             }
             if handle.north() {
-                y = original.y + dy;
-                height = original.height - dy;
+                y += dy;
+                height -= dy;
             }
 
             // A circle is square unless shift says otherwise; a rectangle is
@@ -1867,13 +1872,21 @@ impl ScreenshotEditorWindow {
                 let sign_width = if width < 0. { -1. } else { 1. };
                 let sign_height = if height < 0. { -1. } else { 1. };
                 if handle.west() {
-                    x = original.x + original.width - sign_width * size;
+                    x = rect.x + rect.width - sign_width * size;
                 }
                 if handle.north() {
-                    y = original.y + original.height - sign_height * size;
+                    y = rect.y + rect.height - sign_height * size;
                 }
                 width = sign_width * size;
                 height = sign_height * size;
+            }
+            if original.width < 0. {
+                x += width;
+                width = -width;
+            }
+            if original.height < 0. {
+                y += height;
+                height = -height;
             }
         }
 
@@ -4878,6 +4891,120 @@ mod tests {
         assert!(!geometry_changed(&before, &after));
         after.x = 1.;
         assert!(geometry_changed(&before, &after));
+    }
+
+    #[gpui::test]
+    fn resizing_an_inverted_shape_moves_the_grabbed_edge(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let bundle = project.path().to_path_buf();
+        let (editor, cx) =
+            cx.add_window_view(move |window, cx| ScreenshotEditorWindow::new(bundle, window, cx));
+        for annotation_type in [AnnotationType::Rectangle, AnnotationType::Circle] {
+            for (handle, first, second, bounds) in [
+                (Handle::E, (-70., 0.), (20., 0.), (80., 100., 40., 30.)),
+                (Handle::W, (70., 0.), (-20., 0.), (130., 100., 40., 30.)),
+                (Handle::S, (0., -50.), (0., 20.), (100., 80., 50., 40.)),
+                (Handle::N, (0., 50.), (0., -20.), (100., 110., 50., 40.)),
+                (Handle::Se, (-70., -50.), (20., 20.), (80., 80., 40., 40.)),
+            ] {
+                let expected = Rect {
+                    x: bounds.0,
+                    y: bounds.1,
+                    width: bounds.2,
+                    height: bounds.3,
+                };
+                editor.update_in(cx, |editor, window, cx| {
+                    let original = shape(annotation_type, 100., 100., 50., 30.);
+                    editor.project.annotations = vec![original.clone()];
+                    editor.history =
+                        crate::editor_edits::ProjectHistory::new(editor.project.clone());
+                    let shift = annotation_type == AnnotationType::Circle;
+                    let dragging = Dragging {
+                        id: original.id.clone(),
+                        handle: Some(handle),
+                        start: (0., 0.),
+                        original,
+                        moved: false,
+                    };
+                    editor.drag_resize(&dragging, first, shift);
+                    editor.finish_drag(dragging, window, cx);
+                    let inverted = editor.project.annotations[0].clone();
+                    let visible = normalized_rect(&inverted);
+                    let start = handles(&inverted, 10.)
+                        .into_iter()
+                        .find(|(candidate, _)| *candidate == handle)
+                        .unwrap()
+                        .1;
+                    let dragging = Dragging {
+                        id: inverted.id.clone(),
+                        handle: Some(handle),
+                        start,
+                        original: inverted,
+                        moved: false,
+                    };
+                    editor.drag_resize(&dragging, start, shift);
+                    assert_eq!(
+                        serde_json::to_value(&editor.project.annotations[0]).unwrap(),
+                        serde_json::to_value(&dragging.original).unwrap()
+                    );
+                    editor.drag_resize(&dragging, (start.0 + second.0, start.1 + second.1), shift);
+                    editor.finish_drag(dragging, window, cx);
+                    assert_eq!(
+                        normalized_rect(&editor.project.annotations[0]),
+                        expected,
+                        "{annotation_type:?} {handle:?}, previous bounds {visible:?}"
+                    );
+                    assert_eq!(
+                        normalized_rect(&editor.history.undo().unwrap().annotations[0]),
+                        visible
+                    );
+                    assert_eq!(
+                        normalized_rect(&editor.history.redo().unwrap().annotations[0]),
+                        expected
+                    );
+                });
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn resizing_a_reopened_inverted_shape_keeps_the_opposite_corner_fixed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let project = tempfile::tempdir().unwrap();
+        let bundle = project.path().to_path_buf();
+        let (editor, cx) =
+            cx.add_window_view(move |window, cx| ScreenshotEditorWindow::new(bundle, window, cx));
+        for annotation_type in [AnnotationType::Rectangle, AnnotationType::Circle] {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.project.annotations = vec![shape(annotation_type, 100., 100., -50., -50.)];
+                editor.project.write(project.path()).unwrap();
+                editor.project = cap_project::ProjectConfiguration::load(project.path()).unwrap();
+                let original = editor.project.annotations[0].clone();
+                let dragging = Dragging {
+                    id: original.id.clone(),
+                    handle: Some(Handle::Nw),
+                    start: (50., 50.),
+                    original,
+                    moved: false,
+                };
+                editor.drag_resize(
+                    &dragging,
+                    (30., 30.),
+                    annotation_type == AnnotationType::Rectangle,
+                );
+                editor.finish_drag(dragging, window, cx);
+                assert_eq!(
+                    normalized_rect(&editor.project.annotations[0]),
+                    Rect {
+                        x: 30.,
+                        y: 30.,
+                        width: 70.,
+                        height: 70.,
+                    }
+                );
+            });
+        }
     }
 
     #[cfg(target_os = "linux")]
