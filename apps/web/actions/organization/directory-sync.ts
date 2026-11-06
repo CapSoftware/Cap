@@ -12,7 +12,7 @@ import { serverEnv } from "@cap/env";
 import { hasSsoAccess } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { GeneratePortalLinkIntent } from "@workos-inc/node";
-import { and, count, eq, isNull } from "drizzle-orm";
+import { and, count, eq, gte, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getSsoBilling } from "@/lib/sso/billing";
 import { requestDirectorySync } from "@/lib/sso/directory-sync";
@@ -158,7 +158,10 @@ export async function openOrganizationDirectorySyncPortal(
 
 export async function approveDirectorySyncRemovals(
 	organizationId: Organisation.OrganisationId,
+	confirmedRemovals: number,
 ) {
+	if (!Number.isSafeInteger(confirmedRemovals) || confirmedRemovals < 1)
+		throw new Error("Invalid removal confirmation.");
 	const { workosOrganizationId } =
 		await requireDirectorySyncManager(organizationId);
 	if (!workosOrganizationId)
@@ -166,8 +169,17 @@ export async function approveDirectorySyncRemovals(
 	const now = new Date();
 	await db()
 		.update(organizationDirectorySync)
-		.set({ removalsApprovedAt: now, requestedAt: now })
-		.where(eq(organizationDirectorySync.organizationId, organizationId));
+		.set({
+			removalsApprovedAt: now,
+			requestedAt: now,
+			heldRemovals: confirmedRemovals,
+		})
+		.where(
+			and(
+				eq(organizationDirectorySync.organizationId, organizationId),
+				gte(organizationDirectorySync.heldRemovals, confirmedRemovals),
+			),
+		);
 	revalidatePath(settingsPath);
 	return getOrganizationDirectorySync(organizationId);
 }

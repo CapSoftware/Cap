@@ -173,7 +173,10 @@ export function DirectorySyncCard({
 									onClick={() =>
 										runAction("approve", async () => {
 											setStatus(
-												await approveDirectorySyncRemovals(organizationId),
+												await approveDirectorySyncRemovals(
+													organizationId,
+													status.heldRemovals,
+												),
 											);
 										})
 									}
