@@ -187,8 +187,8 @@ pub static CAPTION_MODELS: &[CaptionModel] = &[
     CaptionModel {
         name: "best",
         label: tr::editor::tabs::captions::model::recommended,
-        model_name: "parakeet-tdt-0.6b-v3 int8",
-        size: "~640MB",
+        model_name: "parakeet-tdt-0.6b-v3 8-bit",
+        size: "~870MB",
         description: tr::editor::tabs::captions::model::recommended_description,
     },
     CaptionModel {
