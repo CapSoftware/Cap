@@ -1,6 +1,6 @@
 use crate::{app_windows, i18n::tr, main_window::Mode, settings_window::Page};
 
-/// Worm Mode's voice-only choice: no browser window or console, just notes and action items
+/// The walk mode's voice-only choice: no browser window or console, just notes and action items
 /// from what you say. Not a brand word, so it stays outside the brand door.
 pub const DIATRIBE_NAME: &str = "Diatribe";
 pub const DIATRIBE_ICON: &str = "icons/microphone.svg";
@@ -87,7 +87,7 @@ impl ModeChoice {
             Self::Capture(Mode::Instant) => "Share instantly with a link. Uploads as you record.",
             Self::Capture(Mode::Studio) => "Highest quality local recording for editing later.",
             Self::Capture(Mode::Screenshot) => "Capture and annotate screenshots instantly.",
-            Self::UxWalk => "Record a worm or a diatribe.",
+            Self::UxWalk => fork_brand::mode_text_static("Record a %noun% or a diatribe."),
         }
     }
 
@@ -103,9 +103,9 @@ impl ModeChoice {
                 "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
             }
             Self::Capture(Mode::Screenshot) => "Capture and annotate stills.",
-            Self::UxWalk => {
-                "A worm records a fresh Chrome window with its clicks, console and failed requests. A diatribe records your voice and the screen under your pointer, with no browser. Either way your agent gets notes and transcripts."
-            }
+            Self::UxWalk => fork_brand::mode_text_static(
+                "A %noun% records a fresh Chrome window with its clicks, console and failed requests. A diatribe records your voice and the screen under your pointer, with no browser. Either way your agent gets notes and transcripts.",
+            ),
         }
     }
 

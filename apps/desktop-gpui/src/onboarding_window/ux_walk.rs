@@ -63,8 +63,10 @@ pub(super) fn demo(index: usize, theme: &Theme) -> Option<AnyElement> {
                 [
                     (
                         "1",
-                        "Choose Worm or Diatribe",
-                        "Worm opens a fresh browser window. Diatribe just listens.",
+                        fork_brand::mode_text_static("Choose %app% or Diatribe"),
+                        fork_brand::mode_text_static(
+                            "%app% opens a fresh browser window. Diatribe just listens.",
+                        ),
                     ),
                     (
                         "2",

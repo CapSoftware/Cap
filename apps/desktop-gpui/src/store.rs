@@ -3421,7 +3421,7 @@ pub fn set_ux_walk_selected(selected: bool) {
     }
 }
 
-/// Worm Mode's Diatribe choice: voice and screen only, no walk browser window or console.
+/// The walk mode's Diatribe choice: voice and screen only, no walk browser window or console.
 pub fn ux_walk_diatribe() -> bool {
     store_section(RECORDING_SETTINGS)
         .get("uxWalkDiatribe")

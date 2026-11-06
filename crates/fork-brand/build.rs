@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-const STRINGS: [(&str, &str); 19] = [
+const STRINGS: [(&str, &str); 20] = [
     ("display_name", "FORK_BRAND_APP_NAME"),
     ("upstream_name", "FORK_BRAND_UPSTREAM_NAME"),
     ("slug", "FORK_BRAND_SLUG"),
@@ -21,6 +21,7 @@ const STRINGS: [(&str, &str); 19] = [
     ("default_server_url", "FORK_BRAND_DEFAULT_SERVER_URL"),
     ("long_description", "FORK_BRAND_LONG_DESCRIPTION"),
     ("walk_mode_name", "FORK_BRAND_WALK_MODE_NAME"),
+    ("walk_noun", "FORK_BRAND_WALK_NOUN"),
 ];
 
 const FORMER_NAMES_SEPARATOR: char = '|';

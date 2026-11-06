@@ -15,7 +15,7 @@ use crate::{
 
 pub(super) struct RecorderWalk {
     pub(super) selected: bool,
-    /// Worm Mode's Diatribe choice: voice and screen only, no walk window or console.
+    /// The walk mode's Diatribe choice: voice and screen only, no walk window or console.
     pub(super) diatribe: bool,
     pub(super) opening: bool,
     replacing_window: bool,
@@ -188,12 +188,12 @@ pub(super) fn system_audio_tooltip(
     }
 }
 
-/// Where a diatribe was started from, which decides what happens to Worm Mode around it.
+/// Where a diatribe was started from, which decides what happens to the walk mode around it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DiatribeStart {
-    /// Worm Mode's Diatribe choice: the Chrome window it kept for Worm has no use now.
+    /// The walk mode's Diatribe choice: the Chrome window it kept for walks has no use now.
     Chosen,
-    /// The Diatribe shortcut: records now and leaves Worm Mode exactly as it was.
+    /// The Diatribe shortcut: records now and leaves the walk mode exactly as it was.
     OneShot,
 }
 
@@ -203,7 +203,7 @@ impl DiatribeStart {
     }
 }
 
-/// What switching between Worm and Diatribe does to Worm Mode's Chrome window.
+/// What switching between walk and Diatribe does to the walk mode's Chrome window.
 #[derive(Debug, PartialEq, Eq)]
 enum WalkWindow {
     Keep,
@@ -269,7 +269,7 @@ impl MainWindow {
         self.walk.diatribe && self.mode_choice(cx) == ModeChoice::UxWalk
     }
 
-    /// Selects Worm Mode. Its Worm choice opens a fresh walk window; Diatribe opens nothing.
+    /// Selects the walk mode. Its walk choice opens a fresh walk window; Diatribe opens nothing.
     pub(crate) fn set_ux_walk(&mut self, cx: &mut Context<Self>) {
         if self.session.read(cx).phase != Phase::Idle
             || self.is_preparing_recording()
@@ -362,8 +362,8 @@ impl MainWindow {
         .detach();
     }
 
-    /// Worm Mode's choice between Worm and Diatribe, remembered for the next time. Switching
-    /// never closes the prepared Chrome window, so switching back to Worm reuses it.
+    /// The walk mode's choice between walk and Diatribe, remembered for the next time. Switching
+    /// never closes the prepared Chrome window, so switching back to a walk reuses it.
     pub(super) fn set_walk_diatribe(&mut self, diatribe: bool, cx: &mut Context<Self>) {
         if self.walk.diatribe == diatribe
             || self.session.read(cx).phase != Phase::Idle
@@ -401,7 +401,7 @@ impl MainWindow {
         }
     }
 
-    /// The Diatribe shortcut: a diatribe right now. Worm Mode's remembered choice, the
+    /// The Diatribe shortcut: a diatribe right now. The walk mode's remembered choice, the
     /// recorder's mode and any prepared Chrome window stay as they were.
     pub(crate) fn record_diatribe_now(&mut self, cx: &mut Context<Self>) {
         self.start_diatribe(DiatribeStart::OneShot, None, cx);
@@ -422,8 +422,10 @@ impl MainWindow {
             self.selected_window = None;
             if self.walk.selected {
                 self.walk.notice = Some(
-                    "The Chrome window closed with the worm. Use New Chrome window for the next one."
-                        .into(),
+                    fork_brand::mode_text(
+                        "The Chrome window closed with the %noun%. Use New Chrome window for the next one.",
+                    )
+                    .into(),
                 );
             }
         }
@@ -852,7 +854,7 @@ impl MainWindow {
                         .label(if recent_diatribe {
                             "Open recent diatribe"
                         } else {
-                            "Open recent worm"
+                            fork_brand::mode_text_static("Open recent %noun%")
                         })
                         .on_click(|_, _, cx| cx.defer(crate::ux_walk_window::open)),
                     )
@@ -869,7 +871,7 @@ impl MainWindow {
         )
     }
 
-    /// Worm Mode's one choice: a worm with its browser evidence, or a voice-only diatribe.
+    /// The walk mode's one choice: a walk with its browser evidence, or a voice-only diatribe.
     fn walk_choice(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let diatribe = self.walk.diatribe;

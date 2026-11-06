@@ -120,7 +120,7 @@ pub(super) fn row_title(item: &RecordingItem) -> String {
     }
 }
 
-/// Instant rows get the blue pill; Worm Mode rows, diatribes included, stay gray.
+/// Instant rows get the blue pill; walk mode rows, diatribes included, stay gray.
 pub(super) fn row_pill_tinted(item: &RecordingItem) -> bool {
     shown_walk(item).is_none() && item.mode == RecordingMode::Instant
 }

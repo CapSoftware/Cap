@@ -9,7 +9,9 @@ const WALK_SHORTCUTS: bool = cfg!(all(target_os = "macos", feature = "ux-walk"))
 pub(super) fn shortcut_label(action: &str) -> Option<&'static str> {
     match action {
         "openUxWalk" if WALK_SHORTCUTS => Some(fork_brand::mode_text_static("Open %walk%")),
-        "openUxWalkNotes" if WALK_SHORTCUTS => Some("Open worm notes"),
+        "openUxWalkNotes" if WALK_SHORTCUTS => {
+            Some(fork_brand::mode_text_static("Open %noun% notes"))
+        }
         "recordDiatribe" if WALK_SHORTCUTS => Some("Start a diatribe"),
         _ => None,
     }
