@@ -314,15 +314,20 @@ export class Organisations extends Effect.Service<Organisations>()(
 								.update(Db.users)
 								.set({
 									activeOrganizationId: fallbackOrgId,
-									defaultOrgId: fallbackOrgId,
 								})
 								.where(
 									Dz.and(
 										Dz.eq(Db.users.id, affectedUserId),
-										Dz.or(
-											Dz.eq(Db.users.activeOrganizationId, id),
-											Dz.eq(Db.users.defaultOrgId, id),
-										),
+										Dz.eq(Db.users.activeOrganizationId, id),
+									),
+								);
+							await tx
+								.update(Db.users)
+								.set({ defaultOrgId: fallbackOrgId })
+								.where(
+									Dz.and(
+										Dz.eq(Db.users.id, affectedUserId),
+										Dz.eq(Db.users.defaultOrgId, id),
 									),
 								);
 						}
