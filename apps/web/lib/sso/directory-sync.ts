@@ -348,10 +348,10 @@ async function deprovisionDirectoryUser(
 				...member,
 				email: user.email,
 			});
-		}
-		const domain = getSsoEmailDomain(user.email);
-		if (domain && verifiedDomains.has(domain)) {
-			await revokeUserCredentials(tx, user.id);
+			const domain = getSsoEmailDomain(user.email);
+			if (domain && verifiedDomains.has(domain)) {
+				await revokeUserCredentials(tx, user.id);
+			}
 		}
 		return true;
 	});
