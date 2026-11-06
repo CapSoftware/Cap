@@ -209,7 +209,7 @@ pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> b
             );
         }
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        (current & (WS_EX_TRANSPARENT as isize)) != 0 == click_through
+        ((current & (WS_EX_TRANSPARENT as isize)) != 0) == click_through
     }
 }
 
