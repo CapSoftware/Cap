@@ -37,6 +37,9 @@ permissions:
 jobs:
   bench:
     name: GPUI benchmarks (${{ matrix.settings.name }})
+    # Benchmarks build GPUI twice and run for up to two hours, so pull requests
+    # from forks do not start them; maintainers can run them with workflow_dispatch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -175,6 +178,8 @@ jobs:
 
   test:
     name: GPUI tests (${{ matrix.settings.name }})
+    # Same as the benchmarks: GPUI's test builds are long, so forks do not start them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 120
     strategy:
       fail-fast: false

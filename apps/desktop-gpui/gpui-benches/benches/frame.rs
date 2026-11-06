@@ -9,26 +9,28 @@
 //! only one view changes per frame.
 //!
 //! With `GPUI_SCENE_DIGEST=<file>` set, every frame a benchmark submits is
-//! also hashed (every primitive, in the order the renderer receives them) and
-//! one line per frame is appended to `<file>`. Two builds that produce the same
-//! digests drew the same scenes, so they render the same pixels.
+//! also hashed (every primitive, in the order the renderer receives them, and
+//! the pixels uploaded into each atlas tile its sprites show) and one line per
+//! frame is appended to `<file>`. Two builds that produce the same digests drew
+//! the same scenes, so they render the same pixels.
 
 use std::{
     borrow::Cow,
-    collections::hash_map::DefaultHasher,
+    collections::{HashMap, hash_map::DefaultHasher},
     fs::OpenOptions,
     hash::{Hash, Hasher},
     io::Write,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use criterion::Criterion;
 use gpui::{
-    AnyView, BenchAppContext, BenchReport, BorderStyle, Bounds, BoxShadow, Corners, DevicePixels,
-    Entity, MouseMoveEvent, PathBuilder, PlatformAtlas, PlatformHeadlessRenderer, PlatformInput,
-    Scene, SharedString, StyleRefinement, UniformListScrollHandle, Window, canvas, div, point,
-    prelude::*, px, quad, rgb, size, uniform_list,
+    AnyView, AtlasKey, AtlasTextureId, AtlasTile, BenchAppContext, BenchReport, BorderStyle,
+    Bounds, BoxShadow, Corners, DevicePixels, Entity, MouseMoveEvent, PathBuilder, PlatformAtlas,
+    PlatformHeadlessRenderer, PlatformInput, Scene, SharedString, StreamFrame, StreamingImageId,
+    StyleRefinement, UniformListScrollHandle, Window, canvas, div, point, prelude::*, px, quad,
+    rgb, size, uniform_list,
 };
 
 const IBM_PLEX: &[u8] =
@@ -582,16 +584,99 @@ fn primitives_8192(cx: &mut BenchAppContext) {
 /// cover the warm-up frames every run draws, whatever Criterion's timing.
 const DIGEST_FRAMES: usize = 64;
 
+/// Wraps the platform's sprite atlas and records a hash of the pixels uploaded
+/// into each tile, so a scene digest covers what its sprites show, not just
+/// which tiles they reference.
+struct DigestAtlas {
+    inner: Arc<dyn PlatformAtlas>,
+    contents: Mutex<HashMap<(AtlasTextureId, u32), u64>>,
+}
+
+impl DigestAtlas {
+    fn content(&self, tile: &AtlasTile) -> u64 {
+        self.contents
+            .lock()
+            .expect("digest atlas lock")
+            .get(&(tile.texture_id, tile.tile_id.0))
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+impl PlatformAtlas for DigestAtlas {
+    fn get_or_insert_with<'a>(
+        &self,
+        key: &AtlasKey,
+        build: &mut dyn FnMut()
+            -> anyhow::Result<Option<(gpui::Size<DevicePixels>, Cow<'a, [u8]>)>>,
+    ) -> anyhow::Result<Option<AtlasTile>> {
+        let mut uploaded = None;
+        let tile = self.inner.get_or_insert_with(key, &mut || {
+            let built = build()?;
+            if let Some((size, bytes)) = &built {
+                let mut hasher = DefaultHasher::new();
+                format!("{size:?}").hash(&mut hasher);
+                bytes.as_ref().hash(&mut hasher);
+                uploaded = Some(hasher.finish());
+            }
+            Ok(built)
+        })?;
+        // A tile id can be reused after `remove`, so the latest upload wins.
+        if let (Some(tile), Some(content)) = (&tile, uploaded) {
+            self.contents
+                .lock()
+                .expect("digest atlas lock")
+                .insert((tile.texture_id, tile.tile_id.0), content);
+        }
+        Ok(tile)
+    }
+
+    fn remove(&self, key: &AtlasKey) {
+        self.inner.remove(key);
+    }
+
+    fn get_or_update_stream(
+        &self,
+        id: StreamingImageId,
+        frame: &StreamFrame,
+    ) -> anyhow::Result<Option<AtlasTile>> {
+        self.inner.get_or_update_stream(id, frame)
+    }
+
+    fn remove_stream(&self, id: StreamingImageId) {
+        self.inner.remove_stream(id);
+    }
+}
+
 /// Wraps the platform's headless renderer and hashes each scene it submits.
 struct SceneDigestRenderer {
     inner: Box<dyn PlatformHeadlessRenderer>,
+    atlas: Arc<DigestAtlas>,
     benchmark: &'static str,
     path: PathBuf,
     frames: usize,
 }
 
 impl SceneDigestRenderer {
-    fn digest(scene: &Scene) -> u64 {
+    fn new(
+        inner: Box<dyn PlatformHeadlessRenderer>,
+        benchmark: &'static str,
+        path: PathBuf,
+    ) -> Self {
+        let atlas = Arc::new(DigestAtlas {
+            inner: inner.sprite_atlas(),
+            contents: Mutex::default(),
+        });
+        Self {
+            inner,
+            atlas,
+            benchmark,
+            path,
+            frames: 0,
+        }
+    }
+
+    fn digest(&self, scene: &Scene) -> u64 {
         let mut hasher = DefaultHasher::new();
         for list in [
             format!("{:?}", scene.shadows),
@@ -605,6 +690,15 @@ impl SceneDigestRenderer {
             format!("{:?}", scene.backdrop_blurs),
         ] {
             list.hash(&mut hasher);
+        }
+        let tiles = scene
+            .monochrome_sprites
+            .iter()
+            .map(|sprite| &sprite.tile)
+            .chain(scene.subpixel_sprites.iter().map(|sprite| &sprite.tile))
+            .chain(scene.polychrome_sprites.iter().map(|sprite| &sprite.tile));
+        for tile in tiles {
+            self.atlas.content(tile).hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -629,7 +723,7 @@ impl PlatformHeadlessRenderer for SceneDigestRenderer {
                 "{} {:>3} {:016x}\n",
                 self.benchmark,
                 self.frames,
-                Self::digest(scene)
+                self.digest(scene)
             );
             OpenOptions::new()
                 .create(true)
@@ -643,7 +737,7 @@ impl PlatformHeadlessRenderer for SceneDigestRenderer {
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
-        self.inner.sprite_atlas()
+        self.atlas.clone()
     }
 }
 
@@ -657,12 +751,8 @@ fn run(criterion: &mut Criterion, name: &'static str, benchmark: fn(&mut BenchAp
             Box::new(move || {
                 let inner = gpui_platform::current_headless_renderer()?;
                 Some(match &digest {
-                    Some(path) => Box::new(SceneDigestRenderer {
-                        inner,
-                        benchmark: name,
-                        path: path.clone(),
-                        frames: 0,
-                    }) as Box<dyn PlatformHeadlessRenderer>,
+                    Some(path) => Box::new(SceneDigestRenderer::new(inner, name, path.clone()))
+                        as Box<dyn PlatformHeadlessRenderer>,
                     None => inner,
                 })
             });
