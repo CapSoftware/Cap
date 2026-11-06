@@ -113,10 +113,8 @@ impl Render for Cards {
 
 /// Full re-render of a wrapping grid of styled cards (borders, rounded corners,
 /// shadows, two labels each): layout-, style- and scene-heavy.
-#[gpui::bench(inputs = [64usize, 256, 1024], group = "cards")]
-fn cards(count: &usize, cx: &mut BenchAppContext) {
+fn cards(count: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
-    let count = *count;
     let mut window = cx.add_empty_window();
     let view = window
         .replace_root_view(|_, _| Cards { count })
@@ -178,10 +176,8 @@ impl Render for TextRows {
 
 /// Label-heavy rows whose text is identical every frame: exercises the line
 /// layout cache hit path and glyph painting.
-#[gpui::bench(inputs = [50usize, 200], group = "text_rows_static")]
-fn text_rows_static(rows: &usize, cx: &mut BenchAppContext) {
+fn text_rows_static(rows: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
-    let rows = *rows;
     let mut window = cx.add_empty_window();
     let view = window
         .replace_root_view(|_, _| TextRows {
@@ -198,10 +194,8 @@ fn text_rows_static(rows: &usize, cx: &mut BenchAppContext) {
 
 /// The same rows with a timestamp column that changes every frame, like a
 /// recording timer or a timeline ruler: one fresh shaping per row per frame.
-#[gpui::bench(inputs = [50usize, 200], group = "text_rows_changing")]
-fn text_rows_changing(rows: &usize, cx: &mut BenchAppContext) {
+fn text_rows_changing(rows: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
-    let rows = *rows;
     let mut window = cx.add_empty_window();
     let view = window
         .replace_root_view(|_, _| TextRows {
@@ -243,10 +237,8 @@ impl Render for Paragraphs {
 
 /// Wrapped paragraphs in columns of several widths: line wrapping and
 /// multi-line text layout.
-#[gpui::bench(inputs = [12usize, 48], group = "paragraphs")]
-fn paragraphs(count: &usize, cx: &mut BenchAppContext) {
+fn paragraphs(count: usize, cx: &mut BenchAppContext) {
     load_fonts(cx);
-    let count = *count;
     let mut window = cx.add_empty_window();
     let view = window
         .replace_root_view(|_, _| Paragraphs { count })
@@ -389,7 +381,11 @@ impl Render for Panel {
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().w(px(80.)).child(DETAILS[(self.ix + row) % DETAILS.len()]))
+                    .child(
+                        div()
+                            .w(px(80.))
+                            .child(DETAILS[(self.ix + row) % DETAILS.len()]),
+                    )
                     .child(SharedString::from(format!("{}", self.value + row as u64)))
             }))
     }
@@ -511,9 +507,7 @@ impl Render for Primitives {
 
 /// Thousands of quads, shadows and paths painted straight from a canvas:
 /// scene insertion, sorting, batching and (on macOS) GPU submission.
-#[gpui::bench(inputs = [1024usize, 8192], group = "primitives")]
-fn primitives(quads: &usize, cx: &mut BenchAppContext) {
-    let quads = *quads;
+fn primitives(quads: usize, cx: &mut BenchAppContext) {
     let mut window = cx.add_empty_window();
     let view = window
         .replace_root_view(|_, _| Primitives { quads })
@@ -524,15 +518,80 @@ fn primitives(quads: &usize, cx: &mut BenchAppContext) {
         .bench_renderer(view, |_, _, cx| cx.notify());
 }
 
+// One benchmark per size rather than `#[gpui::bench(inputs = ...)]`: GPUI's
+// frame report (the `Window::draw` histogram) covers one benchmark function,
+// so separate functions keep each size's frame cost apart.
+
+#[gpui::bench]
+fn cards_64(cx: &mut BenchAppContext) {
+    cards(64, cx);
+}
+
+#[gpui::bench]
+fn cards_256(cx: &mut BenchAppContext) {
+    cards(256, cx);
+}
+
+#[gpui::bench]
+fn cards_1024(cx: &mut BenchAppContext) {
+    cards(1024, cx);
+}
+
+#[gpui::bench]
+fn text_rows_static_50(cx: &mut BenchAppContext) {
+    text_rows_static(50, cx);
+}
+
+#[gpui::bench]
+fn text_rows_static_200(cx: &mut BenchAppContext) {
+    text_rows_static(200, cx);
+}
+
+#[gpui::bench]
+fn text_rows_changing_50(cx: &mut BenchAppContext) {
+    text_rows_changing(50, cx);
+}
+
+#[gpui::bench]
+fn text_rows_changing_200(cx: &mut BenchAppContext) {
+    text_rows_changing(200, cx);
+}
+
+#[gpui::bench]
+fn paragraphs_12(cx: &mut BenchAppContext) {
+    paragraphs(12, cx);
+}
+
+#[gpui::bench]
+fn paragraphs_48(cx: &mut BenchAppContext) {
+    paragraphs(48, cx);
+}
+
+#[gpui::bench]
+fn primitives_1024(cx: &mut BenchAppContext) {
+    primitives(1024, cx);
+}
+
+#[gpui::bench]
+fn primitives_8192(cx: &mut BenchAppContext) {
+    primitives(8192, cx);
+}
+
 gpui::bench_group!(
     benches,
-    cards,
-    text_rows_static,
-    text_rows_changing,
-    paragraphs,
+    cards_64,
+    cards_256,
+    cards_1024,
+    text_rows_static_50,
+    text_rows_static_200,
+    text_rows_changing_50,
+    text_rows_changing_200,
+    paragraphs_12,
+    paragraphs_48,
     recordings_scroll,
     hover_cards,
     cached_panels,
-    primitives
+    primitives_1024,
+    primitives_8192
 );
 gpui::bench_main!(benches);

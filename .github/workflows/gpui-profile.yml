@@ -52,9 +52,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/profile"
           cd "$RUNNER_TEMP/profile"
-          for bench in "cards/cards/1024" "text_rows_static/text_rows_static/200" \
-            "text_rows_changing/text_rows_changing/200" "paragraphs/paragraphs/48" \
-            "recordings_scroll" "hover_cards" "cached_panels" "primitives/primitives/8192"; do
+          for bench in "cards_1024" "text_rows_static_200" \
+            "text_rows_changing_200" "paragraphs_48" \
+            "recordings_scroll" "hover_cards" "cached_panels" "primitives_8192"; do
             name="$(echo "$bench" | tr '/' '_')"
             CRITERION_HOME="$RUNNER_TEMP/profile/criterion" valgrind --tool=callgrind \
               --callgrind-out-file="$name.callgrind" --dump-instr=no \

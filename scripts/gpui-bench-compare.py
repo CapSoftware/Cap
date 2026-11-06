@@ -16,6 +16,7 @@ median times (head / base), paired by round.
 import argparse
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -63,7 +64,39 @@ def run(binary: Path, home: Path, args: argparse.Namespace, log: Path) -> dict:
         estimates[full_id] = data["median"]["point_estimate"]
     if not estimates:
         sys.exit(f"error: {binary} wrote no Criterion estimates under {home}")
-    return estimates
+    return estimates, draw_means(log)
+
+
+REPORT = re.compile(r"^GPUI bench report \(all observed iterations\): (\S+)$")
+
+
+def draw_means(log: Path) -> dict:
+    """Mean `Window::draw` time per benchmark report, in nanoseconds.
+
+    Criterion times a whole iteration, which on macOS includes waiting for the
+    headless GPU to hand back an instance buffer; light frames end up bound by
+    the GPU. The bench report's `window draw` histogram is the CPU cost of the
+    frame alone. Reports cover every input of a benchmark group together.
+    """
+    means = {}
+    name = None
+    in_draw = False
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        match = REPORT.match(line)
+        if match:
+            name, in_draw = match[1], False
+        elif name and line == "window draw:":
+            in_draw = True
+        elif name and in_draw and line.startswith("mean:"):
+            value = line.split(":", 1)[1].strip()
+            scale = {"ms": 1e6, "µs": 1e3, "us": 1e3, "ns": 1.0, "s": 1e9}
+            for unit in ("ms", "µs", "us", "ns", "s"):
+                if value.endswith(unit):
+                    means[name] = float(value[: -len(unit)]) * scale[unit]
+                    break
+            name, in_draw = None, False
+    return means
 
 
 def format_time(nanos: float) -> str:
@@ -94,6 +127,7 @@ def main() -> None:
 
     binaries = {"base": executable(args.base), "head": executable(args.head)}
     samples = {"base": [], "head": []}
+    draws = {"base": [], "head": []}
     args.out.mkdir(parents=True, exist_ok=True)
     for round_ix in range(args.rounds):
         order = ["base", "head"] if round_ix % 2 == 0 else ["head", "base"]
@@ -101,7 +135,9 @@ def main() -> None:
             home = args.out / side / f"round-{round_ix}"
             log = args.out / f"{side}-round-{round_ix}.log"
             print(f"round {round_ix + 1}/{args.rounds}: {side}", flush=True)
-            samples[side].append(run(binaries[side], home, args, log))
+            estimates, draw = run(binaries[side], home, args, log)
+            samples[side].append(estimates)
+            draws[side].append(draw)
 
     names = sorted(set(samples["base"][0]) & set(samples["head"][0]))
     rows = []
@@ -149,6 +185,31 @@ def main() -> None:
             f"| `{row['benchmark']}` | {format_time(row['base_ns'])} | {format_time(row['head_ns'])} "
             f"| {change:+.1f}% | {spread} | {verdict} |"
         )
+    draw_names = sorted(set(draws["base"][0]) & set(draws["head"][0]))
+    if draw_names:
+        lines += [
+            "",
+            "`Window::draw` alone (CPU cost of a frame, from GPUI's bench report; "
+            "grouped benchmarks report all their inputs together):",
+            "",
+            "| Benchmark | Base | Head | Change | Round range | |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        for name in draw_names:
+            base = [d[name] for d in draws["base"] if name in d]
+            head = [d[name] for d in draws["head"] if name in d]
+            ratios = [h / b for b, h in zip(base, head) if b > 0]
+            if not ratios:
+                continue
+            ratio = statistics.median(ratios)
+            verdict = (
+                "**faster**" if max(ratios) < 1 else "**slower**" if min(ratios) > 1 else ""
+            )
+            lines.append(
+                f"| `{name}` | {format_time(statistics.median(base))} "
+                f"| {format_time(statistics.median(head))} | {(ratio - 1) * 100:+.1f}% "
+                f"| {(min(ratios) - 1) * 100:+.1f}% … {(max(ratios) - 1) * 100:+.1f}% | {verdict} |"
+            )
     report = "\n".join(lines) + "\n"
     print(report)
     (args.out / "comparison.md").write_text(report, encoding="utf-8")
