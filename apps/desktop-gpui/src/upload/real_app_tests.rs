@@ -751,9 +751,26 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         );
         let projects = sandbox.projects();
         assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
-        assert!(
-            media_files(&projects[0]) > 0,
-            "{mode}: the recording lost its media"
-        );
+        let project = &projects[0];
+        // Raw fragments alone are what the failure left behind, so only
+        // sealed output counts: finished Instant segments, and Studio segments
+        // saved in the project so the editor can open it.
+        if mode == "instant" {
+            assert!(
+                finished_segments(project) > 0,
+                "instant: no finished display segments in {}",
+                project.display()
+            );
+        } else {
+            let saved = meta(project)
+                .and_then(|meta| meta["segments"].as_array().map(Vec::len))
+                .unwrap_or(0);
+            assert!(
+                saved > 0,
+                "studio: no saved segments in {}: {:?}",
+                project.display(),
+                meta(project)
+            );
+        }
     }
 }
