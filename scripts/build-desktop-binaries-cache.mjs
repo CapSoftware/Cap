@@ -3,20 +3,43 @@ import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-async function newestMtimeMs(targetPath) {
+async function sourceState(targetPath) {
 	let newest = 0;
+	const entries = [];
 	const pending = [targetPath];
 	while (pending.length > 0) {
 		const current = pending.pop();
 		const stat = await fs.stat(current).catch(() => null);
+		entries.push([current, stat?.mtimeMs, stat?.size]);
 		if (!stat) continue;
 		newest = Math.max(newest, stat.mtimeMs);
 		if (stat.isDirectory()) {
-			const entries = await fs.readdir(current);
-			for (const name of entries) pending.push(path.join(current, name));
+			const names = await fs.readdir(current);
+			for (const name of names.sort().reverse())
+				pending.push(path.join(current, name));
 		}
 	}
-	return newest;
+	return { newest, entries };
+}
+
+export async function sidecarSourceSnapshot(watchPaths) {
+	const states = await Promise.all(watchPaths.map(sourceState));
+	return {
+		newest: Math.max(0, ...states.map((state) => state.newest)),
+		fingerprint: createHash("sha256")
+			.update(JSON.stringify(states.map((state) => state.entries)))
+			.digest("hex"),
+	};
+}
+
+export async function recordSidecarBuild(releaseBinary, snapshot) {
+	await fs.writeFile(
+		`${releaseBinary}.sidecar-cache.json`,
+		JSON.stringify({
+			sourceFingerprint: snapshot.fingerprint,
+			releaseHash: await sha256(releaseBinary),
+		}),
+	);
 }
 
 async function sha256(filePath) {
@@ -53,19 +76,23 @@ export async function stagedBinariesAreCurrent(
 	if (await releaseBinaryMatchesDebugBinary(releaseBinary, debugBinaries))
 		return false;
 
-	const newestSource = Math.max(
-		0,
-		...(await Promise.all(watchPaths.map(newestMtimeMs))),
-	);
-	if (newestSource > releaseStat.mtimeMs) return false;
-
+	const snapshot = await sidecarSourceSnapshot(watchPaths);
 	const releaseHash = await sha256(releaseBinary);
+	const record = await fs
+		.readFile(`${releaseBinary}.sidecar-cache.json`, "utf8")
+		.then((text) => JSON.parse(text))
+		.catch(() => null);
+	const checkedSnapshot =
+		record?.sourceFingerprint === snapshot.fingerprint &&
+		record?.releaseHash === releaseHash;
+	if (record ? !checkedSnapshot : snapshot.newest > releaseStat.mtimeMs)
+		return false;
 	const stagedMatches = await Promise.all(
 		stagedBinaries.map(async (stagedBinary) => {
 			const stat = await fs.stat(stagedBinary).catch(() => null);
 			if (
 				!stat?.isFile() ||
-				stat.mtimeMs < newestSource ||
+				(!checkedSnapshot && stat.mtimeMs < snapshot.newest) ||
 				stat.size !== releaseStat.size
 			)
 				return false;

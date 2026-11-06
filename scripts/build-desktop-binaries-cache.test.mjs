@@ -5,7 +5,9 @@ import * as path from "node:path";
 import test from "node:test";
 
 import {
+	recordSidecarBuild,
 	releaseBinaryMatchesDebugBinary,
+	sidecarSourceSnapshot,
 	stagedBinariesAreCurrent,
 } from "./build-desktop-binaries-cache.mjs";
 
@@ -141,6 +143,44 @@ test("rejects cached sidecars after a nested source file is removed", async (con
 
 	assert.equal(
 		await stagedBinariesAreCurrent(release, [cli, exporter], [sourceDirectory]),
+		false,
+	);
+	const snapshot = await sidecarSourceSnapshot([sourceDirectory]);
+	await recordSidecarBuild(release, snapshot);
+	assert.equal(
+		await stagedBinariesAreCurrent(release, [cli, exporter], [sourceDirectory]),
+		true,
+	);
+	assert.equal(
+		(await fs.stat(release)).mtimeMs,
+		new Date("2025-01-02").getTime(),
+	);
+	await fs.writeFile(path.join(nestedDirectory, "new.rs"), "new source");
+	assert.equal(
+		await stagedBinariesAreCurrent(release, [cli, exporter], [sourceDirectory]),
+		false,
+	);
+});
+
+test("rejects source edits during a build and changed release content", async (context) => {
+	const { watched, release, cli, exporter, binaryTime } =
+		await fixture(context);
+	const snapshot = await sidecarSourceSnapshot([watched]);
+	await fs.writeFile(watched, "changed during build");
+	await recordSidecarBuild(release, snapshot);
+	assert.equal(
+		await stagedBinariesAreCurrent(release, [cli, exporter], [watched]),
+		false,
+	);
+	await recordSidecarBuild(release, await sidecarSourceSnapshot([watched]));
+	assert.equal(
+		await stagedBinariesAreCurrent(release, [cli, exporter], [watched]),
+		true,
+	);
+	await fs.writeFile(release, "different");
+	await fs.utimes(release, binaryTime, binaryTime);
+	assert.equal(
+		await stagedBinariesAreCurrent(release, [cli, exporter], [watched]),
 		false,
 	);
 });
