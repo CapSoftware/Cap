@@ -5739,6 +5739,8 @@ mod tests {
                     ScreenshotEditorWindow::new(bundle.clone(), window, cx)
                 });
                 editor.update_in(cx, |editor, window, cx| {
+                    // Past the loading skeleton, which has no drag layer.
+                    editor.ready = true;
                     editor.preview_mouse_down(
                         &MouseDownEvent {
                             button,
