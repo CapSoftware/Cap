@@ -218,7 +218,9 @@ impl MFDecoder {
                     let Some(message) = message else {
                         return;
                     };
-                    let VideoDecoderMessage::GetFrame(time, _, sender) = message;
+                    let VideoDecoderMessage::GetFrame(time, _, sender) = message else {
+                        continue;
+                    };
                     if sender.is_closed() {
                         continue;
                     }
