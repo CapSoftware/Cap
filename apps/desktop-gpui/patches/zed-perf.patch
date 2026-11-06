@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/bounds_tree.rs b/crates/gpui/src/bounds_tree.rs
-index e95e324..3a4848f 100644
+index e95e324..990df26 100644
 --- a/crates/gpui/src/bounds_tree.rs
 +++ b/crates/gpui/src/bounds_tree.rs
-@@ -1,96 +1,85 @@
+@@ -1,96 +1,63 @@
  use crate::{Bounds, Half};
  use std::{
 -    cmp,
@@ -14,38 +14,26 @@ index e95e324..3a4848f 100644
  
 -/// Maximum children per internal node (R-tree style branching factor).
 -/// Higher values = shorter tree = fewer cache misses, but more work per node.
-+/// Maximum children per node. A node that would hold one more is split in two.
  const MAX_CHILDREN: usize = 12;
  
 -/// A spatial tree optimized for finding maximum ordering among intersecting bounds.
-+/// A spatial index that assigns z-order to overlapping UI primitives.
- ///
+-///
 -/// This is an R-tree variant specifically designed for the use case of assigning
 -/// z-order to overlapping UI elements. Key optimizations:
 -/// - Tracks the leaf with global max ordering for O(1) fast-path queries
 -/// - Uses higher branching factor (4) for lower tree height
 -/// - Aggressive pruning during search based on max_order metadata
-+/// [`BoundsTree::insert`] returns one more than the highest ordering of any
-+/// previously inserted bounds that intersect the new bounds. That result is
-+/// fully determined by the inserted bounds; the tree only makes finding it
-+/// fast.
-+///
-+/// The tree is a balanced R-tree: every entry lives in a leaf node, all leaf
-+/// nodes are at the same depth, and a node that overflows is split in two
-+/// along its longer axis, growing the tree at the root. Each node records the
-+/// highest ordering beneath it, so a query skips subtrees that cannot raise
-+/// the answer as well as subtrees that do not intersect it. A frame inserts
-+/// primitives in paint order, which an unbalanced tree turns into long
-+/// chains; staying balanced keeps both insertion and queries logarithmic.
++/// A balanced R-tree: primitives arrive in paint order, which a tree that never
++/// splits full nodes turns into long chains (5-6k instructions per insert on a
++/// cached-view frame). Results depend only on the inserted bounds, so the
++/// tree's shape can change freely.
  #[derive(Debug)]
  pub(crate) struct BoundsTree<U>
  where
      U: Clone + Debug + Default + PartialEq,
  {
 -    /// All nodes stored contiguously for cache efficiency.
-+    /// Every inserted bounds with its ordering, in insertion order.
 +    entries: Vec<Entry<U>>,
-+    /// All nodes, stored contiguously and addressed by index.
      nodes: Vec<Node<U>>,
 -    /// Index of the root node, if any.
 -    root: Option<usize>,
@@ -55,14 +43,9 @@ index e95e324..3a4848f 100644
 -    insert_path: Vec<usize>,
 -    /// Reusable stack for search operations.
 -    search_stack: Vec<NonNull<Node<U>>>,
-+    /// Index of the root node, if any entry has been indexed.
 +    root: Option<u32>,
-+    /// The entry with the highest ordering, for an O(1) fast path: if it
-+    /// intersects a query, nothing can beat it.
 +    max_entry: Option<u32>,
-+    /// Reusable stack of the nodes visited by an insertion.
 +    insert_path: Vec<u32>,
-+    /// Reusable stack of the nodes still to visit in a query.
 +    search_stack: Vec<u32>,
  }
  
@@ -105,14 +88,10 @@ index e95e324..3a4848f 100644
 +where
 +    U: Clone + Debug + Default + PartialEq,
 +{
-+    /// Bounding box of everything beneath this node.
 +    bounds: Bounds<U>,
-+    /// Highest ordering of any entry beneath this node.
 +    max_order: u32,
-+    /// Whether `children` index `entries` (a leaf) or `nodes`.
 +    leaf: bool,
      len: u8,
-+    /// One slot beyond `MAX_CHILDREN` holds the overflow until a split.
 +    children: [u32; MAX_CHILDREN + 1],
  }
  
@@ -149,12 +128,11 @@ index e95e324..3a4848f 100644
  }
  
  impl<U> BoundsTree<U>
-@@ -104,11 +93,12 @@ where
+@@ -104,11 +71,11 @@ where
          + Half
          + Default,
  {
 -    /// Clears all nodes from the tree.
-+    /// Clears all bounds from the tree, keeping its allocations.
      pub fn clear(&mut self) {
 +        self.entries.clear();
          self.nodes.clear();
@@ -164,7 +142,7 @@ index e95e324..3a4848f 100644
          self.insert_path.clear();
          self.search_stack.clear();
      }
-@@ -118,253 +108,243 @@ where
+@@ -118,253 +85,233 @@ where
      /// The ordering is one greater than the maximum ordering of any
      /// existing bounds that intersect with the new bounds.
      pub fn insert(&mut self, new_bounds: Bounds<U>) -> u32 {
@@ -203,8 +181,6 @@ index e95e324..3a4848f 100644
      }
  
 -    /// Finds the maximum ordering among all bounds that intersect with the query.
-+    /// Returns the highest ordering among the entries that intersect `query`,
-+    /// or 0 if none do.
      fn find_max_ordering(&mut self, query: &Bounds<U>) -> u32 {
 -        let Some(root_idx) = self.root else {
 -            return 0;
@@ -292,17 +268,14 @@ index e95e324..3a4848f 100644
 -            max_order: order,
 -            kind: NodeKind::Leaf { order },
 -        });
--
++    fn index_entry(&mut self, entry: u32) {
++        let bounds = self.entries[entry as usize].bounds.clone();
++        let order = self.entries[entry as usize].order;
+ 
 -        let Some(root_idx) = self.root else {
 -            // Tree is empty, new leaf becomes root
 -            self.root = Some(new_leaf_idx);
 -            return new_leaf_idx;
-+    /// Adds `entry` to the leaf whose bounds grow least, splitting any node
-+    /// that overflows on the way back up.
-+    fn index_entry(&mut self, entry: u32) {
-+        let bounds = self.entries[entry as usize].bounds.clone();
-+        let order = self.entries[entry as usize].order;
-+
 +        let Some(root) = self.root else {
 +            let leaf = self.push_node(true, bounds, order);
 +            self.nodes[leaf as usize].push(entry);
@@ -397,8 +370,6 @@ index e95e324..3a4848f 100644
 -                    best_cost = cost;
 -                    best_child_idx = child_idx;
 -                    best_child_pos = pos;
-+    /// The child of `node` whose half-perimeter grows least to cover
-+    /// `bounds`, preferring the smaller child on ties.
 +    fn choose_child(&self, node: u32, bounds: &Bounds<U>) -> u32 {
 +        let mut best = None::<(u32, U, U)>;
 +        for &child in self.nodes[node as usize].children() {
@@ -433,8 +404,6 @@ index e95e324..3a4848f 100644
 -                            children.indices.swap(last - 1, last);
 -                        }
 -                    }
-+    /// Moves the upper half of an overflowing node's children, ordered along
-+    /// the node's longer axis, into a new sibling node, and returns it.
 +    fn split(&mut self, node: u32) -> u32 {
 +        let leaf = self.nodes[node as usize].leaf;
 +        let mut children = self.nodes[node as usize].children;
@@ -542,7 +511,6 @@ index e95e324..3a4848f 100644
 -                    }
 -                }
 -            }
-+    /// Recomputes a node's bounds and maximum ordering from its children.
 +    fn recompute(&mut self, node: u32) {
 +        let current = &self.nodes[node as usize];
 +        let leaf = current.leaf;
@@ -586,7 +554,6 @@ index e95e324..3a4848f 100644
      }
  }
  
-+/// Whether any coordinate is NaN (the only values not equal to themselves).
 +fn has_nan<U: Clone + Debug + Default + PartialEq>(bounds: &Bounds<U>) -> bool {
 +    bounds.origin.x != bounds.origin.x
 +        || bounds.origin.y != bounds.origin.y
@@ -608,7 +575,7 @@ index e95e324..3a4848f 100644
              insert_path: Vec::new(),
              search_stack: Vec::new(),
          }
-@@ -469,4 +449,111 @@ mod tests {
+@@ -469,4 +416,106 @@ mod tests {
              }
          }
      }
@@ -620,8 +587,6 @@ index e95e324..3a4848f 100644
 +        }
 +    }
 +
-+    /// Inserts every bounds into a fresh tree and checks each ordering against
-+    /// a brute-force scan of everything inserted before it.
 +    fn check_against_brute_force(tree: &mut BoundsTree<f32>, all: &[Bounds<f32>]) {
 +        tree.clear();
 +        let mut inserted: Vec<(Bounds<f32>, u32)> = Vec::with_capacity(all.len());
@@ -639,9 +604,6 @@ index e95e324..3a4848f 100644
 +        }
 +    }
 +
-+    /// Shapes a frame actually produces, in paint order: a window background,
-+    /// rows of cards each with a background, a border, a few glyph runs and
-+    /// an overlay; a long list of full-width rows; and deeply nested panels.
 +    #[test]
 +    fn matches_brute_force_on_ui_shaped_frames() {
 +        let mut tree = BoundsTree::default();
@@ -721,36 +683,33 @@ index e95e324..3a4848f 100644
 +    }
  }
 diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
-index 3470ac9..c64b672 100644
+index 3470ac9..e32c357 100644
 --- a/crates/gpui/src/elements/text.rs
 +++ b/crates/gpui/src/elements/text.rs
-@@ -693,8 +693,11 @@ impl TextLayout {
+@@ -693,8 +693,9 @@ impl TextLayout {
                      return size;
                  }
  
 -                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
                  let (text, runs) = if let Some(truncate_width) = truncate_width {
-+                    // Only truncation measures with the line wrapper; checking one
-+                    // out of the pool costs a font resolve and two pool locks.
 +                    let mut line_wrapper =
 +                        cx.text_system().line_wrapper(text_style.font(), font_size);
                      if let Some(max_lines) = text_style.line_clamp
                          && let Some(wrap_width) = wrap_width
                      {
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index 4c1f558..9fba7b4 100644
+index 4c1f558..ebeb308 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
-@@ -54,6 +54,8 @@ pub struct Scene {
+@@ -54,6 +54,7 @@ pub struct Scene {
      /// stream: the renderer breaks its render pass at each blur's order to
      /// snapshot the framebuffer.
      pub backdrop_blurs: Vec<BackdropBlur>,
-+    /// Reused by [`Scene::finish`] to sort primitives without reallocating.
 +    sort_scratch: Vec<(u64, u32)>,
  }
  
  #[expect(missing_docs)]
-@@ -170,16 +172,20 @@ impl Scene {
+@@ -170,16 +171,20 @@ impl Scene {
      }
  
      pub fn finish(&mut self) {
@@ -780,7 +739,7 @@ index 4c1f558..9fba7b4 100644
          self.surfaces.sort_by_key(|surface| surface.order);
          self.backdrop_blurs.sort_by_key(|blur| blur.order);
      }
-@@ -1091,3 +1097,138 @@ impl PathVertex<Pixels> {
+@@ -1091,3 +1096,127 @@ impl PathVertex<Pixels> {
          }
      }
  }
@@ -789,20 +748,13 @@ index 4c1f558..9fba7b4 100644
 +    order_and_tile_key(sprite.order, sprite.tile.tile_id)
 +}
 +
-+/// `(order, tile_id)` packed so that comparing keys compares the tuple.
 +fn order_and_tile_key(order: DrawOrder, tile_id: crate::TileId) -> u64 {
 +    ((order as u64) << 32) | tile_id.0 as u64
 +}
 +
-+/// Sorts `items` exactly as the stable `items.sort_by_key(key)` would, but
-+/// moves each item at most once.
-+///
-+/// Primitives run to around 100 bytes, and a stable sort moves every element
-+/// several times; a frame of text holds thousands of sprites. Sorting
-+/// `(key, index)` pairs instead, then applying that permutation in place,
-+/// keeps the expensive moves to one per item. The pairs are unique (no two
-+/// share an index), so an unstable sort of them orders equal keys by their
-+/// original position — the stable order.
++/// Equivalent to the stable `items.sort_by_key(key)`, but moves each ~100-byte
++/// primitive once instead of several times. No two pairs share an index, so the
++/// unstable sort of `(key, index)` orders equal keys by original position.
 +fn stable_sort_by_key<T: Copy>(
 +    items: &mut [T],
 +    scratch: &mut Vec<(u64, u32)>,
@@ -824,8 +776,6 @@ index 4c1f558..9fba7b4 100644
 +    }
 +    scratch.sort_unstable();
 +
-+    // `scratch[i].1` is the original index of the item that belongs at `i`.
-+    // Follow each cycle of that permutation, marking slots done as they fill.
 +    const DONE: u32 = u32::MAX;
 +    for start in 0..items.len() {
 +        if scratch[start].1 == DONE {
@@ -897,7 +847,6 @@ index 4c1f558..9fba7b4 100644
 +            .collect();
 +        check(sorted.clone());
 +        check(sorted.iter().rev().copied().collect());
-+        // Equal keys everywhere: the order must not change at all.
 +        check(
 +            (0..300)
 +                .map(|payload| Item {
@@ -907,7 +856,6 @@ index 4c1f558..9fba7b4 100644
 +                })
 +                .collect(),
 +        );
-+        // The largest keys sort without overflowing the packing.
 +        check(
 +            (0..100)
 +                .map(|payload| Item {
@@ -920,24 +868,23 @@ index 4c1f558..9fba7b4 100644
 +    }
 +}
 diff --git a/crates/gpui/src/taffy.rs b/crates/gpui/src/taffy.rs
-index eb3c391..f406748 100644
+index eb3c391..dc4dd84 100644
 --- a/crates/gpui/src/taffy.rs
 +++ b/crates/gpui/src/taffy.rs
-@@ -33,9 +33,10 @@ struct NodeContext {
+@@ -33,9 +33,9 @@ struct NodeContext {
  }
  pub struct TaffyLayoutEngine {
      taffy: TaffyTree<NodeContext>,
 -    absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
 -    /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
 -    absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
-+    /// Per node: its snapped absolute bounds, and its unrounded absolute
-+    /// border-box top-left in device pixels (what children are placed from).
-+    /// One map, because the two are always computed, read and evicted together.
++    /// Snapped absolute bounds, plus the unrounded absolute border-box origin in
++    /// device pixels that children are placed from.
 +    absolute_layouts: FxHashMap<LayoutId, AbsoluteLayout>,
      computed_layouts: FxHashSet<LayoutId>,
      layout_bounds_scratch_space: Vec<LayoutId>,
  }
-@@ -48,8 +49,7 @@ impl TaffyLayoutEngine {
+@@ -48,8 +48,7 @@ impl TaffyLayoutEngine {
          taffy.disable_rounding();
          TaffyLayoutEngine {
              taffy,
@@ -947,7 +894,7 @@ index eb3c391..f406748 100644
              computed_layouts: FxHashSet::default(),
              layout_bounds_scratch_space: Vec::new(),
          }
-@@ -57,8 +57,7 @@ impl TaffyLayoutEngine {
+@@ -57,8 +56,7 @@ impl TaffyLayoutEngine {
  
      pub fn clear(&mut self) {
          self.taffy.clear();
@@ -957,7 +904,7 @@ index eb3c391..f406748 100644
          self.computed_layouts.clear();
      }
  
-@@ -211,8 +210,7 @@ impl TaffyLayoutEngine {
+@@ -211,8 +209,7 @@ impl TaffyLayoutEngine {
              let stack = &mut self.layout_bounds_scratch_space;
              stack.push(id);
              while let Some(id) = stack.pop() {
@@ -967,7 +914,7 @@ index eb3c391..f406748 100644
                  stack.extend(
                      self.taffy
                          .children(id.into())
-@@ -348,8 +346,8 @@ impl TaffyLayoutEngine {
+@@ -348,8 +345,8 @@ impl TaffyLayoutEngine {
      // 1dp residual into descendants.
  
      pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
@@ -978,7 +925,7 @@ index eb3c391..f406748 100644
          }
  
          let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
-@@ -361,16 +359,15 @@ impl TaffyLayoutEngine {
+@@ -361,16 +358,15 @@ impl TaffyLayoutEngine {
              Some(parent_id) => {
                  let parent_id = LayoutId::from(parent_id);
                  self.layout_bounds(parent_id, scale_factor);
@@ -999,7 +946,7 @@ index eb3c391..f406748 100644
  
          let absolute_far = absolute_outer_origin + Point::from(Size::from(layout_size));
          let snapped_bounds = Bounds::from_corners(
-@@ -379,11 +376,23 @@ impl TaffyLayoutEngine {
+@@ -379,11 +375,23 @@ impl TaffyLayoutEngine {
          );
  
          let bounds = (snapped_bounds / scale_factor).map(Pixels);
@@ -1025,7 +972,7 @@ index eb3c391..f406748 100644
  #[derive(Copy, Clone, Eq, PartialEq, Debug)]
  #[repr(transparent)]
 diff --git a/crates/gpui/src/text_system.rs b/crates/gpui/src/text_system.rs
-index f3dc95b..5f8885d 100644
+index f3dc95b..0083f98 100644
 --- a/crates/gpui/src/text_system.rs
 +++ b/crates/gpui/src/text_system.rs
 @@ -3,6 +3,8 @@ mod font_features;
@@ -1037,39 +984,31 @@ index f3dc95b..5f8885d 100644
  
  pub use font_fallbacks::*;
  pub use font_features::*;
-@@ -426,7 +428,9 @@ impl WindowTextSystem {
+@@ -426,7 +428,7 @@ impl WindowTextSystem {
              });
          }
  
 -        let layout = self.layout_line(&text, font_size, runs, force_width);
-+        // Pass the `SharedString` itself so a cache miss keys the layout with a
-+        // clone of it instead of a fresh copy of the text.
 +        let layout = self.layout_line_impl(&text, font_size, runs, force_width);
  
          ShapedLine {
              layout,
-@@ -524,7 +528,10 @@ impl WindowTextSystem {
+@@ -524,7 +526,7 @@ impl WindowTextSystem {
          let mut process_line = |line_text: SharedString, line_start, line_end| {
              font_runs.clear();
  
 -            let mut decoration_runs = <Vec<DecorationRun>>::with_capacity(32);
-+            // Most lines carry one or two decoration runs; reserving 32 (about
-+            // 3 KB) per line on every measure put each allocation past the
-+            // allocators' small-size fast paths.
 +            let mut decoration_runs = <Vec<DecorationRun>>::new();
              let mut run_start = line_start;
              while run_start < line_end {
                  let Some(run) = runs.peek_mut() else {
-@@ -649,6 +656,23 @@ impl WindowTextSystem {
+@@ -649,6 +651,20 @@ impl WindowTextSystem {
          runs: &[TextRun],
          force_width: Option<Pixels>,
      ) -> Arc<LineLayout> {
 +        self.layout_line_impl(text, font_size, runs, force_width)
 +    }
 +
-+    /// [`Self::layout_line`] over any text the line layout cache can key by.
-+    /// The cache only converts `text` into a `SharedString` on a miss, so a hit
-+    /// (the common case) does not copy the text.
 +    fn layout_line_impl<Text>(
 +        &self,
 +        text: Text,
@@ -1084,7 +1023,7 @@ index f3dc95b..5f8885d 100644
          let mut last_run = None::<&TextRun>;
          let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
          font_runs.clear();
-@@ -681,12 +705,9 @@ impl WindowTextSystem {
+@@ -681,12 +697,9 @@ impl WindowTextSystem {
              }
          }
  
@@ -1101,10 +1040,10 @@ index f3dc95b..5f8885d 100644
          self.font_runs_pool.lock().push(font_runs);
  
 diff --git a/crates/gpui/src/text_system/font_features.rs b/crates/gpui/src/text_system/font_features.rs
-index c1ab72b..569e8d5 100644
+index c1ab72b..9b64f74 100644
 --- a/crates/gpui/src/text_system/font_features.rs
 +++ b/crates/gpui/src/text_system/font_features.rs
-@@ -1,12 +1,22 @@
+@@ -1,12 +1,20 @@
  use std::borrow::Cow;
 -use std::sync::Arc;
 +use std::sync::{Arc, LazyLock};
@@ -1117,9 +1056,7 @@ index c1ab72b..569e8d5 100644
  pub struct FontFeatures(pub Arc<Vec<(String, u32)>>);
  
 +impl Default for FontFeatures {
-+    /// No features. Every default shares one empty list, so the
-+    /// `TextStyle::default()` behind each `Window::text_style()` call does not
-+    /// allocate; equality and hashing compare contents, not the `Arc`.
++    // Sharing one Arc is safe: equality and hashing compare the list's contents.
 +    fn default() -> Self {
 +        static NONE: LazyLock<Arc<Vec<(String, u32)>>> = LazyLock::new(Default::default);
 +        Self(NONE.clone())
@@ -1130,16 +1067,13 @@ index c1ab72b..569e8d5 100644
      /// Disables `calt`.
      pub fn disable_ligatures() -> Self {
 diff --git a/crates/gpui/src/text_system/line.rs b/crates/gpui/src/text_system/line.rs
-index cb66359..c6748fa 100644
+index cb66359..367dbb0 100644
 --- a/crates/gpui/src/text_system/line.rs
 +++ b/crates/gpui/src/text_system/line.rs
-@@ -373,8 +373,13 @@ fn paint_line(
+@@ -373,8 +373,10 @@ fn paint_line(
          let mut prev_glyph_position = Point::default();
          let mut max_glyph_size = size(px(0.), px(0.));
          let mut first_glyph_x = origin.x;
-+        // A glyph's rendering inputs depend only on its run's font (subpixel
-+        // rendering) and on its color (dilation), so resolve them once per run
-+        // and per color rather than for every glyph.
 +        let mut dilation_for_color: Option<(Hsla, u8)> = None;
          for (run_ix, run) in layout.runs.iter().enumerate() {
              max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
@@ -1147,7 +1081,7 @@ index cb66359..c6748fa 100644
  
              for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
                  glyph_origin.x += glyph.position.x - prev_glyph_position.x;
-@@ -532,12 +537,25 @@ fn paint_line(
+@@ -532,12 +534,25 @@ fn paint_line(
                              layout.font_size,
                          )?;
                      } else {
@@ -1174,13 +1108,12 @@ index cb66359..c6748fa 100644
                          )?;
                      }
                  }
-@@ -596,6 +614,16 @@ fn paint_line_background(
+@@ -596,6 +611,15 @@ fn paint_line_background(
          ),
      );
      window.paint_layer(line_bounds, |window| {
-+        // Only runs with a background color paint anything below. Most text has
-+        // none, so skip the per-glyph walk; the layer itself is still pushed so
-+        // the scene's draw order is unchanged.
++        // The layer above is still pushed when nothing paints in it: it takes a
++        // draw order, and skipping it would renumber everything after.
 +        if decoration_runs
 +            .iter()
 +            .all(|run| run.background_color.is_none())
@@ -1458,22 +1391,18 @@ index 0000000..9688c50
 +    });
 +}
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 82cdc92..b5386ac 100644
+index 82cdc92..0dc181d 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -993,6 +993,11 @@ pub(crate) struct Frame {
+@@ -993,6 +993,7 @@ pub(crate) struct Frame {
      pub(crate) window_active: bool,
      pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
      accessed_element_states: Vec<(GlobalElementId, TypeId)>,
-+    /// Ranges of `accessed_element_states` copied from the previous frame by
-+    /// `reuse_prepaint`/`reuse_paint`. Only those keys can still have their
-+    /// state in the previous frame when this one finishes: `with_element_state`
-+    /// takes the state out of the previous frame on first access.
 +    reused_element_state_ranges: Vec<Range<usize>>,
      pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
      pub(crate) dispatch_tree: DispatchTree,
      pub(crate) scene: Scene,
-@@ -1039,6 +1044,7 @@ impl Frame {
+@@ -1039,6 +1040,7 @@ impl Frame {
              window_active: false,
              element_states: FxHashMap::default(),
              accessed_element_states: Vec::new(),
@@ -1481,7 +1410,7 @@ index 82cdc92..b5386ac 100644
              mouse_listeners: Vec::new(),
              dispatch_tree,
              scene: Scene::default(),
-@@ -1064,6 +1070,7 @@ impl Frame {
+@@ -1064,6 +1066,7 @@ impl Frame {
      pub(crate) fn clear(&mut self) {
          self.element_states.clear();
          self.accessed_element_states.clear();
@@ -1489,7 +1418,7 @@ index 82cdc92..b5386ac 100644
          self.mouse_listeners.clear();
          self.dispatch_tree.clear();
          self.scene.clear();
-@@ -1134,11 +1141,20 @@ impl Frame {
+@@ -1134,11 +1137,18 @@ impl Frame {
      }
  
      pub(crate) fn finish(&mut self, prev_frame: &mut Self) {
@@ -1498,11 +1427,9 @@ index 82cdc92..b5386ac 100644
 -                prev_frame.element_states.remove_entry(element_state_key)
 -            {
 -                self.element_states.insert(element_state_key, element_state);
-+        // Carry over the state of every element this frame reused from the
-+        // previous one. Keys accessed through `with_element_state` already moved
-+        // their state into this frame, so only the reused ranges can match.
-+        // `truncate` may have shortened the accessed list since a range was
-+        // recorded; clamping keeps the scan within the keys that are still there.
++        // Only keys copied by reuse_prepaint/reuse_paint can still have state in
++        // the previous frame: with_element_state removes it on first access.
++        // Ranges are clamped because truncate may have shortened the list.
 +        let accessed = self.accessed_element_states.len();
 +        for range in &self.reused_element_state_ranges {
 +            let range = range.start.min(accessed)..range.end.min(accessed);
@@ -1515,7 +1442,7 @@ index 82cdc92..b5386ac 100644
              }
          }
  
-@@ -3407,12 +3423,19 @@ impl Window {
+@@ -3407,12 +3417,19 @@ impl Window {
                  .iter_mut()
                  .map(|request| request.take()),
          );
@@ -1535,7 +1462,7 @@ index 82cdc92..b5386ac 100644
          self.text_system
              .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
  
-@@ -3477,12 +3500,19 @@ impl Window {
+@@ -3477,12 +3494,19 @@ impl Window {
                  .iter_mut()
                  .map(|listener| listener.take()),
          );
@@ -1555,7 +1482,7 @@ index 82cdc92..b5386ac 100644
          self.next_frame.tab_stops.replay(
              &self.rendered_frame.tab_stops.insertion_history
                  [range.start.tab_handle_index..range.end.tab_handle_index],
-@@ -4440,6 +4470,35 @@ impl Window {
+@@ -4440,6 +4464,31 @@ impl Window {
          glyph_id: GlyphId,
          font_size: Pixels,
          color: Hsla,
@@ -1573,12 +1500,8 @@ index 82cdc92..b5386ac 100644
 +        )
 +    }
 +
-+    /// [`Self::paint_glyph`] with the glyph's rendering inputs already resolved:
 +    /// `subpixel_rendering` must equal `should_use_subpixel_rendering(font_id,
-+    /// font_size)` and `dilation` must equal the text system's
-+    /// `glyph_dilation_for_color(color)`. Painting a line resolves them once per
-+    /// run and color instead of once per glyph; on macOS the former takes the
-+    /// native window's lock.
++    /// font_size)` and `dilation` must equal `glyph_dilation_for_color(color)`.
 +    pub(crate) fn paint_glyph_with_rendering(
 +        &mut self,
 +        origin: Point<Pixels>,
@@ -1591,7 +1514,7 @@ index 82cdc92..b5386ac 100644
      ) -> Result<()> {
          self.invalidator.debug_assert_paint();
  
-@@ -4461,8 +4520,6 @@ impl Window {
+@@ -4461,8 +4510,6 @@ impl Window {
              (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
          );
          let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
@@ -1600,7 +1523,7 @@ index 82cdc92..b5386ac 100644
          let params = RenderGlyphParams {
              font_id,
              glyph_id,
-@@ -4514,7 +4571,7 @@ impl Window {
+@@ -4514,7 +4561,7 @@ impl Window {
          Ok(())
      }
  
@@ -1609,7 +1532,7 @@ index 82cdc92..b5386ac 100644
          if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
              return false;
          }
-@@ -7378,3 +7435,95 @@ mod tests {
+@@ -7378,3 +7425,90 @@ mod tests {
          assert_eq!(b_focus_count.get(), 1);
      }
  }
@@ -1655,8 +1578,6 @@ index 82cdc92..b5386ac 100644
 +        }
 +    }
 +
-+    /// A cached view that is reused for a frame (its elements do not run) must
-+    /// still hand its element state to the frame after, where it renders again.
 +    #[test]
 +    fn element_state_survives_frames_that_reuse_its_view() {
 +        let mut cx = TestAppContext::single();
@@ -1678,7 +1599,6 @@ index 82cdc92..b5386ac 100644
 +        draw(&mut cx);
 +        let first = seen.take().expect("the child paints on the first frame");
 +
-+        // Only the root re-renders: the cached child is reused on these frames.
 +        for _ in 0..3 {
 +            root.update(&mut cx, |_, _, cx| cx.notify()).unwrap();
 +            draw(&mut cx);
@@ -1689,12 +1609,10 @@ index 82cdc92..b5386ac 100644
 +            );
 +        }
 +
-+        // The child renders again and finds the state it created on the first frame.
 +        child.update(&mut cx, |_, cx| cx.notify());
 +        draw(&mut cx);
 +        assert_eq!(seen.take(), Some(first));
 +
-+        // And a frame where nothing is reused keeps it too.
 +        cx.update_window(window, |_, window, cx| {
 +            window.refresh();
 +            window.draw(cx).clear();
