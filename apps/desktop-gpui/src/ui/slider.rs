@@ -197,7 +197,6 @@ impl Slider {
         Self::drag_layer_for(id, MouseButton::Left, on_move, on_up)
     }
 
-    /// [`Self::drag_layer`] for a drag held with `button`.
     pub fn drag_layer_for(
         id: impl Into<ElementId>,
         button: MouseButton,

@@ -877,7 +877,6 @@ struct Toast {
 struct PanDrag {
     start: Point<Pixels>,
     origin: (f32, f32),
-    /// Left or middle: the pan follows and ends with this button only.
     button: MouseButton,
 }
 
