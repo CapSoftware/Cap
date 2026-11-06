@@ -6329,9 +6329,12 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => {
-                        edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT)
-                    }
+                    _ => edits::insert_zoom_segment(
+                        timeline,
+                        start,
+                        end,
+                        f64::from(crate::store::GeneralSettings::load().new_zoom_amount()),
+                    ),
                 };
                 true
             },
@@ -14977,6 +14980,27 @@ mod tests {
                     Some(DragKind::CreateZoom { .. })
                 ));
             });
+        }
+
+        #[gpui::test]
+        fn a_new_zoom_starts_at_the_default_zoom_amount_setting(cx: &mut gpui::TestAppContext) {
+            let settings = tempfile::tempdir().unwrap();
+            let store = settings.path().join("store");
+            std::fs::write(
+                &store,
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+            )
+            .unwrap();
+            crate::store::set_test_tauri_store_path(Some(store));
+            let (editor, cx) = fixture(cx);
+            let index = editor.update_in(cx, |editor, window, cx| {
+                editor.create_gap_segment(TrackKind::Zoom, 4., 6., window, cx)
+            });
+            let amount = editor.read_with(cx, |editor, _| {
+                editor.project.timeline.as_ref().unwrap().zoom_segments[index].amount
+            });
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(amount, 2.5);
         }
 
         #[gpui::test]
