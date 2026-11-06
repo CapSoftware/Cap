@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import {
 	Button,
 	buttonVariants,
@@ -10,7 +9,8 @@ import {
 } from "@cap/ui";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
+import { usePublicEnv } from "@/utils/public-env";
 
 const URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>]+/gi;
 
@@ -30,17 +30,20 @@ function hostnameOf(value: string): string | null {
 	}
 }
 
-const TRUSTED_HOSTS: ReadonlySet<string> = (() => {
+function trustedHostsFor(webUrl: string): ReadonlySet<string> {
 	const hosts = new Set(CAP_HOSTS);
-	const webHost = hostnameOf(buildEnv.NEXT_PUBLIC_WEB_URL);
+	const webHost = hostnameOf(webUrl);
 	if (webHost) hosts.add(webHost);
 	return hosts;
-})();
+}
 
-function isTrustedHref(href: string): boolean {
+function isTrustedHref(
+	href: string,
+	trustedHosts: ReadonlySet<string>,
+): boolean {
 	const host = hostnameOf(href);
 	if (!host) return false;
-	for (const trusted of TRUSTED_HOSTS) {
+	for (const trusted of trustedHosts) {
 		if (host === trusted || host.endsWith(`.${trusted}`)) return true;
 	}
 	return false;
@@ -176,6 +179,9 @@ export function LinkifiedText({
 	text: string;
 	linkClassName?: string;
 }) {
+	const { webUrl } = usePublicEnv();
+	const trustedHosts = useMemo(() => trustedHostsFor(webUrl), [webUrl]);
+
 	if (!text) return null;
 
 	const nodes: ReactNode[] = [];
@@ -191,7 +197,7 @@ export function LinkifiedText({
 
 		if (start > lastIndex) nodes.push(text.slice(lastIndex, start));
 
-		if (href && isTrustedHref(href)) {
+		if (href && isTrustedHref(href, trustedHosts)) {
 			nodes.push(
 				<a
 					key={`lt-${start}`}

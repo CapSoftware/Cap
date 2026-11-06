@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { signOut } from "next-auth/react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -14,6 +13,7 @@ import {
 	PaperState,
 	paperStateStyles as styles,
 } from "@/components/paper-state/PaperState";
+import { usePublicEnv } from "@/utils/public-env";
 
 const accessUrls = (videoId: Video.VideoId) => {
 	const next = encodeURIComponent(`/s/${videoId}`);
@@ -36,13 +36,14 @@ function SwitchAccountButton({ loginUrl }: { loginUrl: string }) {
 }
 
 export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
+	const { webUrl } = usePublicEnv();
 	const user = useCurrentUser();
 	const urls = accessUrls(videoId);
 
 	if (user) {
 		return (
 			<PaperState
-				homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+				homeHref={webUrl}
 				doodle={<LockDoodle />}
 				title="This video is private"
 				lede={
@@ -57,7 +58,7 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 					<SwitchAccountButton loginUrl={urls.login} />
 					<a
 						className={`${styles.cta} ${styles.ghost}`}
-						href={`${buildEnv.NEXT_PUBLIC_WEB_URL}/dashboard`}
+						href={`${webUrl}/dashboard`}
 					>
 						Go to my Caps
 					</a>
@@ -68,7 +69,7 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 
 	return (
 		<PaperState
-			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+			homeHref={webUrl}
 			doodle={<LockDoodle />}
 			title="This video is private"
 			lede="Only people the owner invited can watch it. If that's you, sign in with the email address that was invited."
@@ -86,9 +87,11 @@ export function PrivateVideoState({ videoId }: { videoId: Video.VideoId }) {
 }
 
 export function SignInRequiredState({ videoId }: { videoId: Video.VideoId }) {
+	const { webUrl } = usePublicEnv();
+
 	return (
 		<PaperState
-			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+			homeHref={webUrl}
 			doodle={<KeyDoodle />}
 			title="Sign in to watch"
 			lede="The owner only shares this video with approved email addresses. Sign in with yours to start watching."
@@ -103,11 +106,12 @@ export function SignInRequiredState({ videoId }: { videoId: Video.VideoId }) {
 }
 
 export function AccessRestrictedState({ videoId }: { videoId: Video.VideoId }) {
+	const { webUrl } = usePublicEnv();
 	const user = useCurrentUser();
 
 	return (
 		<PaperState
-			homeHref={buildEnv.NEXT_PUBLIC_WEB_URL}
+			homeHref={webUrl}
 			doodle={<EnvelopeDoodle />}
 			title="This video is restricted"
 			lede={
