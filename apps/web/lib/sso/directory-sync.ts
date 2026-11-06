@@ -359,7 +359,7 @@ async function deprovisionDirectoryUser(
 
 async function reconcileDirectory(
 	organizationId: Organisation.OrganisationId,
-	removalsApproved: boolean,
+	approvedRemovals: number,
 	deadline: number,
 ): Promise<DirectorySyncResult> {
 	const [record] = await db()
@@ -442,18 +442,11 @@ async function reconcileDirectory(
 		}
 	}
 
-	const [links, members] = await Promise.all([
-		db()
-			.select()
-			.from(directoryUsers)
-			.where(eq(directoryUsers.organizationId, organizationId)),
-		db()
-			.select({ userId: organizationMembers.userId })
-			.from(organizationMembers)
-			.where(eq(organizationMembers.organizationId, organizationId)),
-	]);
+	const links = await db()
+		.select()
+		.from(directoryUsers)
+		.where(eq(directoryUsers.organizationId, organizationId));
 	const linksById = new Map(links.map((link) => [link.id, link]));
-	const memberIds = new Set(members.map((member) => member.userId));
 	const result = emptyResult("synced");
 	const provisionedUserIds = new Set<User.UserId>();
 
@@ -461,7 +454,7 @@ async function reconcileDirectory(
 		if (!remote.active) continue;
 		const link = linksById.get(remote.id);
 		const email = remote.email;
-		if (link?.active && memberIds.has(link.userId)) {
+		if (link?.active) {
 			if (email && link.email !== email) {
 				await db()
 					.update(directoryUsers)
@@ -517,7 +510,7 @@ async function reconcileDirectory(
 	if (
 		leavingUserIds.size >= MASS_REMOVAL_MIN &&
 		leavingUserIds.size > managedUserIds.size * MASS_REMOVAL_RATIO &&
-		!removalsApproved
+		leavingUserIds.size > approvedRemovals
 	) {
 		result.held = leavingUserIds.size;
 		console.error("Directory sync held a large removal", {
@@ -566,20 +559,22 @@ export async function syncOrganizationDirectory(
 	const [state] = await db()
 		.select({
 			removalsApprovedAt: organizationDirectorySync.removalsApprovedAt,
+			heldRemovals: organizationDirectorySync.heldRemovals,
 		})
 		.from(organizationDirectorySync)
 		.where(eq(organizationDirectorySync.organizationId, organizationId))
 		.limit(1);
-	const removalsApproved = Boolean(
+	const approvedRemovals =
 		state?.removalsApprovedAt &&
-			state.removalsApprovedAt.getTime() >
-				startedAt.getTime() - REMOVAL_APPROVAL_MS,
-	);
+		state.removalsApprovedAt.getTime() >
+			startedAt.getTime() - REMOVAL_APPROVAL_MS
+			? state.heldRemovals
+			: 0;
 
 	try {
 		const result = await reconcileDirectory(
 			organizationId,
-			removalsApproved,
+			approvedRemovals,
 			deadline,
 		);
 		await db()
