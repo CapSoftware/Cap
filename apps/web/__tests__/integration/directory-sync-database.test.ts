@@ -431,6 +431,51 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(cleared?.removalsApprovedAt).toBeNull();
 		});
 
+		it("counts only members who would leave toward a held removal", async () => {
+			const org = await makeOrganization();
+			const second = `directory_${id()}`;
+			fixture.directories.set(org.workosOrganizationId, [
+				{
+					id: org.directoryId,
+					organizationId: org.workosOrganizationId,
+					state: "active",
+					name: "Okta",
+				},
+				{
+					id: second,
+					organizationId: org.workosOrganizationId,
+					state: "active",
+					name: "Entra ID",
+				},
+			]);
+			const emails = Array.from(
+				{ length: 12 },
+				(_, index) => `shared${index}@${org.domain}`,
+			);
+			fixture.users.set(
+				org.directoryId,
+				emails.map((email) => directoryUser(org.directoryId, email)),
+			);
+			fixture.users.set(
+				second,
+				emails.map((email) => directoryUser(second, email)),
+			);
+			await syncOrganizationDirectory(org.organizationId, later());
+			expect((await memberIds(org.organizationId)).size).toBe(13);
+
+			fixture.users.set(org.directoryId, []);
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 0, removed: 12 });
+			expect((await memberIds(org.organizationId)).size).toBe(13);
+
+			fixture.users.set(second, []);
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 12, removed: 0 });
+			expect((await memberIds(org.organizationId)).size).toBe(13);
+		});
+
 		it("never removes anyone when the directory disconnects or SSO billing lapses", async () => {
 			const org = await makeOrganization();
 			fixture.users.set(org.directoryId, [
