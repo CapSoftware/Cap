@@ -36,7 +36,13 @@ import { Effect, Option } from "effect";
 import { FolderInput } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type PropsWithChildren, useEffect, useRef, useState } from "react";
+import {
+	memo,
+	type PropsWithChildren,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -123,11 +129,11 @@ export interface CapCardProps extends PropsWithChildren {
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
-	onDelete?: () => void;
+	onDelete?: (capId: Video.VideoId) => void;
 	userId?: string;
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
-	onSelectToggle?: () => void;
+	onSelectToggle?: (capId: Video.VideoId) => void;
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
 	isDeleting?: boolean;
@@ -139,7 +145,7 @@ export interface CapCardProps extends PropsWithChildren {
 	currentFolderId?: Folder.FolderId | null;
 }
 
-export const CapCard = ({
+export const CapCard = memo(function CapCard({
 	cap,
 	analytics,
 	children,
@@ -156,7 +162,7 @@ export const CapCard = ({
 	moveLocation,
 	moveRootLabel,
 	currentFolderId = null,
-}: CapCardProps) => {
+}: CapCardProps) {
 	const { activeOrganization } = useDashboardContext();
 	const customDomain = activeOrganization?.organization.customDomain;
 	const domainVerified = activeOrganization?.organization.domainVerified;
@@ -210,7 +216,7 @@ export const CapCard = ({
 
 	const deleteMutation = useMutation({
 		mutationFn: async () => {
-			await onDelete?.();
+			await onDelete?.(cap.id);
 		},
 		onError: (error) => {
 			console.error("Error deleting cap:", error);
@@ -360,7 +366,7 @@ export const CapCard = ({
 		e.preventDefault();
 		e.stopPropagation();
 		if (onSelectToggle) {
-			onSelectToggle();
+			onSelectToggle(cap.id);
 		}
 	};
 
@@ -874,4 +880,4 @@ export const CapCard = ({
 			</fieldset>
 		</>
 	);
-};
+});

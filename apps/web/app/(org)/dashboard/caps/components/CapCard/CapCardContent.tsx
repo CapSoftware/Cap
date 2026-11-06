@@ -2,7 +2,7 @@ import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -23,14 +23,14 @@ interface CapContentProps {
 	setIsSharingDialogOpen: (isSharingDialogOpen: boolean) => void;
 }
 
-export const CapCardContent: React.FC<CapContentProps> = ({
+export const CapCardContent = memo(function CapCardContent({
 	cap,
 	userId,
 	sharedCapCard = false,
 	hideSharedStatus,
 	isOwner,
 	setIsSharingDialogOpen,
-}) => {
+}: CapContentProps) {
 	const router = useRouter();
 	const effectiveDate = cap.metadata?.customCreatedAt
 		? new Date(cap.metadata.customCreatedAt)
@@ -237,4 +237,4 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 			</div>
 		</div>
 	);
-};
+});
