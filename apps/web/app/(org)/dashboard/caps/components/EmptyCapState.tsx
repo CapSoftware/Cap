@@ -8,7 +8,9 @@ import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useRive } from "@/lib/rive";
 import { useTheme } from "../../Contexts";
+import { useUploadingStatus } from "../UploadingContext";
 import { UploadCapButton } from "./UploadCapButton";
+import { UploadPlaceholderCard } from "./UploadPlaceholderCard";
 import { WebRecorderDialog } from "./web-recorder-dialog/web-recorder-dialog";
 
 interface EmptyCapStateProps {
@@ -17,6 +19,7 @@ interface EmptyCapStateProps {
 
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 	const { theme } = useTheme();
+	const [isUploading] = useUploadingStatus();
 	const { isChromeBrowser, isInstalled } = useCapChromeExtension();
 	const showChromeButton = isChromeBrowser || isInstalled;
 	const { RiveComponent: EmptyCap } = useRive({
@@ -28,7 +31,14 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 		<div className="flex flex-col flex-1 justify-center items-center w-full h-full">
 			<div className="flex flex-col gap-3 justify-center items-center h-full text-center">
 				<div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
-					<EmptyCap key={`${theme}empty-cap`} className="h-[150px] w-[400px]" />
+					{isUploading ? (
+						<UploadPlaceholderCard />
+					) : (
+						<EmptyCap
+							key={`${theme}empty-cap`}
+							className="h-[150px] w-[400px]"
+						/>
+					)}
 				</div>
 				<div className="flex flex-col items-center px-5">
 					<p className="mb-1 text-xl font-semibold text-gray-12">
