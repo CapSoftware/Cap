@@ -1,6 +1,12 @@
 import { db } from "@cap/database";
 import { organizationSso, organizations, users } from "@cap/database/schema";
-import { STRIPE_AVAILABLE, STRIPE_SCIM_PRICE_ID, stripe } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import {
+	isSsoSubscription,
+	STRIPE_AVAILABLE,
+	STRIPE_SCIM_PRICE_ID,
+	stripe,
+} from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
@@ -10,6 +16,11 @@ export async function hasScimSubscription(
 	organizationId: Organisation.OrganisationId,
 ) {
 	if (!STRIPE_AVAILABLE()) return false;
+	const priceIds = new Set(
+		[STRIPE_SCIM_PRICE_ID, serverEnv().STRIPE_SCIM_PRICE_ID].filter(
+			(priceId): priceId is string => Boolean(priceId),
+		),
+	);
 	const [record] = await db()
 		.select({
 			ownerCustomerId: users.stripeCustomerId,
@@ -36,9 +47,8 @@ export async function hasScimSubscription(
 			if (
 				ENTITLED_STATUSES.has(subscription.status) &&
 				subscription.metadata?.organizationId === organizationId &&
-				subscription.items.data.some(
-					(item) => item.price.id === STRIPE_SCIM_PRICE_ID,
-				)
+				!isSsoSubscription(subscription) &&
+				subscription.items.data.some((item) => priceIds.has(item.price.id))
 			) {
 				return true;
 			}

@@ -205,6 +205,7 @@ function createServerEnv() {
 					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
 				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
+			STRIPE_SCIM_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),
