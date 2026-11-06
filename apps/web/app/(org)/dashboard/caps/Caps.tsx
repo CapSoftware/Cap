@@ -94,6 +94,14 @@ export const Caps = ({
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const moveLocation = { type: "personal" } as const;
+	const selectionPageRef = useRef(page);
+
+	useEffect(() => {
+		if (selectionPageRef.current !== page) {
+			selectionPageRef.current = page;
+			setSelectedCaps([]);
+		}
+	}, [page]);
 
 	const anyCapSelected = selectedCaps.length > 0;
 
