@@ -7,7 +7,17 @@ import { comments, notifications, users, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { Comment, User, Video } from "@cap/web-domain";
-import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import {
+	and,
+	DrizzleQueryError,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	ne,
+	or,
+	sql,
+} from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
 
@@ -39,6 +49,7 @@ const ANON_NOTIF_WINDOW_MS = 5 * 60 * 1000;
 const ANON_NOTIF_MAX_PER_VIDEO = 50;
 
 const isDuplicateEntryError = (error: unknown) => {
+	if (error instanceof DrizzleQueryError) error = error.cause;
 	if (!error || typeof error !== "object") return false;
 	const duplicateEntryError = error as {
 		code?: string;
@@ -151,14 +162,17 @@ export async function createNotification(
 
 			const notificationId = nanoId();
 
-			await db().insert(notifications).values({
-				id: notificationId,
-				orgId: recipientUser.activeOrganizationId,
-				recipientId,
-				type,
-				data,
-				videoId: notification.videoId,
-			});
+			await db()
+				.insert(notifications)
+				.values({
+					id: notificationId,
+					orgId: recipientUser.activeOrganizationId,
+					recipientId,
+					type,
+					data,
+					videoId: notification.videoId,
+					dedupKey: `reply:${recipientId}:${notification.comment.id}`,
+				});
 
 			return { success: true, notificationId };
 		}
@@ -226,14 +240,20 @@ export async function createNotification(
 			return;
 		}
 
-		await db().insert(notifications).values({
-			id: notificationId,
-			orgId: videoResult.activeOrganizationId,
-			recipientId: videoResult.ownerId,
-			type,
-			data,
-			videoId: notification.videoId,
-		});
+		await db()
+			.insert(notifications)
+			.values({
+				id: notificationId,
+				orgId: videoResult.activeOrganizationId,
+				recipientId: videoResult.ownerId,
+				type,
+				data,
+				videoId: notification.videoId,
+				dedupKey:
+					type === "view"
+						? `view:${videoResult.ownerId}:${notification.videoId}:${notification.authorId}`
+						: `${type}:${videoResult.ownerId}:${notification.comment.id}`,
+			});
 
 		if (type === "comment") {
 			await sendNewCommentEmail({
@@ -246,6 +266,7 @@ export async function createNotification(
 
 		return { success: true, notificationId };
 	} catch (error) {
+		if (isDuplicateEntryError(error)) return;
 		console.error("Error creating notification:", error);
 		throw error;
 	}
