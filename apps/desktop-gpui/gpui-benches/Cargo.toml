@@ -1,0 +1,22 @@
+# Frame benchmarks for Cap's GPUI fork. This crate is not part of the
+# desktop-gpui workspace: `scripts/gpui-bench.sh` copies it into the prepared
+# zed checkout (`crates/gpui_cap_benches`) and runs it there, so it builds
+# against exactly the patched gpui the app ships and against Zed's lockfile.
+[package]
+name = "gpui_cap_benches"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+criterion.workspace = true
+gpui = { workspace = true, features = ["bench"] }
+gpui_platform = { workspace = true, features = ["font-kit", "test-support", "wayland", "x11"] }
+
+[[bench]]
+name = "frame"
+harness = false
