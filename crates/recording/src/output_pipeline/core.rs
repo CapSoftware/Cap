@@ -3275,6 +3275,11 @@ async fn finish_build(
         );
     }
 
+    #[cfg(debug_assertions)]
+    if has_video {
+        inject_debug_pipeline_failure(&mut setup_ctx, stop_token.clone());
+    }
+
     let scope = PipelineBuildScope::current();
     let completion = scope.as_ref().map(PipelineBuildScope::task_completion);
     let drain_owned_tasks = scope.is_some();
@@ -3390,6 +3395,28 @@ fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool
             .downcast_ref::<super::oop_muxer::MuxerSubprocessFinishError>()
             .is_some_and(|error| !error.child_reaped())
     })
+}
+
+/// Debug builds only: `CAP_RECORDING_FAIL_PIPELINE_AFTER_MS=<ms>` fails every
+/// video pipeline that runs that long, the way a failed encoder or capture
+/// task would. The real-app tests use it to drive Stop after a failure.
+#[cfg(debug_assertions)]
+fn inject_debug_pipeline_failure(setup_ctx: &mut SetupCtx, stop_token: CancellationToken) {
+    let Some(after) = std::env::var("CAP_RECORDING_FAIL_PIPELINE_AFTER_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(Duration::from_millis)
+    else {
+        return;
+    };
+    setup_ctx
+        .tasks()
+        .spawn("debug-injected-failure", async move {
+            tokio::select! {
+                _ = stop_token.cancelled() => Ok(()),
+                _ = tokio::time::sleep(after) => Err(anyhow!("Injected pipeline failure")),
+            }
+        });
 }
 
 async fn finish_muxer_owned(
