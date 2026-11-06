@@ -19,6 +19,9 @@ echo "recorded=${recorded:-no}" >>"$out/result.txt"
 eval "$(systemctl --user show-environment | grep -E "^(WAYLAND_DISPLAY|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|LIBGL_ALWAYS_SOFTWARE)=" | sed 's/^/export /')"
 mkdir -p "$out/cores"
 ulimit -c unlimited
+# Some hosts leave kernel.core_pattern at `core`: a file in the crashing
+# process's working directory.
+cd "$out/cores"
 echo "core limit: $(ulimit -c), pattern: $(cat /proc/sys/kernel/core_pattern)" >>"$out/actions.log"
 
 completed=0 crashed=0 other=0
@@ -40,6 +43,15 @@ for round in $(seq "$rounds"); do
   done
   if [[ $state == exited ]] && grep -aq "native crash" "$out/profile/logs/cap-gpui.log.stderr" 2>/dev/null; then
     state=crashed
+    sleep 3
+    for core in "$out"/cores/core*; do
+      [[ -f $core && $core != *.txt ]] || continue
+      DEBUGINFOD_URLS=https://debuginfod.ubuntu.com timeout 900 gdb -q -batch \
+        -iex 'set debuginfod enabled on' \
+        -ex 'info registers rip' -ex 'bt full 30' -ex 'info sharedlibrary' -ex 'thread apply all bt 40' \
+        "$CAP_BIN" "$core" >"$out/cores/round-$round.bt.txt" 2>&1
+      rm -f "$core"
+    done
   fi
   kill "$pid" 2>/dev/null
   for _ in $(seq 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
@@ -55,12 +67,4 @@ echo "completed=$completed" >>"$out/result.txt"
 echo "crashed=$crashed" >>"$out/result.txt"
 echo "other=$other" >>"$out/result.txt"
 
-for core in "$out"/cores/core.*; do
-  [[ -f $core ]] || continue
-  DEBUGINFOD_URLS=https://debuginfod.ubuntu.com gdb -q -batch \
-    -iex 'set debuginfod enabled on' \
-    -ex 'info registers rip' -ex 'bt full 30' -ex 'info sharedlibrary' -ex 'thread apply all bt 40' \
-    "$CAP_BIN" "$core" >"$core.bt.txt" 2>&1
-  rm -f "$core"
-done
 cat "$out/result.txt"

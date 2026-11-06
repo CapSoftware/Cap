@@ -16,8 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gpui: [main, perf]
-        shard: [1, 2]
+        gpui: [perf]
+        shard: [1, 2, 3, 4]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
@@ -78,7 +78,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/out/stress"
           sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
-            "$RUNNER_TEMP/out/stress" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 ROUNDS=90 || true
+            "$RUNNER_TEMP/out/stress" LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 ROUNDS=120 || true
           sudo mkdir -p "$RUNNER_TEMP/out/stress/cores"
           sudo chmod -R a+r "$RUNNER_TEMP/out/stress"
           cat "$RUNNER_TEMP/out/stress/result.txt"
