@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
+import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
 	normalizeEmailAddress,
 } from "@cap/database/auth/domain-utils";
 import {
@@ -67,6 +69,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { isCommentRateLimited } from "@/lib/comment-rate-limit";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
 	isEmailCodeSendLimited,
@@ -85,6 +88,15 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	restoreVideoToOriginalAsUser,
+	saveVideoEditsAsUser,
+	VideoEditError,
+} from "@/lib/video-edit-save";
+import {
+	areEditSpecsEquivalent,
+	createIdentityEditSpec,
+} from "@/lib/video-edits";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 
 export const dynamic = "force-dynamic";
@@ -455,6 +467,12 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 			return yield* Effect.fail(new HttpApiError.BadRequest());
 		}
 
+		if (
+			isEmailBlockedFromSignup(email, serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS)
+		) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+
 		const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 		if (!allowedDomains) return;
 
@@ -468,6 +486,19 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 		);
 
 		if (!existingUser && !isEmailAllowedForSignup(email, allowedDomains)) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+	},
+);
+
+// Runs after the per-email rate limit because it can make a DNS lookup.
+const ensureNotDisposableSignup = Effect.fn("Mobile.ensureNotDisposableSignup")(
+	function* (email: string) {
+		const disposable = yield* Effect.tryPromise({
+			try: () => isDisposableEmailSignup(email),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		if (disposable) {
 			return yield* Effect.fail(new HttpApiError.Forbidden());
 		}
 	},
@@ -527,6 +558,7 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -584,6 +616,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
@@ -2118,6 +2151,123 @@ const assertMobileVideoOwner = Effect.fn("Mobile.assertVideoOwner")(function* (
 	}
 });
 
+const MOBILE_EDIT_BUSY_UPLOAD_PHASES = new Set([
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"complete",
+	"error",
+]);
+
+// Ownership is checked before viewing rules, so another person's private or password-protected video is a 404.
+const assertMobileVideoEditor = Effect.fn("Mobile.assertVideoEditor")(
+	function* (videoId: Video.VideoId) {
+		const user = yield* CurrentUser;
+		const database = yield* Database;
+		const [owned] = yield* database.use((db) =>
+			db
+				.select({ ownerId: Db.videos.ownerId })
+				.from(Db.videos)
+				.where(eq(Db.videos.id, videoId))
+				.limit(1),
+		);
+		if (!owned || owned.ownerId !== user.id) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		yield* assertMobileVideoOwner(videoId);
+	},
+);
+
+const getCapEdit = Effect.fn("Mobile.getCapEdit")(function* (
+	videoId: Video.VideoId,
+) {
+	yield* assertMobileVideoEditor(videoId);
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({
+				duration: Db.videos.duration,
+				source: Db.videos.source,
+				isScreenshot: Db.videos.isScreenshot,
+				metadata: Db.videos.metadata,
+				uploadPhase: Db.videoUploads.phase,
+			})
+			.from(Db.videos)
+			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	const [edit] = yield* database.use((db) =>
+		db
+			.select({ editSpec: Db.videoEdits.editSpec })
+			.from(Db.videoEdits)
+			.where(eq(Db.videoEdits.videoId, videoId))
+			.limit(1),
+	);
+
+	const duration = row.duration ?? 0;
+	const editable =
+		!row.isScreenshot &&
+		(row.source.type === "desktopMP4" || row.source.type === "webMP4") &&
+		duration > 0;
+	const isPro = yield* currentUserIsPro();
+	const busy =
+		Boolean(row.metadata?.editProcessing) ||
+		(row.uploadPhase !== null &&
+			MOBILE_EDIT_BUSY_UPLOAD_PHASES.has(row.uploadPhase));
+	const status = !editable
+		? ("not_editable" as const)
+		: !isPro
+			? ("pro_required" as const)
+			: busy
+				? ("busy" as const)
+				: ("available" as const);
+	const hasEdits = edit
+		? !areEditSpecsEquivalent(
+				edit.editSpec,
+				createIdentityEditSpec(edit.editSpec.sourceDuration),
+			)
+		: false;
+	return { status, duration, hasEdits };
+});
+
+const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
+	videoId: Video.VideoId,
+	run: (user: typeof Db.users.$inferSelect) => Promise<unknown>,
+) {
+	yield* assertMobileVideoEditor(videoId);
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [userRow] = yield* database.use((db) =>
+		db.select().from(Db.users).where(eq(Db.users.id, user.id)).limit(1),
+	);
+	if (!userRow) return yield* Effect.fail(new HttpApiError.Forbidden());
+	yield* Effect.tryPromise({
+		try: () => run(userRow),
+		catch: (error) => {
+			if (!(error instanceof VideoEditError)) {
+				return new HttpApiError.InternalServerError();
+			}
+			switch (error.code) {
+				case "rate_limited":
+					return new Mobile.MobileTooManyRequests();
+				case "not_found":
+					return new HttpApiError.NotFound();
+				case "busy":
+					return new HttpApiError.Conflict();
+				case "invalid":
+				case "not_editable":
+				case "unavailable":
+					return new HttpApiError.BadRequest();
+				default:
+					return new HttpApiError.Forbidden();
+			}
+		},
+	});
+	return { success: true as const };
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -2494,6 +2644,9 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	type: "text" | "emoji";
 }) {
 	const user = yield* CurrentUser;
+	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
 	let parentCommentId = requestedParentCommentId;
 	yield* assertCanCreateFeedback(videoId);
 	const { settings } = yield* getMobileVideoRules(videoId);
@@ -3250,7 +3403,10 @@ const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
 	);
 	if (
 		!Mobile.isMobileRecordingDurationAllowed({
-			durationSeconds: input.durationSeconds,
+			durationSeconds: Mobile.mobileRecordingGateDurationSeconds({
+				durationSeconds: input.durationSeconds,
+				videoSegments,
+			}),
 			isPro: userIsPro(userRow),
 		})
 	) {
@@ -3573,6 +3729,32 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								.pipe(Effect.map(() => ({ success: true as const }))),
 						),
 					)
+					.handle("getCapEdit", ({ path, request }) =>
+						withMappedErrors(getCapEdit(path.id)).pipe(
+							withMobileVideoAccess(request, path.id),
+						),
+					)
+					.handle("saveCapEdit", ({ path, payload }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								saveVideoEditsAsUser(user, path.id, {
+									version: 1,
+									sourceDuration: payload.sourceDuration,
+									keepRanges: payload.keepRanges.map((range) => ({
+										start: range.start,
+										end: range.end,
+									})),
+								}),
+							),
+						),
+					)
+					.handle("restoreCapEdit", ({ path }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								restoreVideoToOriginalAsUser(user, path.id),
+							),
+						),
+					)
 					.handle("getPlayback", ({ path, request }) =>
 						withMappedErrors(
 							getPlayback(path.id, getMobilePublicOrigin(request)),
@@ -3714,7 +3896,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 												.where(
 													and(
 														eq(Db.notifications.type, "reply"),
-														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.parentCommentId') = ${path.id}`,
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${path.id}`,
 													),
 												);
 										}
