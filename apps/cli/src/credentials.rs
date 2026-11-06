@@ -206,10 +206,24 @@ fn agent_grants_path() -> Result<std::path::PathBuf, String> {
         .ok_or_else(|| "Could not locate the user configuration directory".to_string())
 }
 
+fn with_keyring<T: Send>(
+    operation: impl FnOnce() -> keyring::Result<T> + Send,
+) -> Result<T, String> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("cap-keyring".to_string())
+            .spawn_scoped(scope, operation)
+            .map_err(|error| error.to_string())?
+            .join()
+            .map_err(|_| "The OS credential store panicked".to_string())?
+            .map_err(|error| error.to_string())
+    })
+}
+
 fn load_agent_keyring() -> Result<StoredAgentCredential, String> {
-    let entry = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
-        .map_err(|error| error.to_string())?;
-    let value = entry.get_password().map_err(|error| error.to_string())?;
+    let value = with_keyring(|| {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)?.get_password()
+    })?;
     serde_json::from_str(&value).map_err(|error| error.to_string())
 }
 
@@ -283,10 +297,11 @@ fn write_restricted_file(_path: &std::path::Path, _bytes: &[u8]) -> Result<(), S
 }
 
 fn load_agent_access_grants() -> StoredAgentAccessGrants {
-    let keyring = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
-        .and_then(|entry| entry.get_password())
-        .ok()
-        .and_then(|value| serde_json::from_str(&value).ok());
+    let keyring = with_keyring(|| {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)?.get_password()
+    })
+    .ok()
+    .and_then(|value| serde_json::from_str(&value).ok());
     if let Some(grants) = keyring {
         return grants;
     }
@@ -333,8 +348,10 @@ pub fn store_agent_access_grant(
         },
     );
     let serialized = serde_json::to_string(&grants).map_err(|error| error.to_string())?;
-    let keyring_result = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)
-        .and_then(|entry| entry.set_password(&serialized));
+    let keyring_result = with_keyring(|| {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER)?
+            .set_password(&serialized)
+    });
     if keyring_result.is_ok() {
         let _ = std::fs::remove_file(agent_grants_path()?);
         return Ok(AgentCredentialStorage::Keyring);
@@ -361,8 +378,9 @@ pub fn store_agent(
 ) -> Result<AgentCredentialStorage, String> {
     validate_agent_server(credential.server.clone())?;
     let serialized = serde_json::to_string(credential).map_err(|error| error.to_string())?;
-    let keyring_result = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)
-        .and_then(|entry| entry.set_password(&serialized));
+    let keyring_result = with_keyring(|| {
+        keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER)?.set_password(&serialized)
+    });
     if keyring_result.is_ok() {
         let _ = std::fs::remove_file(agent_credential_path()?);
         return Ok(AgentCredentialStorage::Keyring);
@@ -419,11 +437,9 @@ pub fn resolve_agent() -> Result<AgentCredentials, String> {
 }
 
 pub fn delete_agent() -> Result<(), String> {
-    if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
-    if let Ok(entry) = keyring::Entry::new(AGENT_KEYRING_SERVICE, AGENT_GRANTS_KEYRING_USER) {
-        let _ = entry.delete_credential();
+    for user in [AGENT_KEYRING_USER, AGENT_GRANTS_KEYRING_USER] {
+        let _ =
+            with_keyring(|| keyring::Entry::new(AGENT_KEYRING_SERVICE, user)?.delete_credential());
     }
     for path in [agent_credential_path()?, agent_grants_path()?] {
         match std::fs::remove_file(path) {
@@ -752,6 +768,25 @@ pub async fn status(format: OutputFormat) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn keyring_operations_run_outside_the_async_runtime() {
+        assert_eq!(
+            with_keyring(|| {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                Ok(42)
+            }),
+            Ok(42)
+        );
+    }
+
+    #[test]
+    fn keyring_operations_preserve_backend_errors() {
+        assert_eq!(
+            with_keyring(|| Err::<(), _>(keyring::Error::NoEntry)),
+            Err(keyring::Error::NoEntry.to_string())
+        );
+    }
 
     #[test]
     fn agent_servers_require_https_except_for_loopback_development() {
