@@ -35,6 +35,30 @@ pub struct H264EncoderBuilder {
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
     crf: Option<u8>,
+    software_tuning: Option<SoftwareEncoderTuning>,
+}
+
+/// libx264 settings for an export split across several encoders running at
+/// once: each gets a share of the CPU threads, and `capped_crf` switches rate
+/// control to constant quality with the export bitrate as its ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoftwareEncoderTuning {
+    pub threads: usize,
+    pub capped_crf: Option<u8>,
+}
+
+impl SoftwareEncoderTuning {
+    fn apply(&self, codec: &Codec, options: &mut Dictionary<'static>, max_bitrate: usize) {
+        if codec.name() != "libx264" {
+            return;
+        }
+        options.set("threads", &self.threads.max(1).to_string());
+        if let Some(crf) = self.capped_crf {
+            options.set("crf", &crf.to_string());
+            options.set("maxrate", &max_bitrate.to_string());
+            options.set("bufsize", &max_bitrate.saturating_mul(2).to_string());
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,7 +111,13 @@ impl H264EncoderBuilder {
             encoder_priority_override: None,
             is_export: false,
             crf: None,
+            software_tuning: None,
         }
+    }
+
+    pub fn with_software_tuning(mut self, tuning: SoftwareEncoderTuning) -> Self {
+        self.software_tuning = Some(tuning);
+        self
     }
 
     pub fn with_preset(mut self, preset: H264Preset) -> Self {
@@ -171,8 +201,20 @@ impl H264EncoderBuilder {
 
         let mut last_error = None;
 
-        for (codec, encoder_options) in candidates {
+        for (codec, mut encoder_options) in candidates {
             let codec_name = codec.name().to_string();
+            if let Some(tuning) = &self.software_tuning {
+                tuning.apply(
+                    &codec,
+                    &mut encoder_options,
+                    get_bitrate(
+                        output_width,
+                        output_height,
+                        input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                        self.bpp,
+                    ),
+                );
+            }
 
             if is_hardware_h264(&codec_name)
                 && let Err(reason) = cached_hardware_self_test(
@@ -205,8 +247,9 @@ impl H264EncoderBuilder {
                 self.external_conversion,
                 self.crf,
             ) {
-                Ok(encoder) => {
+                Ok(mut encoder) => {
                     let is_hardware = is_hardware_h264(&codec_name);
+                    encoder.software_fallback = Some(Box::new(self.clone()));
                     let fps =
                         input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
                     if is_hardware {
@@ -305,7 +348,90 @@ impl H264EncoderBuilder {
             hw_upload,
             #[cfg(target_os = "macos")]
             videotoolbox_hw: None,
+            software_fallback: None,
+            #[cfg(test)]
+            injected_failure: None,
         })
+    }
+
+    /// Opens libx264 without an output file, for packets written through a
+    /// [`PacketSink`] as stream 0 and muxed into an output later.
+    pub fn build_software_detached(self) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (raw_width, raw_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+        let (output_width, output_height) = (ensure_even(raw_width), ensure_even(raw_height));
+        let OpenedVideoEncoder {
+            encoder,
+            converter,
+            converted_frame_pool,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            hw_upload,
+        } = self.open_software(output_width, output_height)?;
+        Ok(H264Encoder {
+            base: EncoderBase::new(0),
+            encoder,
+            converter,
+            output_format,
+            output_width,
+            output_height,
+            input_format,
+            input_width,
+            input_height,
+            converted_frame_pool,
+            hw_upload,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+            software_fallback: None,
+            #[cfg(test)]
+            injected_failure: None,
+        })
+    }
+
+    fn open_software(
+        &self,
+        output_width: u32,
+        output_height: u32,
+    ) -> Result<OpenedVideoEncoder, H264EncoderError> {
+        let input_config = self.input_config;
+        let (codec, mut encoder_options) = get_codec_and_options(
+            &input_config,
+            self.preset,
+            Some(&["libx264"]),
+            self.is_export,
+            self.crf,
+        )
+        .into_iter()
+        .next()
+        .ok_or(H264EncoderError::CodecNotFound)?;
+        if let Some(tuning) = &self.software_tuning {
+            tuning.apply(
+                &codec,
+                &mut encoder_options,
+                get_bitrate(
+                    output_width,
+                    output_height,
+                    input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+                    self.bpp,
+                ),
+            );
+        }
+        open_video_encoder(
+            codec,
+            encoder_options,
+            &input_config,
+            output_width,
+            output_height,
+            self.bpp,
+            self.external_conversion,
+            self.crf,
+        )
     }
 
     /// Builds an `h264_videotoolbox` encoder that consumes IOSurface-backed
@@ -439,6 +565,9 @@ impl H264EncoderBuilder {
             converted_frame_pool: None,
             hw_upload: HwUpload::default(),
             videotoolbox_hw: Some(Arc::new(hw_frames)),
+            software_fallback: None,
+            #[cfg(test)]
+            injected_failure: None,
         })
     }
 
@@ -902,6 +1031,17 @@ pub struct H264Encoder {
     hw_upload: HwUpload,
     #[cfg(target_os = "macos")]
     videotoolbox_hw: Option<Arc<VideoToolboxHwFrames>>,
+    software_fallback: Option<Box<H264EncoderBuilder>>,
+    #[cfg(test)]
+    injected_failure: Option<InjectedCodecFailure>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct InjectedCodecFailure {
+    frames_until_failure: usize,
+    error: ffmpeg::Error,
+    healthy_frames_between_failures: Option<usize>,
 }
 
 pub struct ConversionRequirements {
@@ -961,9 +1101,91 @@ impl H264Encoder {
     /// Whether the selected codec is a hardware encoder, which can fail at
     /// runtime after opening (a busy or reset media engine).
     pub fn is_hardware(&self) -> bool {
+        #[cfg(test)]
+        if self.injected_failure.is_some() {
+            return true;
+        }
         self.encoder
             .codec()
             .is_some_and(|codec| is_hardware_h264(codec.name()))
+    }
+
+    pub fn codec_name(&self) -> String {
+        self.encoder
+            .codec()
+            .map(|codec| codec.name().to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn can_replace_with_software(&self) -> bool {
+        self.software_fallback.is_some() && self.is_hardware()
+    }
+
+    /// Swaps a hardware encoder that stopped working mid-stream for libx264
+    /// at the same size and frame rate. The output stream and the timestamp
+    /// state stay as they are, so packets carry on the same timeline; frames
+    /// the failed encoder still held are lost. libx264 starts on an IDR frame
+    /// with its parameter sets in-band, as every encoder here writes them.
+    pub fn replace_with_software(&mut self) -> Result<(), H264EncoderError> {
+        let builder = self
+            .software_fallback
+            .take()
+            .ok_or(H264EncoderError::CodecNotFound)?;
+        let opened = builder.open_software(self.output_width, self.output_height)?;
+        self.encoder = opened.encoder;
+        self.converter = opened.converter;
+        self.converted_frame_pool = opened.converted_frame_pool;
+        self.output_format = opened.output_format;
+        self.hw_upload = opened.hw_upload;
+        #[cfg(test)]
+        {
+            self.injected_failure = None;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_codec_failure_after(
+        &mut self,
+        frames: usize,
+        error: ffmpeg::Error,
+        replacement_preset: Option<H264Preset>,
+    ) {
+        self.injected_failure = Some(InjectedCodecFailure {
+            frames_until_failure: frames,
+            error,
+            healthy_frames_between_failures: None,
+        });
+        let builder = self.software_fallback.take();
+        self.software_fallback = replacement_preset
+            .zip(builder)
+            .map(|(preset, builder)| Box::new((*builder).with_preset(preset)));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_intermittent_codec_failures(
+        &mut self,
+        healthy_frames_between_failures: usize,
+        error: ffmpeg::Error,
+        replacement_preset: Option<H264Preset>,
+    ) {
+        self.inject_codec_failure_after(healthy_frames_between_failures, error, replacement_preset);
+        if let Some(failure) = &mut self.injected_failure {
+            failure.healthy_frames_between_failures = Some(healthy_frames_between_failures);
+        }
+    }
+
+    #[cfg(test)]
+    fn injected_codec_failure(&mut self) -> Option<ffmpeg::Error> {
+        let failure = self.injected_failure.as_mut()?;
+        if failure.frames_until_failure == 0 {
+            if let Some(healthy) = failure.healthy_frames_between_failures {
+                failure.frames_until_failure = healthy;
+            }
+            return Some(failure.error);
+        }
+        failure.frames_until_failure -= 1;
+        None
     }
 
     pub fn conversion_requirements(&self) -> ConversionRequirements {
@@ -996,6 +1218,11 @@ impl H264Encoder {
         timestamp: Duration,
         output: &mut S,
     ) -> Result<(), QueueFrameError> {
+        #[cfg(test)]
+        if let Some(error) = self.injected_codec_failure() {
+            return Err(QueueFrameError::Encode(error));
+        }
+
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
@@ -1021,12 +1248,12 @@ impl H264Encoder {
         Ok(())
     }
 
-    pub fn queue_frame_reusable(
+    pub fn queue_frame_reusable<S: PacketSink + ?Sized>(
         &mut self,
         frame: &mut frame::Video,
         converted_frame: &mut Option<frame::Video>,
         timestamp: Duration,
-        output: &mut format::context::Output,
+        output: &mut S,
     ) -> Result<(), QueueFrameError> {
         self.base.update_pts(frame, timestamp, &mut self.encoder);
 
@@ -1092,6 +1319,12 @@ impl H264Encoder {
         &mut self,
         output: &mut S,
     ) -> Result<(), ffmpeg::Error> {
+        #[cfg(test)]
+        if let Some(failure) = &self.injected_failure
+            && failure.frames_until_failure == 0
+        {
+            return Err(failure.error);
+        }
         self.base.process_eof(output, &mut self.encoder)
     }
 
@@ -1378,7 +1611,7 @@ fn get_codec_and_options(
             }
             "h264_nvenc" => {
                 if is_export {
-                    options.set("preset", "p5");
+                    options.set("preset", "p4");
                     options.set("tune", "hq");
                     options.set("rc", "vbr");
                     options.set("spatial-aq", "1");

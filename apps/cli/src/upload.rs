@@ -127,7 +127,7 @@ impl UploadArgs {
             );
         }
         let (video_id, link) = if use_agent {
-            upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
+            upload_file_with_agent(&file_path, self.name.as_deref(), &meta, None)
                 .await
                 .map_err(|error| {
                     format!(
@@ -140,9 +140,16 @@ impl UploadArgs {
                     let server = creds.server.clone();
                     let http = Client::new();
                     let auth = format!("Bearer {}", creds.api_key);
-                    let video_id =
-                        create_video(&http, &server, &auth, &self.name, self.video_id, &meta)
-                            .await?;
+                    let video_id = create_video(
+                        &http,
+                        &server,
+                        &auth,
+                        &self.name,
+                        self.video_id,
+                        &meta,
+                        None,
+                    )
+                    .await?;
                     let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
                     upload_file(&http, &put_url, &file_path).await?;
                     let link = format!("{server}/s/{video_id}");
@@ -154,7 +161,7 @@ impl UploadArgs {
                             "{legacy_error} --video-id currently requires Cap Desktop login or a legacy desktop CAP_API_KEY"
                         ));
                     }
-                    upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
+                    upload_file_with_agent(&file_path, self.name.as_deref(), &meta, None)
                         .await
                         .map_err(|error| {
                             format!(
@@ -228,7 +235,11 @@ impl UploadArgs {
 
 /// Upload an existing MP4 video file and return its shareable link. Reuses the same credential
 /// resolution and signed-upload flow as `cap upload`, so automation-driven uploads behave identically.
-pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result<String, String> {
+pub async fn upload_video_path(
+    file_path: &Path,
+    name: Option<String>,
+    organization_id: Option<&str>,
+) -> Result<String, String> {
     if !is_mp4(file_path) {
         return Err(format!(
             "Automation upload only supports MP4 files; {} is not an .mp4",
@@ -238,7 +249,7 @@ pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result
 
     let meta = probe_video_meta(file_path)?;
     if prefer_agent_upload() {
-        return upload_file_with_agent(file_path, name.as_deref(), &meta)
+        return upload_file_with_agent(file_path, name.as_deref(), &meta, organization_id)
             .await
             .map(|(_, link)| link);
     }
@@ -247,12 +258,13 @@ pub async fn upload_video_path(file_path: &Path, name: Option<String>) -> Result
             let server = creds.server.clone();
             let http = Client::new();
             let auth = format!("Bearer {}", creds.api_key);
-            let video_id = create_video(&http, &server, &auth, &name, None, &meta).await?;
+            let video_id =
+                create_video(&http, &server, &auth, &name, None, &meta, organization_id).await?;
             let put_url = presign_put(&http, &server, &auth, &video_id, &meta).await?;
             upload_file(&http, &put_url, file_path).await?;
             Ok(format!("{server}/s/{video_id}"))
         }
-        Err(_) => upload_file_with_agent(file_path, name.as_deref(), &meta)
+        Err(_) => upload_file_with_agent(file_path, name.as_deref(), &meta, organization_id)
             .await
             .map(|(_, link)| link),
     }
@@ -263,6 +275,7 @@ fn agent_upload_payload(
     name: Option<&str>,
     content_length: u64,
     meta: &VideoMeta,
+    organization_id: Option<&str>,
 ) -> serde_json::Value {
     let mut payload = json!({
         "fileName": file_name,
@@ -276,6 +289,9 @@ fn agent_upload_payload(
     if let Some(name) = name {
         payload["title"] = json!(name);
     }
+    if let Some(organization_id) = organization_id {
+        payload["organizationId"] = json!(organization_id);
+    }
     payload
 }
 
@@ -283,6 +299,7 @@ async fn upload_file_with_agent(
     file_path: &Path,
     name: Option<&str>,
     meta: &VideoMeta,
+    organization_id: Option<&str>,
 ) -> Result<(String, String), String> {
     let content_length = tokio::fs::metadata(file_path)
         .await
@@ -297,7 +314,7 @@ async fn upload_file_with_agent(
         .mutate_json(
             Method::POST,
             "/uploads",
-            &agent_upload_payload(file_name, name, content_length, meta),
+            &agent_upload_payload(file_name, name, content_length, meta, organization_id),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -417,6 +434,7 @@ async fn create_video(
     name: &Option<String>,
     video_id: Option<String>,
     meta: &VideoMeta,
+    organization_id: Option<&str>,
 ) -> Result<String, String> {
     #[derive(Deserialize)]
     struct CreateResponse {
@@ -432,6 +450,9 @@ async fn create_video(
     params.push(("fps", meta.fps.to_string()));
     if let Some(name) = name {
         params.push(("name", name.clone()));
+    }
+    if let Some(organization_id) = organization_id {
+        params.push(("orgId", organization_id.to_string()));
     }
     if let Some(id) = &video_id {
         params.push(("videoId", id.clone()));
@@ -541,7 +562,7 @@ async fn upload_file(http: &Client, put_url: &str, path: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::{VideoMeta, agent_upload_payload, prefer_agent_upload_sources};
+    use super::{VideoMeta, agent_upload_payload, create_video, prefer_agent_upload_sources};
     use crate::credentials::{AgentCredentialSource, CredentialSource};
 
     #[test]
@@ -553,11 +574,94 @@ mod tests {
             fps: 30.0,
         };
         for name in [None, Some("Demo"), Some("")] {
-            let payload = agent_upload_payload("demo.mp4", name, 1024, &meta);
+            let payload = agent_upload_payload("demo.mp4", name, 1024, &meta, None);
             match name {
                 Some(name) => assert_eq!(payload["title"], name),
                 None => assert!(payload.get("title").is_none()),
             }
+        }
+    }
+
+    #[test]
+    fn agent_upload_payload_preserves_the_requested_organization() {
+        let meta = VideoMeta {
+            duration_in_secs: 1.0,
+            width: 640,
+            height: 360,
+            fps: 30.0,
+        };
+        for organization_id in [None, Some("target-org")] {
+            let payload = agent_upload_payload("demo.mp4", None, 1024, &meta, organization_id);
+            assert_eq!(
+                payload
+                    .get("organizationId")
+                    .and_then(serde_json::Value::as_str),
+                organization_id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_video_creation_preserves_the_requested_organization() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let meta = VideoMeta {
+            duration_in_secs: 1.0,
+            width: 640,
+            height: 360,
+            fps: 30.0,
+        };
+        for organization_id in [None, Some("target-org")] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let body = r#"{"id":"video_1"}"#;
+                stream.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ).as_bytes()).await.unwrap();
+                String::from_utf8(request).unwrap()
+            });
+
+            let id = create_video(
+                &reqwest::Client::new(),
+                &format!("http://{address}"),
+                "Bearer test-key",
+                &None,
+                None,
+                &meta,
+                organization_id,
+            )
+            .await
+            .unwrap();
+            assert_eq!(id, "video_1");
+            let request = server.await.unwrap();
+            let target = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let url = url::Url::parse(&format!("http://{address}{target}")).unwrap();
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "orgId")
+                    .map(|(_, value)| value.into_owned())
+                    .as_deref(),
+                organization_id
+            );
         }
     }
 

@@ -39,6 +39,9 @@ export function useCapRecorder(options: RecorderOptions) {
 			systemAudio,
 		});
 		recorderRef.current = recorder;
+		setPhase(recorder.phase);
+		setVideoId(recorder.videoId);
+		setDurationMs(recorder.durationMs);
 
 		const unsubPhase = recorder.on("phasechange", (e) => {
 			setPhase(e.phase);

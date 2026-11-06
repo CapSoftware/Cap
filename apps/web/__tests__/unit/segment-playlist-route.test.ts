@@ -117,6 +117,10 @@ vi.mock("@/lib/server", async () => {
 	};
 });
 
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: async () => false,
+}));
+
 import { GET } from "@/app/api/playlist/route";
 
 const request = (type = "segments-status", suffix = "&requireComplete=1") =>

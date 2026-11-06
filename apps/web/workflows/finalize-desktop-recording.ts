@@ -655,6 +655,11 @@ async function dispatchDesktopRecordingJob(
 	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) {
 		throw new Error("Recording content verification is not configured");
 	}
+	// Listing the runs decoded during the recording needs nothing below, so it overlaps the inventory read.
+	const preverifiedRunUrls =
+		current.source.kind === "mp4"
+			? Promise.resolve([])
+			: buildPreverifiedRunUrls(video);
 	const urls = await buildDesktopRecordingSourceUrls(
 		video,
 		current.source,
@@ -743,9 +748,9 @@ async function dispatchDesktopRecordingJob(
 			);
 		}
 		path = "/video/mux-segments";
-		const [output, preverifiedRunUrls] = await Promise.all([
+		const [output, runUrls] = await Promise.all([
 			buildDesktopSegmentsOutput({ video, attempt, sourceBytes }),
-			buildPreverifiedRunUrls(video),
+			preverifiedRunUrls,
 		]);
 		body = {
 			audioLevels: true,
@@ -753,7 +758,7 @@ async function dispatchDesktopRecordingJob(
 			...urls,
 			...output,
 			manifestSha256: current.source.manifestSha256,
-			...(preverifiedRunUrls.length > 0 ? { preverifiedRunUrls } : {}),
+			...(runUrls.length > 0 ? { preverifiedRunUrls: runUrls } : {}),
 		};
 	}
 	try {

@@ -13,7 +13,6 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY vendor ./vendor
 COPY apps/cli ./apps/cli
-COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 # The hot loops run on the GPU (NVDEC, Vulkan compositing, NVENC); fat LTO
 # costs minutes per build for no measurable export speed.
 ENV CARGO_PROFILE_RELEASE_LTO=false \

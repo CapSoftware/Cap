@@ -540,14 +540,20 @@ impl DeepLinkAction {
             DeepLinkAction::OpenEditor { project_path } => {
                 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingStatus};
 
+                if crate::library::is_screenshot_bundle(&project_path) {
+                    cx.defer(move |cx| app_windows::open_screenshot_editor(project_path, cx));
+                    return Ok(());
+                }
+
                 let meta =
                     RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
                 match &meta.inner {
                     RecordingMetaInner::Studio(studio) => {
-                        let status = studio.status();
-                        if let StudioRecordingStatus::Failed { .. } = status {
-                            return Err("Unable to open failed recording".to_string());
-                        } else if let StudioRecordingStatus::InProgress = status {
+                        let recording_now = RecordingSession::active_project_dir_in(cx)
+                            .is_some_and(|active| active == project_path);
+                        if matches!(studio.status(), StudioRecordingStatus::InProgress)
+                            && recording_now
+                        {
                             return Err("Recording in progress".to_string());
                         }
                         // Deferred like `activate_recent`: `open_editor` opens
@@ -606,7 +612,9 @@ fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
             .map(|info| info.display_name().to_string())
             .unwrap_or_else(|| match &id {
                 DeviceOrModelID::DeviceID(device) => device.clone(),
-                DeviceOrModelID::ModelID(_) => "Camera".to_string(),
+                DeviceOrModelID::ModelID(_) => {
+                    crate::i18n::tr::main::device::fallback_camera().to_string()
+                }
             }),
         id,
     }

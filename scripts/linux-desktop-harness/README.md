@@ -85,7 +85,8 @@ real login activates.
 
 - `x11-camera.sh <cap-gpui> <ffmpeg lib dir> <out-dir>` records the display on
   Xvfb (X11 capture, no portal) with a camera: a v4l2loopback device that
-  ffmpeg feeds a 1280x720 test pattern. Cap waits for the Stop shortcut to start
+  ffmpeg feeds a 1280x720 test pattern, as YUYV, NV12 or MJPEG
+  (`CAMERA_FORMAT`; CI runs all three). Cap waits for the Stop shortcut to start
   and to stop, pressed with real X input (xdotool), well before its 60 s
   automatic stop. It checks the camera track is 1280x720 and as long as the
   display track, about five seconds, and fails if any result is missing. It

@@ -1,6 +1,7 @@
 use crate::RecordingStartGate;
 #[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
+use crate::markers::{MarkerSegmentClock, RecordedMarker, RecordingMarkers};
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{
     AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
@@ -346,6 +347,7 @@ pub struct ActorHandle {
     actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: screen_capture::ScreenCaptureTarget,
     done_fut: DoneFut,
+    markers: RecordingMarkers,
     // pub bounds: Bounds,
 }
 
@@ -372,6 +374,7 @@ pub struct Actor {
     // Resolved once at recording start: the display can be disconnected, or its
     // mode changed, by the time the recording stops.
     display_notch: Option<cap_project::DisplayNotch>,
+    markers: RecordingMarkers,
 }
 
 impl Actor {
@@ -582,8 +585,9 @@ impl Actor {
                 pipeline,
                 segment_start_time,
                 segment_start_instant,
-                ..
+                index,
             }) => {
+                self.markers.segment_paused(index);
                 let segment_start_instant = self
                     .segment_factory
                     .start_gate()
@@ -646,6 +650,7 @@ impl Actor {
         };
 
         self.update_diagnostic_segment_count();
+        self.markers.stopped();
         let recording = stop_recording(
             self.recording_dir.clone(),
             std::mem::take(&mut self.segments),
@@ -653,6 +658,7 @@ impl Actor {
             self.segment_factory.fragmented,
             self.display_notch,
             known_failure,
+            self.markers.snapshot(),
         )
         .await;
         let recording = match recording {
@@ -716,6 +722,7 @@ impl Message<Pause> for Actor {
                 index,
                 ..
             }) => {
+                self.markers.segment_paused(index);
                 if let Some(diagnostic) = &mut self.diagnostic {
                     diagnostic.stage("pausing");
                 }
@@ -899,6 +906,11 @@ impl Message<ResumeFinished> for Actor {
                 {
                     let index = *next_index;
                     self.segment_factory.commit_next(&mut pipeline);
+                    self.markers.segment_started(
+                        index,
+                        pipeline.start_time,
+                        pipeline.start_gate.clone(),
+                    );
                     self.state = Some(ActorState::Recording {
                         pipeline,
                         index,
@@ -1100,6 +1112,11 @@ impl Message<Resume> for Actor {
                 }
                 let new_segment_start_time = current_time_f64();
 
+                self.markers.segment_started(
+                    next_index,
+                    pipeline.start_time,
+                    pipeline.start_gate.clone(),
+                );
                 self.state = Some(ActorState::Recording {
                     pipeline,
                     index: next_index,
@@ -1124,6 +1141,7 @@ impl Message<Cancel> for Actor {
         if let Some(diagnostic) = &mut self.diagnostic {
             diagnostic.stage("cancelling");
         }
+        self.markers.stopped();
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
         if let Some(failure) = self.terminal_stop_failure.as_ref() {
@@ -2073,6 +2091,15 @@ impl ActorHandle {
         self.done_fut.clone()
     }
 
+    /// Marks the instant `at` in the recording; see [`RecordingMarkers::add`].
+    pub fn add_marker(&self, at: Instant) -> Option<usize> {
+        self.markers.add(at)
+    }
+
+    pub fn marker_count(&self) -> usize {
+        self.markers.count()
+    }
+
     pub async fn pause(&self) -> anyhow::Result<()> {
         #[cfg(any(target_os = "macos", windows))]
         if self.terminal_started() {
@@ -2144,6 +2171,7 @@ pub struct ActorBuilder {
     lifetime: StudioLifetimeOwner,
     output_path: PathBuf,
     capture_target: screen_capture::ScreenCaptureTarget,
+    window_only: bool,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
@@ -2168,6 +2196,7 @@ impl ActorBuilder {
             },
             output_path: output,
             capture_target,
+            window_only: false,
             system_audio: false,
             mic_feed: None,
             camera_feed: None,
@@ -2185,6 +2214,12 @@ impl ActorBuilder {
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
         self.system_audio = system_audio;
+        self
+    }
+
+    /// Record only the target window, following it, on macOS and Windows.
+    pub fn with_window_only(mut self, window_only: bool) -> Self {
+        self.window_only = window_only;
         self
     }
 
@@ -2265,6 +2300,7 @@ impl ActorBuilder {
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
+                window_only: self.window_only,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
@@ -2421,6 +2457,8 @@ async fn spawn_studio_recording_actor(
     let done_fut = completion_rx_to_done_fut(completion_rx);
 
     let segment_start_time = current_time_f64();
+    let markers = RecordingMarkers::new(Some(&recording_dir));
+    markers.segment_started(index, pipeline.start_time, pipeline.start_gate.clone());
 
     trace!("spawning recording actor");
 
@@ -2455,6 +2493,7 @@ async fn spawn_studio_recording_actor(
         segments: Vec::new(),
         completion_tx: completion_tx.clone(),
         display_notch: crate::capture_pipeline::resolve_display_notch(&base_inputs.capture_target),
+        markers: markers.clone(),
     });
 
     Ok(ActorHandle {
@@ -2467,6 +2506,7 @@ async fn spawn_studio_recording_actor(
         actor_ref,
         capture_target: base_inputs.capture_target,
         done_fut,
+        markers,
     })
 }
 
@@ -2706,6 +2746,7 @@ async fn stop_recording(
     fragmented: bool,
     display_notch: Option<cap_project::DisplayNotch>,
     known_failure: Option<String>,
+    markers: Vec<RecordedMarker>,
 ) -> anyhow::Result<CompletedRecording> {
     use cap_project::*;
 
@@ -2891,6 +2932,13 @@ async fn stop_recording(
         .iter()
         .filter_map(|segment| segment.diagnostics.clone())
         .collect();
+    let marker_clocks: Vec<_> = segment_outputs
+        .iter()
+        .map(|segment| MarkerSegmentClock {
+            latest_start: segment.meta.latest_start_time(),
+            duration: segment.duration,
+        })
+        .collect();
     let segment_metas: Vec<_> = segment_outputs
         .into_iter()
         .map(|segment| segment.meta)
@@ -2988,6 +3036,7 @@ async fn stop_recording(
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -2999,6 +3048,7 @@ async fn stop_recording(
     if let Some(clips) = clip_configs {
         project_config.clips = clips;
     }
+    project_config.markers = crate::markers::place_recorded_markers(&markers, &marker_clocks, Some);
     project_config
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
@@ -3413,6 +3463,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(any(target_os = "macos", windows))]
+            crate::window_only_target(&capture_target, base_inputs.window_only),
             #[cfg(target_os = "linux")]
             sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
@@ -3656,6 +3708,11 @@ async fn create_segment_pipeline(
                         display: cursor_display,
                         #[cfg(target_os = "linux")]
                         window: base_inputs.capture_target.window(),
+                        #[cfg(not(target_os = "linux"))]
+                        window: crate::window_only_target(
+                            &base_inputs.capture_target,
+                            base_inputs.window_only,
+                        ),
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
@@ -3754,7 +3811,10 @@ async fn changed(
     }
 }
 
-fn pipeline_epoch(start_time: Timestamps, start_gate: Option<&RecordingStartGate>) -> Timestamps {
+pub(crate) fn pipeline_epoch(
+    start_time: Timestamps,
+    start_gate: Option<&RecordingStartGate>,
+) -> Timestamps {
     start_gate
         .and_then(RecordingStartGate::armed_at)
         .filter(|armed| armed.instant() > start_time.instant())
@@ -3987,6 +4047,7 @@ mod tests {
                     root.join("content/cursors"),
                     RecordingBaseInputs {
                         capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                        window_only: false,
                         capture_system_audio: false,
                         mic_feed: None,
                         camera_feed: None,
@@ -4049,6 +4110,7 @@ mod tests {
                     segments,
                     completion_tx,
                     display_notch: None,
+                    markers: crate::markers::RecordingMarkers::new(None),
                 });
                 let result = actor.ask(Stop).await;
                 if fail_metadata {
@@ -4097,6 +4159,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4126,6 +4189,7 @@ mod tests {
             segments: Vec::new(),
             completion_tx,
             display_notch: None,
+            markers: crate::markers::RecordingMarkers::new(None),
         };
         let error = anyhow::Error::new(StudioCaptureStoppedError::new(anyhow!(
             "pause found unusable media"
@@ -4139,6 +4203,7 @@ mod tests {
             actor_ref,
             capture_target: target,
             done_fut: completion_rx_to_done_fut(completion_rx),
+            markers: crate::markers::RecordingMarkers::new(None),
         }
     }
 
@@ -4195,6 +4260,7 @@ mod tests {
             path.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: target.clone(),
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4248,6 +4314,7 @@ mod tests {
             }],
             completion_tx,
             display_notch: None,
+            markers: crate::markers::RecordingMarkers::new(None),
         });
         ActorHandle {
             recording_dir: path.to_path_buf(),
@@ -4255,6 +4322,7 @@ mod tests {
             actor_ref,
             capture_target: target,
             done_fut: completion_rx_to_done_fut(completion_rx),
+            markers: crate::markers::RecordingMarkers::new(None),
         }
     }
 
@@ -4332,6 +4400,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -4395,6 +4464,7 @@ mod tests {
                 segments,
                 completion_tx,
                 display_notch: None,
+                markers: crate::markers::RecordingMarkers::new(None),
             });
             ActorHandle {
                 recording_dir: path.to_path_buf(),
@@ -4402,6 +4472,7 @@ mod tests {
                 actor_ref,
                 capture_target: target,
                 done_fut: completion_rx_to_done_fut(completion_rx),
+                markers: crate::markers::RecordingMarkers::new(None),
             }
         }
 
@@ -4576,6 +4647,7 @@ mod tests {
                 path.join("content/cursors"),
                 RecordingBaseInputs {
                     capture_target: target.clone(),
+                    window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
@@ -4655,9 +4727,11 @@ mod tests {
                     segments: vec![prior_segment],
                     completion_tx,
                     display_notch: None,
+                    markers: crate::markers::RecordingMarkers::new(None),
                 }),
                 capture_target: target,
                 done_fut: completion_rx_to_done_fut(completion_rx),
+                markers: crate::markers::RecordingMarkers::new(None),
             }
         }
 
@@ -5747,6 +5821,7 @@ mod tests {
             false,
             None,
             None,
+            Vec::new(),
         )
         .await
         .expect("recording should stop");
@@ -5963,6 +6038,7 @@ mod tests {
             false,
             None,
             None,
+            Vec::new(),
         )
         .await;
         assert!(result.is_err());
@@ -6032,6 +6108,7 @@ mod tests {
                     fragmented,
                     None,
                     None,
+                    Vec::new(),
                 )
                 .await;
                 assert!(result.is_err());
@@ -6153,6 +6230,7 @@ mod tests {
             actor_ref: actor_ref.clone(),
             capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
             done_fut,
+            markers: crate::markers::RecordingMarkers::new(None),
         };
         let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
         assert!(!report.stop_acknowledged);
@@ -6255,6 +6333,7 @@ mod tests {
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -6287,6 +6366,7 @@ mod tests {
                 segments: Vec::new(),
                 completion_tx,
                 display_notch: None,
+                markers: crate::markers::RecordingMarkers::new(None),
             },
             screen_tx,
         )
@@ -6348,6 +6428,7 @@ mod tests {
                 actor_ref: actor_ref.clone(),
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 done_fut,
+                markers: crate::markers::RecordingMarkers::new(None),
             };
             let report = handle.stop_with_intent(first).await;
             assert!(report.accepted_intent);
@@ -6502,6 +6583,7 @@ mod windows_cancel_tests {
             PathBuf::new(),
             RecordingBaseInputs {
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -6526,6 +6608,7 @@ mod windows_cancel_tests {
             segments: Vec::new(),
             completion_tx,
             display_notch: None,
+            markers: crate::markers::RecordingMarkers::new(None),
         }
     }
 

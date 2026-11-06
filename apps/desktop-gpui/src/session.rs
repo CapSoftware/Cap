@@ -15,6 +15,7 @@ use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::app_sounds::AppSound;
+use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -434,6 +435,10 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    /// An instant recording stopped cleanly and its share link was handed
+    /// out. Taken by the phase observer, which brings the main window back
+    /// only for the "Show Cap" Instant outcome.
+    pub finished_instant: bool,
     preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
@@ -467,6 +472,10 @@ pub struct RecordingSession {
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
+    marker_count: usize,
+    /// When the last marker went in, for the controls bar's acknowledgement.
+    marker_added_at: Option<Instant>,
+    pub paused_for_sleep: bool,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -497,6 +506,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            finished_instant: false,
             preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
@@ -514,6 +524,9 @@ impl RecordingSession {
             discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
+            marker_count: 0,
+            marker_added_at: None,
+            paused_for_sleep: false,
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -588,6 +601,67 @@ impl RecordingSession {
     /// where muted spans would silently bake zeros in).
     pub fn mode(&self) -> Option<crate::recording::RecordingMode> {
         self.last_config.as_ref().map(|config| config.mode)
+    }
+
+    /// Studio recordings take markers while they capture or sit paused.
+    /// Instant ones have no editor timeline to put a marker on.
+    pub fn markers_available(&self) -> bool {
+        matches!(self.phase, Phase::Recording { .. })
+            && self.mode() == Some(recording::RecordingMode::Studio)
+            && self.active.is_some()
+            && !self.pipeline_failed
+    }
+
+    pub fn marker_count(&self) -> usize {
+        self.marker_count
+    }
+
+    pub fn marker_added_at(&self) -> Option<Instant> {
+        self.marker_added_at
+    }
+
+    /// Marks the recording at `at`, the moment the shortcut or button was
+    /// pressed. A press while paused lands on the pause point.
+    pub fn add_marker(&mut self, at: Instant, cx: &mut Context<Self>) {
+        if !self.markers_available() {
+            return;
+        }
+        let Some(count) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.add_marker(at))
+        else {
+            return;
+        };
+        self.marker_count = count;
+        self.marker_added_at = Some(Instant::now());
+        tracing::info!(
+            count,
+            paused = self.is_paused(),
+            latency_ms = at.elapsed().as_secs_f64() * 1000.0,
+            "recording marker added"
+        );
+        if crate::store::recording_marker_sound_enabled() {
+            AppSound::RecordingMarker.play();
+        }
+        cx.notify();
+    }
+
+    pub fn active_project_dir(&self) -> Option<&std::path::Path> {
+        self.active
+            .as_ref()
+            .map(|active| active.project_dir.as_path())
+    }
+
+    /// The recording being captured right now, if the session is installed.
+    pub fn active_project_dir_in(cx: &App) -> Option<std::path::PathBuf> {
+        cx.try_global::<SessionGlobal>().and_then(|session| {
+            session
+                .0
+                .read(cx)
+                .active_project_dir()
+                .map(std::path::Path::to_path_buf)
+        })
     }
 
     /// Whether the live recording actually has a microphone attached.
@@ -692,7 +766,10 @@ impl RecordingSession {
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
+        self.paused_for_sleep = false;
         self.pipeline_failed = false;
+        self.marker_count = 0;
+        self.marker_added_at = None;
         #[cfg(target_os = "linux")]
         {
             self.instant_attempt = None;
@@ -1077,8 +1154,7 @@ impl RecordingSession {
                             DiskSpaceStatus::Exhausted => {
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
-                                this.storage_notice =
-                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.storage_notice = Some(tr::dialog::storage::stopping().into());
                                 this.stop(cx);
                                 false
                             }
@@ -1257,6 +1333,7 @@ impl RecordingSession {
             self.stop_requested = false;
         }
         self.stopped_elapsed = Some(self.elapsed());
+        self.paused_for_sleep = false;
         self.pause_control.cancel_for_stop();
         self.phase = Phase::Stopping;
         self.preparing_studio_editor =
@@ -1366,7 +1443,7 @@ impl RecordingSession {
                         tracing::info!(dir = %project_dir.display(), "recording finished");
                         stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
-                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                            this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
                             this.finished_studio = Some(project_dir);
@@ -1378,17 +1455,18 @@ impl RecordingSession {
                                 let separator = if link.contains('?') { '&' } else { '?' };
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
+                            this.finished_instant = !low_storage;
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
-                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
                 }
@@ -1454,6 +1532,9 @@ impl RecordingSession {
                 if let Some(paused) = outcome.paused {
                     let was_paused = this.is_paused();
                     this.phase = Phase::Recording { paused };
+                    if !paused {
+                        this.paused_for_sleep = false;
+                    }
                     if was_paused && !paused {
                         if let Some(since) = this.paused_since.take() {
                             this.paused_accum += since.elapsed();
@@ -1477,6 +1558,49 @@ impl RecordingSession {
             .ok();
         })
         .detach();
+    }
+
+    /// Gets a running recording out of capture before the Mac sleeps: Studio
+    /// pauses, which closes its segment, and Instant stops and saves, because
+    /// an Instant pause keeps ScreenCaptureKit running. Returns whether
+    /// anything was dispatched; the sleep is held while it settles.
+    pub fn prepare_for_sleep(&mut self, cx: &mut Context<Self>) -> bool {
+        match sleep_action(
+            self.phase,
+            self.mode(),
+            self.pause_unavailable(),
+            self.pipeline_failed,
+        ) {
+            SleepAction::None => false,
+            SleepAction::StopInstant => {
+                tracing::info!("stopping the Instant recording before sleep");
+                self.stop(cx);
+                self.phase == Phase::Stopping
+            }
+            SleepAction::PauseStudio => {
+                self.toggle_pause(cx);
+                let pausing = self.pause_control.pending.is_some();
+                if pausing {
+                    self.paused_for_sleep = true;
+                    cx.notify();
+                }
+                pausing
+            }
+        }
+    }
+
+    /// Whether a control already started is still settling: a stop, or a
+    /// Studio pause or resume in flight. An Instant recording is stopped
+    /// straight away instead, because its pause keeps capture running.
+    pub fn sleep_should_wait(&self) -> bool {
+        self.phase == Phase::Stopping
+            || (self.pause_pending() && self.mode() != Some(recording::RecordingMode::Instant))
+    }
+
+    pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {
+        if self.paused_for_sleep {
+            cx.notify();
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1997,6 +2121,7 @@ impl RecordingSession {
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
+        self.paused_for_sleep = false;
         self.pipeline_failed = false;
         self.storage_monitor = None;
         self.countdown_remaining = None;
@@ -2008,6 +2133,32 @@ impl RecordingSession {
         self.paused_accum = Duration::ZERO;
         self.paused_since = None;
         cx.notify();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SleepAction {
+    None,
+    PauseStudio,
+    StopInstant,
+}
+
+fn sleep_action(
+    phase: Phase,
+    mode: Option<recording::RecordingMode>,
+    pause_unavailable: bool,
+    pipeline_failed: bool,
+) -> SleepAction {
+    match (phase, mode) {
+        (Phase::Recording { .. }, Some(recording::RecordingMode::Instant)) if !pipeline_failed => {
+            SleepAction::StopInstant
+        }
+        (Phase::Recording { paused: false }, Some(recording::RecordingMode::Studio))
+            if !pause_unavailable =>
+        {
+            SleepAction::PauseStudio
+        }
+        _ => SleepAction::None,
     }
 }
 
@@ -2636,6 +2787,54 @@ mod recording_failure_tests {
 #[cfg(test)]
 mod pause_control_tests {
     use super::*;
+
+    #[test]
+    fn sleep_pauses_running_studio_and_stops_every_live_instant_recording() {
+        use recording::RecordingMode::{Instant, Studio};
+        let running = Phase::Recording { paused: false };
+        let paused = Phase::Recording { paused: true };
+
+        assert_eq!(
+            sleep_action(running, Some(Studio), false, false),
+            SleepAction::PauseStudio
+        );
+        assert_eq!(
+            sleep_action(running, Some(Studio), true, false),
+            SleepAction::None
+        );
+        assert_eq!(
+            sleep_action(paused, Some(Studio), false, false),
+            SleepAction::None
+        );
+
+        for (phase, pause_unavailable) in [
+            (running, false),
+            (paused, false),
+            (running, true),
+            (paused, true),
+        ] {
+            assert_eq!(
+                sleep_action(phase, Some(Instant), pause_unavailable, false),
+                SleepAction::StopInstant,
+                "{phase:?} pause_unavailable={pause_unavailable}"
+            );
+        }
+        assert_eq!(
+            sleep_action(paused, Some(Instant), false, true),
+            SleepAction::None,
+            "a failed pipeline is already being stopped"
+        );
+
+        for phase in [Phase::Idle, Phase::Starting, Phase::Stopping] {
+            for mode in [Some(Studio), Some(Instant), None] {
+                assert_eq!(
+                    sleep_action(phase, mode, false, false),
+                    SleepAction::None,
+                    "{phase:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn rapid_toggle_does_not_dispatch_a_second_control() {
