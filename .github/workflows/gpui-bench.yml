@@ -114,13 +114,28 @@ jobs:
             gpui-bench-v1-${{ runner.os }}-${{ env.ZED_LOCK_HASH }}-
             gpui-bench-v1-${{ runner.os }}-
 
-      - name: Build benchmarks (base)
+      # Both sides build from the same checkout path, swapped in turn. Paths
+      # end up in symbol hashes and panic locations, so building them from two
+      # paths gives two code layouts that differ by a few percent with
+      # identical sources. Cargo judges path dependencies by mtime, so the
+      # swapped-in sources are touched to force the rebuild.
+      - name: Build benchmarks
         shell: bash
-        run: ./scripts/gpui-bench-build.sh "$ZED_BASE" "$RUNNER_TEMP/bench/base"
-
-      - name: Build benchmarks (head)
-        shell: bash
-        run: ./scripts/gpui-bench-build.sh "$ZED_HEAD" "$RUNNER_TEMP/bench/head"
+        run: |
+          set -euo pipefail
+          build() {
+            find "$ZED_HEAD/crates" -type f -name '*.rs' -exec touch {} +
+            ./scripts/gpui-bench-build.sh "$ZED_HEAD" "$RUNNER_TEMP/bench/$1"
+          }
+          mv "$ZED_HEAD" "$ZED_HEAD.head"
+          mv "$ZED_BASE" "$ZED_HEAD"
+          build base
+          mv "$ZED_HEAD" "$ZED_BASE"
+          mv "$ZED_HEAD.head" "$ZED_HEAD"
+          build head
+          if cmp -s "$RUNNER_TEMP/bench/base/frame"* "$RUNNER_TEMP/bench/head/frame"*; then
+            echo "Base and head benchmark builds are identical." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Measure
         shell: bash

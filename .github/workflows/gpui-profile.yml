@@ -60,19 +60,14 @@ jobs:
               --callgrind-out-file="$name.callgrind" --dump-instr=no \
               "$RUNNER_TEMP/bench/frame" --bench --profile-time 2 "^${bench}\$" > "$name.log" 2>&1 \
               || { tail -50 "$name.log"; exit 1; }
+            callgrind_annotate --inclusive=yes --threshold=99 "$name.callgrind" > "$name.inclusive.txt" 2>/dev/null || true
+            callgrind_annotate --inclusive=no --threshold=99 "$name.callgrind" > "$name.self.txt" 2>/dev/null || true
             {
               echo "## $bench"
               echo
-              echo '### Inclusive'
-              echo '```'
-              callgrind_annotate --inclusive=yes --threshold=99 "$name.callgrind" 2>/dev/null \
-                | sed -n '/Ir/,$p' | head -70 | cut -c1-220
-              echo '```'
-              echo
               echo '### Self'
               echo '```'
-              callgrind_annotate --inclusive=no --threshold=99 "$name.callgrind" 2>/dev/null \
-                | sed -n '/Ir/,$p' | head -60 | cut -c1-220
+              awk 'NR > 20 && NR <= 80' "$name.self.txt" | cut -c1-220
               echo '```'
             } > "$name.md"
             cat "$name.md"
@@ -84,5 +79,6 @@ jobs:
           name: gpui-profile
           path: |
             ${{ runner.temp }}/profile/*.md
+            ${{ runner.temp }}/profile/*.txt
             ${{ runner.temp }}/profile/*.callgrind
           if-no-files-found: ignore
