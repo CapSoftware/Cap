@@ -15,6 +15,13 @@ export const isSubdomain = (raw: string): boolean => {
 	return Boolean(subdomain);
 };
 
+const readVercelJson = (response: Response) => {
+	if (response.status >= 500) {
+		throw new Error(`Vercel returned HTTP ${response.status}`);
+	}
+	return response.json();
+};
+
 export const getConfigResponse = async (domain: string) => {
 	const response = await fetch(
 		`https://api.vercel.com/v6/domains/${domain.toLowerCase()}/config?teamId=${
@@ -28,7 +35,7 @@ export const getConfigResponse = async (domain: string) => {
 			},
 			cache: "no-store",
 		},
-	).then((res) => res.json());
+	).then(readVercelJson);
 	return response;
 };
 
@@ -45,7 +52,7 @@ export const getDomainResponse = async (domain: string) => {
 			},
 			cache: "no-store",
 		},
-	).then((res) => res.json());
+	).then(readVercelJson);
 	return response;
 };
 
@@ -63,7 +70,7 @@ export const verifyDomain = async (domain: string) => {
 				"Content-Type": "application/json",
 			},
 		},
-	).then((res) => res.json());
+	).then(readVercelJson);
 	return response;
 };
 
@@ -176,7 +183,7 @@ export const checkDomainStatus = async (domain: string) => {
 			verified = true;
 		} else {
 			const verificationJson = await verifyDomain(domain);
-			verified = verificationJson?.verified;
+			verified = verificationJson.verified === true;
 		}
 
 		const currentAValues = configJson.aValues || [];
