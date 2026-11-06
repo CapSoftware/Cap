@@ -20,12 +20,14 @@ interface ShareCapParams {
 	capId: Video.VideoId;
 	spaceIds: Space.SpaceIdOrOrganisationId[];
 	public?: boolean;
+	mode?: "replace" | "add";
 }
 
 export async function shareCap({
 	capId,
 	spaceIds,
 	public: isPublic,
+	mode = "replace",
 }: ShareCapParams) {
 	try {
 		const user = await getCurrentUser();
@@ -95,7 +97,7 @@ export async function shareCap({
 		const orgIdsToRemove = currentSharedOrganizations
 			.filter((s) => !organizationIds.includes(s.organizationId))
 			.map((s) => s.organizationId);
-		if (orgIdsToRemove.length > 0) {
+		if (mode === "replace" && orgIdsToRemove.length > 0) {
 			await db()
 				.delete(sharedVideos)
 				.where(
@@ -126,7 +128,7 @@ export async function shareCap({
 		const spaceIdsToRemove = currentSpaceVideos
 			.filter((s) => !spacesIds.includes(s.spaceId))
 			.map((s) => s.spaceId);
-		if (spaceIdsToRemove.length > 0) {
+		if (mode === "replace" && spaceIdsToRemove.length > 0) {
 			await db()
 				.delete(spaceVideos)
 				.where(
