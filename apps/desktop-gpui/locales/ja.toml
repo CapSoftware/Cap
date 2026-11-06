@@ -3052,6 +3052,11 @@ half = "1/2"
 label = "プレビュー"
 quarter = "1/4"
 
+[editor.window.reel]
+off = "オフ"
+title = "リールモード"
+tooltip = "スマホアプリの画面が動画にどう重なるかを確認できます。書き出しには含まれません。"
+
 [editor.window.text_menu]
 copy_style = "スタイルをコピー"
 copy_style_first = "先にスタイルをコピーしてください"

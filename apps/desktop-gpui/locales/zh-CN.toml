@@ -3052,6 +3052,11 @@ half = "1/2"
 label = "预览"
 quarter = "1/4"
 
+[editor.window.reel]
+off = "关闭"
+title = "Reel 模式"
+tooltip = "查看手机应用的界面如何覆盖在视频上。它不会出现在导出内容中。"
+
 [editor.window.text_menu]
 copy_style = "复制样式"
 copy_style_first = "请先复制一个样式"
