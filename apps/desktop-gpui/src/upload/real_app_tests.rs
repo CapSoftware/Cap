@@ -686,3 +686,74 @@ async fn real_app_start_cue_waits_for_a_slow_server_video() {
     );
     assert_eq!(mock.created().len(), 1);
 }
+
+/// The display sleeping mid-recording makes ScreenCaptureKit report that it
+/// has nothing to capture. That ends the recording with its media on disk
+/// instead of failing it and leaving Stop and Quit waiting on a capture that
+/// can never confirm cleanup. Sleeping the display disturbs whoever is at the
+/// machine, so this runs only with `CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1`.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_display_sleep_ends_the_recording_with_its_media() {
+    if std::env::var_os("CAP_GPUI_REAL_APP_DISPLAY_SLEEP").is_none() {
+        eprintln!("set CAP_GPUI_REAL_APP_DISPLAY_SLEEP=1 to sleep the display");
+        return;
+    }
+    for mode in ["instant", "studio"] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        let name = format!("display-sleep-{mode}");
+        let auto = format!("{mode}:90");
+        let app = sandbox.launch(&name, &[("CAP_GPUI_AUTO_RECORD", auto.as_str())]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the recording to start",
+            Duration::from_secs(120),
+            || sandbox.log(&name).contains("recording started"),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        assert!(
+            Command::new("pmset")
+                .arg("displaysleepnow")
+                .status()
+                .unwrap()
+                .success()
+        );
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let _ = Command::new("caffeinate").args(["-u", "-t", "2"]).status();
+        let ended = |log: &str| {
+            log.contains("Capture cleanup is unconfirmed")
+                || log.contains("recording failed to stop cleanly")
+                || log.contains("failed recording files preserved")
+                || log.contains("recording finished")
+        };
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the recording to end",
+            Duration::from_secs(60),
+            || ended(&sandbox.log(&name)),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(&name));
+        assert!(
+            log.contains("Screen capture source disappeared"),
+            "{mode}: the display sleep never reached the capture source:\n{log}"
+        );
+        assert!(
+            !log.contains("Capture cleanup is unconfirmed"),
+            "{mode}: Stop was left waiting on a dead capture:\n{log}"
+        );
+        let projects = sandbox.projects();
+        assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
+        assert!(
+            media_files(&projects[0]) > 0,
+            "{mode}: the recording lost its media"
+        );
+    }
+}
