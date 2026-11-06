@@ -25,7 +25,7 @@ app.post(
 			name: z.string().max(255).optional(),
 			userId: z.string().max(255).optional(),
 			metadata: z
-				.record(z.unknown())
+				.record(z.string(), z.unknown())
 				.optional()
 				.refine(
 					(val) => val === undefined || JSON.stringify(val).length <= 8192,
