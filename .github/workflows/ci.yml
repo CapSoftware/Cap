@@ -145,6 +145,7 @@ jobs:
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
+          __tests__/unit/proxy-frame-headers.test.ts
           __tests__/unit/referral-checkout.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts

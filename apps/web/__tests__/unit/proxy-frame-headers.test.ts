@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { proxy } from "../../proxy";
+
+const mocks = vi.hoisted(() => ({ isCap: "true" as string | undefined }));
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -11,7 +13,11 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/schema", () => ({ organizations: {} }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
+	buildEnv: {
+		get NEXT_PUBLIC_IS_CAP() {
+			return mocks.isCap;
+		},
+	},
 	serverEnv: () => ({
 		WEB_URL: "https://cap.so",
 		VERCEL_URL_HOST: undefined,
@@ -39,6 +45,10 @@ const expectNoFrameHeaders = (response: Response) => {
 };
 
 describe("proxy frame headers", () => {
+	beforeEach(() => {
+		mocks.isCap = "true";
+	});
+
 	it.each([
 		"/login",
 		"/dashboard",
@@ -92,6 +102,29 @@ describe("proxy frame headers", () => {
 	it("keeps redirecting app pages on custom domains to the main origin", async () => {
 		const response = await send("https://videos.customer.example/dashboard");
 		expect(response.headers.get("location")).toBe("https://cap.so/dashboard");
+		expectFrameHeaders(response);
+	});
+
+	it.each(["", "verified_domain=videos.customer.example"])(
+		"redirects custom-domain sign-in with cookie %s to the main origin",
+		async (cookie) => {
+			const path = "/login?next=%2Fc%2Fcollection-id%3Fpage%3D2&sso=1";
+			const response = await send(`https://videos.customer.example${path}`, {
+				cookie,
+			});
+			expect(response.status).toBe(307);
+			expect(response.headers.get("location")).toBe(`https://cap.so${path}`);
+			expectFrameHeaders(response);
+		},
+	);
+
+	it("keeps sign-in on a self-hosted deployment", async () => {
+		mocks.isCap = undefined;
+		const response = await send(
+			"https://cap.customer.example/login?next=%2Fc%2Fcollection-id",
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("location")).toBeNull();
 		expectFrameHeaders(response);
 	});
 
