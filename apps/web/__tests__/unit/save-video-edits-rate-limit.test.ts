@@ -64,6 +64,7 @@ vi.mock("@cap/web-backend", () => ({
 					bucketName: "cap-bucket",
 					headObject: headObjectMock,
 					copyObject: copyObjectMock,
+					deleteObject: () => Effect.void,
 				},
 			]),
 	},
