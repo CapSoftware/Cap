@@ -290,6 +290,11 @@ pub struct AppWindows {
     /// State the app owns, unlike a visibility probe that also reads a
     /// minimized window or a hidden app as gone.
     pub main_hidden_by_app: bool,
+    /// The user closed the main window ([`request_close_main`]) and nothing
+    /// has shown it since. Closing Settings or the last editor leaves it
+    /// closed rather than bringing back a window the user put away; the tray,
+    /// the dock and the shortcuts still reach it.
+    main_closed_by_user: bool,
     /// `hiddenForPicker` in the editor's record modal
     /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
     /// itself for an editor-owned target picker ("Record a new clip"). A
@@ -567,6 +572,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
         main_hidden_by_app: false,
+        main_closed_by_user: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
         #[cfg(target_os = "linux")]
@@ -912,7 +918,9 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
         open_onboarding(cx);
         return;
     }
-    cx.global_mut::<AppWindows>().main_hidden_by_app = false;
+    let windows = cx.global_mut::<AppWindows>();
+    windows.main_hidden_by_app = false;
+    windows.main_closed_by_user = false;
     let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
@@ -1099,6 +1107,7 @@ pub fn request_close_main(cx: &mut App) {
         })
         .ok();
     }
+    cx.global_mut::<AppWindows>().main_closed_by_user = true;
     hide_main_window(cx);
 
     // `state.is_recording_active_or_pending()`: everything but Idle.
@@ -1547,7 +1556,9 @@ fn restore_after_settings(cx: &mut App) {
     crate::hotkeys::resume(cx);
     // Not while recording: the main window is deliberately hidden then, and
     // the session observer brings it back when the recording ends.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && !cx.global::<AppWindows>().main_closed_by_user
+    {
         show_main_window(cx);
         return;
     }
@@ -2991,6 +3002,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
         main_hidden_by_app: _,
+        main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
         #[cfg(target_os = "linux")]
@@ -6449,8 +6461,13 @@ async fn drive_auto_playback(
 /// away) rather than revealing main over it. The idle gate is this port's
 /// own: during a recording the main window is deliberately hidden and the
 /// session observer restores it when the recording ends.
-fn reveal_main_after_editor_close(editors_left: usize, settings_open: bool, idle: bool) -> bool {
-    editors_left == 0 && !settings_open && idle
+fn reveal_main_after_editor_close(
+    editors_left: usize,
+    settings_open: bool,
+    idle: bool,
+    main_closed_by_user: bool,
+) -> bool {
+    editors_left == 0 && !settings_open && idle && !main_closed_by_user
 }
 
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
@@ -6552,15 +6569,22 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
+    let main_closed_by_user = windows.main_closed_by_user;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
+        main_closed_by_user,
         "editor window closed"
     );
     let session = session.read(cx);
     let capture_safe = session.phase == Phase::Idle || session.capture_stopped_for_editor();
-    if reveal_main_after_editor_close(editors_left, settings_open, capture_safe) {
+    if reveal_main_after_editor_close(
+        editors_left,
+        settings_open,
+        capture_safe,
+        main_closed_by_user,
+    ) {
         show_main_window(cx);
     } else {
         // A dock-activating window closed; the policy has to be recomputed
@@ -7383,14 +7407,16 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
+    let main_closed_by_user = windows.main_closed_by_user;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
+        main_closed_by_user,
         "screenshot editor window closed"
     );
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
+    if reveal_main_after_editor_close(editors_left, settings_open, idle, main_closed_by_user) {
         show_main_window(cx);
     } else {
         crate::menus::schedule_dock_sync(cx);
@@ -8335,14 +8361,21 @@ mod tests {
     #[test]
     fn main_window_never_returns_over_an_open_settings_window() {
         // The reported flow: last editor closes while Settings is open.
-        assert!(!reveal_main_after_editor_close(0, true, true));
+        assert!(!reveal_main_after_editor_close(0, true, true, false));
         // No Settings: the last editor closing reveals main.
-        assert!(reveal_main_after_editor_close(0, false, true));
+        assert!(reveal_main_after_editor_close(0, false, true, false));
         // Other editors still open keep main hidden either way.
-        assert!(!reveal_main_after_editor_close(1, false, true));
-        assert!(!reveal_main_after_editor_close(1, true, true));
+        assert!(!reveal_main_after_editor_close(1, false, true, false));
+        assert!(!reveal_main_after_editor_close(1, true, true, false));
         // Mid-recording the session observer owns the reveal, not this path.
-        assert!(!reveal_main_after_editor_close(0, false, false));
+        assert!(!reveal_main_after_editor_close(0, false, false, false));
+    }
+
+    /// A shortcut recording with the main window closed opens the editor
+    /// afterwards; closing that editor must not bring the main window back.
+    #[test]
+    fn main_window_closed_by_the_user_stays_closed_after_the_last_editor() {
+        assert!(!reveal_main_after_editor_close(0, false, true, true));
     }
 
     #[test]
