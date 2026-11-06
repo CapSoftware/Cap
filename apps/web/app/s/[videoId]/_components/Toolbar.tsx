@@ -132,9 +132,6 @@ export const Toolbar = ({
 					});
 				} catch (error) {
 					console.error("Error posting comment:", error);
-				} finally {
-					setCommentBoxOpen(false);
-					setComment("");
 				}
 			},
 		});

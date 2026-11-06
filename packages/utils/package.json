@@ -16,7 +16,7 @@
 	"devDependencies": {
 		"react": "^19.1.1",
 		"react-dom": "^19.1.1",
-		"react-router-dom": "^6.18.0",
+		"react-router-dom": "^6.30.6",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3"
 	},
