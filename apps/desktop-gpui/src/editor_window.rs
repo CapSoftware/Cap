@@ -533,6 +533,12 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     })
 }
 
+/// The amount drawn and generated zooms start at: the Default zoom amount
+/// setting, falling back to what its slider shows.
+fn new_zoom_amount() -> f64 {
+    f64::from(crate::store::GeneralSettings::load().new_zoom_amount())
+}
+
 fn load_recording_clicks(
     project_path: &std::path::Path,
 ) -> Vec<Vec<cap_project::CursorClickEvent>> {
@@ -6261,11 +6267,7 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let amount = f64::from(
-            crate::store::GeneralSettings::load()
-                .default_zoom_amount
-                .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
-        );
+        let amount = new_zoom_amount();
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
@@ -6324,12 +6326,7 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => edits::insert_zoom_segment(
-                        timeline,
-                        start,
-                        end,
-                        f64::from(crate::store::GeneralSettings::load().new_zoom_amount()),
-                    ),
+                    _ => edits::insert_zoom_segment(timeline, start, end, new_zoom_amount()),
                 };
                 true
             },
@@ -14245,6 +14242,31 @@ mod tests {
         .unwrap();
         assert_eq!(load_recording_clicks(&root), vec![vec![click]]);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_zooms_start_at_the_zoom_amount_settings_shows() {
+        let settings = tempfile::tempdir().unwrap();
+        let store = settings.path().join("store");
+        for (contents, expected) in [
+            (r#"{ "general_settings": {} }"#, 1.5),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": null } }"#,
+                1.5,
+            ),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+                2.5,
+            ),
+        ] {
+            std::fs::write(&store, contents).unwrap();
+            crate::store::set_test_tauri_store_path(Some(store.clone()));
+            let shown = crate::store::GeneralSettings::load().new_zoom_amount();
+            let amount = new_zoom_amount();
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(f64::from(shown), expected, "{contents}");
+            assert_eq!(amount, expected, "{contents}");
+        }
     }
 
     #[test]
