@@ -37,47 +37,36 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
-      - name: Fallback unit tests (bundled DXC intact)
+      - name: Render one frame on FXC and on DXC with wgpu logs
         shell: bash
         run: |
-          cargo test --locked -p cap-rendering --lib dx12_compiler_fallback_tests -- --nocapture 2>&1 | tee unit.txt
-          echo "----- summary -----"
-          grep -h "device created on FXC\|dx12 init error\|no bundled DXC\|test result\|^test " unit.txt
-
-      - name: Whole cap-rendering suite with an unloadable bundled DXC (every GPU test on FXC)
-        shell: bash
-        env:
-          RUST_BACKTRACE: "0"
-        run: |
-          cargo test --locked -p cap-rendering --no-run
+          cargo test --locked -p cap-rendering --test fxc_debug --no-run
+          set +e
           printf '' > target/debug/deps/dxcompiler.dll
           printf '' > target/debug/deps/dxil.dll
-          ls -la target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
-          set +e
-          cargo test --locked --no-fail-fast -p cap-rendering -- --test-threads=1 --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: --skip loadable_bundled_dxc_is_kept > fxc-suite.txt 2>&1
-          echo "exit=$?"
-          set -e
-          echo "----- summary -----"
-          grep -h "test result\|FAILED\|panicked\|device is lost\|Device lost\|DEVICE_REMOVED\|removed\|Running " fxc-suite.txt | head -200
-          grep -h "test result" fxc-suite.txt | awk '{p+=$4; f+=$6} END {print "TOTAL passed", p, "failed", f}'
-
-      - name: Same suite on DXC, single-threaded (baseline)
-        if: always()
-        shell: bash
-        run: |
+          cargo test --locked -p cap-rendering --test fxc_debug imported_portrait -- --nocapture > fxc-debug.txt 2>&1
+          echo "fxc exit=$?"
           rm -f target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
-          set +e
-          cargo test --locked --no-fail-fast -p cap-rendering -- --test-threads=1 --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: > dxc-suite.txt 2>&1
-          echo "exit=$?"
+          cargo test --locked -p cap-rendering --test fxc_debug imported_portrait -- --nocapture > dxc-debug.txt 2>&1
+          echo "dxc exit=$?"
           set -e
-          echo "----- summary -----"
-          grep -h "test result\|FAILED\|panicked\|device is lost\|Running " dxc-suite.txt | head -200
-          grep -h "test result" dxc-suite.txt | awk '{p+=$4; f+=$6} END {print "TOTAL passed", p, "failed", f}'
+          for f in fxc-debug.txt dxc-debug.txt; do
+            echo "===== $f"
+            grep -a "FXC DEBUG\|ERROR\|WARN\|lost\|Lost\|removed\|failed\|D3D12\|test result\|panicked" "$f" | cut -c1-400 | head -80
+          done
+
+      - name: Display driver events
+        if: always()
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddHours(-2)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match 'Display|dxgkrnl|BasicRender|Dxgkrnl' -or $_.Id -eq 4101 } |
+            Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 400
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: suite-logs
+          name: fxc-debug-logs
           path: |
-            fxc-suite.txt
-            dxc-suite.txt
+            fxc-debug.txt
+            dxc-debug.txt
