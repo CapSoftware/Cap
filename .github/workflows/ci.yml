@@ -141,6 +141,7 @@ jobs:
           __tests__/unit/notification-read-state.test.ts
           __tests__/unit/organization-preferences-switch.test.ts
           __tests__/unit/organization-preferences-target.test.ts
+          __tests__/unit/organization-provisioning.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
