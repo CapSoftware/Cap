@@ -765,6 +765,9 @@ impl EditorWindow {
         if self.clip_segments().len() < 2 {
             return;
         }
+        // The trash button stops the press that would blur the rename input,
+        // and deleting shifts every later index under the draft.
+        self.commit_clip_rename(window, cx);
         self.edit_project("clip-delete", window, cx, move |project| {
             project
                 .timeline
@@ -3609,6 +3612,77 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[cfg(target_os = "linux")]
+    mod rename_and_delete {
+        use super::*;
+        use gpui::Render;
+
+        struct ClipsView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipsView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                ClipsView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn three_clips(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 4.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 6.0}
+                    ],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+        }
+
+        /// Deleting shifts every later clip down one index, so a rename still
+        /// bound to an index when the delete lands would commit its draft
+        /// onto a different clip. Without a loaded recording `edit_project`
+        /// applies neither edit here; what this checks is that the delete
+        /// closes the rename before it runs, through the same commit a press
+        /// on another card uses.
+        #[gpui::test]
+        fn deleting_a_clip_ends_a_live_rename_first(cx: &mut gpui::TestAppContext) {
+            for (renamed, deleted) in [(1, 0), (2, 1), (2, 2), (0, 2)] {
+                let (editor, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    three_clips(editor);
+                    editor.start_clip_rename(renamed, window, cx);
+                    assert_eq!(editor.clips.editing, Some(renamed));
+                    let input = editor.clips.rename_input.clone().unwrap();
+                    input.update(cx, |input, cx| input.set_text("Intro".to_string(), cx));
+                    editor.delete_clip(deleted, window, cx);
+                    assert_eq!(
+                        editor.clips.editing, None,
+                        "rename of clip {renamed} still live after deleting clip {deleted}"
+                    );
+                });
+            }
+        }
+    }
 
     #[test]
     fn appended_recordings_bring_their_markers_onto_the_copied_segments() {

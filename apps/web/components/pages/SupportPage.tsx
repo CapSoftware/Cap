@@ -74,9 +74,7 @@ export const SupportPage = () => {
 			<div className="wrapper wrapper-sm">
 				<div className="mx-auto max-w-[760px] pt-16 pb-24 md:pt-24 md:pb-32">
 					<div className="mb-16 text-center md:mb-20">
-						<p className="mb-4 text-sm font-medium tracking-widest uppercase text-gray-9">
-							Support
-						</p>
+						<p className="mb-4 text-sm font-medium text-gray-9">Support</p>
 						<h1 className="text-[2rem] leading-[2.5rem] md:text-[3.25rem] md:leading-[3.75rem] text-gray-12 mb-6">
 							How can we help?
 						</h1>

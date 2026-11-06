@@ -277,6 +277,9 @@ thread_local! {
 #[cfg(test)]
 thread_local! {
     static TEST_STORE_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static TEST_AFTER_AUTH_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
 }
 
 #[cfg(test)]
@@ -307,8 +310,8 @@ static STORE_UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The whole store as raw JSON.
 ///
-/// A missing file is an empty store. A file that exists but does not parse is
-/// *not*: it is returned as `None` so no write path can silently replace
+/// A missing or whitespace-only file is an empty store. Nonempty invalid JSON
+/// is returned as `None` so no write path can silently replace
 /// someone's settings with a fresh object.
 fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
     #[cfg(test)]
@@ -321,6 +324,9 @@ fn read_store(path: &std::path::Path) -> Option<Map<String, Value>> {
             return None;
         }
     };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Some(Map::new());
+    }
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(Value::Object(map)) => Some(map),
         Ok(_) => {
@@ -969,6 +975,9 @@ pub struct GeneralSettings {
     pub focus_center: bool,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
     pub post_screenshot_behaviour: PostScreenshotBehaviour,
+    /// GPUI-only: a cancelled picker leaves the main window hidden unless it
+    /// was on screen when the picker opened.
+    pub keep_main_hidden_on_cancel: bool,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -1366,6 +1375,12 @@ impl GeneralSettings {
         }
     }
 
+    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
+    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    pub fn new_zoom_amount(&self) -> f32 {
+        self.default_zoom_amount.unwrap_or(1.5)
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1402,6 +1417,7 @@ impl GeneralSettings {
             focus_center: bool_at(general, "focusCenter", false),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
+            keep_main_hidden_on_cancel: bool_at(general, "keepMainHiddenOnCancel", false),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
@@ -1682,6 +1698,7 @@ pub fn transcription_hints() -> Vec<String> {
 /// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthSnapshot {
+    pub server_url: String,
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
@@ -1707,7 +1724,20 @@ impl AuthSnapshot {
 /// `maybeProtectedHeaders` (`utils/web-api.ts:64-75`): `secret.api_key` wins
 /// over `secret.token`, and `plan.upgraded` is the Pro gate.
 pub fn auth_snapshot() -> AuthSnapshot {
-    let auth = store_section("auth");
+    let store = cached_store(&tauri_store_path()).unwrap_or_default();
+    let empty = Map::new();
+    let auth = store
+        .get("auth")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let server_url = string_at(
+        store
+            .get(GENERAL_SETTINGS)
+            .and_then(Value::as_object)
+            .unwrap_or(&empty),
+        "serverUrl",
+        DEFAULT_SERVER_URL,
+    );
     let token = auth
         .get("secret")
         .and_then(Value::as_object)
@@ -1747,7 +1777,12 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .collect()
         })
         .unwrap_or_default();
+    #[cfg(test)]
+    if let Some(after_snapshot) = TEST_AFTER_AUTH_SNAPSHOT.with(|hook| hook.take()) {
+        after_snapshot();
+    }
     AuthSnapshot {
+        server_url,
         token,
         plan_upgraded,
         plan_manual,
@@ -3013,16 +3048,39 @@ mod tests {
     /// token and every preset.
     #[test]
     fn a_corrupt_store_is_never_overwritten() {
-        let store = TempStore::new("corrupt", Some("{ this is not json"));
-        assert!(!super::set_store_setting(
-            GENERAL_SETTINGS,
-            "hideDockIcon",
-            Value::Bool(true)
-        ));
-        assert_eq!(
-            std::fs::read_to_string(&store.path).unwrap(),
-            "{ this is not json"
-        );
+        for contents in ["{ this is not json", r#"{"auth":"token""#, "null", "[]"] {
+            let store = TempStore::new("corrupt", Some(contents));
+            assert!(!super::set_store_setting(
+                GENERAL_SETTINGS,
+                "hideDockIcon",
+                Value::Bool(true)
+            ));
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+        }
+    }
+
+    #[test]
+    fn onboarding_progress_recovers_an_empty_store() {
+        for contents in ["", " \t\r\n"] {
+            let store = TempStore::new("empty-onboarding", Some(contents));
+            assert_eq!(GeneralSettings::load(), GeneralSettings::default());
+            assert!(!has_completed_startup());
+            assert!(!has_completed_onboarding());
+
+            assert!(set_has_completed_startup(true));
+            assert!(has_completed_startup());
+            assert!(set_has_completed_onboarding(true));
+            assert!(has_completed_onboarding());
+            assert_eq!(
+                store.read(),
+                serde_json::json!({
+                    "general_settings": {
+                        "hasCompletedStartup": true,
+                        "hasCompletedOnboarding": true
+                    }
+                })
+            );
+        }
     }
 
     /// Every value the page can read back has to survive the round trip, and
@@ -3060,6 +3118,7 @@ mod tests {
         assert_eq!(settings.recording_countdown, Some(5));
         assert!(!settings.custom_cursor_capture);
         assert_eq!(settings.default_zoom_amount, Some(2.5));
+        assert_eq!(settings.new_zoom_amount(), 2.5);
         assert_eq!(settings.max_fps, 120);
         assert_eq!(settings.server_url, "https://cap.example.com");
         assert_eq!(settings.excluded_windows.len(), 1);
@@ -3070,6 +3129,7 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key
