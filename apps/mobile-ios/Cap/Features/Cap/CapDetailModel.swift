@@ -76,7 +76,7 @@ final class CapDetailModel {
     var unlockError: String?
     var draft = ""
     var replyingTo: CapComment?
-    /// The moment a new comment is pinned to. Captured when composing starts so it doesn't drift.
+    /// Captured when composing starts so it doesn't drift.
     var composerTimestamp: Double?
     var highlightedCommentID: String?
     var commentOrder: CommentOrder = .oldest
@@ -104,7 +104,6 @@ final class CapDetailModel {
     private static let captionsKey = "captions.enabled"
     private static let playbackSpeedKey = "playback.speed"
 
-    /// Playback starts at 1x until the viewer picks a speed, then every Cap plays at their pick.
     private static var preferredSpeed: Float {
         guard let stored = UserDefaults.standard.object(forKey: playbackSpeedKey) as? Double else { return 1 }
         return CapViewer.nearestSpeed(to: stored)
@@ -146,7 +145,6 @@ final class CapDetailModel {
         return true
     }
 
-    /// The time new comments and reactions attach to; screenshots have no timeline.
     var feedbackTimestamp: Double? {
         guard !viewer.isScreenshot, currentTime > 0.5 else { return nil }
         return currentTime
@@ -233,7 +231,6 @@ final class CapDetailModel {
         }
     }
 
-    /// Keeps processing, transcription and AI states fresh like the share page's status polling.
     private func startPollingIfNeeded(_ detail: CapDetail) {
         let waiting = detail.cap.isProcessing || detail.transcriptionStatus == .processing || detail.viewer.isGeneratingAI
         guard waiting else {
@@ -380,7 +377,6 @@ final class CapDetailModel {
         }.map(\.id))
         if nowPlaying != nowPlayingCommentIDs { nowPlayingCommentIDs = nowPlaying }
 
-        // Reactions other people left float up as playback passes them.
         let delta = seconds - previous
         guard isPlaying, delta > 0, delta < 1.5, reactionsEnabled else { return }
         let passed = detail.comments.filter { comment in
@@ -434,7 +430,6 @@ final class CapDetailModel {
         player?.pause()
     }
 
-    /// Pauses unless the video keeps going somewhere else (Picture in Picture or fullscreen).
     func pauseForDisappear() {
         guard !isPictureInPictureActive, !isFullscreen else { return }
         player?.pause()
@@ -766,7 +761,7 @@ final class CapDetailModel {
         }
     }
 
-    /// The MP4 already loaded for playback, so the editor opens without fetching or probing it again.
+    /// Reuses the playback MP4, so the editor opens without fetching or probing it again.
     var editorSource: AVURLAsset? {
         guard playback?.kind == .mp4 else { return nil }
         return player?.currentItem?.asset as? AVURLAsset

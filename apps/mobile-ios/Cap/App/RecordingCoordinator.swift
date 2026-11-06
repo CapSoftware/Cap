@@ -4,8 +4,6 @@ import Observation
 import os
 import UIKit
 
-/// Follows every recording's upload for the whole process, including background launches that only
-/// exist to finish one, and keeps the record screen, the library and the Live Activity in step.
 @MainActor
 final class RecordingCoordinator {
     static let shared = RecordingCoordinator()
@@ -13,7 +11,6 @@ final class RecordingCoordinator {
     private static let log = Logger(subsystem: "so.cap.mobile", category: "recordings")
     private var started = false
     weak var session: SessionModel?
-    /// The camera recorder, while it's recording.
     weak var activeModel: RecordModel?
 
     func start() {
@@ -58,8 +55,7 @@ final class RecordingCoordinator {
 
     var showsHomeOnReturn: Bool { UserDefaults.standard.bool(forKey: Self.showHomeKey) }
 
-    /// A recording just stopped: the homepage shows it uploading. Cap can't come forward by itself,
-    /// so while it's away this waits for it to be back in front.
+    /// Cap can't come forward by itself, so while it's away this waits for it to be back in front.
     func showHome() {
         guard UIApplication.shared.applicationState == .active else {
             UserDefaults.standard.set(true, forKey: Self.showHomeKey)
@@ -70,7 +66,6 @@ final class RecordingCoordinator {
         NotificationCenter.default.post(name: .capShowHome, object: nil)
     }
 
-    /// A screen recording the extension finished by itself: show it at the top of the library.
     func collectFinishedScreenRecording(showHome: Bool) {
         guard let session, let entry = RecordingHandoff.take(), CapID(entry.capId) != nil else { return }
         refreshLibrary(session)
@@ -78,7 +73,6 @@ final class RecordingCoordinator {
         if showHome { self.showHome() }
     }
 
-    /// A camera recording stopped: its Cap joins the library.
     func cameraRecordingStopped() {
         if let session { refreshLibrary(session) }
     }
@@ -130,8 +124,6 @@ final class RecordingCoordinator {
     }
 }
 
-/// Recordings stopped in this session, newest first, so the record screen can say what each is
-/// doing while the next one is already recording.
 @MainActor
 @Observable
 final class RecentRecordings {
@@ -160,13 +152,10 @@ final class RecentRecordings {
     }
 
     private(set) var items: [Item] = []
-    /// The record screen shows progress itself; elsewhere a toast says the link was copied.
     @ObservationIgnored var isRecorderVisible = false
-    /// Links that arrive while still recording, kept until the recording stops.
     @ObservationIgnored private var links: [String: (capId: String, shareUrl: String)] = [:]
     @ObservationIgnored private var placeholderTimeout: Task<Void, Never>?
 
-    /// A camera recording has stopped; its last segments are uploading.
     func stopped(jobId: String, kind: Kind) {
         var item = Item(kind: kind, jobId: jobId, status: .uploading(0))
         if let link = links.removeValue(forKey: jobId) {
@@ -177,7 +166,6 @@ final class RecentRecordings {
         copyLinkIfNewest(item.id)
     }
 
-    /// The screen recording is stopping in the extension; shown until Cap takes it over.
     func savingScreen() {
         // Once per stop, however it was stopped and whichever signal arrives first.
         guard !items.contains(where: { $0.kind == .screen && ($0.status == .saving || Date.now.timeIntervalSince($0.stoppedAt) < 10) }) else { return }
@@ -234,7 +222,6 @@ final class RecentRecordings {
         items[index].status = .failed(message)
     }
 
-    /// The extension uploaded it all itself and already copied the link.
     func finishedElsewhere(capId: String, shareUrl: String) {
         guard !items.contains(where: { $0.capId == capId }) else { return }
         for index in items.indices { items[index].linkCopied = false }
@@ -263,7 +250,6 @@ final class RecentRecordings {
         if items.count > 6 { items.removeLast(items.count - 6) }
     }
 
-    /// The newest recording's link goes on the clipboard the moment it exists.
     private func copyLinkIfNewest(_ id: UUID) {
         guard items.first?.id == id, let item = items.first, !item.linkCopied, item.shareUrl != nil else { return }
         copyLink(item)

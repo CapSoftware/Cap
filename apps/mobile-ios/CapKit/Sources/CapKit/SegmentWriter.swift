@@ -2,11 +2,8 @@
 import Foundation
 import Synchronization
 
-/// Encodes video and audio into separate fragmented MP4 tracks, cut every couple of seconds, and
-/// writes each piece to disk the moment the encoder emits it so it can upload while recording continues.
-///
-/// Append from one serial queue. Timestamps are shifted so the recording starts at zero, which lets
-/// the writers start before the first frame arrives.
+/// Append from one serial queue. Timestamps are shifted to start at zero so the writers can start
+/// before the first frame arrives.
 public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Sendable {
     public struct VideoFormat: Sendable {
         public let width: Int
@@ -48,14 +45,11 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
     private var lastVideoEnd: CMTime = .zero
     private var lastVideoTime: CMTime = .invalid
     private let frameDuration: CMTime
-    /// The last frame written, held so a still screen can be carried to the moment recording stops.
+    /// Held so a still screen can be carried to the moment recording stops.
     private var lastVideoSample: CMSampleBuffer?
-    /// Where the audio written so far ends, on the recording's timeline.
     private var audioEnd: CMTime = .zero
-    /// Brings each audio source to `audioFormat`.
     private var resampler: AVAudioConverter?
     private let encoder: AudioEncoder?
-    /// Encoded audio waiting for the writer, which can be briefly busy.
     private var pendingAudio: [CMSampleBuffer] = []
     /// Audio can break on its own, for example when headphones change the microphone mid-recording.
     /// The video carries on, and the audio recorded until then is kept.
@@ -128,16 +122,12 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         }
     }
 
-    /// Seconds of video written so far.
     public var duration: Double { lastVideoEnd.seconds }
 
-    /// Audio gaps and overlaps smaller than this are timing jitter, not missing sound.
     private static let audioJitter = CMTime(value: 1, timescale: 20)
-    /// How far audio may trail the video before the missing stretch is filled with silence.
     private static let audioLag = CMTime(value: 3, timescale: 2)
 
-    /// Every source (the camera's microphone, the phone's mic or its app sound) is converted to this,
-    /// so a source can change mid-recording without breaking the track.
+    /// Every source is converted to this so it can change mid-recording without breaking the track.
     static let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
 
     public func appendVideo(_ buffer: CMSampleBuffer) {
@@ -162,8 +152,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         }
     }
 
-    /// Takes any linear PCM. Audio before the first frame is dropped so both tracks start together,
-    /// and gaps are filled with silence so the audio always covers the video.
     public func appendAudio(_ buffer: CMSampleBuffer) {
         guard !finishing, !failed.load(ordering: .relaxed), !audioBroken.load(ordering: .relaxed), audioInput != nil, offset != nil,
               let shifted = shift(buffer)
@@ -180,9 +168,7 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         appendConverted(converted, waiting: false)
     }
 
-    /// Flushes the last segments to disk and reports the recorded duration.
-    /// - Parameter stop: when recording stopped, on the samples' clock. A still screen sends no new
-    ///   frames, so the last one is held until then.
+    /// A still screen sends no new frames, so the last one is held until `stop`.
     public func finish(at stop: CMTime? = nil, _ completion: @escaping @Sendable (Result<Double, any Error>) -> Void) {
         guard !finishing else { return }
         guard !failed.load(ordering: .relaxed) else {
@@ -194,7 +180,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         if !audioUsable { audioWriter?.cancelWriting() }
         let writers = [videoWriter] + (audioUsable ? audioWriter.map { [$0] } ?? [] : [])
         guard let offset else {
-            // Stopped before a single frame arrived.
             finishing = true
             writers.forEach { $0.cancelWriting() }
             completion(.success(0))
@@ -248,8 +233,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
 
     // MARK: Audio
 
-    /// Converts to `audioFormat`. The converter is rebuilt when the source format changes,
-    /// for example when headphones connect and the microphone changes.
     private func convert(_ buffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
         guard let description = CMSampleBufferGetFormatDescription(buffer),
               let source = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
@@ -283,7 +266,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         return output
     }
 
-    /// Encodes converted audio, placed at the end of what's already written.
     @discardableResult
     private func appendConverted(_ pcm: AVAudioPCMBuffer, waiting: Bool) -> Bool {
         guard let encoder else { return false }
@@ -311,7 +293,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         }
     }
 
-    /// Fills the audio with silence up to `time`, a second at a time.
     private func appendSilence(until time: CMTime, waiting: Bool) {
         let rate = Self.audioFormat.sampleRate
         while !audioBroken.load(ordering: .relaxed) {
@@ -345,7 +326,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         return Self.retime(buffer, by: CMTimeMultiply(offset, multiplier: -1))
     }
 
-    /// Moves every sample's timestamps by `delta`. Copies the timing only; the pixel or audio data is shared.
     public static func retime(_ buffer: CMSampleBuffer, by delta: CMTime) -> CMSampleBuffer? {
         var count: CMItemCount = 0
         CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
@@ -363,7 +343,6 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
         return shifted
     }
 
-    /// A copy of a single frame shown at `time` for `duration`.
     static func retime(_ buffer: CMSampleBuffer, to time: CMTime, duration: CMTime) -> CMSampleBuffer? {
         var timing = CMSampleTimingInfo(duration: duration, presentationTimeStamp: time, decodeTimeStamp: .invalid)
         var copy: CMSampleBuffer?
@@ -403,16 +382,12 @@ public final class SegmentWriter: NSObject, AVAssetWriterDelegate, @unchecked Se
     }
 }
 
-/// Encodes the recording's audio to AAC so the encoder's start-up delay can be left out.
-///
 /// AAC encoders begin with about two packets of lead-in. Kept, they're marked discarded when the
 /// recording is processed but not in the uploaded source, and processing rejects that difference;
 /// left out, the sound lands about a millisecond late, which nobody can hear.
 final class AudioEncoder {
     let formatDescription: CMAudioFormatDescription
-    /// Packets starting at or after this are dropped; set when the recording ends.
     var cutoff: CMTime?
-    /// How much input it takes to bring every earlier sample out of the encoder.
     var delay: CMTime { CMTime(value: CMTimeValue((primingPackets + 1) * Self.framesPerPacket), timescale: timescale) }
 
     private static let framesPerPacket = 1024
@@ -451,7 +426,6 @@ final class AudioEncoder {
         timescale = CMTimeScale(input.sampleRate)
     }
 
-    /// Encodes `pcm` and returns the packets now ready, timed from zero. Nil if encoding failed.
     func encode(_ pcm: AVAudioPCMBuffer) -> [CMSampleBuffer]? {
         var ready: [CMSampleBuffer] = []
         nonisolated(unsafe) var supplied = false
@@ -483,7 +457,6 @@ final class AudioEncoder {
         }
     }
 
-    /// The packet as a sample buffer, or nil when it falls after the cutoff.
     private func packet(_ index: Int, of output: AVAudioCompressedBuffer) throws(SegmentWriter.Failure) -> CMSampleBuffer? {
         guard let descriptions = output.packetDescriptions else { throw .cantEncode }
         let start = CMTime(value: packets * Int64(Self.framesPerPacket), timescale: timescale)

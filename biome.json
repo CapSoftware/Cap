@@ -15,8 +15,7 @@
 			"!capcodec/**/*.sh",
 			"!capcodec/**/*.jsonl",
 			"!capcodec/**/*.pyc",
-			"!capcodec/capcodec.bundle",
-			"!apps/mobile-ios/**/*.xcassets"
+			"!capcodec/capcodec.bundle"
 		],
 		"ignoreUnknown": false
 	},

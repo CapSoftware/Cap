@@ -512,7 +512,7 @@ struct LinkifiedText: View {
 
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    /// Makes web links tappable. Only http(s) links become links; nothing else is interpreted.
+    /// Only http(s) links become links; nothing else is interpreted.
     static func attributed(_ text: String) -> AttributedString {
         var attributed = AttributedString(text)
         guard let detector, text.count < 20_000 else { return attributed }
@@ -623,7 +623,7 @@ struct CommentComposer: View {
     }
 }
 
-/// Shows the moment a comment is pinned to. Its own view so playback time only redraws the chip.
+/// Its own view so playback time only redraws the chip.
 private struct ComposerTimestampToggle: View {
     @Bindable var model: CapDetailModel
     let focused: Bool

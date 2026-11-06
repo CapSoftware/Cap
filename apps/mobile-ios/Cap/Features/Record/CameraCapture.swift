@@ -4,12 +4,10 @@ import Foundation
 import os
 import Synchronization
 
-/// Runs the camera and microphone, and feeds a `SegmentWriter` while recording.
 /// All capture state lives on `sessionQueue`; all sample handling on `outputQueue`.
 nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     enum Event: Sendable {
         case running
-        /// The camera was taken away mid-recording: Cap went to the background, a call came in, and so on.
         case interrupted
         case resumed
         case failed(String)
@@ -21,14 +19,12 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         var errorDescription: String? { "This device's camera isn't available." }
     }
 
-    /// Portrait 1080p at 30 fps: sharp for faces and light enough to upload while recording on cellular.
+    /// Sharp for faces and light enough to upload while recording on cellular.
     static let format = SegmentWriter.VideoFormat(width: 1080, height: 1920, fps: 30, bitrate: 4_000_000)
 
     struct Configuration: Sendable {
         let preset: AVCaptureSession.Preset
-        /// Shows the front camera the way a mirror would.
         let mirrored: Bool
-        /// Keeps the camera running while another app is in front, for the floating camera.
         let multitasking: Bool
 
         static let recorder = Configuration(preset: .hd1920x1080, mirrored: false, multitasking: false)
@@ -57,7 +53,6 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
     private var writer: SegmentWriter?
 
     var onEvent: (@Sendable (Event) -> Void)?
-    /// Every camera frame, on the output queue, whether or not it's being recorded.
     var onFrame: (@Sendable (CMSampleBuffer) -> Void)?
 
     init(configuration: Configuration = .recorder) {
@@ -70,7 +65,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
 
     // MARK: Session
 
-    /// Sets the camera up and starts the preview. Safe to call again; later calls only restart it.
+    /// Safe to call again; later calls only restart it.
     func start(position: AVCaptureDevice.Position, microphone: Bool, completion: @escaping @Sendable (Result<Bool, any Error>) -> Void) {
         sessionQueue.async { [self] in
             #if DEBUG
@@ -178,7 +173,6 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         }
     }
 
-    /// Switches between the front and back camera, including mid-recording.
     func flip(completion: @escaping @Sendable (AVCaptureDevice.Position) -> Void) {
         sessionQueue.async { [self] in
             guard configured, let current = videoInput?.device.position else { return }
@@ -221,7 +215,6 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         outputQueue.async { self.writer = writer }
     }
 
-    /// Stops feeding the writer, flushes it, and reports the recorded duration.
     func endRecording(_ completion: @escaping @Sendable (Result<Double, any Error>) -> Void) {
         outputQueue.async { [self] in
             guard let writer else {
@@ -240,7 +233,6 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         }
     }
 
-    /// Seconds recorded so far.
     func recordedDuration(_ completion: @escaping @Sendable (Double) -> Void) {
         outputQueue.async { [self] in completion(writer?.duration ?? 0) }
     }
@@ -261,8 +253,8 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
 }
 
 #if DEBUG
-/// Plays a video file into the recorder in real time, so the simulator (which has no camera) can
-/// exercise the real encoder, segmenting and upload path. Set `CAP_DEBUG_RECORDER_FILE`.
+/// Lets the simulator, which has no camera, exercise the real encoder, segmenting and upload path.
+/// Set `CAP_DEBUG_RECORDER_FILE`.
 nonisolated final class DebugFileSource: @unchecked Sendable {
     static var configuredFile: URL? {
         ProcessInfo.processInfo.environment["CAP_DEBUG_RECORDER_FILE"].map { URL(fileURLWithPath: $0) }

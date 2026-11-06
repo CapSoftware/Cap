@@ -8,9 +8,8 @@ import ReplayKit
 import UIKit
 import UserNotifications
 
-/// Records the screen while the user is anywhere on the phone. Runs in its own small process
-/// (about 50 MB), so it encodes in hardware, writes two-second segments, and uploads them as
-/// they're made with the app's session, so the link works the moment recording stops.
+/// Runs in its own small process (about 50 MB), so it encodes in hardware and uploads segments as
+/// they're made, so the link works the moment recording stops.
 final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private static let log = Logger(subsystem: "so.cap.mobile.broadcast", category: "screen")
     /// Static screens produce no frames; resend the last one so segments keep their two-second rhythm.
@@ -20,7 +19,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private static let frameTolerance = CMTime(value: 8, timescale: 1000)
 
     private let queue = DispatchQueue(label: "so.cap.mobile.broadcast.writer", qos: .userInteractive)
-    /// The new Cap, from the moment the server creates it.
     private let created = Mutex<RecordingHandoff.Entry?>(nil)
 
     // queue
@@ -130,7 +128,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
     }
 
-    /// The writer is created on the first frame, when the screen's size is known.
+    /// Created on the first frame, when the screen's size is known.
     private func start(with buffer: CMSampleBuffer) -> Bool {
         guard let uploads, let credentials, let pixels = CMSampleBufferGetImageBuffer(buffer) else { return false }
         // H.264 wants even dimensions.
@@ -192,7 +190,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         appendFrame(repeated, repeated: true)
     }
 
-    /// Cap's Stop button, in the app or its Live Activity.
     private func listenForStop() {
         queue.sync {
             started = ProcessStats.mark()
@@ -211,9 +208,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         }
     }
 
-    /// Flushes the writer. Stopped from Cap, which is in front, the rest of the upload is handed to
-    /// Cap so recording ends at once. Otherwise this process finishes the upload, handing over
-    /// whatever is left after a few seconds.
+    /// Stopped from Cap, which is in front, the rest of the upload is handed to Cap so recording ends at once.
     private func complete(handOff: Bool = false, _ done: @escaping @Sendable () -> Void) {
         guard !finishing else {
             done()
@@ -285,7 +280,6 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
 
     private static let notificationId = "so.cap.mobile.screen-recording"
 
-    /// The way back: tapping it opens Cap's library, where the recording is uploading.
     private static func notifySaved(_ entry: RecordingHandoff.Entry?) async {
         let content = UNMutableNotificationContent()
         content.title = "Your recording is saved"

@@ -264,8 +264,8 @@ private struct ModePicker: View {
     }
 }
 
-/// What the free plan allows. Outside the United States storefront App Review allows no way to buy outside the
-/// App Store, so the note only states the limit; on that storefront it links to the dashboard (see `WebUpgrade`).
+/// Outside the United States storefront App Review allows no way to buy outside the App Store, so the
+/// note only states the limit; on that storefront it links to the dashboard (see `WebUpgrade`).
 private struct FreeLimitNote: View {
     let upgradeURL: URL?
 
@@ -301,8 +301,7 @@ private struct TrailingIconLabelStyle: LabelStyle {
     }
 }
 
-/// Elapsed time, drawn by the system's timer text so it ticks without re-rendering the screen. On the free
-/// plan it turns amber for the last 30 seconds.
+/// Drawn by the system's timer text so it ticks without re-rendering the screen.
 private struct RecordingTimer: View {
     let startedAt: Date
     let limit: TimeInterval?
@@ -382,7 +381,6 @@ private struct RecordPressStyle: ButtonStyle {
     }
 }
 
-/// The live camera image, drawn by the capture pipeline straight onto a layer.
 private struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     /// Switching cameras replaces the layer's connection, which then needs turning upright again.
@@ -421,3 +419,4 @@ private struct CameraPreview: UIViewRepresentable {
         }
     }
 }
+

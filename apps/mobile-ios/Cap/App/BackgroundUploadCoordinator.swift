@@ -4,8 +4,6 @@ import Foundation
 import os
 import UIKit
 
-/// Receives background upload events for the whole process, including launches where iOS only
-/// woke Cap to deliver them, and tells Cap the upload landed so processing can start.
 @MainActor
 final class BackgroundUploadCoordinator {
     static let shared = BackgroundUploadCoordinator()
@@ -17,8 +15,7 @@ final class BackgroundUploadCoordinator {
     private var lastUIFraction: [String: Double] = [:]
     private var backgroundTime: [String: BackgroundAssertion] = [:]
 
-    /// The transfer itself runs in the system's upload daemon either way. Asking for the usual
-    /// background time keeps Cap awake briefly after the user leaves, so the Live Activity keeps
+    /// The transfer runs in the system's upload daemon either way. Background time keeps the Live Activity
     /// moving for short uploads instead of freezing the moment Cap is suspended.
     func keepProgressLive(capId: String) {
         guard backgroundTime[capId] == nil else { return }
@@ -38,7 +35,6 @@ final class BackgroundUploadCoordinator {
         imageUploads[capId] = isImage
         return isImage
     }
-    /// The signed-in session's upload list, when the UI is running.
     weak var center: UploadCenter?
 
     func start() {
@@ -95,8 +91,6 @@ final class BackgroundUploadCoordinator {
         }
     }
 
-    /// Loom imports run on Cap's servers; follow their progress while Cap is open so the
-    /// Live Activity can show it. The import keeps going on the server either way.
     func trackImport(capId: String, title: String) {
         UploadActivities.shared.start(id: capId, title: title, kind: .loom, phase: .importing, capId: capId)
         let api = AppServices.shared.api
@@ -119,7 +113,6 @@ final class BackgroundUploadCoordinator {
         }
     }
 
-    /// Finishes uploads whose bytes landed while Cap couldn't reach the server or the keychain.
     func retryPending() async {
         let services = AppServices.shared
         for record in services.backgroundUploads.records where record.state == .uploaded {
@@ -161,9 +154,8 @@ final class BackgroundUploadCoordinator {
     }
 }
 
-/// Starts and updates the Live Activity for each upload or import.
-/// Activities are keyed by upload job: iOS only starts them while Cap is on screen, so one starts
-/// the moment a file is picked, and the Cap is attached once the server creates it.
+/// iOS only starts Live Activities while Cap is on screen, so one starts the moment a file is picked,
+/// keyed by upload job, and the Cap is attached once the server creates it.
 @MainActor
 final class UploadActivities {
     static let shared = UploadActivities()
@@ -212,7 +204,6 @@ final class UploadActivities {
         }
     }
 
-    /// Attaches the Cap once the server has created it.
     func link(id: String, capId: String) {
         capIds[id] = capId
         jobForCap[capId] = id
@@ -231,7 +222,6 @@ final class UploadActivities {
         send(id: id, phase: phase, fraction: fraction, force: false)
     }
 
-    /// - Parameter dismissImmediately: for work that finished while the user was watching in Cap.
     func finish(id: String, phase: CapUploadAttributes.ContentState.Phase, message: String? = nil, dismissImmediately: Bool = false) async {
         // ActivityKit's handle isn't annotated Sendable; ending it from the main actor is supported.
         guard let found = activities.removeValue(forKey: id) else { return }

@@ -65,7 +65,6 @@ final class SessionModel {
         }
     }
 
-    /// The scope bar only earns its space when there's somewhere else to go than My Caps.
     var showsScopeBar: Bool { !spaces.isEmpty || (bootstrap?.organizations.count ?? 0) > 1 }
 
     var selectedSpace: Space? {

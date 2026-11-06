@@ -1,9 +1,8 @@
 import StoreKit
 import SwiftUI
 
-/// Whether Cap may point people to cap.so to upgrade. App Review 3.1.1(a) and 3.1.3 allow buttons and links to
-/// purchases outside the App Store only on the United States storefront; everywhere else the app shows the plan
-/// but never a way to buy it. Hidden until the storefront is known.
+/// App Review 3.1.1(a) and 3.1.3 allow buttons and links to purchases outside the App Store only on the
+/// United States storefront. Hidden until the storefront is known.
 @MainActor @Observable
 final class WebUpgrade {
     static let shared = WebUpgrade()

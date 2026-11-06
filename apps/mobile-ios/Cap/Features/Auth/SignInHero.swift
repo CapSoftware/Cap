@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// The sign-in scene. A hand-drawn cursor drags out a selection the way Cap's area picker does, the Cap
-/// mark develops inside it out of ordered-dither pixels in Cap's blues and dissolves into the real glass
-/// mark, then the ink lifts, the mark shrinks to its place in the full logo and the wordmark comes in
-/// beside it. The scene then rests and stops redrawing.
 struct SignInHero: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -56,7 +52,7 @@ struct SignInHero: View {
 }
 
 struct SignInScene {
-    /// When the scene comes to rest on the full logo. Reduce Motion shows only this moment.
+    /// Reduce Motion shows only this moment.
     static let end: Double = 3.9
     static let cell: CGFloat = 3.5
 
@@ -77,9 +73,8 @@ struct SignInScene {
 
     let cols: Int
     let rows: Int
-    /// The selection, in cells.
     private let selection: CGRect
-    /// Half the logo's tile, in cells. The glass logo is a 40-unit tile, so its rings sit at 16, 13 and 10 of 20.
+    /// The glass logo is a 40-unit tile, so its rings sit at 16, 13 and 10 of 20.
     private var tileHalf: CGFloat { selection.width * 0.39 }
 
     init(size: CGSize, time: Double, dark: Bool) {
@@ -101,7 +96,7 @@ struct SignInScene {
         CGPoint(x: size.width / 2 - 50.25 * lockupUnit, y: size.height / 2 - 20 * lockupUnit)
     }
 
-    /// Where the real mark goes, in points: over the dithered one, then into the full logo. Its tile is 39.5 of 40 units.
+    /// Its tile is 39.5 of 40 units.
     var logoFrame: CGRect {
         let side = tileHalf * 2 * Self.cell * 40 / 39.5
         let center = point(selection.midX, selection.midY)
@@ -120,7 +115,6 @@ struct SignInScene {
         CGRect(x: lockupOrigin.x + 44 * lockupUnit, y: lockupOrigin.y, width: 60 * lockupUnit, height: 40 * lockupUnit)
     }
 
-    /// The wordmark arrives left to right behind a dithered edge, in the same cells as the mark's pixels.
     func drawWordmarkMask(in context: inout GraphicsContext, size: CGSize) {
         let shown = progress(Beat.wordmark)
         guard shown > 0 else { return }
@@ -143,7 +137,7 @@ struct SignInScene {
         context.fill(path, with: .color(.black))
     }
 
-    /// The real logo is fully there early in the resolve, so the gaps the pixels leave show it, not the background.
+    /// Fully there early in the resolve, so the gaps the pixels leave show it, not the background.
     var logoOpacity: Double { progress(Beat.resolve.lowerBound...(Beat.resolve.lowerBound + 0.2), ease: true) }
     var logoScale: Double { 1.04 - 0.04 * progress(Beat.resolve, ease: true) }
 
@@ -153,7 +147,7 @@ struct SignInScene {
 
     // MARK: Pixels
 
-    /// Darkest to brightest. Index 0 is no ink.
+    /// Index 0 is no ink.
     private static let blues: [(UInt8, UInt8, UInt8)] = [
         (0, 0, 0), (0x1E, 0x3A, 0x8A), (0x2F, 0x63, 0xF0), (0x47, 0x85, 0xFF), (0xAD, 0xC9, 0xFF), (0xDC, 0xE7, 0xFF), (0xFF, 0xFF, 0xFF),
     ]
@@ -182,7 +176,6 @@ struct SignInScene {
                 let threshold = Self.threshold(x, y)
                 var color: (UInt8, UInt8, UInt8)?
 
-                // The logo's pixels give way to the real logo in dither order.
                 if threshold >= resolved {
                     let u = (Double(x) + 0.5 - cx) / half
                     let v = (Double(y) + 0.5 - cy) / half
@@ -209,7 +202,6 @@ struct SignInScene {
                             } else if edge < 0 {
                                 value = 4.3
                             } else {
-                                // The tile's glow: a sparse scatter of one pale blue, like the real logo's soft halo.
                                 let fall = 1 - edge / 0.3
                                 if threshold < 0.6 * fall * fall * reveal {
                                     color = Self.blues[dark ? 2 : 4]
@@ -217,7 +209,6 @@ struct SignInScene {
                                 value = -1
                             }
                             if value >= 0 {
-                                // Fresh pixels flash bright as they develop.
                                 value += (1 - reveal) * 1.6
                                 let index = min(Self.blues.count - 1, Int(value + threshold))
                                 if index > 0 { color = Self.blues[index] }
@@ -256,7 +247,6 @@ struct SignInScene {
 
     private var ink: Color { dark ? Color(white: 0.94) : Color(white: 0.1) }
     private var paper: Color { dark ? .black : .white }
-    /// Hand-drawn lines redraw with one of three wobbles every 150 ms.
     private var boil: Int { Int(time / 0.15) % 3 }
 
     func drawInk(in context: inout GraphicsContext) {

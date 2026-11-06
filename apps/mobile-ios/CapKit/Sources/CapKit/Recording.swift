@@ -5,7 +5,6 @@ public enum RecordingTrack: String, Codable, Sendable, CaseIterable {
     case audio
 }
 
-/// One fragmented MP4 piece of a recording, written to disk as soon as the encoder cuts it.
 public struct RecordedSegment: Codable, Sendable, Hashable {
     public enum State: String, Codable, Sendable {
         case pending
@@ -43,14 +42,10 @@ public struct RecordedSegment: Codable, Sendable, Hashable {
     }
 }
 
-/// A recording from the moment capture starts until Cap has it, persisted so a relaunch can finish it.
 public struct RecordingJob: Codable, Sendable, Identifiable {
     public enum Phase: String, Codable, Sendable {
-        /// Still capturing; segments keep arriving.
         case recording
-        /// Capture ended; the last segments are uploading.
         case uploading
-        /// Every segment is in storage and Cap is being told to process it.
         case completing
         case completed
         case failed
@@ -68,7 +63,6 @@ public struct RecordingJob: Codable, Sendable, Identifiable {
         }
     }
 
-    /// Local id; names the folder the segments are written to.
     public let id: String
     public let userId: String
     public let title: String
@@ -106,8 +100,7 @@ public struct RecordingJob: Codable, Sendable, Identifiable {
         phase == .uploading && capId != nil && durationSeconds != nil && !segments.isEmpty && segments.allSatisfy { $0.state == .uploaded }
     }
 
-    /// What Cap needs to stitch the segments together, checked against the server's own rules
-    /// so a broken recording fails here with a clear reason instead of as a 400.
+    /// Checked against the server's own rules so a broken recording fails here with a clear reason, not a 400.
     public func completion() throws(RecordingError) -> RecordingCompletion {
         guard let durationSeconds, durationSeconds > 0 else { throw .empty }
         func media(_ track: RecordingTrack) throws(RecordingError) -> [RecordingCompletion.Segment] {
@@ -168,14 +161,11 @@ public enum RecordingLimits {
     public static let segmentDuration: TimeInterval = 2
 }
 
-/// Decides which upload links to ask Cap for. Subpaths are predictable, so links for the next few
-/// segments are fetched ahead of time and a finished segment can start uploading immediately,
-/// with one small request every ~10 seconds of recording instead of one per segment.
-/// Links that end up unused cost nothing on S3; on Google Drive they reserve a placeholder each.
+/// Prefetches links for upcoming segments, one request per ~10 s instead of one per segment.
+/// Unused links cost nothing on S3; on Google Drive they reserve a placeholder each.
 public enum RecordingTargetPlanner {
     public static let lookahead = 8
     public static let maxBatch = 25
-    /// Fetch again once fewer than this many future links are left for a track.
     public static let runway = 3
 
     public static func subpathsToRequest(for job: RecordingJob, known: Set<String>) -> [String] {

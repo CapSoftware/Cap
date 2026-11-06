@@ -339,7 +339,6 @@ struct ErrorText: View {
     }
 }
 
-/// The web sign-in's solid button: ink on paper, paper on ink in dark mode.
 struct InkButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 

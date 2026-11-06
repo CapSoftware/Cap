@@ -72,7 +72,6 @@ struct LibraryContent: View {
     @State private var pendingDelete: CapSummary?
     private let recent = RecentRecordings.shared
 
-    /// Recordings still saving or uploading; once ready they're Caps in the list below.
     private var recordingsInProgress: [RecentRecordings.Item] {
         recent.items.filter { $0.status != .ready }
     }
@@ -314,7 +313,6 @@ extension View {
     func shimmering() -> some View { modifier(Shimmer()) }
 }
 
-/// My Caps, every space and (with more than one) the organization, always one tap away under the title.
 struct ScopeBar: View {
     @Environment(SessionModel.self) private var session
 

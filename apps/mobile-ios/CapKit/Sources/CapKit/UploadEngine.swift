@@ -48,11 +48,9 @@ public enum MultipartBody {
     }
 }
 
-/// A validated request ready for a background upload task, plus the file it streams.
 public struct PreparedUploadRequest: Sendable {
     public let request: URLRequest
     public let bodyFile: URL
-    /// A multipart body written for S3 POST targets; deleted when the upload ends.
     public let temporaryBody: URL?
 }
 
@@ -74,8 +72,8 @@ public final class UploadEngine: Sendable {
         throw .insecureTarget
     }
 
-    /// Builds the storage request for an upload target. Only https targets are accepted (plus
-    /// localhost in debug builds), and Cap's own credentials and hop-by-hop headers are never forwarded.
+    /// Only https targets are accepted (plus localhost in debug builds), and Cap's own credentials and
+    /// hop-by-hop headers are never forwarded.
     public func prepareRequest(
         file: URL,
         fileName: String,

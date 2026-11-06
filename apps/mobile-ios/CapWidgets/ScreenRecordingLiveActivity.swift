@@ -3,7 +3,6 @@ import CapKit
 import SwiftUI
 import WidgetKit
 
-/// While the screen records: the elapsed time and one tap to stop, which opens the recording in Cap.
 struct ScreenRecordingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ScreenRecordingAttributes.self) { context in

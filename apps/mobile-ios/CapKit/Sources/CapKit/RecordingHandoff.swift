@@ -1,8 +1,6 @@
 import Foundation
 import Security
 
-/// Tells the app which Cap the screen recorder just made, so opening Cap lands on it.
-/// Kept in the keychain group the app and its extensions share; it holds no secret.
 public enum RecordingHandoff {
     public struct Entry: Codable, Sendable, Equatable {
         public let capId: String
@@ -40,7 +38,6 @@ public enum RecordingHandoff {
         SecItemAdd(attributes as CFDictionary, nil)
     }
 
-    /// The latest handoff, removed as it's read so it's acted on once.
     public static func take(accessGroup: String? = nil, maxAge: TimeInterval = 30 * 60, now: Date = .now) -> Entry? {
         var lookup = query(accessGroup)
         lookup[kSecReturnData as String] = kCFBooleanTrue

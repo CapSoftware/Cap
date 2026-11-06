@@ -68,14 +68,13 @@ public struct CapEnvironment: Sendable, Hashable {
     public var termsURL: URL { url(path: "terms") }
     public var supportURL: URL { url(path: "docs") }
     public var dashboardURL: URL { url(path: "dashboard") }
-    /// The dashboard's billing page, where a free plan upgrades. Signing in there keeps the purchase on the right account.
+    /// Signing in on the dashboard keeps the purchase on the right account.
     public var upgradeURL: URL { url(path: "dashboard/settings/organization/billing") }
 
     public func shareURL(for capId: CapID) -> URL {
         baseURL.appending(path: "s").appending(path: capId.rawValue)
     }
 
-    /// The share link that starts playback at `seconds`, like the share page's "Copy link at".
     public func shareURL(for capId: CapID, at seconds: Double) -> URL {
         let whole = Int(max(0, seconds.isFinite ? seconds : 0))
         guard whole > 0 else { return shareURL(for: capId) }
@@ -106,7 +105,6 @@ public struct CapID: Sendable, Hashable, Codable, CustomStringConvertible {
     public var description: String { rawValue }
 }
 
-/// A Cap to open, optionally at a time or with a comment highlighted (from notification emails).
 public struct ShareTarget: Sendable, Hashable {
     public let id: CapID
     public let startTime: Double?
@@ -137,7 +135,6 @@ public struct ShareTarget: Sendable, Hashable {
 public enum DeepLink: Sendable, Hashable {
     case share(ShareTarget)
     case authCallback(URL)
-    /// From the screen recording's Live Activity.
     case stopScreenRecording
 
     public static let stopScreenRecordingURL = URL(string: "cap://record/stop")!

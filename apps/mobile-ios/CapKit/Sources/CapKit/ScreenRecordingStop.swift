@@ -2,11 +2,8 @@ import Foundation
 import notify
 import Security
 
-/// Lets Cap stop the screen recording, which runs in the broadcast extension's own process.
-///
-/// The request is written to the keychain group only Cap and its extensions can read, then a
-/// system-wide notification wakes the extension. Any app can post that notification, so the
-/// extension acts on it only when a fresh request is there too.
+/// Any app can post the notification that wakes the extension, so it acts only when a fresh
+/// request is also in the keychain group only Cap and its extensions can read.
 public enum ScreenRecordingStop {
     public static let notification = "so.cap.mobile.broadcast.stop"
 
@@ -34,7 +31,6 @@ public enum ScreenRecordingStop {
         notify_post(notification)
     }
 
-    /// Whether Cap asked to stop in the last few seconds; the request is removed as it's read.
     public static func take(accessGroup: String? = nil, maxAge: TimeInterval = 15, now: Date = .now) -> Bool {
         var lookup = query(accessGroup)
         lookup[kSecReturnData as String] = kCFBooleanTrue
@@ -48,11 +44,8 @@ public enum ScreenRecordingStop {
     }
 }
 
-/// Where screen recordings live: a folder Cap and its broadcast extension share, so the extension
-/// can stop at once and leave the last uploads to Cap.
 public enum ScreenRecordingStore {
     public static let groupIdentifier = "group.so.cap.mobile"
-    /// Posted by the extension when it has handed a recording to Cap.
     public static let handOffNotification = "so.cap.mobile.broadcast.handed-off"
 
     public static var root: URL? {

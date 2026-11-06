@@ -56,8 +56,7 @@ public struct TranscriptCue: Sendable, Hashable, Identifiable {
 }
 
 extension TranscriptCue {
-    /// The part of the cue to show at a time. Long cues are shown a phrase at a time, in step with the speech, so a
-    /// caption never grows past about two short lines.
+    /// Long cues show a phrase at a time so a caption never grows past about two short lines.
     public func caption(at time: Double, maxCharacters: Int = 64) -> String {
         let phrases = Self.phrases(text, maxCharacters: maxCharacters)
         guard phrases.count > 1, end > start else { return phrases.first ?? text }
@@ -71,7 +70,6 @@ extension TranscriptCue {
         return phrases[phrases.count - 1]
     }
 
-    /// Splits text into evenly sized runs of whole words, none longer than the limit unless a single word is.
     static func phrases(_ text: String, maxCharacters: Int) -> [String] {
         let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !words.isEmpty else { return [] }

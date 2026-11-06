@@ -13,7 +13,6 @@ final class RecordModel {
         case unavailable(String)
         case ready
         case recording(startedAt: Date)
-        /// Capture has stopped; the last segments are flushing.
         case finishing
     }
 
@@ -52,7 +51,6 @@ final class RecordModel {
         return false
     }
 
-    /// The free plan's cap on length; nil on Cap Pro.
     var limit: TimeInterval? { session.isPro ? nil : RecordingLimits.freeDuration }
     var upgradeURL: URL { session.services.environment.upgradeURL }
 
@@ -104,7 +102,6 @@ final class RecordModel {
         }
     }
 
-    /// Releases the camera while screen mode is showing.
     func pauseCamera() {
         wantsCamera = false
         guard phase == .ready else { return }
@@ -123,7 +120,6 @@ final class RecordModel {
         }
     }
 
-    /// The screen went away; release the camera unless a recording still needs it.
     func teardown() {
         if isRecording { discard() }
         capture.stop()
@@ -218,7 +214,6 @@ final class RecordModel {
         phase = .ready
     }
 
-    /// Stops and deletes the recording, including the Cap if it was created.
     func discard() {
         guard isRecording || phase == .finishing, let jobId else { return }
         limitTask?.cancel()
@@ -255,7 +250,6 @@ final class RecordModel {
         }
     }
 
-    /// The server gave up on the recording being made: it can't become a Cap, so stop it.
     func uploadFailed(jobId: String) {
         guard jobId == self.jobId, isRecording else { return }
         discard()

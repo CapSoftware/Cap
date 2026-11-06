@@ -20,7 +20,6 @@ final class UploadJob: Identifiable {
     let id = UUID()
     let fileName: String
     var phase: Phase = .preparing
-    /// Set once Cap has created the Cap, so the link can be shared while bytes are still moving.
     var capId: String?
     var shareURL: String?
 
@@ -105,8 +104,7 @@ final class UploadCenter {
         jobs.removeAll { $0.id == job.id }
     }
 
-    /// Stops jobs still preparing in this session. Transfers already handed to the background
-    /// session are cancelled by sign out.
+    /// Transfers already handed to the background session are cancelled by sign out.
     func cancelAll() {
         for task in tasks.values { task.cancel() }
         tasks.removeAll()
@@ -269,7 +267,7 @@ final class UploadCenter {
         return try await probe(destination, fileName: fileName, contentType: type.preferredMIMEType ?? "video/mp4")
     }
 
-    /// Photos become screenshot Caps. Re-encoding to JPEG drops location and camera metadata.
+    /// Re-encoding to JPEG drops location and camera metadata.
     nonisolated static func prepareImage(at source: URL, suggestedName: String?, removeSource: Bool) throws -> PreparedVideo {
         defer { if removeSource { try? FileManager.default.removeItem(at: source) } }
         let jpeg: Data

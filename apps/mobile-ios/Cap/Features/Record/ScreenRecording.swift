@@ -30,7 +30,6 @@ enum RecordMode: String, CaseIterable, Identifiable {
     static let offered: [RecordMode] = [.camera, .screen]
 }
 
-/// Starts and stops screen recording through the system broadcast sheet, preset to Cap.
 /// iOS only lets its own button start a broadcast, so that button sits invisibly on top of Cap's.
 @MainActor
 @Observable
@@ -67,7 +66,6 @@ final class ScreenRecorder {
         button.sendActions(for: .touchUpInside)
     }
 
-    /// Asked before the first screen recording, so Cap can say when the recording is ready.
     static func requestNotifications() {
         Task {
             let center = UNUserNotificationCenter.current()
@@ -85,15 +83,12 @@ final class ScreenRecorder {
     }
 }
 
-/// The screen recording as the whole app sees it: its Live Activity, the Stop button, and taking
-/// the recording over from the broadcast extension once it stops.
 @MainActor
 final class ScreenRecordingSession {
     static let shared = ScreenRecordingSession()
 
     private static let log = Logger(subsystem: "so.cap.mobile", category: "screen-recording")
     private var activity: Activity<ScreenRecordingAttributes>?
-    /// Set from the moment Cap's own broadcast starts until it ends.
     private var recording: (withCamera: Bool, startedAt: Date, stats: ProcessStats.Mark)?
     private var handOffToken: Int32 = NOTIFY_TOKEN_INVALID
     private var started = false
@@ -115,13 +110,11 @@ final class ScreenRecordingSession {
                 ScreenRecordingSession.shared.captureChanged()
             }
         }
-        // The extension has stopped and left the rest of the upload to Cap.
         notify_register_dispatch(ScreenRecordingStore.handOffNotification, &handOffToken, .main) { _ in
             Task { await AppServices.shared.screenRecordings?.adopt() }
         }
     }
 
-    /// Called as Cap's own broadcast starts.
     func began(withCamera: Bool) {
         guard recording == nil else { return }
         recording = (withCamera, .now, ProcessStats.mark())
@@ -163,7 +156,6 @@ final class ScreenRecordingSession {
         }
     }
 
-    /// Stops without the system sheet; the recording then shows on the record screen.
     func stop() {
         guard ScreenRecorder.isScreenCaptured else {
             endActivity()
@@ -188,7 +180,6 @@ final class ScreenRecordingSession {
         guard wasRecording else { return }
         ProcessStats.note("Screen recording ended, app state \(UIApplication.shared.applicationState.rawValue)")
         RecentRecordings.shared.savingScreen()
-        // Back to the library to see it upload, now or as soon as Cap is in front again.
         RecordingCoordinator.shared.showHome()
         Task {
             let notifications = await UNUserNotificationCenter.current().notificationSettings()
@@ -212,8 +203,8 @@ final class ScreenRecordingSession {
     }
 }
 
-/// The system's broadcast button, stretched over Cap's record button and nearly transparent, so a
-/// tap on the record button is a real tap on it and the sheet always opens.
+/// Nearly transparent over Cap's record button, so a tap there is a real tap on the system button
+/// and the sheet always opens.
 struct BroadcastTapTarget: UIViewRepresentable {
     let picker: RPSystemBroadcastPickerView
 
@@ -245,7 +236,6 @@ struct ScreenModePanel: View {
     let recorder: ScreenRecorder
     let mode: RecordMode
     let bubble: CameraBubble
-    /// Recordings are listed above: just the essentials, so it all fits.
     var compact = false
 
     var body: some View {

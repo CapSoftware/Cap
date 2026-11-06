@@ -105,7 +105,6 @@ private struct AddMenuStyle: ViewModifier {
     }
 }
 
-/// A video or photo from the picker, copied straight into the upload staging folder.
 struct PickedMedia: Transferable {
     let url: URL
     let suggestedName: String?

@@ -7,11 +7,8 @@ import SwiftUI
 import UIKit
 import VideoToolbox
 
-/// The camera floating over other apps while the screen is recorded, so it's captured with it.
-///
-/// It's a video call style Picture in Picture window fed straight from the camera: iOS keeps those
-/// small, like a FaceTime call, and shows no playback controls. It outlives the record screen,
-/// since recording carries on after Cap is closed, and stops when the screen recording does.
+/// A video call style Picture in Picture window: iOS keeps those small, like a FaceTime call, and shows
+/// no playback controls. It outlives the record screen, since recording carries on after Cap is closed.
 @MainActor
 @Observable
 final class CameraBubble: NSObject {
@@ -28,9 +25,7 @@ final class CameraBubble: NSObject {
     private(set) var state: State = .idle
     private(set) var isFloating = false
 
-    /// On the record screen; the floating window grows out of it.
     @ObservationIgnored let preview = LayerView()
-    /// Inside the floating window.
     @ObservationIgnored private let floating = LayerView()
     @ObservationIgnored private let capture = CameraCapture(configuration: .bubble)
     @ObservationIgnored private var pip: AVPictureInPictureController?
@@ -98,7 +93,6 @@ final class CameraBubble: NSObject {
         state = .ready
     }
 
-    /// Floats the camera over everything; called once the screen recording has started.
     func float() {
         Task {
             // The system sheet can still be closing, which briefly blocks Picture in Picture.
@@ -125,7 +119,6 @@ final class CameraBubble: NSObject {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    /// Leaving the record screen keeps the camera only while it's part of a recording.
     func releaseUnlessFloating() {
         if !isFloating { stop() }
     }
@@ -141,7 +134,6 @@ final class CameraBubble: NSObject {
         if renderer.isReadyForMoreMediaData { renderer.enqueue(buffer) }
     }
 
-    /// A live camera image filling its view.
     final class LayerView: UIView {
         let display = AVSampleBufferDisplayLayer()
         var onLayout: ((CGSize) -> Void)?
@@ -185,7 +177,6 @@ extension CameraBubble: AVPictureInPictureControllerDelegate {
     }
 }
 
-/// The camera bubble's live image on the record screen, which Picture in Picture lifts out of.
 struct CameraBubbleView: UIViewRepresentable {
     let bubble: CameraBubble
 
@@ -210,7 +201,7 @@ private extension CATransaction {
     }
 }
 
-/// Crops camera frames to a centred square in hardware. Used only from the camera's output queue.
+/// Used only from the camera's output queue.
 private nonisolated final class SquareCrop: @unchecked Sendable {
     private let side: Int
     private var session: VTPixelTransferSession?

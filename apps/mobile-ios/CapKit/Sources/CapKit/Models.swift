@@ -374,7 +374,7 @@ public enum TranscriptionStatus: String, UnknownCaseDecodable {
     public static let unknownCase = TranscriptionStatus.skipped
 }
 
-/// Share settings resolved by the server across the Cap, its organization and its spaces.
+/// Resolved by the server across the Cap, its organization and its spaces.
 public struct ViewerSettings: Codable, Sendable, Hashable {
     public var disableSummary: Bool
     public var disableCaptions: Bool

@@ -2,8 +2,7 @@
 import ActivityKit
 import Foundation
 
-/// The Live Activity shown in the Dynamic Island and on the lock screen while a Cap uploads or imports.
-/// It starts as soon as the user picks a file, before the Cap exists, so `capId` arrives later in the state.
+/// Starts as soon as the user picks a file, before the Cap exists, so `capId` arrives later in the state.
 public struct CapUploadAttributes: ActivityAttributes {
     public enum Kind: String, Codable, Hashable, Sendable {
         case video, image, loom, recording
@@ -43,7 +42,6 @@ public struct CapUploadAttributes: ActivityAttributes {
     }
 }
 
-/// The Live Activity shown while the screen is recorded, so it can be stopped from anywhere.
 public struct ScreenRecordingAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable, Sendable {
         public var isStopping: Bool

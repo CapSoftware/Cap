@@ -1,12 +1,10 @@
 import Darwin
 import Foundation
 
-/// What a recording cost this process, kept on the device so it can be read back after a test.
 public struct ProcessStats: Codable, Sendable {
     public var process: String
     public var recordedSeconds: Double
     public var wallSeconds: Double
-    /// User plus system CPU time; divide by wall time for the average share of one core.
     public var cpuSeconds: Double
     public var memoryMB: Double
     public var peakMemoryMB: Double
@@ -36,7 +34,6 @@ public struct ProcessStats: Codable, Sendable {
         )
     }
 
-    /// Keeps the last 20 in Caches/RecordingStats.jsonl.
     public func save() {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
               let line = try? JSONEncoder().encode(self)
@@ -47,7 +44,6 @@ public struct ProcessStats: Codable, Sendable {
         try? (lines.suffix(20).joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
     }
 
-    /// A line in Caches/Diagnostics.log, for problems that only show on a device.
     public static func note(_ message: String) {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
         let file = caches.appending(path: "Diagnostics.log")

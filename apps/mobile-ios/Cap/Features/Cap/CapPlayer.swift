@@ -12,7 +12,6 @@ final class PlayerLayerView: UIView {
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-/// Renders the player into an `AVPlayerLayer`. The inline surface also owns Picture in Picture.
 struct PlayerLayerRepresentable: UIViewRepresentable {
     let player: AVPlayer
     let model: CapDetailModel
@@ -74,8 +73,6 @@ struct RoutePicker: UIViewRepresentable {
 
 // MARK: Player
 
-/// Cap's player: the video with tap-to-show controls, captions and reactions.
-/// The timeline with comment markers lives in `PlayerTimeline`.
 struct CapPlayerSurface: View {
     let model: CapDetailModel
     let player: AVPlayer
@@ -293,7 +290,6 @@ private struct PlayerControls: View {
 
 // MARK: Timeline
 
-/// The scrubber. It carries the comment and reaction markers, chapter ticks and the playhead.
 struct PlayerTimeline: View {
     enum Style { case inline, overlay }
 
@@ -568,7 +564,6 @@ private struct BurstView: View {
 
 // MARK: Lock screen
 
-/// Lock screen, Control Center and headphone controls for the Cap that's playing.
 @MainActor
 final class NowPlaying {
     static let shared = NowPlaying()

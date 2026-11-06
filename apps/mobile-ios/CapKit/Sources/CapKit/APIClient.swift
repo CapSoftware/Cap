@@ -93,7 +93,6 @@ public struct APIRequest: Sendable {
     public var query: [URLQueryItem]
     public var body: Data?
     public var authenticated: Bool
-    /// Attaches the password unlock for this Cap, if the viewer has one.
     public var videoAccess: CapID?
 
     public init(method: HTTPMethod = .get, path: [String], query: [URLQueryItem] = [], body: Data? = nil, authenticated: Bool = true, videoAccess: CapID? = nil) {
@@ -420,7 +419,6 @@ extension CapAPI {
         return response.status
     }
 
-    /// Verifies a share password and keeps the unlock for later requests about this Cap.
     public func unlockCap(_ id: CapID, password: String) async throws(CapAPIError) {
         let unlock: CapUnlock = try await send(mobile(.post, "caps", id.rawValue, "unlock", body: Self.body(["password": password])))
         guard !unlock.accessToken.isEmpty, unlock.accessToken.utf8.count <= 4096 else { throw CapAPIError.invalidResponse }
@@ -567,8 +565,7 @@ extension CapAPI {
         return "Bearer \(credentials.apiKey)"
     }
 
-    /// Headers for Cap-origin media like thumbnails: the session, plus the password unlock for
-    /// that Cap's own thumbnail. Nothing is sent to other origins.
+    /// Nothing is sent to other origins, and the unlock only for that Cap's own thumbnail.
     public func mediaHeaders(for url: URL) -> [String: String] {
         guard let authorization = authorizationHeader(for: url) else { return [:] }
         var headers = ["Authorization": authorization]

@@ -3,8 +3,6 @@ import CapKit
 import SwiftUI
 import UIKit
 
-/// Trim, split and delete, laid out like the Photos video editor. Changes preview instantly; Save sends the kept
-/// clips to Cap, which renders the new version.
 struct EditorView: View {
     @State var model: EditorModel
     let onFinished: (EditorOutcome) -> Void
@@ -158,7 +156,6 @@ struct EditorView: View {
     }
 }
 
-/// The filmstrip. Clips sit side by side at a fixed scale; the selected one gets yellow trim handles.
 private struct EditorTimeline: View {
     let model: EditorModel
 
@@ -224,7 +221,6 @@ private struct EditorTimeline: View {
                             scrubbing = false
                             model.endScrub()
                         } else {
-                            // A tap selects the clip under the finger and moves the playhead there.
                             let time = Self.output(forX: value.location.x, timeline: shown, layout: layout)
                             let index = shown.locate(output: time)?.index
                             model.selectedClip = model.selectedClip == index ? nil : index
@@ -305,7 +301,6 @@ private struct EditorTimeline: View {
     }
 }
 
-/// One clip's frames, tiled from the filmstrip so each tile shows the moment it covers.
 private struct ClipStrip: View {
     let model: EditorModel
     let clip: EditRange
@@ -334,7 +329,7 @@ private struct ClipStrip: View {
     }
 }
 
-/// An `AVPlayerLayer` that reports its first frame, which is when the editor is really ready.
+/// Reports its first frame, which is when the editor is really ready.
 struct EditorPlayerSurface: UIViewRepresentable {
     let player: AVPlayer
     var onFirstFrame: (@MainActor @Sendable () -> Void)?

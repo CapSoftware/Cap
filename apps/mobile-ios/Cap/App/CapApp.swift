@@ -14,13 +14,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    /// The screen recording's notification: back to the library, where it's uploading.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: false)
         await RecordingCoordinator.shared.showHome()
     }
 
-    /// Already in Cap when a screen recording stops: show it there rather than as a banner.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: true)
         return []
@@ -47,7 +45,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Self.orientations
     }
 
-    /// Screens are portrait only. Fullscreen video unlocks landscape while it is presented.
     static func allowLandscape(_ allowed: Bool, in scene: UIWindowScene?) {
         orientations = allowed ? .allButUpsideDown : .portrait
         guard let scene else { return }
@@ -100,7 +97,6 @@ struct RootView: View {
 
 enum AppTab: Hashable {
     case caps
-    /// Not a page: selecting it opens the recorder over whatever tab was showing.
     case record
     case analytics
     case settings
@@ -112,11 +108,10 @@ struct RecorderRequest: Identifiable {
 }
 
 extension Notification.Name {
-    /// Opens the recorder; the object is the folder id to save into, if any.
+    /// The object is the folder id to save into, if any.
     static let capOpenRecorder = Notification.Name("so.cap.mobile.openRecorder")
-    /// Opens a Cap on the Caps tab, over anything presented; the object is its id.
+    /// The object is the Cap's id.
     static let capOpenCap = Notification.Name("so.cap.mobile.openCap")
-    /// Closes the recorder and anything opened on the Caps tab, to show a recording that just stopped.
     static let capShowHome = Notification.Name("so.cap.mobile.showHome")
 }
 
@@ -174,7 +169,6 @@ struct MainTabView: View {
             RecordView(session: session, folderId: request.folderId)
         }
         .onReceive(NotificationCenter.default.publisher(for: .capOpenRecorder)) { note in
-            // Already open: stay on it, mid-recording or not.
             guard recorder == nil else { return }
             recorder = RecorderRequest(folderId: note.object as? String)
         }

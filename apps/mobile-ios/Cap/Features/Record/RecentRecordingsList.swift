@@ -1,8 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// What each recording stopped this session is doing, so the next one can start straight away.
-/// Shown on the record screen and above the library.
 struct RecentRecordingsList: View {
     let recent: RecentRecordings
     var items: [RecentRecordings.Item]? = nil

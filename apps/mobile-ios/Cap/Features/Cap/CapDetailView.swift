@@ -238,7 +238,6 @@ struct CapDetailView: View {
                             .padding(.horizontal, CapTheme.spacing)
                         } header: {
                             if available.count > 1, let current {
-                                // Stays pinned under the player so the tabs are always reachable.
                                 Picker("Section", selection: Binding(get: { current }, set: { section = $0 })) {
                                     ForEach(available, id: \.self) { item in
                                         Text(title(for: item, detail: detail)).tag(item)
@@ -294,7 +293,6 @@ struct CapDetailView: View {
         }
     }
 
-    /// Asks Cap whether this video can be edited now, then opens the editor or says why not.
     private func openEditor(_ detail: CapDetail) {
         guard !openingEditor else { return }
         openingEditor = true
@@ -475,7 +473,6 @@ struct MarkerLayer: View {
     var body: some View {
         let coarse = TimelineMarkers.build(comments, duration: duration, buckets: max(6, Int(width / 30)))
         let total = coarse.reduce(0) { $0 + $1.count }
-        // Few moments: show each one. Busy Caps: show where activity clusters and badge only the peaks.
         let sparse = total <= max(6, Int(width / 34))
         let badges = sparse ? coarse : Self.peaks(in: coarse, width: width, limit: 3)
         ZStack(alignment: .leading) {
@@ -495,7 +492,6 @@ struct MarkerLayer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The busiest moments, kept far enough apart that their badges don't overlap.
     static func peaks(in markers: [TimelineMarker], width: CGFloat, limit: Int) -> [TimelineMarker] {
         var chosen: [TimelineMarker] = []
         for marker in markers.sorted(by: { $0.count == $1.count ? $0.time < $1.time : $0.count > $1.count }) {
@@ -516,7 +512,6 @@ struct MarkerLayer: View {
     }
 }
 
-/// A slim histogram of comment and reaction activity along the timeline.
 private struct DensityLayer: View {
     let markers: [TimelineMarker]
     let width: CGFloat

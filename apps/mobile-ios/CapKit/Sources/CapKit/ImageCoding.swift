@@ -66,8 +66,7 @@ public enum ImageCoding {
         return output as Data
     }
 
-    /// Re-encodes a photo for a screenshot Cap. Re-encoding drops EXIF, GPS and maker metadata;
-    /// 4096 px keeps text sharp while bounding the upload.
+    /// Re-encoding drops EXIF, GPS and maker metadata; 4096 px keeps text sharp while bounding the upload.
     public static func encodeScreenshot(fileURL: URL, maxPixelSize: Int = 4096) throws(ImageCodingError) -> Data {
         guard let image = downsample(fileURL: fileURL, maxPixelSize: maxPixelSize),
               let jpeg = jpegData(from: image, quality: 0.9)

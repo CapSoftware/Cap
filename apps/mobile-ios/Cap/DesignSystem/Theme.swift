@@ -27,7 +27,6 @@ extension FolderColor {
     }
 }
 
-/// The glass Cap logo, shared with the desktop app and the web.
 struct CapLogoMark: View {
     var size: CGFloat = 44
     var animated = false
