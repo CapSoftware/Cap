@@ -40,7 +40,7 @@ mod completion;
 pub use completion::CleanInstantRecording;
 
 /// Stop failed because the recording had already failed, after every capture
-/// task exited and the screen source stopped. Nothing is capturing any more,
+/// task exited and its sources stopped. Nothing is capturing any more,
 /// and the files on disk stay as they are.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]

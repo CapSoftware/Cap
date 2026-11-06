@@ -86,6 +86,17 @@ pub(crate) trait MuxTarget: Send + 'static {
 #[error("output storage stalled while finishing; recording left for recovery")]
 pub struct StorageStalled;
 
+impl StorageStalled {
+    /// Whether `error`, or the I/O error it is, reports a stalled writer.
+    pub fn is_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        error.is::<Self>()
+            || error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| inner.is::<Self>())
+    }
+}
+
 impl From<StorageStalled> for std::io::Error {
     fn from(stalled: StorageStalled) -> Self {
         std::io::Error::new(std::io::ErrorKind::TimedOut, stalled)
@@ -965,6 +976,16 @@ mod tests {
         let shared = shared(&sink);
         drop(sink);
         assert_eq!(Arc::strong_count(&shared), 1);
+    }
+
+    #[test]
+    fn a_stall_stays_recognisable_through_io_errors() {
+        assert!(StorageStalled::is_in(&StorageStalled));
+        assert!(StorageStalled::is_in(&std::io::Error::from(StorageStalled)));
+        assert!(!StorageStalled::is_in(&std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "slow disk"
+        )));
     }
 
     #[test]
