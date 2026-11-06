@@ -57,11 +57,11 @@ export type LiveManifest = z.infer<typeof manifestSchema>;
 const stateSchema = z.object({
 	lastAudioSegmentIndex: z.number().int(),
 	transcribedDurationMs: z.number(),
-	transcriptionOptions: z.record(z.unknown()),
+	transcriptionOptions: z.record(z.string(), z.unknown()),
 	urls: z.object({
 		manifest: z.string().url(),
 		audioInit: z.string().url(),
-		segments: z.record(z.string().url()),
+		segments: z.record(z.string(), z.string().url()),
 	}),
 });
 
