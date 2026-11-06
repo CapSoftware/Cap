@@ -71,7 +71,27 @@ Membership provisioning is transactional and repeatable, using organization/user
 
 An ambiguous default connection blocks domain-based discovery but leaves settings accessible for repair; an explicit active IdP connection is still checked against the mapped organization. Settings and sign-in query WorkOS directly, so disabling/resetting a connection is recognized without a connection webhook cache.
 
-This feature does **not** enforce SSO-only login, implement SCIM/deprovisioning, revoke existing Cap sessions when a user leaves the IdP, or provide SAML single logout. Standard Cap sign-in remains available. Do not present these as delivered enterprise controls.
+SAML SSO does **not** enforce SSO-only login or provide SAML single logout. Standard Cap sign-in remains available. Do not present these as delivered enterprise controls. Deprovisioning and session revocation come from directory sync, described below.
+
+## Directory sync (SCIM)
+
+Directory sync is included with the SAML SSO add-on and uses WorkOS Directory Sync. Owners and admins open **Directory sync** under **Settings → Organization → Security & Compliance**, which opens the WorkOS Admin Portal with the `dsync` intent. The organization needs an active SSO entitlement and at least one verified WorkOS domain.
+
+Cap reconciles state rather than replaying events. A sync reads the WorkOS organization, its directories, and every user of each `active` directory, then compares that list with `directory_users`, the table of directory users Cap has linked to Cap accounts:
+
+- An active directory user whose email is on a verified domain is linked to the Cap account with that email, or to a new account, and added to the organization as a `member` without a Pro seat. Existing accounts keep their name, active organization, and other memberships. Users on unverified domains are skipped.
+- A linked user who is deactivated or missing from an active directory has the link marked inactive and is removed from the organization through the same helper as a manual removal (seat release, space memberships, invites). If the email is on a verified domain, Cap also revokes the user's web sessions, desktop and mobile keys, CLI agent keys, and MCP tokens. Accounts and content are never deleted.
+- Only linked users are managed. Members who were never linked to a directory user are never removed. The organization owner is never removed or signed out.
+- The directory is the source of truth for linked users. Removing a linked member in Cap is undone at the next sync, so remove them in the directory instead.
+- A user still linked through another active directory user stays a member.
+- Directories that are not `active` (disconnected, invalid credentials, deleting) and lapsed SSO billing pause sync. Neither removes anyone.
+- If one sync would remove at least 10 linked members and more than 20% of them, the removals are held and shown in settings. An owner or admin confirms with **Remove N members**. The approval is valid for an hour.
+
+Syncs are triggered by the `POST /api/webhooks/workos` webhook (any `dsync.*` event), by opening the portal, and by the `/api/cron/directory-sync` cron, which runs every minute. The cron picks up requested syncs and also refreshes every tracked organization every 15 minutes, so a missed webhook only delays changes. A lease on `organization_directory_sync` lets only one sync run per organization at a time. A sync that hits its time budget stops and is resumed by the next cron run. A failed sync is retried after two minutes.
+
+The webhook verifies the `WorkOS-Signature` HMAC over the raw body with `WORKOS_WEBHOOK_SECRET` and a five-minute tolerance. It uses the event only to find the organization, then requests a sync, so a replayed or reordered event cannot change membership. Configure a WorkOS webhook endpoint at `https://cap.so/api/webhooks/workos` for the `dsync.*` events and set its signing secret as `WORKOS_WEBHOOK_SECRET`. Without the secret, the webhook returns 503 and the 15-minute cron refresh keeps directories in sync.
+
+Migration `0052_directory_sync` adds `organization_directory_sync` and `directory_users`. It is additive and must be deployed before the application change. `apps/web/__tests__/integration/directory-sync-database.test.ts` covers the sync against MySQL with the same `CAP_SSO_TEST_DATABASE_URL` rules as the SSO database test.
 
 ## Rollout and verification
 
@@ -106,5 +126,6 @@ Before enabling a customer, verify a real WorkOS flow on the candidate deploymen
 - [Organization domains and profile validation](https://workos.com/docs/sso/domains)
 - [Admin Portal](https://workos.com/docs/admin-portal) and [domain verification](https://workos.com/docs/domain-verification)
 - [JIT provisioning](https://workos.com/docs/sso/jit-provisioning)
+- [Directory Sync](https://workos.com/docs/directory-sync) and [handling inactive users](https://workos.com/docs/directory-sync/handle-inactive-users)
 - [SSO testing](https://workos.com/docs/sso/test-sso) and [launch checklist](https://workos.com/docs/sso/launch-checklist)
 - [SAML security](https://workos.com/docs/sso/saml-security) and [single logout](https://workos.com/docs/sso/single-logout)
