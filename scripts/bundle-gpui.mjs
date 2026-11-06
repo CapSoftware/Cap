@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildMacosBundles } from "./build-macos-bundles.mjs";
+import { buildMacosIcon } from "./build-macos-icon.mjs";
 import { buildMacosPackages } from "./build-macos-packages.mjs";
 
 const repoRoot = path.resolve(
@@ -40,14 +42,27 @@ export function gpuiBinaryPath(target, profile = "release") {
 	);
 }
 
-export function gpuiPlatformConfig(platform) {
+export function gpuiPlatformConfig(
+	platform,
+	{ appexBundles = [], icon = null } = {},
+) {
 	if (platform === "darwin") {
+		const files = Object.fromEntries([
+			...appexBundles.map((bundle) => [
+				`PlugIns/${path.basename(bundle)}`,
+				bundle,
+			]),
+			...(icon ? [["Resources/Assets.car", icon.assets]] : []),
+		]);
 		return {
 			bundle: {
 				resources: {
 					"../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
 						"onnxruntime/lib/libonnxruntime.dylib",
 				},
+				...(Object.keys(files).length > 0 && {
+					macOS: { files },
+				}),
 			},
 		};
 	}
@@ -66,6 +81,10 @@ export function gpuiPlatformConfig(platform) {
 	return null;
 }
 
+export function profileArguments(profile) {
+	return profile === "debug" ? ["--debug"] : [];
+}
+
 export function bundleArguments(target, args) {
 	return ["tauri", "bundle", "--target", target, ...args];
 }
@@ -78,7 +97,7 @@ export function bundleEnvironment(env) {
 	};
 }
 
-function validate(target, args) {
+function validate(target, args, profile) {
 	const platform = targetPlatform(target ?? "");
 	if (!platform || platform !== process.platform) {
 		throw new Error(
@@ -87,6 +106,9 @@ function validate(target, args) {
 	}
 	if (args.some((argument) => /^--(?:target|debug)(?:=|$)/.test(argument))) {
 		throw new Error("The GPUI bundle is always a release build for <target>");
+	}
+	if (profile === "debug" && process.env.CI) {
+		throw new Error("--profile=debug is for local bundles only");
 	}
 	return platform;
 }
@@ -104,8 +126,8 @@ function run(command, args, options = {}) {
 const sha256 = (contents) =>
 	createHash("sha256").update(contents).digest("hex");
 
-export async function stageMainBinary(target) {
-	const source = gpuiBinaryPath(target);
+export async function stageMainBinary(target, profile = "release") {
+	const source = gpuiBinaryPath(target, profile);
 	const destination = path.join(path.dirname(source), mainBinaryName(target));
 	const built = await fs.readFile(source);
 	if (built.length === 0) throw new Error(`${source} is empty`);
@@ -117,8 +139,8 @@ export async function stageMainBinary(target) {
 	return destination;
 }
 
-export async function writePlatformConfig(platform) {
-	const config = gpuiPlatformConfig(platform);
+export async function writePlatformConfig(platform, options) {
+	const config = gpuiPlatformConfig(platform, options);
 	if (!config) return null;
 	const file = path.join(gpuiDirectory, platformConfigNames[platform]);
 	const contents = `${JSON.stringify(config, null, "\t")}\n`;
@@ -128,29 +150,44 @@ export async function writePlatformConfig(platform) {
 }
 
 export function parseOptions(args) {
-	const flags = new Set(["--skip-build", "--no-bundle"]);
+	const flags = new Set(["--skip-build", "--no-bundle", "--profile=debug"]);
 	return {
 		skipBuild: args.includes("--skip-build"),
 		noBundle: args.includes("--no-bundle"),
+		profile: args.includes("--profile=debug") ? "debug" : "release",
 		bundleArgs: args.filter((argument) => !flags.has(argument)),
 	};
 }
 
 export async function bundleGpui(target, args, { env = process.env } = {}) {
-	const { skipBuild, noBundle, bundleArgs } = parseOptions(args);
-	const platform = validate(target, bundleArgs);
+	const { skipBuild, noBundle, profile, bundleArgs } = parseOptions(args);
+	const platform = validate(target, bundleArgs, profile);
 
 	if (!skipBuild) {
 		run("bash", [
 			path.join(repoRoot, "scripts", "build-gpui-binary.sh"),
-			"release",
+			profile,
 			target,
 		]);
 	}
-	const staged = await stageMainBinary(target);
+	const staged = await stageMainBinary(target, profile);
 	console.log(`Staged ${staged}`);
 	if (noBundle) return;
-	await writePlatformConfig(platform);
+	const appexBundles =
+		platform === "darwin" ? await buildMacosBundles(target, { env }) : [];
+	const icon =
+		platform === "darwin"
+			? await buildMacosIcon({
+					outputDirectory: path.join(
+						gpuiDirectory,
+						"target",
+						target,
+						profile,
+						"icon",
+					),
+				})
+			: null;
+	await writePlatformConfig(platform, { appexBundles, icon });
 	if (platform === "linux") {
 		await fs
 			.access(path.join(gpuiDirectory, platformConfigNames.linux))
@@ -161,10 +198,16 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 			});
 	}
 
+	const profileArgs = profileArguments(profile);
 	if (platform === "darwin") {
-		const result = await buildMacosPackages(target, bundleArgs, {
-			env: bundleEnvironment(env),
-		});
+		const result = await buildMacosPackages(
+			target,
+			[...bundleArgs, ...profileArgs],
+			{
+				platformConfig: gpuiPlatformConfig(platform, { appexBundles, icon }),
+				env: bundleEnvironment(env),
+			},
+		);
 		if (result.signal || result.code !== 0) {
 			throw new Error(
 				`macOS GPUI bundling failed with ${result.signal ?? result.code}`,
@@ -173,10 +216,14 @@ export async function bundleGpui(target, args, { env = process.env } = {}) {
 		return;
 	}
 
-	run("bun", ["run", ...bundleArguments(target, bundleArgs)], {
-		cwd: gpuiDirectory,
-		env: bundleEnvironment({ ...env, RUST_TARGET_TRIPLE: target }),
-	});
+	run(
+		"bun",
+		["run", ...bundleArguments(target, [...bundleArgs, ...profileArgs])],
+		{
+			cwd: gpuiDirectory,
+			env: bundleEnvironment({ ...env, RUST_TARGET_TRIPLE: target }),
+		},
+	);
 }
 
 if (
