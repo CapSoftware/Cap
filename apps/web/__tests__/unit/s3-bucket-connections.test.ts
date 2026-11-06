@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
 import { DatabaseError, S3Bucket, User } from "@cap/web-domain";
@@ -55,7 +56,7 @@ import {
 	s3ConnectionPool,
 } from "@cap/web-backend/src/S3Buckets/S3ConnectionPool";
 
-async function storageFixture() {
+async function storageFixture(config: Record<string, string> = {}) {
 	let connections = 0;
 	const sockets = new Set<Socket>();
 	const authorizations: string[] = [];
@@ -86,6 +87,7 @@ async function storageFixture() {
 							["CAP_AWS_BUCKET", "capso"],
 							["S3_INTERNAL_ENDPOINT", endpoint],
 							["S3_PUBLIC_ENDPOINT", endpoint],
+							...Object.entries(config),
 						]),
 					),
 				),
@@ -345,6 +347,72 @@ describe("personal bucket selection", () => {
 			expect(url.searchParams.get("X-Amz-Credential")).toContain(
 				"/eu-west-1/s3/",
 			);
+		} finally {
+			await fixture.close();
+		}
+	});
+});
+
+const { privateKey } = generateKeyPairSync("rsa", {
+	modulusLength: 2048,
+	privateKeyEncoding: { type: "pkcs1", format: "pem" },
+	publicKeyEncoding: { type: "spki", format: "pem" },
+});
+
+const cloudfrontConfig = {
+	CAP_CLOUDFRONT_DISTRIBUTION_ID: "test-distribution",
+	CLOUDFRONT_KEYPAIR_ID: "test-keypair",
+	CLOUDFRONT_KEYPAIR_PRIVATE_KEY: privateKey,
+	CAP_AWS_BUCKET_URL: "https://cdn.example.com",
+};
+
+describe("optional CloudFront signing", () => {
+	it.each([
+		[
+			"every setting",
+			Object.fromEntries(
+				Object.keys(cloudfrontConfig).map((name) => [name, ""]),
+			),
+		],
+		...Object.keys(cloudfrontConfig).map(
+			(name) => [name, { ...cloudfrontConfig, [name]: "" }] as const,
+		),
+	] as const)("uses S3 signing when %s is empty", async (_, config) => {
+		const fixture = await storageFixture(config);
+		try {
+			const [access] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(),
+			);
+			const url = new URL(
+				await fixture.runtime.runPromise(
+					access.getSignedObjectUrl("owner/video/result.mp4"),
+				),
+			);
+			expect(url.origin).toBe(fixture.endpoint);
+			expect(url.pathname).toBe("/capso/owner/video/result.mp4");
+			expect(url.searchParams.has("X-Amz-Signature")).toBe(true);
+			expect(url.searchParams.has("Key-Pair-Id")).toBe(false);
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("uses CloudFront signing when every setting is configured", async () => {
+		const fixture = await storageFixture(cloudfrontConfig);
+		try {
+			const [access] = await fixture.runtime.runPromise(
+				fixture.service.getBucketAccess(),
+			);
+			const url = new URL(
+				await fixture.runtime.runPromise(
+					access.getSignedObjectUrl("owner/video/result.mp4"),
+				),
+			);
+			expect(url.origin).toBe(cloudfrontConfig.CAP_AWS_BUCKET_URL);
+			expect(url.pathname).toBe("/owner/video/result.mp4");
+			expect(url.searchParams.get("Key-Pair-Id")).toBe("test-keypair");
+			expect(url.searchParams.has("Signature")).toBe(true);
+			expect(url.searchParams.has("X-Amz-Signature")).toBe(false);
 		} finally {
 			await fixture.close();
 		}

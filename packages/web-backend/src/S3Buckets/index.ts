@@ -92,10 +92,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		};
 
 		const cloudfrontEnvs = yield* Config.all({
-			distributionId: Config.string("CAP_CLOUDFRONT_DISTRIBUTION_ID"),
-			keypairId: Config.string("CLOUDFRONT_KEYPAIR_ID"),
-			privateKey: Config.string("CLOUDFRONT_KEYPAIR_PRIVATE_KEY"),
-			bucketUrl: Config.string("CAP_AWS_BUCKET_URL"),
+			distributionId: Config.nonEmptyString("CAP_CLOUDFRONT_DISTRIBUTION_ID"),
+			keypairId: Config.nonEmptyString("CLOUDFRONT_KEYPAIR_ID"),
+			privateKey: Config.nonEmptyString("CLOUDFRONT_KEYPAIR_PRIVATE_KEY"),
+			bucketUrl: Config.nonEmptyString("CAP_AWS_BUCKET_URL"),
 		}).pipe(
 			Effect.match({
 				onSuccess: (v) => v,
