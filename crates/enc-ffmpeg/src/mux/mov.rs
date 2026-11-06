@@ -136,6 +136,68 @@ mod tests {
         shades
     }
 
+    fn decoded_first_frame(path: &std::path::Path) -> frame::Video {
+        let mut input = format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let stream_index = stream.index();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut decoded = frame::Video::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() == stream_index {
+                decoder.send_packet(&packet).unwrap();
+                if decoder.receive_frame(&mut decoded).is_ok() {
+                    return decoded;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        decoder.receive_frame(&mut decoded).unwrap();
+        decoded
+    }
+
+    #[test]
+    fn colour_and_straight_alpha_are_encoded_as_bt709_limited_range() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("red.mov");
+        let info = VideoInfo::from_raw(RawVideoFormat::Rgba, WIDTH, HEIGHT, 30);
+        let mut mov = MOVFile::init(path.clone(), |output| {
+            ProResEncoder::builder(info).build(output)
+        })
+        .unwrap();
+
+        let mut source = frame::Video::new(format::Pixel::RGBA, WIDTH, HEIGHT);
+        for pixel in source.data_mut(0).chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[220, 40, 40, 128]);
+        }
+        for index in 0..8 {
+            mov.queue_video_frame(&mut source, Duration::from_secs_f64(index as f64 / 30.0))
+                .unwrap();
+        }
+        mov.finish().unwrap();
+
+        let decoded = decoded_first_frame(&path);
+        assert_eq!(decoded.format(), format::Pixel::YUVA444P12LE);
+        let sample = |plane: usize| {
+            f64::from(u16::from_le_bytes([
+                decoded.data(plane)[0],
+                decoded.data(plane)[1],
+            ])) / 16.0
+        };
+        let [y, cb, cr, alpha] = [sample(0), sample(1), sample(2), sample(3)];
+        // (220,40,40) is Y 83.2, Cb 109.9, Cr 207.1 in BT.709 limited range.
+        // BT.601 would give Y 96 and Cb 101, full range Y 78, and an encoder
+        // that read the input as premultiplied would brighten red to 255.
+        assert!((y - 83.2).abs() <= 1.5, "Y {y}");
+        assert!((cb - 109.9).abs() <= 1.5, "Cb {cb}");
+        assert!((cr - 207.1).abs() <= 1.5, "Cr {cr}");
+        assert!((alpha - 128.0).abs() <= 1.5, "alpha {alpha}");
+    }
+
     #[test]
     fn every_queued_frame_is_encoded_with_its_own_pixels() {
         ffmpeg::init().unwrap();
