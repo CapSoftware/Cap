@@ -317,7 +317,7 @@ impl Muxer for WindowsMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((session, encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -350,8 +350,12 @@ impl Muxer for WindowsMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((_session, mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
                         let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
@@ -848,7 +852,7 @@ impl Muxer for WindowsCameraMuxer {
                             };
 
                             match muxer {
-                                Ok(muxer) => Ok(either::Left((session, encoder, muxer))),
+                                Ok(muxer) => Ok(either::Left((encoder, muxer, session))),
                                 Err(err) => fallback(Some(err.to_string())),
                             }
                         }
@@ -881,8 +885,12 @@ impl Muxer for WindowsCameraMuxer {
                     }
                 }
 
+                // Outlives the arm's encoder, so the encoder closes while it is
+                // still reported live.
+                let mut _media_foundation_session = None;
                 match encoder {
-                    either::Left((_session, mut encoder, mut muxer)) => {
+                    either::Left((mut encoder, mut muxer, session)) => {
+                        _media_foundation_session = Some(session);
                         info!(
                             "Windows camera encoder started (hardware) with frame pacing: {:?} {}x{} -> NV12 {}x{} @ {}fps",
                             input_format,
