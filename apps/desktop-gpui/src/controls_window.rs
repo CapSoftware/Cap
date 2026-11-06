@@ -517,9 +517,7 @@ impl ControlsWindow {
                             .child(
                                 self.action_button(
                                     "settings",
-                                    if diatribe {
-                                        crate::mode_choice::DIATRIBE_ICON
-                                    } else if has_walk {
+                                    if has_walk {
                                         "icons/ux-walk.svg"
                                     } else {
                                         "icons/settings.svg"
@@ -527,18 +525,17 @@ impl ControlsWindow {
                                     !has_walk,
                                 )
                                 .when(has_walk, |this| {
-                                    this.tooltip(move |_, cx| {
-                                        ui::Tooltip::new(
-                                            &theme,
-                                            if diatribe {
-                                                "Diatribe notes"
-                                            } else {
-                                                "Walk notes & chapters"
-                                            },
-                                        )
-                                        .view(cx)
-                                    })
-                                    .on_click(|_, _, cx| cx.defer(crate::ux_walk_window::open))
+                                    let label = if diatribe {
+                                        "Notes"
+                                    } else {
+                                        "Notes & chapters"
+                                    };
+                                    this.role(gpui::Role::Button)
+                                        .aria_label(label)
+                                        .tooltip(move |_, cx| {
+                                            ui::Tooltip::new(&theme, label).view(cx)
+                                        })
+                                        .on_click(|_, _, cx| cx.defer(crate::ux_walk_window::open))
                                 }),
                             ),
                     ),

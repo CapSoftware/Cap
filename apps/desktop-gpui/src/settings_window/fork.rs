@@ -106,9 +106,23 @@ fn shown_walk(item: &RecordingItem) -> Option<&crate::ux_walk_library::WalkSumma
 }
 
 pub(super) fn row_title(item: &RecordingItem) -> String {
-    shown_walk(item)
-        .map(|walk| walk.topic.clone())
-        .unwrap_or_else(|| item.pretty_name.clone())
+    match shown_walk(item) {
+        Some(walk) if walk.diatribe => {
+            chrono::TimeZone::timestamp_millis_opt(&chrono::Local, walk.started_at_ms as i64)
+                .single()
+                .map_or_else(
+                    || crate::mode_choice::DIATRIBE_NAME.into(),
+                    crate::mode_choice::diatribe_title,
+                )
+        }
+        Some(walk) => walk.topic.clone(),
+        None => item.pretty_name.clone(),
+    }
+}
+
+/// Instant rows get the blue pill; Worm Mode rows, diatribes included, stay gray.
+pub(super) fn row_pill_tinted(item: &RecordingItem) -> bool {
+    shown_walk(item).is_none() && item.mode == RecordingMode::Instant
 }
 
 pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
@@ -199,17 +213,15 @@ impl SettingsWindow {
             return actions;
         };
         let notes = walk.file.clone();
-        let (icon, label) = if walk.notes {
-            ("icons/scan-text.svg", "View notes")
-        } else if walk.diatribe {
-            (crate::mode_choice::DIATRIBE_ICON, "View notes")
+        let icon = if walk.notes {
+            "icons/scan-text.svg"
         } else {
-            ("icons/ux-walk.svg", "View walk notes")
+            "icons/ux-walk.svg"
         };
         actions = actions.child(self.row_button(
             "recording-walk-notes",
             icon,
-            label,
+            "View notes",
             false,
             cx,
             move |_, _, cx| {
@@ -322,7 +334,7 @@ impl SettingsWindow {
             if revoke {
                 "Revoking link…"
             } else {
-                "Sharing video only. Walk notes and browser traces stay local…"
+                "Sharing video only. Notes and browser traces stay local…"
             }
             .into(),
         );
@@ -601,11 +613,22 @@ mod tests {
         ));
         assert_eq!(row_label(&talk), "Diatribe");
         assert_eq!(row_icon(&talk), crate::mode_choice::DIATRIBE_ICON);
-        assert_eq!(row_title(&talk), "Diatribe");
+        assert!(!row_pill_tinted(&talk));
+        let started = chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2026, 11, 5, 18, 20, 0)
+            .single()
+            .unwrap();
+        talk.walk.as_mut().unwrap().started_at_ms = started.timestamp_millis() as u64;
+        assert_eq!(row_title(&talk), "Diatribe 2026-11-05 18.20");
         let mut walk = talk.clone();
         walk.walk.as_mut().unwrap().diatribe = false;
         assert_eq!(row_label(&walk), fork_brand::WALK_MODE_NAME);
         assert_eq!(row_icon(&walk), "icons/ux-walk.svg");
+        assert_eq!(row_title(&walk), "Diatribe");
+        assert!(!row_pill_tinted(&walk));
+        assert!(row_pill_tinted(&recording(
+            "Instant",
+            RecordingMode::Instant
+        )));
     }
 
     #[cfg(all(target_os = "macos", feature = "ux-walk"))]

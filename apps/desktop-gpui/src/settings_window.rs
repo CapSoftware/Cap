@@ -2979,12 +2979,13 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .flex_col()
+                    .flex_1()
                     .gap(px(8.))
                     .min_w_0()
                     .child(
                         div()
                             .w_full()
-                            .truncate()
+                            .line_clamp(2)
                             .text_size(px(14.))
                             .child(fork::row_title(item)),
                     )
@@ -3065,9 +3066,10 @@ impl SettingsWindow {
             .gap(px(4.))
             .child(
                 // `bg-blue-100` for instant, `bg-gray-4` for studio.
-                pill(match item.mode {
-                    RecordingMode::Instant => Hsla::from(theme.blue_100),
-                    RecordingMode::Studio => theme.settings_fill(),
+                pill(if fork::row_pill_tinted(item) {
+                    Hsla::from(theme.blue_100)
+                } else {
+                    theme.settings_fill()
                 })
                 .child(glyph(fork::row_icon(item)))
                 .child(fork::row_label(item)),

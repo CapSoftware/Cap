@@ -183,7 +183,7 @@ impl RecordingSession {
         if let Err(error) = begin_browser(&journal, window_id) {
             self.walk.notice =
                 format!("Recording and notes are saving. Browser evidence is unavailable: {error}");
-            self.error = Some("Browser evidence is unavailable. Video and notes are still recording. Open walk notes for details.".into());
+            self.error = Some("Browser evidence is unavailable. Video and notes are still recording. Open the notes for details.".into());
         }
         self.walk.journal = Some(journal);
         // Evidence checkpoints read Studio segments; an Instant diatribe has none, and its
@@ -309,7 +309,7 @@ impl RecordingSession {
         {
             self.walk.notice = reason;
             if self.error.is_none() {
-                self.error = Some("Browser evidence stopped. Video and notes are still recording. Open walk notes for details.".into());
+                self.error = Some("Browser evidence stopped. Video and notes are still recording. Open the notes for details.".into());
                 cx.notify();
             }
         }

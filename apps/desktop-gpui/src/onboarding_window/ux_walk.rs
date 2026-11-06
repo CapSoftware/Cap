@@ -7,13 +7,13 @@ pub(super) const DETAIL: ModeDetail = ModeDetail {
     mode: ModeChoice::UxWalk,
     title: || fork_brand::WALK_MODE_NAME,
     tagline: || "Record, note & review",
-    description: || "Open a fresh browser window, already selected for recording. Walk through your product with native capture controls, notes, chapters and transcripts.",
+    description: || "Walk through your product in a fresh browser window, or choose Diatribe and just talk. Either way your agent gets notes and transcripts.",
     icon: "icons/ux-walk.svg",
     features: [
-        || "Fresh browser window, ready to record",
+        || "A fresh browser window",
+        || "Or Diatribe: just talk",
         || "Timestamped notes & chapters",
-        || "Diatribe: just talk, get action items",
-        || "Evidence for your agent",
+        || "Transcripts for your agent",
     ],
 };
 
@@ -63,18 +63,18 @@ pub(super) fn demo(index: usize, theme: &Theme) -> Option<AnyElement> {
                 [
                     (
                         "1",
-                        "Open your walk window",
-                        "A new browser window is selected for recording.",
+                        "Choose Worm or Diatribe",
+                        "Worm opens a fresh browser window. Diatribe just listens.",
                     ),
                     (
                         "2",
-                        "Add notes and chapters",
-                        "Keep observations beside the recording.",
+                        "Walk through it, or just talk",
+                        "Add notes and chapters as you go.",
                     ),
                     (
                         "3",
-                        "Review and hand off",
-                        "Give your agent the evidence and context.",
+                        "Hand off to your agent",
+                        "It gets the notes and transcripts.",
                     ),
                 ]
                 .into_iter()

@@ -2386,7 +2386,11 @@ impl MainWindow {
             return;
         }
         if self.diatribe_selected(cx) {
-            self.start_diatribe(Some((target, excluded_windows)), cx);
+            self.start_diatribe(
+                ux_walk::DiatribeStart::Chosen,
+                Some((target, excluded_windows)),
+                cx,
+            );
             return;
         }
         // An armed editor recording target forces Studio before this window's
@@ -6996,6 +7000,7 @@ impl MainWindow {
     /// `BaseControls`: camera, microphone, system audio.
     fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let diatribe = self.diatribe_selected(cx);
+        let diatribe_microphone = diatribe.then(|| self.diatribe_microphone());
         div()
             .flex()
             .flex_col()
@@ -7008,7 +7013,7 @@ impl MainWindow {
                     .line_height(px(14.))
                     .text_color(self.theme.gray_11)
                     .child(if diatribe {
-                        "Choose your microphone"
+                        "Choose your audio"
                     } else {
                         tr::main::device::heading()
                     }),
@@ -7059,17 +7064,23 @@ impl MainWindow {
                     self.render_device_row(
                         "microphone-row",
                         "icons/microphone.svg",
-                        self.microphone
-                            .as_ref()
-                            .map(|mic| mic.name.clone())
-                            .unwrap_or_else(|| {
-                                if diatribe {
-                                    "Default microphone".into()
-                                } else {
-                                    tr::main::device::no_microphone().into()
-                                }
-                            }),
-                        if self.microphone.is_some()
+                        match (&self.microphone, diatribe_microphone.as_ref()) {
+                            (_, Some(ux_walk::DiatribeMicrophone::Missing)) => {
+                                "No microphone found".into()
+                            }
+                            (Some(mic), _) => mic.name.clone(),
+                            (None, Some(ux_walk::DiatribeMicrophone::Default(name))) => {
+                                format!("{name} (default)")
+                            }
+                            (None, Some(_)) => "Default microphone".into(),
+                            (None, None) => tr::main::device::no_microphone().into(),
+                        },
+                        if matches!(
+                            diatribe_microphone,
+                            Some(ux_walk::DiatribeMicrophone::Missing)
+                        ) {
+                            PillState::Off
+                        } else if (self.microphone.is_some() || diatribe)
                             && let Some(pill) = self.access_pill(OSPermission::Microphone, cx)
                         {
                             pill

@@ -5,6 +5,11 @@ use crate::{app_windows, i18n::tr, main_window::Mode, settings_window::Page};
 pub const DIATRIBE_NAME: &str = "Diatribe";
 pub const DIATRIBE_ICON: &str = "icons/microphone.svg";
 
+/// A diatribe's name in the library and the tray: "Diatribe 2026-11-05 18.20".
+pub fn diatribe_title(at: chrono::DateTime<chrono::Local>) -> String {
+    format!("{DIATRIBE_NAME} {}", at.format("%Y-%m-%d %H.%M"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeChoice {
     Capture(Mode),
@@ -69,7 +74,7 @@ impl ModeChoice {
                  reports, and visual communication."
             }
             Self::UxWalk => {
-                "Walk through your product in a new browser window, or choose Diatribe and just talk. Notes, transcripts and action items are ready for your agent."
+                "Walk through your product in a fresh browser window, or choose Diatribe and just talk. Either way your agent gets notes and transcripts."
             }
         }
     }
@@ -82,7 +87,7 @@ impl ModeChoice {
             Self::Capture(Mode::Instant) => "Share instantly with a link. Uploads as you record.",
             Self::Capture(Mode::Studio) => "Highest quality local recording for editing later.",
             Self::Capture(Mode::Screenshot) => "Capture and annotate screenshots instantly.",
-            Self::UxWalk => "Record a walk, or just talk with Diatribe.",
+            Self::UxWalk => "Record a worm or a diatribe.",
         }
     }
 
@@ -99,7 +104,7 @@ impl ModeChoice {
             }
             Self::Capture(Mode::Screenshot) => "Capture and annotate stills.",
             Self::UxWalk => {
-                "Record a walk in a new browser window with its clicks, console and failed requests, or choose Diatribe to record just your voice and screen. Either way you get notes for your agent."
+                "A worm records a fresh Chrome window with its clicks, console and failed requests. A diatribe records your voice and the screen under your pointer, with no browser. Either way your agent gets notes and transcripts."
             }
         }
     }
