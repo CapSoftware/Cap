@@ -461,6 +461,14 @@ export default function CapDetailScreen() {
 		let active = true;
 		setPlaybackLoading(true);
 		setPlaybackError(null);
+		const subscription = player.addListener(
+			"statusChange",
+			({ status, error }) => {
+				if (!active || status !== "error") return;
+				setPlaybackLoading(false);
+				setPlaybackError(error?.message ?? "Unable to play this video");
+			},
+		);
 		player
 			.replaceAsync({
 				uri: playback.url,
@@ -477,8 +485,22 @@ export default function CapDetailScreen() {
 
 		return () => {
 			active = false;
+			subscription.remove();
 		};
 	}, [playback, player]);
+
+	const retryPlayback = async () => {
+		if (playbackLoading || typeof id !== "string") return;
+		setPlaybackLoading(true);
+		setPlaybackError(null);
+		setHasPlayed(false);
+		try {
+			setPlayback(await apiClient.getPlayback(id));
+		} catch (error) {
+			setPlaybackLoading(false);
+			setPlaybackError(getCapDetailErrorMessage(error));
+		}
+	};
 
 	useEffect(() => {
 		if (!copied) return;
@@ -1038,11 +1060,9 @@ export default function CapDetailScreen() {
 											<ActionButton
 												accessibilityHint="Reloads this video"
 												label="Try again"
-												onPress={() =>
-													setPlayback((current) =>
-														current ? { ...current } : current,
-													)
-												}
+												onPress={() => {
+													void retryPlayback();
+												}}
 												symbol="arrow.clockwise"
 												variant="secondary"
 											/>
