@@ -2,10 +2,10 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
 const MIN_BALANCE_MICRO_CREDITS = 5_000;
@@ -25,7 +25,7 @@ app.post(
 			name: z.string().max(255).optional(),
 			userId: z.string().max(255).optional(),
 			metadata: z
-				.record(z.unknown())
+				.record(z.string(), z.unknown())
 				.optional()
 				.refine(
 					(val) => val === undefined || JSON.stringify(val).length <= 8192,
