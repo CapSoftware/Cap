@@ -159,6 +159,7 @@ mod tests {
             speakers: Vec::new(),
             kind: Kind::Notes,
             project: None,
+            external: None,
         };
         assert!(!request.uses_browser());
         assert!(!request.opens_walk_window());

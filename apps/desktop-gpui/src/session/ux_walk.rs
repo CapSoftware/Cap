@@ -4,6 +4,7 @@ use gpui::{Context, Task};
 
 use super::{Phase, RecordingSession};
 use crate::recording::StartConfig;
+use crate::ux_walk::external::{self, State as ExternalState};
 use crate::ux_walk_journal::Journal;
 
 pub struct WalkState {
@@ -125,7 +126,18 @@ impl RecordingSession {
         }
         // An Instant restart (a diatribe's) starts again without passing through `finish`, so
         // the discarded take's journal is closed here; a Studio restart already closed it.
+        // Restarting an outside walk keeps it going for its caller.
+        let restarting = self.walk.restarting;
+        self.walk.restarting |= self.walk.journal.as_ref().is_some_and(|walk| {
+            walk.request.external.is_some()
+                && walk.request.external
+                    == config
+                        .ux_walk
+                        .as_ref()
+                        .and_then(|request| request.external.clone())
+        });
         self.walk_abort();
+        self.walk.restarting = restarting;
         self.walk.journal = None;
         self.walk.notes = None;
         self.walk.processing = false;
@@ -145,6 +157,7 @@ impl RecordingSession {
             self.begin_notes(request);
             return true;
         }
+        let external = request.external.clone();
         let journal = match Journal::begin(
             request,
             self.active.as_ref().unwrap().project_dir.clone(),
@@ -152,6 +165,10 @@ impl RecordingSession {
         ) {
             Ok(journal) => journal,
             Err(error) => {
+                external::fail(
+                    external.as_deref(),
+                    &format!("Could not create the walk journal: {error}"),
+                );
                 self.error = Some(format!("Could not create the walk journal: {error}"));
                 self.stop(cx);
                 return false;
@@ -185,6 +202,13 @@ impl RecordingSession {
                 format!("Recording and notes are saving. Browser evidence is unavailable: {error}");
             self.error = Some("Browser evidence is unavailable. Video and notes are still recording. Open the notes for details.".into());
         }
+        external::update(external.as_deref(), |status| {
+            status.advance(
+                ExternalState::Recording,
+                &self.walk.notice,
+                Some(&journal.request.directory),
+            )
+        });
         self.walk.journal = Some(journal);
         // Evidence checkpoints read Studio segments; an Instant diatribe has none, and its
         // transcript comes from the finished video when it stops.
@@ -352,10 +376,25 @@ impl RecordingSession {
             if let Err(error) = walk.abort() {
                 tracing::error!(%error, "saving interrupted walk journal");
             }
+            if !self.walk.restarting {
+                external::fail(
+                    walk.request.external.as_deref(),
+                    "The recording ended without a completed walk. Its notes are saved in its folder.",
+                );
+            }
             self.walk.notice =
                 "Recording ended without a completed walk. Your notes are saved in its folder."
                     .into();
         }
+    }
+
+    /// The outside caller's id for the walk being recorded, if another app started it.
+    pub fn walk_external_id(&self) -> Option<String> {
+        self.walk
+            .journal
+            .as_ref()
+            .filter(|walk| walk.state == "recording")
+            .and_then(|walk| walk.request.external.clone())
     }
 
     pub fn add_walk_event(
@@ -390,8 +429,10 @@ impl RecordingSession {
         let Some(walk) = self.walk.journal.as_mut() else {
             return false;
         };
+        let external_id = walk.request.external.clone();
         if let Err(error) = walk.complete(elapsed) {
             self.walk.notice = format!("Walk files saved; could not finish the journal: {error}");
+            external::fail(external_id.as_deref(), &self.walk.notice);
             self.finish(cx);
             cx.defer(crate::ux_walk_window::open);
             return true;
@@ -400,6 +441,9 @@ impl RecordingSession {
         let browser_journal = walk.clone();
         let generation = self.recording_generation;
         self.walk.notice = "Saving an independent copy of the Cap project…".into();
+        external::update(external_id.as_deref(), |status| {
+            status.advance(ExternalState::Stopping, &self.walk.notice, None)
+        });
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -419,7 +463,8 @@ impl RecordingSession {
                     Err(error) => {
                         this.walk.notice = format!(
                             "Your recording and notes are saved. Could not prepare the walk: {error}"
-                        )
+                        );
+                        external::fail(external_id.as_deref(), &this.walk.notice);
                     }
                 }
                 cx.defer(crate::ux_walk_window::open);
@@ -571,12 +616,16 @@ impl RecordingSession {
         }
         let file = walk.file();
         let diatribe = walk.request.is_diatribe();
+        let external_id = walk.request.external.clone();
         self.walk.processing = true;
         self.walk.notice = if diatribe {
             "Transcribing and organizing your notes, decisions and action items…".into()
         } else {
             "Preparing chapters, screenshots and transcript…".into()
         };
+        external::update(external_id.as_deref(), |status| {
+            status.advance(ExternalState::Processing, &self.walk.notice, None)
+        });
         cx.notify();
         cx.spawn(async move |this, cx| {
             let completed = file.clone();
@@ -594,6 +643,7 @@ impl RecordingSession {
                     return;
                 }
                 this.walk.processing = false;
+                let ok = result.is_ok();
                 this.walk.notice = match result {
                     Ok(_) if diatribe => {
                         "Diatribe ready. Open the notes or copy the agent prompt.".into()
@@ -605,6 +655,14 @@ impl RecordingSession {
                         format!("Recording and notes saved. Processing needs attention: {error}")
                     }
                 };
+                let notice = this.walk.notice.clone();
+                external::update(external_id.as_deref(), |status| {
+                    if ok {
+                        status.advance(ExternalState::Ready, &notice, None)
+                    } else {
+                        status.fail(&notice)
+                    }
+                });
                 cx.notify();
             })
             .ok();
@@ -632,6 +690,7 @@ mod tests {
                 speakers: Vec::new(),
                 kind,
                 project: None,
+                external: None,
             },
             directory.with_extension("cap"),
             100_000,

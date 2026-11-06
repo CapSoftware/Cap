@@ -24,6 +24,7 @@ fn request() -> Request {
         speakers: vec!["Tester".into()],
         kind: Kind::Walk,
         project: None,
+        external: None,
     }
 }
 
@@ -97,6 +98,7 @@ fn a_diatribe_request_records_its_kind_and_no_browser() {
         url: String::new(),
         topic: "Diatribe".into(),
         kind: Kind::Diatribe,
+        external: None,
         ..request()
     };
     assert!(req.is_diatribe());
@@ -114,6 +116,20 @@ fn a_diatribe_request_records_its_kind_and_no_browser() {
     assert!(next.is_diatribe());
     assert_eq!(next.directory.file_name().unwrap(), "diatribe-again");
     fs::remove_dir_all(req.directory).unwrap();
+}
+
+#[test]
+fn an_outside_callers_id_stays_out_of_the_journal_but_survives_a_restart() {
+    let mut req = request();
+    req.external = Some("z3-run-1".into());
+    let value = serde_json::to_value(&req).unwrap();
+    assert!(value.get("external").is_none());
+    let reread: Request = serde_json::from_value(value).unwrap();
+    assert_eq!(reread.external, None);
+    assert_eq!(
+        req.for_restart("again").external.as_deref(),
+        Some("z3-run-1")
+    );
 }
 
 #[test]
@@ -160,6 +176,7 @@ fn notes_ride_on_an_ordinary_recording_without_browser_or_walk_window() {
         url: String::new(),
         topic: "Standup".into(),
         kind: Kind::Notes,
+        external: None,
         ..request()
     };
     assert!(req.is_notes());
@@ -173,6 +190,7 @@ fn notes_ride_on_an_ordinary_recording_without_browser_or_walk_window() {
     assert!(
         Request {
             kind: Kind::Diatribe,
+            external: None,
             ..request()
         }
         .opens_walk_window()
@@ -199,6 +217,7 @@ fn notes_ride_on_an_ordinary_recording_without_browser_or_walk_window() {
 fn notes_for_an_earlier_recording_are_written_complete() {
     let req = Request {
         kind: Kind::Notes,
+        external: None,
         ..request()
     };
     assert!(

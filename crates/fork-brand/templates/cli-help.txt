@@ -3,3 +3,4 @@ Use %cli% sharing configure --server https://your-server.example --enable to cho
 Supply an upload credential with --token-stdin, or CAP_UX_UPLOAD_TOKEN for a headless session.
 Use %cli% upload FILE --json to share explicitly, and %cli% sharing revoke ID to revoke a link.
 Use %cli% guide --json for local capture, export and library commands.
+Use %cli% walk start --mode worm|diatribe --topic TOPIC --json to record a %walk% from another app; walk status ID --follow --json reports it and walk stop ID ends it.
