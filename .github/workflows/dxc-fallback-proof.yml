@@ -1,0 +1,57 @@
+name: DXC fallback proof (temporary)
+
+on:
+  push:
+    branches:
+      - fix/windows-dxc-fxc-fallback
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-sync
+          save-cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node scripts/setup.js
+
+      - name: Add FFmpeg DLLs to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Fallback unit tests (bundled DXC intact)
+        shell: bash
+        run: |
+          cargo test --locked -p cap-rendering --lib dx12_compiler_fallback_tests -- --nocapture 2>&1 | tee unit.txt
+          echo "----- summary -----"
+          grep -h "device created on FXC\|dx12 init error\|no bundled DXC\|test result\|^test " unit.txt
+
+      - name: Whole cap-rendering suite with an unloadable bundled DXC (every GPU test on FXC)
+        shell: bash
+        run: |
+          cargo test --locked -p cap-rendering --no-run
+          printf '' > target/debug/deps/dxcompiler.dll
+          printf '' > target/debug/deps/dxil.dll
+          ls -la target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: --skip loadable_bundled_dxc_is_kept 2>&1 | tee fxc-suite.txt
+          echo "----- summary -----"
+          grep -h "test result\|FAILED\|panicked" fxc-suite.txt
+          grep -h "test result" fxc-suite.txt | awk '{p+=$4; f+=$6} END {print "TOTAL passed", p, "failed", f}'
