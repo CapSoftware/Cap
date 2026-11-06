@@ -101,3 +101,17 @@ notification, and open-editor actions are desktop-only and are skipped on the CL
 rules with `cap automations list --json`.
 
 Run `cap --help` or `cap <command> --help` for full flag documentation.
+
+## Window-only recording (Focus)
+
+`cap record start --window <id> --window-only --detach --json` captures the selected
+window's content using the existing Focus capture engine on macOS and Windows.
+Without `--window-only`, `--window` retains its existing screen-region behavior.
+The option requires `--window` and is unavailable on Linux. Studio supports a
+separate camera track; Instant with `--window-only` rejects `--camera` because that
+combination would fall back to screen-region capture. Stop detached recordings
+with `cap record stop --id <recordingId> --json`.
+
+Focus does not guarantee smooth background WebGL rendering or complete input or
+privacy isolation. Keyboard/cursor controls, application-specific audio, browser
+throttling, and MCP recording tools are separate concerns.
