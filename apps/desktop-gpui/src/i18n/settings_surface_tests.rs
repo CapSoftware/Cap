@@ -39,8 +39,6 @@ const FORMATTED: &[&str] = &[
     "settings.cli.installs_command",
     "settings.cli.path_missing",
     "settings.transcription.count",
-    "settings.experimental.switch.open_failed",
-    "settings.experimental.switch.check_failed",
     "settings.feedback.diagnostic.confirm_body",
     "settings.changelog.version",
     "settings.integrations.managed_by",
@@ -286,6 +284,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::shortcuts::recording_description(),
             "Start a recording without opening Cap first.",
         ),
+        (tr::settings::shortcuts::cancelling_title(), "Cancelling"),
+        (
+            tr::settings::shortcuts::cancelling_description(),
+            "For screenshots and recordings started from a shortcut or the tray.",
+        ),
         (
             tr::settings::shortcuts::while_recording_title(),
             "While recording",
@@ -388,6 +391,30 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Nothing opens",
         ),
         (
+            tr::settings::shortcuts::on_cancel::title(),
+            "When you cancel",
+        ),
+        (
+            tr::settings::shortcuts::on_cancel::hint(),
+            "Esc or closing the picker",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::cancel_stay_hidden_hint(),
+            "Unless Cap was open",
+        ),
+        (
             tr::settings::shortcuts::label::screenshot_area(),
             "Screenshot an area",
         ),
@@ -428,6 +455,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Cycle recording mode",
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
+        (tr::settings::shortcuts::label::add_marker(), "Add marker"),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
@@ -511,52 +539,6 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::experimental::muxer_description(),
             "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary.",
-        ),
-        (tr::settings::experimental::developer(), "Developer"),
-        (
-            tr::settings::experimental::developer_description(),
-            "Only shown in development builds.",
-        ),
-        (tr::settings::experimental::native_app(), "Use native app"),
-        (
-            tr::settings::experimental::native_app_description(),
-            "Turn off to close this app and reopen the classic Tauri app in the dev harness. Recordings and settings are shared.",
-        ),
-        (
-            tr::settings::experimental::switch::switching(),
-            "Switching back to the classic Cap app.",
-        ),
-        (
-            tr::settings::experimental::switch::data_stays(),
-            "Your recordings and settings stay exactly where they are.",
-        ),
-        (
-            tr::settings::experimental::switch::opening(),
-            "Opening the classic Cap app",
-        ),
-        (
-            tr::settings::experimental::switch::opening_detail(),
-            "This window will close when the classic Cap app is ready.",
-        ),
-        (
-            tr::settings::experimental::switch::busy(),
-            "Finish your recording, export, upload, import, or transcription task before switching to the classic app.",
-        ),
-        (
-            tr::settings::experimental::switch::not_found(),
-            "Couldn't find the classic Cap app to switch back to.",
-        ),
-        (
-            tr::settings::experimental::switch::save_failed(),
-            "Couldn't save your app preference. Cap is still open.",
-        ),
-        (
-            tr::settings::experimental::switch::timed_out(),
-            "The classic app hasn't opened. Check the dev terminal for build errors, then try again.",
-        ),
-        (
-            tr::settings::experimental::switch::failed(),
-            "Couldn't open the classic Cap app.",
         ),
         (tr::settings::feedback::title(), "Feedback"),
         (
@@ -1495,14 +1477,6 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::settings::cli::load_failed(&error),
         format!("Couldn't load CLI status: {error}")
-    );
-    assert_eq!(
-        tr::settings::experimental::switch::open_failed(&error),
-        format!("Couldn't open the classic Cap app: {error}")
-    );
-    assert_eq!(
-        tr::settings::experimental::switch::check_failed(&error),
-        format!("Couldn't check whether the classic Cap app opened: {error}")
     );
     let path_entry = "~/.local/bin".to_string();
     assert_eq!(

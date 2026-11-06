@@ -37,6 +37,7 @@ mod editor_hover_bench;
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_shapes;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
@@ -77,7 +78,9 @@ mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod power;
 mod presets;
+mod style_presets;
 mod project_save;
 mod recording;
 mod screenshot;
@@ -98,6 +101,7 @@ mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
+mod transcript;
 mod transcription;
 mod tray;
 mod ui;
@@ -165,10 +169,9 @@ fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Windows ends the process at logoff or shutdown without running
-/// `on_app_quit`, so both markers that mean "this session crashed" clear here.
+/// `on_app_quit`, so the marker that means "this session crashed" clears here.
 #[cfg(target_os = "windows")]
 fn end_windows_session() {
-    crate::store::clear_handoff_marker();
     crash_capture::mark_clean_exit();
 }
 
@@ -343,9 +346,6 @@ fn main() {
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
     blur_recovery::configure(previous_session);
-    if cfg!(debug_assertions) {
-        store::mark_handoff_session();
-    }
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
@@ -479,18 +479,13 @@ fn main() {
             return;
         };
 
-        if cfg!(debug_assertions) {
-            cx.on_app_quit(|_| async {
-                crate::store::clear_handoff_marker();
-            })
-            .detach();
-        }
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();
         })
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        power::install(cx);
         #[cfg(target_os = "macos")]
         match platform::install_native_quit_handler() {
             Ok(requests) => {

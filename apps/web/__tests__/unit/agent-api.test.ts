@@ -77,6 +77,20 @@ describe("agent API normalization", () => {
 		expect(agentTranscriptRevision(rendered)).toMatch(/^[a-f0-9]{64}$/);
 	});
 
+	it("preserves spoken arrows inside cue text and stops only at actual time boundaries", () => {
+		const cues = parseAgentVtt(
+			"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nThe message says --> continue\nA -> B, not a timing cue\n00:00:02.000 --> 00:00:03.500\nNext sentence\n",
+		);
+		expect(cues).toEqual([
+			{
+				startMs: 1_000,
+				endMs: 2_000,
+				text: "The message says --> continue\nA -> B, not a timing cue",
+			},
+			{ startMs: 2_000, endMs: 3_500, text: "Next sentence" },
+		]);
+	});
+
 	it("removes complete and unterminated VTT tags", () => {
 		const cues = parseAgentVtt(
 			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nSafe <script>alert(1)</script> text\n\n2\n00:00:01.000 --> 00:00:02.000\nBefore <script\n",
@@ -178,6 +192,31 @@ describe("agent API normalization", () => {
 		expect(status.overall).toBe("processing");
 		expect(status.transcript.status).toBe("processing");
 		expect(status.ai.status).toBe("queued");
+	});
+
+	it("reports stable upload error codes without raw processing details", () => {
+		const status = (uploadError: string | null) =>
+			agentStatus({
+				id: Video.VideoId.make("cap_synthetic_failed"),
+				updatedAt: new Date("2026-07-18T12:00:00.000Z"),
+				transcriptionStatus: null,
+				uploadPhase: "error",
+				uploadError,
+			}).upload;
+
+		expect(status("AGENT_UPLOAD_DURATION_LIMIT_EXCEEDED")).toEqual({
+			status: "error",
+			reason: "AGENT_UPLOAD_DURATION_LIMIT_EXCEEDED",
+			retryable: true,
+		});
+		expect(
+			status("ffmpeg exited with code 1: Invalid data found at /tmp/x"),
+		).toEqual({
+			status: "error",
+			reason: "PROCESSING_FAILED",
+			retryable: true,
+		});
+		expect(status(null).reason).toBe("PROCESSING_FAILED");
 	});
 
 	it("creates portable download names", () => {

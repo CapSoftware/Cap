@@ -7,7 +7,9 @@ import {
 	type ReactNode,
 	useCallback,
 	useContext,
+	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { getAvailableTranslations } from "@/actions/videos/get-available-translations";
@@ -18,6 +20,10 @@ import {
 } from "@/actions/videos/translation-languages";
 
 export type CaptionLanguage = LanguageCode | "original" | "off";
+
+const TRANSLATION_RETRY_WINDOW_MS = 6 * 60 * 1000;
+const TRANSLATION_RETRY_DELAY_MS = 5_000;
+const TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS = 30_000;
 
 interface AvailableTranslation {
 	code: LanguageCode;
@@ -50,6 +56,22 @@ export function CaptionProvider({
 	videoId,
 	transcriptionStatus,
 }: CaptionProviderProps) {
+	return (
+		<CaptionProviderForVideo
+			key={videoId}
+			videoId={videoId}
+			transcriptionStatus={transcriptionStatus}
+		>
+			{children}
+		</CaptionProviderForVideo>
+	);
+}
+
+function CaptionProviderForVideo({
+	children,
+	videoId,
+	transcriptionStatus,
+}: CaptionProviderProps) {
 	const [selectedLanguage, setSelectedLanguage] =
 		useState<CaptionLanguage>("original");
 	const [isTranslating, setIsTranslating] = useState(false);
@@ -59,6 +81,17 @@ export function CaptionProvider({
 	const [originalVttContent, setOriginalVttContent] = useState<string | null>(
 		null,
 	);
+	const mounted = useRef(true);
+	const selectedLanguageRef = useRef<CaptionLanguage>("original");
+	const translations = useRef(new Map<LanguageCode, string>());
+	const pending = useRef(new Map<LanguageCode, Promise<string | null>>());
+
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
 
 	const { data: availableData, isLoading: isLoadingAvailable } = useQuery({
 		queryKey: ["availableTranslations", videoId],
@@ -80,36 +113,62 @@ export function CaptionProvider({
 
 	const hasOriginal = availableData?.hasOriginal ?? false;
 
-	const requestTranslation = useCallback(
-		async (language: LanguageCode): Promise<string | null> => {
-			return new Promise((resolve) => {
-				setTranslatedVttContent((prev) => {
-					const cached = prev.get(language);
-					if (cached) {
-						resolve(cached);
-						return prev;
-					}
-
-					setIsTranslating(true);
-					translateTranscript(videoId, language)
-						.then((result) => {
-							if (result.success && result.translatedVtt) {
-								const vtt = result.translatedVtt;
-								setTranslatedVttContent((p) => new Map(p).set(language, vtt));
-								resolve(vtt);
-							} else {
-								resolve(null);
-							}
-						})
-						.finally(() => {
-							setIsTranslating(false);
-						});
-
-					return prev;
-				});
-			});
+	const translateWhileInProgress = useCallback(
+		async (language: LanguageCode) => {
+			const isStillWanted = () =>
+				mounted.current && selectedLanguageRef.current === language;
+			const startedAt = Date.now();
+			for (;;) {
+				const result = await translateTranscript(videoId, language);
+				if (
+					!(result.inProgress || result.rateLimited) ||
+					Date.now() - startedAt >= TRANSLATION_RETRY_WINDOW_MS ||
+					!isStillWanted()
+				) {
+					return result;
+				}
+				await new Promise((resolve) =>
+					setTimeout(
+						resolve,
+						result.rateLimited
+							? TRANSLATION_RATE_LIMITED_RETRY_DELAY_MS
+							: TRANSLATION_RETRY_DELAY_MS,
+					),
+				);
+				if (!isStillWanted()) return result;
+			}
 		},
 		[videoId],
+	);
+
+	const requestTranslation = useCallback(
+		(language: LanguageCode): Promise<string | null> => {
+			const cached = translations.current.get(language);
+			if (cached) return Promise.resolve(cached);
+			const existing = pending.current.get(language);
+			if (existing) return existing;
+
+			const request = Promise.resolve()
+				.then(() => translateWhileInProgress(language))
+				.then((result) => {
+					if (!result.success || !result.translatedVtt) return null;
+					if (mounted.current) {
+						translations.current.set(language, result.translatedVtt);
+						setTranslatedVttContent(new Map(translations.current));
+					}
+					return result.translatedVtt;
+				})
+				.catch(() => null)
+				.finally(() => {
+					if (pending.current.get(language) === request)
+						pending.current.delete(language);
+					if (mounted.current) setIsTranslating(pending.current.size > 0);
+				});
+			pending.current.set(language, request);
+			if (mounted.current) setIsTranslating(true);
+			return request;
+		},
+		[translateWhileInProgress],
 	);
 
 	const currentVttContent = useMemo(() => {
@@ -124,6 +183,7 @@ export function CaptionProvider({
 
 	const handleSetSelectedLanguage = useCallback(
 		async (language: CaptionLanguage) => {
+			selectedLanguageRef.current = language;
 			setSelectedLanguage(language);
 
 			if (

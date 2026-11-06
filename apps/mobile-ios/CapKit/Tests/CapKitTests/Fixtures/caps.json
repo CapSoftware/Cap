@@ -1,0 +1,63 @@
+{
+	"folders": [
+		{
+			"id": "folder_1",
+			"name": "Product",
+			"color": "purple",
+			"parentId": null,
+			"videoCount": 2
+		}
+	],
+	"caps": [
+		{
+			"id": "cap_1",
+			"shareUrl": "https://cap.so/s/cap_1",
+			"title": "Launch walkthrough",
+			"createdAt": "2026-10-28T09:15:00.000Z",
+			"updatedAt": "2026-10-28T10:15:00.000Z",
+			"ownerId": "user_123",
+			"ownerName": "Richie",
+			"durationSeconds": 125.4,
+			"thumbnailUrl": "https://cap.so/api/mobile/caps/cap_1/thumbnail?v=1",
+			"thumbnailCacheKey": "cap-thumbnail:cap_1:1",
+			"folderId": null,
+			"public": true,
+			"protected": false,
+			"viewCount": 1200,
+			"commentCount": 3,
+			"reactionCount": 9,
+			"upload": null,
+			"ownedByCurrentUser": true
+		},
+		{
+			"id": "cap_2",
+			"shareUrl": "https://cap.so/s/cap_2",
+			"title": "Uploading",
+			"createdAt": "2026-10-29T09:15:00Z",
+			"updatedAt": "2026-10-29T09:15:00Z",
+			"ownerName": "Richie",
+			"durationSeconds": null,
+			"thumbnailUrl": null,
+			"folderId": "folder_1",
+			"public": false,
+			"protected": true,
+			"viewCount": 0,
+			"commentCount": 0,
+			"reactionCount": 0,
+			"upload": {
+				"uploaded": 50,
+				"total": 200,
+				"phase": "uploading",
+				"processingProgress": 0,
+				"processingMessage": null,
+				"processingError": null
+			}
+		},
+		{ "id": "cap_broken", "title": "Missing share URL" }
+	],
+	"page": 1,
+	"limit": 30,
+	"total": 2,
+	"collectionTotal": 12,
+	"hasMore": false
+}

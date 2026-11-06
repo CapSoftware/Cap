@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { formatClock } from "@/lib/player-time";
 
 const SPEED_OPTIONS = [
 	{ value: 0.25, label: "0.25x (Very Slow)" },
@@ -78,19 +79,34 @@ export const SpeedController = () => {
 			fileSize: selectedFile.size,
 			fileType: selectedFile.type,
 		});
-
-		const videoElement = document.createElement("video");
-		videoElement.preload = "metadata";
-
-		videoElement.onloadedmetadata = () => {
-			URL.revokeObjectURL(videoElement.src);
-			const duration = videoElement.duration;
-			const dimensions = `${videoElement.videoWidth}x${videoElement.videoHeight}`;
-			setVideoInfo({ duration, dimensions });
-		};
-
-		videoElement.src = URL.createObjectURL(selectedFile);
 	};
+
+	useEffect(() => {
+		if (!file) return;
+		const videoElement = document.createElement("video");
+		const url = URL.createObjectURL(file);
+		let disposed = false;
+		const dispose = () => {
+			if (disposed) return;
+			disposed = true;
+			videoElement.onloadedmetadata = null;
+			videoElement.onerror = null;
+			videoElement.removeAttribute("src");
+			URL.revokeObjectURL(url);
+		};
+		videoElement.preload = "metadata";
+		videoElement.onloadedmetadata = () => {
+			if (disposed) return;
+			setVideoInfo({
+				duration: videoElement.duration,
+				dimensions: `${videoElement.videoWidth}x${videoElement.videoHeight}`,
+			});
+			dispose();
+		};
+		videoElement.onerror = dispose;
+		videoElement.src = url;
+		return dispose;
+	}, [file]);
 
 	const handleDragOver = (e: React.DragEvent) => {
 		e.preventDefault();
@@ -489,16 +505,10 @@ export const SpeedController = () => {
 		}
 	};
 
-	const formatDuration = (seconds: number) => {
-		const minutes = Math.floor(seconds / 60);
-		const remainingSeconds = Math.floor(seconds % 60);
-		return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-	};
-
 	const getEstimatedOutputDuration = () => {
 		if (!videoInfo) return null;
 		const estimatedDuration = videoInfo.duration / selectedSpeed;
-		return formatDuration(estimatedDuration);
+		return formatClock(estimatedDuration);
 	};
 
 	useEffect(() => {
@@ -608,7 +618,7 @@ export const SpeedController = () => {
 							</p>
 							{videoInfo && (
 								<div className="mt-3 text-sm text-gray-600">
-									<p>Duration: {formatDuration(videoInfo.duration)}</p>
+									<p>Duration: {formatClock(videoInfo.duration)}</p>
 									<p>Resolution: {videoInfo.dimensions}</p>
 									<p className="mt-2 font-medium">
 										Estimated output duration: {getEstimatedOutputDuration()}

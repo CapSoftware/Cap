@@ -4887,7 +4887,12 @@ impl MainWindow {
         let studio = item.mode == library::RecordingMode::Studio;
         let sharing = item.sharing.clone();
         let mode = item.mode;
-        let opens_editor = item.opens_editor();
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        let opens_editor = item.opens_editor(active.as_deref());
         let subtitle = item.upload.as_ref().map_or_else(
             || item.mode.label().to_string(),
             |upload| {
@@ -4935,7 +4940,12 @@ impl MainWindow {
             .items_center()
             .justify_between()
             .gap(px(2.));
-        if item.opens_editor() {
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        if item.opens_editor(active.as_deref()) {
             let editor = path.clone();
             row = row.child(self.library_action(
                 "lib-rec-edit",

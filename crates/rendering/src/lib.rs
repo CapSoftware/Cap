@@ -8,8 +8,7 @@ use cap_project::{
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
 use cursor_interpolation::{
-    CursorEventOrder, InterpolatedCursorPosition, interpolate_cursor,
-    interpolate_cursor_with_click_spring,
+    InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
@@ -57,10 +56,13 @@ mod readiness;
 mod recorded_cursor_assets;
 mod scene;
 mod segment_timing;
+mod shape;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
 mod transition;
+#[cfg(test)]
+mod transition_render_tests;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -76,7 +78,8 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
 pub use layers::{
-    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+    BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
+    new_font_system,
 };
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
@@ -86,6 +89,9 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use transition::{
+    TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
+};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -216,9 +222,11 @@ mod font_family_tests {
 }
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
-pub use cursor_interpolation::PrecomputedCursorTimeline;
+pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
 use mask::interpolate_masks;
 use scene::*;
+pub use shape::PreparedShape;
+use shape::prepare_shapes;
 use takeover::InterpolatedTakeover;
 pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
@@ -3136,6 +3144,9 @@ pub struct ProjectUniforms {
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
+    /// Shape-track marks for this frame, drawn in output-frame space like
+    /// text: zoom, crop, scenes and the 3D camera never move them.
+    pub shapes: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).
     pub camera3d: Option<Camera3DFrame>,
@@ -3654,6 +3665,9 @@ pub struct FrameLayout {
     pub display: [f32; 4],
     pub camera: Option<[f32; 4]>,
     pub output_size: [u32; 2],
+    /// Only the caption layer measures its box, so this is filled in after
+    /// the frame renders and stays `None` from [`ProjectUniforms::frame_layout`].
+    pub caption: Option<CaptionFrameBox>,
 }
 
 /// Unzoomed placement of the display card in output-frame pixels. Without a
@@ -3683,6 +3697,7 @@ impl ProjectUniforms {
             display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
+            caption: None,
         }
     }
 
@@ -4194,6 +4209,33 @@ impl ProjectUniforms {
         total_duration: f64,
         zoom_timeline: &ZoomTransformTimeline,
     ) -> Self {
+        Self::new_with_cursor_event_order(
+            constants,
+            project,
+            frame_number,
+            fps,
+            resolution_base,
+            cursor_events,
+            segment_frames,
+            total_duration,
+            zoom_timeline,
+            CursorEventOrder::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_cursor_event_order(
+        constants: &RenderVideoConstants,
+        project: &Arc<ProjectConfiguration>,
+        frame_number: u32,
+        fps: u32,
+        resolution_base: XY<u32>,
+        cursor_events: &CursorEvents,
+        segment_frames: &DecodedSegmentFrames,
+        total_duration: f64,
+        zoom_timeline: &ZoomTransformTimeline,
+        cursor_event_order: CursorEventOrder,
+    ) -> Self {
         let cursor = project.cursor_at(f64::from(frame_number) / f64::from(fps.max(1)));
         let cursor_smoothing = (!cursor.raw).then_some(SpringMassDamperSimulationConfig {
             tension: cursor.tension,
@@ -4210,7 +4252,7 @@ impl ProjectUniforms {
                     Some(cfg),
                     Some(click_spring_cfg),
                 ),
-                None => interpolate_cursor(cursor_events, time, None),
+                None => cursor_event_order.interpolate_raw(cursor_events, time),
             }
         };
 
@@ -4225,7 +4267,7 @@ impl ProjectUniforms {
             total_duration,
             zoom_timeline,
             &cursor_interp_fn,
-            CursorEventOrder::default(),
+            cursor_event_order,
         )
     }
 
@@ -5377,6 +5419,18 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let shapes = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_shapes(
+                    XY::new(output_size.0, output_size.1),
+                    timeline_time,
+                    &timeline.shape_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -5405,6 +5459,7 @@ impl ProjectUniforms {
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
+            shapes,
             camera3d,
             camera3d_zoom,
             screen_color_grade,
@@ -8192,6 +8247,10 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
+    pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
+        self.overlays.as_ref()?.captions.frame_box()
+    }
+
     pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
@@ -8576,8 +8635,14 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8750,8 +8815,14 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8802,20 +8873,98 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.render_parts(
+            device,
+            queue,
+            encoder,
+            session,
+            uniforms,
+            render_display,
+            LayerParts::ALL,
+        )
+    }
+
+    /// What one side of a layered transition draws: its own content on a
+    /// transparent frame, with its masks, so a blurred region moves with the
+    /// footage it hides. Masks and a focus blur read and cover the
+    /// background too (a pixelated cell at a clip's edge samples it), so a
+    /// side with either keeps its background to stay identical to its plain
+    /// frames. When a mask is ordered above a text or
+    /// image overlay it has to cover that overlay as well, which only a whole
+    /// frame can show correctly, so the overlays travel with the clips then.
+    fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
+        let background = self.camera3d.blur_kind().is_some() || !uniforms.masks.is_empty();
+        LayerParts {
+            background,
+            content: true,
+            masks: true,
+            overlays: self.masks_cover_overlays(uniforms),
+        }
+    }
+
+    fn masks_cover_overlays(&self, uniforms: &ProjectUniforms) -> bool {
+        let Some(overlays) = &self.overlays else {
+            return false;
+        };
+        if uniforms.masks.is_empty() || !uniforms.project.has_overlay_order() {
+            return false;
+        }
+        let mut overlay_below = false;
+        for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+            match overlay.kind {
+                OverlayTrackKind::Image => {
+                    overlay_below |= overlays.images.has_track(overlay.track)
+                }
+                OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Shape => {
+                    overlay_below |= overlays.shapes.has_track(overlay.track)
+                }
+                OverlayTrackKind::Mask => {
+                    if overlay_below
+                        && uniforms
+                            .masks
+                            .iter()
+                            .any(|mask| mask.track == overlay.track)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_parts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
 
         let session_views = [session.current_texture_view(), session.other_texture_view()];
         self.background_blur.retain_views(session_views);
         self.background_color_grade.retain_views(session_views);
         self.camera3d.retain_views(session_views);
-        self.mask.begin_frame(session_views);
-
-        if render_display {
-            self.display.copy_to_texture(encoder);
+        if parts.masks {
+            self.mask.begin_frame(session_views);
         }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
-        self.background.render_surface(encoder);
+
+        if parts.content {
+            if render_display {
+                self.display.copy_to_texture(encoder);
+            }
+            self.camera.copy_to_texture(encoder);
+            self.camera_only.copy_to_texture(encoder);
+        }
+        if parts.background {
+            self.background.render_surface(encoder);
+        }
 
         let mut passes = LayerPasses {
             encoder,
@@ -8823,6 +8972,38 @@ impl RendererLayers {
             #[cfg(test)]
             split: self.split_layer_passes,
         };
+        if parts.background {
+            self.render_background(device, &mut passes, session, uniforms);
+        } else if parts.content {
+            passes.pass(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+        }
+        if parts.content {
+            self.render_content(device, &mut passes, session, uniforms, render_display);
+        }
+        if parts.masks || parts.overlays {
+            self.render_overlays(
+                device,
+                queue,
+                &mut passes,
+                session,
+                uniforms,
+                render_display,
+                parts,
+            );
+        }
+        Ok(())
+    }
+
+    fn render_background(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+    ) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
@@ -8889,6 +9070,18 @@ impl RendererLayers {
 
             session.swap_textures();
         }
+    }
+
+    fn render_content(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
@@ -8986,19 +9179,39 @@ impl RendererLayers {
             }
             None => {}
         }
+    }
 
-        if uniforms.project.overlay_order.is_empty() {
-            if !uniforms.masks.is_empty() {
+    #[allow(clippy::too_many_arguments)]
+    fn render_overlays(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) {
+        let load = wgpu::LoadOp::Load;
+
+        if !uniforms.project.has_overlay_order() {
+            if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
                         .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
-            if let Some(overlays) = &self.overlays {
+            if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
+                        .render(passes.pass(session.current_texture_view(), load));
+                }
+
+                if overlays.shapes.has_content() {
+                    overlays
+                        .shapes
                         .render(passes.pass(session.current_texture_view(), load));
                 }
 
@@ -9011,7 +9224,7 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask => {
+                    OverlayTrackKind::Mask if parts.masks => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -9022,25 +9235,40 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
+                        if parts.overlays
+                            && render_display
+                            && overlays.images.has_track(overlay.track) =>
                     {
                         overlays.images.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text
+                        if parts.overlays && overlays.text.has_track(overlay.track) =>
+                    {
                         overlays.text.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Shape
+                        if parts.overlays && overlays.shapes.has_track(overlay.track) =>
+                    {
+                        overlays.shapes.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
+                    }
+                    OverlayTrackKind::Mask
+                    | OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Shape => {}
                 }
             }
         }
 
-        if let Some(overlays) = &self.overlays {
+        if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
             if overlays.keyboard.has_content() {
                 overlays
                     .keyboard
@@ -9053,8 +9281,37 @@ impl RendererLayers {
                     .render(passes.pass(session.current_texture_view(), load));
             }
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayerParts {
+    background: bool,
+    content: bool,
+    masks: bool,
+    /// Every overlay but masks: images, text, keyboard and captions.
+    overlays: bool,
+}
+
+impl LayerParts {
+    const ALL: Self = Self {
+        background: true,
+        content: true,
+        masks: true,
+        overlays: true,
+    };
+    const BACKGROUND: Self = Self {
+        background: true,
+        content: false,
+        masks: false,
+        overlays: false,
+    };
+    const OVERLAYS: Self = Self {
+        background: false,
+        content: false,
+        masks: false,
+        overlays: true,
+    };
 }
 
 /// Lets consecutive layer draws into the same texture share one render pass.
@@ -9191,6 +9448,13 @@ async fn produce_transition_texture(
     session: &mut RenderSession,
     compositor: &TransitionCompositor,
 ) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let parameters = TransitionParameters {
+        kind: transition.0,
+        progress: transition.1,
+        opaque: outgoing.render_display || incoming.render_display,
+    };
+    let layered = parameters.composite().is_layered();
+
     let mut outgoing_encoder =
         constants
             .device
@@ -9207,13 +9471,19 @@ async fn produce_transition_texture(
             outgoing.render_display,
         )
         .await?;
-    layers.render(
+    let outgoing_parts = if layered {
+        layers.transition_side_parts(&outgoing.uniforms)
+    } else {
+        LayerParts::ALL
+    };
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut outgoing_encoder,
         session,
         &outgoing.uniforms,
         outgoing.render_display,
+        outgoing_parts,
     )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
@@ -9239,25 +9509,69 @@ async fn produce_transition_texture(
         .await;
     layers.camera_blur_unavailable |= outgoing_camera_blur_unavailable;
     incoming_prepare?;
-    layers.render(
+
+    if !layered {
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+        )?;
+        compositor.capture_incoming_and_render(
+            &constants.queue,
+            &mut incoming_encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+            parameters,
+        );
+        return Ok(incoming_encoder);
+    }
+
+    // Both sides take the outgoing side's parts: masks, 3D blur and overlay
+    // order are timeline state shared by the two, and a background drawn
+    // into the sides must not be drawn again underneath them.
+    let incoming_parts = outgoing_parts;
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut incoming_encoder,
         session,
         &incoming.uniforms,
         incoming.render_display,
+        incoming_parts,
     )?;
-    compositor.capture_incoming_and_render(
+    compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
+    if !incoming_parts.background {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::BACKGROUND,
+        )?;
+    }
+    compositor.render_layers(
         &constants.queue,
         &mut incoming_encoder,
-        session.current_texture(),
         session.current_texture_view(),
-        TransitionParameters {
-            kind: transition.0,
-            progress: transition.1,
-            opaque: outgoing.render_display || incoming.render_display,
-        },
+        parameters,
+        incoming_parts.background,
     );
+    if !incoming_parts.overlays {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::OVERLAYS,
+        )?;
+    }
 
     Ok(incoming_encoder)
 }
@@ -9821,6 +10135,308 @@ mod project_uniforms_tests {
     }
 
     #[tokio::test]
+    async fn raw_cursor_event_order_preserves_preview_uniforms_and_pixels() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let click = |time_ms: f64, down: bool| cap_project::CursorClickEvent {
+            active_modifiers: Vec::new(),
+            cursor_num: 0,
+            cursor_id: "primary".to_string(),
+            time_ms,
+            down,
+        };
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut random_time = 0.0;
+        let random_moves = (0..400)
+            .map(|index| {
+                if next() % 4 != 0 {
+                    random_time += f64::from(next() % 40);
+                }
+                let mut event = cursor_move(
+                    random_time,
+                    f64::from(next() % 1000) / 1000.0,
+                    f64::from(next() % 1000) / 1000.0,
+                );
+                event.cursor_id = (index / 37 % 3).to_string();
+                event
+            })
+            .collect::<Vec<_>>();
+        let mut click_time = 0.0;
+        let random_clicks = (0..40)
+            .map(|index| {
+                click_time += f64::from(next() % 400);
+                click(click_time, index % 2 == 0)
+            })
+            .collect::<Vec<_>>();
+        let mut unordered_moves = random_moves.clone();
+        unordered_moves.swap(120, 121);
+        unordered_moves.swap(10, 300);
+        let mut unordered_clicks = random_clicks.clone();
+        unordered_clicks.swap(3, 30);
+        let cases = [
+            CursorEvents {
+                moves: random_moves.clone(),
+                clicks: random_clicks.clone(),
+            },
+            CursorEvents {
+                moves: unordered_moves,
+                clicks: unordered_clicks,
+            },
+            CursorEvents {
+                moves: vec![
+                    cursor_move(0.0, 0.1, 0.5),
+                    cursor_move(0.0, 0.2, 0.5),
+                    cursor_move(250.0, 0.3, 0.4),
+                    cursor_move(250.0, 0.35, 0.45),
+                    cursor_move(800.0, 0.8, 0.6),
+                ],
+                clicks: vec![click(250.0, true), click(250.0, false), click(260.0, true)],
+            },
+            CursorEvents {
+                moves: Vec::new(),
+                clicks: random_clicks,
+            },
+        ];
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.motion_blur = 0.6;
+        project.cursor.rotation_amount = 1.0;
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.cursor.stop_movement_in_last_seconds = Some(0.5);
+        project.cursor.ripple.enabled = true;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let project = Arc::new(project);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut linear_renderer = FrameRenderer::new(&constants);
+        let mut ordered_renderer = FrameRenderer::new(&constants);
+        let mut linear_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut ordered_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut ordered_cases = 0;
+        for events in &cases {
+            let order = CursorEventOrder::new(events);
+            if order != CursorEventOrder::default() {
+                ordered_cases += 1;
+            }
+            let zoom = ZoomTransformTimeline::from_project(&project, events, 10.0, size);
+            let event_frames = events
+                .moves
+                .iter()
+                .map(|event| event.time_ms)
+                .chain(events.clicks.iter().map(|click| click.time_ms))
+                .step_by(7)
+                .map(|time_ms| (time_ms * 60.0 / 1000.0) as u32);
+            for frame_number in [0, 1, 15, 16, 48, 120, 300, 599]
+                .into_iter()
+                .chain(event_frames)
+            {
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let linear = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    events,
+                    &frames,
+                    10.0,
+                    &zoom,
+                );
+                let ordered = ProjectUniforms::new_with_cursor_event_order(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    events,
+                    &frames,
+                    10.0,
+                    &zoom,
+                    order,
+                );
+                assert_eq!(ordered.cursor_event_order, order);
+                let mut neutral = ordered.clone();
+                neutral.cursor_event_order = CursorEventOrder::default();
+                assert_eq!(
+                    format!("{linear:?}"),
+                    format!("{neutral:?}"),
+                    "frame={frame_number}: uniforms changed"
+                );
+                let linear = linear_renderer
+                    .render_immediate(frames.clone(), linear, events, true, &mut linear_layers)
+                    .await
+                    .unwrap();
+                let ordered = ordered_renderer
+                    .render_immediate(frames, ordered, events, true, &mut ordered_layers)
+                    .await
+                    .unwrap();
+                assert!(
+                    linear.data == ordered.data,
+                    "frame={frame_number}: rendered cursor pixels changed"
+                );
+            }
+        }
+        assert_eq!(ordered_cases, 3);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_raw_cursor_preview_uniforms() {
+        use std::hint::black_box;
+
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for duration_secs in [60, 600, 3600] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = true;
+            project.cursor.ripple.enabled = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": duration_secs, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            let project = Arc::new(project);
+            let events = CursorEvents {
+                moves: (0..=duration_secs * 60)
+                    .map(|index| {
+                        cursor_move(
+                            index as f64 * 1000.0 / 60.0,
+                            (index % 479) as f64 / 479.0,
+                            (index % 283) as f64 / 283.0,
+                        )
+                    })
+                    .collect(),
+                clicks: (0..duration_secs * 2)
+                    .map(|index| cap_project::CursorClickEvent {
+                        active_modifiers: Vec::new(),
+                        cursor_num: 0,
+                        cursor_id: "primary".to_string(),
+                        time_ms: index as f64 * 500.0,
+                        down: index % 2 == 0,
+                    })
+                    .collect(),
+            };
+            let started = Instant::now();
+            let order = CursorEventOrder::new(black_box(&events));
+            let order_us = started.elapsed().as_secs_f64() * 1e6;
+            assert_eq!(
+                order,
+                CursorEventOrder {
+                    moves: true,
+                    clicks: true
+                }
+            );
+            let zoom =
+                ZoomTransformTimeline::from_project(&project, &events, duration_secs as f64, size);
+            for workload in ["middle", "end"] {
+                let mut baseline = Vec::new();
+                let mut optimized = Vec::new();
+                for index in 0..544u32 {
+                    let frame_number = match workload {
+                        "middle" => duration_secs * 30,
+                        _ => (duration_secs - 3) * 60,
+                    } + index % 120;
+                    let time = frame_number as f32 / 60.0;
+                    let frames = DecodedSegmentFrames {
+                        screen_size: size,
+                        screen_frame: Some(source.clone()),
+                        camera_frame: None,
+                        segment_time: time,
+                        recording_time: time,
+                        segment_has_camera: false,
+                    };
+                    let old = || {
+                        ProjectUniforms::new(
+                            black_box(&constants),
+                            black_box(&project),
+                            black_box(frame_number),
+                            60,
+                            size,
+                            black_box(&events),
+                            black_box(&frames),
+                            duration_secs as f64,
+                            black_box(&zoom),
+                        )
+                    };
+                    let new = || {
+                        ProjectUniforms::new_with_cursor_event_order(
+                            black_box(&constants),
+                            black_box(&project),
+                            black_box(frame_number),
+                            60,
+                            size,
+                            black_box(&events),
+                            black_box(&frames),
+                            duration_secs as f64,
+                            black_box(&zoom),
+                            black_box(order),
+                        )
+                    };
+                    let measure = |build: &dyn Fn() -> ProjectUniforms| {
+                        let started = Instant::now();
+                        let uniforms = build();
+                        (started.elapsed().as_secs_f64() * 1e6, uniforms)
+                    };
+                    let ((old_us, old_uniforms), (new_us, new_uniforms)) = if index % 2 == 0 {
+                        (measure(&old), measure(&new))
+                    } else {
+                        let new = measure(&new);
+                        (measure(&old), new)
+                    };
+                    let mut neutral = new_uniforms;
+                    neutral.cursor_event_order = CursorEventOrder::default();
+                    assert!(old_uniforms.interpolated_cursor.is_some());
+                    assert_eq!(format!("{old_uniforms:?}"), format!("{neutral:?}"));
+                    if index >= 32 {
+                        baseline.push(old_us);
+                        optimized.push(new_us);
+                    }
+                }
+                baseline.sort_by(f64::total_cmp);
+                optimized.sort_by(f64::total_cmp);
+                let p50 = baseline.len() / 2;
+                let p95 = baseline.len() * 95 / 100;
+                println!(
+                    "raw_preview_uniforms duration_secs={duration_secs} workload={workload} moves={} clicks={} frames={} order_setup_us={order_us:.3} baseline_p50_us={:.3} baseline_p95_us={:.3} optimized_p50_us={:.3} optimized_p95_us={:.3}",
+                    events.moves.len(),
+                    events.clicks.len(),
+                    baseline.len(),
+                    baseline[p50],
+                    baseline[p95],
+                    optimized[p50],
+                    optimized[p95],
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn ordered_cursor_event_lookups_preserve_rendered_pixels() {
         let mut constants = cursor_test_constants().await;
         let size = XY::new(320, 180);
@@ -9930,6 +10546,98 @@ mod project_uniforms_tests {
             distinct_frames.insert(ordered.data);
         }
         assert!(distinct_frames.len() > 8);
+    }
+
+    #[tokio::test]
+    async fn idle_hidden_cursor_never_flashes_while_resuming() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: [0.0, 3000.0, 3050.0]
+                .into_iter()
+                .map(|time| cursor_move(time, 0.5, 0.5))
+                .collect(),
+            clicks: Vec::new(),
+        };
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let cursor = PrecomputedCursorTimeline::new(&events, None, None);
+        let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let mut hidden_project = project.clone();
+        hidden_project.cursor.hide = true;
+        let project = Arc::new(project);
+        let hidden_project = Arc::new(hidden_project);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut render = async |project: &Arc<ProjectConfiguration>, frame_number: u32| {
+            let time = frame_number as f32 / 60.0;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: Some(source.clone()),
+                camera_frame: None,
+                segment_time: time,
+                recording_time: time,
+                segment_has_camera: false,
+            };
+            let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                &constants,
+                project,
+                frame_number,
+                60,
+                size,
+                &events,
+                &frames,
+                4.0,
+                &zoom,
+                &cursor,
+            );
+            renderer
+                .render_immediate(frames, uniforms, &events, true, &mut layers)
+                .await
+                .unwrap()
+                .data
+        };
+        let background = render(&hidden_project, 180).await;
+        let mut coverage = Vec::new();
+        for frame_number in 160..=212 {
+            let frame = render(&project, frame_number).await;
+            let drawn: u64 = frame
+                .iter()
+                .zip(background.iter())
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            coverage.push((frame_number, drawn));
+        }
+        assert_eq!(coverage[0].1, 0, "the cursor must start idle-hidden");
+        let full = coverage.last().unwrap().1;
+        assert!(full > 0, "the fixture must draw a cursor");
+        for pair in coverage.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "cursor coverage fell from {} at frame {} to {} at frame {}",
+                pair[0].1,
+                pair[0].0,
+                pair[1].1,
+                pair[1].0,
+            );
+        }
+        let at_resume = coverage.iter().find(|(frame, _)| *frame == 180).unwrap().1;
+        assert_eq!(
+            at_resume, full,
+            "the cursor must be fully visible when it moves"
+        );
     }
 
     #[tokio::test]

@@ -3119,18 +3119,7 @@ async fn run_export(
     };
     let _ = progress_tx.send((0, total));
 
-    let progress = {
-        let progress_tx = progress_tx.clone();
-        let cancel = cancel.clone();
-        move |frame_index: u32| {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            progress_tx
-                .send(((frame_index + 1).min(total), total))
-                .is_ok()
-        }
-    };
+    let progress = export_progress(total, progress_tx, cancel);
 
     let resolution = XY::new(width, height);
     match base {
@@ -3172,8 +3161,58 @@ async fn run_export(
     }
 }
 
+fn export_progress(
+    total: u32,
+    progress_tx: flume::Sender<(u32, u32)>,
+    cancel: Arc<AtomicBool>,
+) -> impl FnMut(u32) -> bool + Send + 'static {
+    let mut rendered = 0;
+    move |frame_index: u32| {
+        if cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        rendered = rendered.max((frame_index + 1).min(total));
+        progress_tx.send((rendered, total)).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn export_progress_does_not_restart_when_turbo_falls_back() {
+        let (tx, rx) = flume::unbounded();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut progress = super::export_progress(300, tx, cancel.clone());
+
+        for frame in [0, 149, 0, 1, 149, 150, 299] {
+            assert!(progress(frame));
+        }
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            [
+                (1, 300),
+                (150, 300),
+                (150, 300),
+                (150, 300),
+                (150, 300),
+                (151, 300),
+                (300, 300)
+            ]
+        );
+
+        cancel.store(true, Ordering::Relaxed);
+        assert!(!progress(299));
+        assert!(rx.is_empty());
+    }
+
+    #[test]
+    fn export_progress_stops_when_the_editor_drops_its_receiver() {
+        let (tx, rx) = flume::unbounded();
+        let mut progress = super::export_progress(300, tx, Arc::new(AtomicBool::new(false)));
+        drop(rx);
+        assert!(!progress(0));
+    }
+
     #[test]
     fn estimate_ranges_keep_their_english_wording() {
         use super::format_estimate_range;
