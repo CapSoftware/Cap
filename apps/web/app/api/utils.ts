@@ -31,7 +31,7 @@ let rateLimitRequestCounter = 0;
 
 export const developerRateLimiter = createMiddleware(async (c, next) => {
 	const key =
-		c.req.header("authorization") ??
+		c.req.header("authorization")?.split(" ")[1] ??
 		c.req.header("x-forwarded-for") ??
 		"unknown";
 	const now = Date.now();
