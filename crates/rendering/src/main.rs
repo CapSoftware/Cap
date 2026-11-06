@@ -132,9 +132,7 @@ async fn main() -> Result<()> {
                     false,
                 )
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to create decoders for segment {i}: {e}")
-                })?;
+                .map_err(|e| anyhow::anyhow!("Failed to create decoders for segment {i}: {e}"))?;
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
                 let keyboard = Arc::new(s.keyboard_events(&recording_meta));

@@ -2125,9 +2125,7 @@ fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
     let benchmark_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("BENCHMARKS.md");
 
     if !benchmark_file.exists() {
-        bail!(
-            "BENCHMARKS.md not found at {benchmark_file:?}. Please ensure the file exists."
-        );
+        bail!("BENCHMARKS.md not found at {benchmark_file:?}. Please ensure the file exists.");
     }
 
     let content = fs::read_to_string(&benchmark_file)?;

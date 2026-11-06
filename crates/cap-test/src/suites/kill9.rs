@@ -173,9 +173,7 @@ async fn run_single_kill9(
     if !ready {
         let _ = child.kill();
         let _ = child.wait();
-        anyhow::bail!(
-            "record-harness child never signaled ready within {READY_WAIT_TIMEOUT:?}"
-        );
+        anyhow::bail!("record-harness child never signaled ready within {READY_WAIT_TIMEOUT:?}");
     }
 
     tokio::time::sleep(Duration::from_secs(kill_after_secs)).await;
