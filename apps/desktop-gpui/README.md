@@ -122,7 +122,10 @@ byte of what gets installed:
 - `packaging/windows/installer-hooks.nsh` gives the NSIS installer a 128 MB
   LZMA window, so `cap-cli.exe` compresses against `Cap.exe`. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
 deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
-update in place would otherwise leave behind.
+update in place would otherwise leave behind. Before copying files, and before
+uninstalling, it also ends running `cap-cli.exe` processes (the `cap mcp serve`
+servers AI assistants keep alive), which would otherwise hold the FFmpeg DLLs
+open and fail the update.
 
 ### The native updater
 
