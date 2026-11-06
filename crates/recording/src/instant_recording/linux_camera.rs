@@ -3079,6 +3079,65 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running X11 desktop with a 1920x1080 capture region"]
+    fn real_x11_pooled_frames_compose_camera_in_place() {
+        use crate::screen_capture::{X11Grabber, X11InputConfig};
+
+        ffmpeg::init().unwrap();
+        let timestamp = Timestamp::Instant(Instant::now());
+        let camera = FFmpegVideoFrame {
+            inner: pattern_frame(Pixel::NV12, 640, 480, 5),
+            timestamp,
+        };
+        let config = X11InputConfig {
+            display_name: std::env::var("DISPLAY").unwrap(),
+            window_id: None,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            show_cursor: false,
+        };
+        for shm in [false, true] {
+            let mut grabber = X11Grabber::with_shm(&config, shm).unwrap();
+            assert_eq!(grabber.uses_shm(), shm);
+            let info = VideoInfo::from_raw_ffmpeg(Pixel::BGRZ, 1920, 1080, 30);
+            let mut compositor = Compositor::new(
+                info,
+                LinuxCameraPresentation::default_for(info.width, info.height),
+            );
+            let mut pointers = std::collections::BTreeSet::new();
+            let mut previous = None;
+            for index in 0..12 {
+                let mut screen = grabber.grab().unwrap();
+                screen.set_pts(Some(index));
+                let pixels = screen.data(0).as_ptr();
+                let buffer = unsafe { (*screen.as_ptr()).buf[0] };
+                pointers.insert(pixels);
+                assert_eq!(plane_buffer_refcount(&screen), 1);
+                let output = compositor
+                    .compose(
+                        FFmpegVideoFrame {
+                            inner: screen,
+                            timestamp,
+                        },
+                        &camera,
+                        0,
+                    )
+                    .unwrap();
+                assert_eq!(output.inner.data(0).as_ptr(), pixels);
+                assert_eq!(unsafe { (*output.inner.as_ptr()).buf[0] }, buffer);
+                assert_eq!(output.inner.pts(), Some(index));
+                previous = Some(output);
+                std::hint::black_box(&previous);
+            }
+            assert_eq!(pointers.len(), 2);
+            drop(previous);
+        }
+    }
+
+    #[test]
     fn compositor_converts_nv12_camera_without_mutating_shared_screen_and_preserves_pts() {
         ffmpeg::init().expect("FFmpeg initializes");
         let timestamp = Timestamp::Instant(Instant::now());
