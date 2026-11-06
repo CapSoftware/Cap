@@ -13,8 +13,9 @@ pub const SCHEMA_VERSION: u8 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// A walk: a fresh Chrome window with its evidence, narrated.
-    Worm,
+    /// A walk: a fresh Chrome window with its evidence, narrated. Its wire value is kept stable.
+    #[serde(rename = "worm")]
+    Walk,
     /// Talking a topic through: screen and microphone, no browser.
     Diatribe,
 }
@@ -113,7 +114,7 @@ impl Status {
             topic: topic.into(),
             state: State::Starting,
             step: match mode {
-                Mode::Worm => "Opening a new Chrome window…".into(),
+                Mode::Walk => "Opening a new Chrome window…".into(),
                 Mode::Diatribe => "Starting the diatribe…".into(),
             },
             folder: None,
@@ -223,14 +224,14 @@ mod tests {
 
     #[test]
     fn a_finished_walk_keeps_its_result() {
-        let mut status = Status::starting("abc", Mode::Worm, "Checkout");
+        let mut status = Status::starting("abc", Mode::Walk, "Checkout");
         assert!(status.advance(State::Ready, "Walk ready", Some(Path::new("/w"))));
         assert!(!status.fail("late error"));
         assert!(!status.advance(State::Processing, "again", None));
         assert_eq!(status.state, State::Ready);
         assert_eq!(status.error, None);
 
-        let mut failed = Status::starting("abc", Mode::Worm, "Checkout");
+        let mut failed = Status::starting("abc", Mode::Walk, "Checkout");
         assert!(failed.fail("Chrome did not open"));
         assert_eq!(failed.state, State::Failed);
         assert_eq!(failed.error.as_deref(), Some("Chrome did not open"));

@@ -1154,8 +1154,11 @@ mod tests {
     fn parses_outside_walk_actions() {
         use crate::ux_walk::external::Mode;
         let start = |value: serde_json::Value| {
-            let url =
-                Url::parse_with_params("cap-ux://action", &[("value", value.to_string())]).unwrap();
+            let url = Url::parse_with_params(
+                &format!("{}://action", fork_brand::URL_SCHEME),
+                &[("value", value.to_string())],
+            )
+            .unwrap();
             DeepLinkAction::try_from(&url)
         };
         assert_eq!(
@@ -1164,7 +1167,7 @@ mod tests {
             }})),
             Ok(DeepLinkAction::StartWalk {
                 id: "run-1".into(),
-                mode: Mode::Worm,
+                mode: Mode::Walk,
                 topic: "Checkout".into(),
                 url: Some("https://example.com".into()),
             })

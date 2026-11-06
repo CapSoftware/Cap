@@ -43,7 +43,11 @@
 		{ "id": "capux-media", "why": "deployed R2 bucket" },
 		{ "id": "capux-retention", "why": "deployed R2 lifecycle rule" },
 		{ "id": "capux_read", "why": "viewer cookie on existing links" },
-		{ "id": "@cap-ux/cloud", "why": "private package name held in lockfiles" }
+		{ "id": "@cap-ux/cloud", "why": "private package name held in lockfiles" },
+		{
+			"id": "\"worm\"",
+			"why": "walk mode value Z3 sends in start_walk links and cap-cli walk --mode"
+		}
 	],
 	"prose_docs": [
 		"README.md",

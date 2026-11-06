@@ -563,7 +563,7 @@ impl MainWindow {
         let Some((microphone, selected)) = microphone else {
             crate::ux_walk::external::fail(
                 request.external.as_deref(),
-                "A diatribe needs a microphone. Connect one or choose it in Worm's recorder.",
+                "A diatribe needs a microphone. Connect one or choose it in the recorder.",
             );
             self.session.update(cx, |session, cx| {
                 session.error = Some(
@@ -650,7 +650,7 @@ impl MainWindow {
             return Err(format!("Use an http or https start page, not {url}."));
         }
         if self.diatribe_blocked(cx) || self.walk.opening {
-            return Err("Worm is busy with another recording. Finish it, then try again.".into());
+            return Err("Another recording is in progress. Finish it, then try again.".into());
         }
         let mut request = crate::ux_walk::request(&topic)?;
         request.external = Some(id.clone());
@@ -664,7 +664,7 @@ impl MainWindow {
                 request.url.clear();
                 self.start_diatribe_request(DiatribeStart::OneShot, None, Ok(request), cx);
             }
-            external::Mode::Worm => {
+            external::Mode::Walk => {
                 if let Some(url) = &url {
                     request.url = url.clone();
                 }
@@ -681,15 +681,15 @@ impl MainWindow {
                         cx.notify();
                         let window = opened?;
                         if this.diatribe_blocked(cx) {
-                            return Err(
-                                "Worm started another recording before the walk could begin."
-                                    .to_string(),
-                            );
+                            return Err("Another recording started before the walk could begin."
+                                .to_string());
                         }
-                        this.start_external_worm(request, window, cx);
+                        this.record_external_walk(request, window, cx);
                         Ok(())
                     });
-                    if let Err(error) = started.unwrap_or_else(|_| Err("Worm closed.".into())) {
+                    if let Err(error) =
+                        started.unwrap_or_else(|_| Err(format!("{} closed.", fork_brand::APP_NAME)))
+                    {
                         if let Some(id) = &unused {
                             crate::ux_walk_browser::close_window(id);
                         }
@@ -704,7 +704,7 @@ impl MainWindow {
 
     /// The walk half of an outside start: a Studio recording of the walk's own Chrome window,
     /// with the recorder's microphone and camera, as the Record button would start it.
-    fn start_external_worm(
+    fn record_external_walk(
         &mut self,
         request: Request,
         window: crate::devices::WindowOption,
@@ -770,13 +770,22 @@ impl MainWindow {
                             .filter(|error| Some(error) != earlier.as_ref())
                     })
                 }) else {
-                    external::fail(Some(&id), "Worm closed before the recording started.");
+                    external::fail(
+                        Some(&id),
+                        &format!(
+                            "{} closed before the recording started.",
+                            fork_brand::APP_NAME
+                        ),
+                    );
                     return;
                 };
                 idle_checks = if idle.is_some() { idle_checks + 1 } else { 0 };
                 if idle_checks >= 6 {
                     let error = idle.flatten().unwrap_or_else(|| {
-                        "Worm could not start the recording. Open Worm to see why.".into()
+                        format!(
+                            "{app} could not start the recording. Open {app} to see why.",
+                            app = fork_brand::APP_NAME
+                        )
                     });
                     external::fail(Some(&id), &error);
                     return;

@@ -32,13 +32,15 @@ enum WalkCommands {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Mode {
-    Worm,
+    /// A walk: a fresh Chrome window, narrated. Its value is kept stable for callers.
+    #[value(name = "worm")]
+    Walk,
     Diatribe,
 }
 
 #[derive(Args)]
 struct WalkStart {
-    #[arg(long, value_enum, default_value_t = Mode::Worm)]
+    #[arg(long, value_enum, default_value_t = Mode::Walk)]
     mode: Mode,
     /// What the walk is about; names its folder
     #[arg(long)]
@@ -198,7 +200,7 @@ async fn start(args: WalkStart) -> Result<Value, String> {
         return Err(format!("A walk with id {id} already exists."));
     }
     let mode = match args.mode {
-        Mode::Worm => "worm",
+        Mode::Walk => "worm",
         Mode::Diatribe => "diatribe",
     };
     send(&start_link(&id, mode, &args.topic, args.url.as_deref()))?;
