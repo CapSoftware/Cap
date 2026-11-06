@@ -5,6 +5,7 @@ import {
 	directoryUsers,
 	mcpOAuthTokens,
 	organizationDirectorySync,
+	organizationInvites,
 	organizationMembers,
 	organizationSso,
 	organizations,
@@ -114,7 +115,7 @@ function id() {
 	return randomUUID().replaceAll("-", "").slice(0, 15);
 }
 
-const later = () => Date.now() + 60_000;
+const later = () => Date.now() + 240_000;
 
 async function makeOrganization() {
 	const ownerId = User.UserId.make(id());
@@ -583,26 +584,56 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(state?.leaseExpiresAt).toBeNull();
 		});
 
-		it("backs off and reports a directory that cannot be read before the deadline", async () => {
-			const org = await makeOrganization();
-			fixture.users.set(org.directoryId, [
-				directoryUser(org.directoryId, `alice@${org.domain}`),
-			]);
-			await expect(
-				syncOrganizationDirectory(org.organizationId, Date.now() - 1),
-			).rejects.toThrow("could not be read");
-			const [state] = await database()
-				.select()
-				.from(organizationDirectorySync)
-				.where(
-					eq(organizationDirectorySync.organizationId, org.organizationId),
+		it("backs off only when a full sync budget cannot read the directory", async () => {
+			const slowRead = async (budget: number) => {
+				const org = await makeOrganization();
+				fixture.users.set(
+					org.directoryId,
+					["alice", "bob", "carol"].map((name) =>
+						directoryUser(org.directoryId, `${name}@${org.domain}`),
+					),
 				);
-			expect(state?.syncedAt).toBeNull();
-			expect(state?.lastError).toContain("could not be read");
-			expect(state?.leaseExpiresAt?.getTime()).toBeGreaterThan(
+				const realNow = Date.now;
+				const start = realNow();
+				const calls = fixture.listUserCalls;
+				const clock = vi
+					.spyOn(Date, "now")
+					.mockImplementation(() =>
+						fixture.listUserCalls > calls ? start + budget + 1 : realNow(),
+					);
+				let outcome: unknown;
+				try {
+					outcome = await syncOrganizationDirectory(
+						org.organizationId,
+						start + budget,
+					).catch((error: Error) => error);
+				} finally {
+					clock.mockRestore();
+				}
+				const [state] = await database()
+					.select()
+					.from(organizationDirectorySync)
+					.where(
+						eq(organizationDirectorySync.organizationId, org.organizationId),
+					);
+				return { org, outcome, state };
+			};
+
+			const full = await slowRead(240_000);
+			expect(full.outcome).toBeInstanceOf(Error);
+			expect(full.state?.lastError).toContain("could not be read");
+			expect(full.state?.leaseExpiresAt?.getTime()).toBeGreaterThan(
 				Date.now() + 30 * 60_000,
 			);
-			expect((await memberIds(org.organizationId)).size).toBe(1);
+			expect((await memberIds(full.org.organizationId)).size).toBe(1);
+
+			const late = await slowRead(30_000);
+			expect(late.outcome).toMatchObject({ status: "partial" });
+			expect(late.state?.lastError).toBeNull();
+			expect(late.state?.leaseExpiresAt).toBeNull();
+			expect(
+				await syncOrganizationDirectory(late.org.organizationId, later()),
+			).toMatchObject({ status: "synced", added: 3 });
 		});
 
 		it("resumes provisioning when the deadline passes after the directory is read", async () => {
@@ -675,6 +706,28 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
 				false,
 			);
+
+			await database()
+				.insert(organizationInvites)
+				.values({
+					id: id(),
+					organizationId: org.organizationId,
+					invitedEmail: `alice@${org.domain}`,
+					invitedByUserId: org.ownerId,
+					role: "member",
+				});
+			await provisionSsoMembership(aliceUser.id, identity);
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				true,
+			);
+			await database()
+				.delete(organizationMembers)
+				.where(
+					and(
+						eq(organizationMembers.organizationId, org.organizationId),
+						eq(organizationMembers.userId, aliceUser.id),
+					),
+				);
 
 			fixture.users.set(org.directoryId, [alice]);
 			await syncOrganizationDirectory(org.organizationId, later());
