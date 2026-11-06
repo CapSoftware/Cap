@@ -1372,6 +1372,12 @@ impl GeneralSettings {
         }
     }
 
+    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
+    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    pub fn new_zoom_amount(&self) -> f32 {
+        self.default_zoom_amount.unwrap_or(1.5)
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -3086,6 +3092,7 @@ mod tests {
         assert_eq!(settings.recording_countdown, Some(5));
         assert!(!settings.custom_cursor_capture);
         assert_eq!(settings.default_zoom_amount, Some(2.5));
+        assert_eq!(settings.new_zoom_amount(), 2.5);
         assert_eq!(settings.max_fps, 120);
         assert_eq!(settings.server_url, "https://cap.example.com");
         assert_eq!(settings.excluded_windows.len(), 1);
@@ -3096,6 +3103,7 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key
