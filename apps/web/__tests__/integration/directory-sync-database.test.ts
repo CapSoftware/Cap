@@ -729,6 +729,15 @@ describe.runIf(Boolean(databaseUrl))(
 				false,
 			);
 
+			const sessionVersion = (await userByEmail(`alice@${org.domain}`))
+				?.authSessionVersion;
+			fixture.users.set(org.directoryId, []);
+			await syncOrganizationDirectory(org.organizationId, later());
+			expect(
+				(await userByEmail(`alice@${org.domain}`))?.authSessionVersion,
+			).toBe(sessionVersion);
+			fixture.users.set(org.directoryId, [alice]);
+
 			const profileId = `prof_fixture_${id()}`;
 			await database().insert(accounts).values({
 				id: id(),
