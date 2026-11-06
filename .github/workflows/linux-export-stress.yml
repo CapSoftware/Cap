@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gpui: [perf]
+        gpui: [perf-no-wgpu-debug]
         shard: [1, 2, 3, 4]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -54,7 +54,7 @@ jobs:
           ./scripts/prepare-gpui-dependency.sh
 
       - name: Build cap-gpui
-        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui --config 'profile.dev.package.wgpu-types.debug-assertions=false'
 
       - name: Fetch the Cap package for desktop integration
         run: |
