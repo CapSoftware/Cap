@@ -1,0 +1,88 @@
+name: GPUI frame profile
+
+# Runs each GPUI frame benchmark under callgrind on Linux and publishes the
+# hottest functions (inclusive and self cost). An investigation aid for the
+# GPUI patch stack; it measures instructions, not time, so it is stable from
+# run to run.
+
+on:
+  push:
+    branches:
+      - "gpui-profile/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    name: GPUI callgrind profile
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../gpui-bench-target
+      CARGO_PROFILE_BENCH_DEBUG: "line-tables-only"
+      CARGO_PROFILE_BENCH_LTO: "false"
+      CARGO_PROFILE_BENCH_CODEGEN_UNITS: "16"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers libssl-dev libasound2-dev \
+            libzstd-dev fonts-dejavu-core valgrind
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Prepare GPUI dependency
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build benchmarks
+        run: ./scripts/gpui-bench-build.sh ../zed-cap "$RUNNER_TEMP/bench"
+
+      - name: Profile
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/profile"
+          cd "$RUNNER_TEMP/profile"
+          for bench in "cards/cards/1024" "text_rows_static/text_rows_static/200" \
+            "text_rows_changing/text_rows_changing/200" "paragraphs/paragraphs/48" \
+            "recordings_scroll" "hover_cards" "cached_panels" "primitives/primitives/8192"; do
+            name="$(echo "$bench" | tr '/' '_')"
+            CRITERION_HOME="$RUNNER_TEMP/profile/criterion" valgrind --tool=callgrind \
+              --callgrind-out-file="$name.callgrind" --dump-instr=no \
+              "$RUNNER_TEMP/bench/frame" --bench --profile-time 2 "^${bench}\$" > "$name.log" 2>&1 \
+              || { tail -50 "$name.log"; exit 1; }
+            {
+              echo "## $bench"
+              echo
+              echo '### Inclusive'
+              echo '```'
+              callgrind_annotate --inclusive=yes --threshold=99 "$name.callgrind" 2>/dev/null \
+                | sed -n '/Ir/,$p' | head -70 | cut -c1-220
+              echo '```'
+              echo
+              echo '### Self'
+              echo '```'
+              callgrind_annotate --inclusive=no --threshold=99 "$name.callgrind" 2>/dev/null \
+                | sed -n '/Ir/,$p' | head -60 | cut -c1-220
+              echo '```'
+            } > "$name.md"
+            cat "$name.md"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gpui-profile
+          path: |
+            ${{ runner.temp }}/profile/*.md
+            ${{ runner.temp }}/profile/*.callgrind
+          if-no-files-found: ignore
