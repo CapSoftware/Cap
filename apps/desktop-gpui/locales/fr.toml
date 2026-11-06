@@ -2419,6 +2419,7 @@ file = "Fichier"
 link = "Lien de partage"
 
 [editor.export.done]
+copy_file = "Copier le fichier"
 copy_link = "Copier le lien"
 instant_hint = "Utilisez le mode Instant pour votre prochain enregistrement si vous voulez un lien dès que vous arrêtez."
 link_copied = "Lien copié"
@@ -2426,6 +2427,7 @@ open_file = "Ouvrir le fichier"
 open_link = "Ouvrir le lien"
 retry_copy = "Réessayer la copie"
 reuploaded = "Votre dernière modification est disponible sur le même lien"
+saved_copy = "Copie enregistrée sous {name}"
 uploaded = "Votre Cap a bien été mis en ligne"
 
 [editor.export.estimate]

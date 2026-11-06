@@ -2421,6 +2421,7 @@ file = { text = "File", context = "Export destination." }
 link = { text = "Shareable Link", context = "Export destination." }
 
 [editor.export.done]
+copy_file = "Copy File"
 copy_link = "Copy link"
 instant_hint = "Use Instant Mode for your next recording if you want a link the moment you stop."
 link_copied = "Link copied"
@@ -2428,6 +2429,7 @@ open_file = "Open File"
 open_link = "Open link"
 retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
+saved_copy = { text = "Saved a copy as {name}", context = "{name} is the new file's name, for example Demo copy.mp4." }
 uploaded = "Your Cap has been uploaded successfully"
 
 [editor.export.estimate]

@@ -45,6 +45,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.prepare_controls_failed",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
+    "editor.export.done.saved_copy",
     "editor.export.estimate.gigabytes",
     "editor.export.estimate.gigabytes_range",
     "editor.export.estimate.hours",
@@ -211,6 +212,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::destination::clipboard(), "Clipboard"),
         (tr::editor::export::destination::file(), "File"),
         (tr::editor::export::destination::link(), "Shareable Link"),
+        (tr::editor::export::done::copy_file(), "Copy File"),
         (tr::editor::export::done::copy_link(), "Copy link"),
         (
             tr::editor::export::done::instant_hint(),
@@ -1434,6 +1436,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::append_error(&message),
         format!("Failed to add clip: {message}")
+    );
+    assert_eq!(
+        tr::editor::export::done::saved_copy("Demo copy.mp4"),
+        "Saved a copy as Demo copy.mp4"
     );
     assert_eq!(
         tr::editor::clips::import_error(&message),

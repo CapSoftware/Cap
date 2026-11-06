@@ -2419,6 +2419,7 @@ file = "फ़ाइल"
 link = "शेयर लिंक"
 
 [editor.export.done]
+copy_file = "फ़ाइल कॉपी करें"
 copy_link = "लिंक कॉपी करें"
 instant_hint = "अगर आप रोकते ही लिंक चाहते हैं, तो अगली रिकॉर्डिंग के लिए Instant मोड इस्तेमाल करें।"
 link_copied = "लिंक कॉपी हो गया"
@@ -2426,6 +2427,7 @@ open_file = "फ़ाइल खोलें"
 open_link = "लिंक खोलें"
 retry_copy = "फिर से कॉपी करें"
 reuploaded = "आपका नया संपादन उसी लिंक पर तैयार है"
+saved_copy = "कॉपी {name} के रूप में सहेजी गई"
 uploaded = "आपका Cap सफलतापूर्वक अपलोड हो गया"
 
 [editor.export.estimate]
