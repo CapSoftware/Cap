@@ -543,7 +543,7 @@ export function HLSVideoPlayer({
 		isPlaybackSourceReady,
 		reloadPlayback,
 		router,
-		videoRef.current,
+		videoRef,
 	]);
 
 	useEffect(() => {

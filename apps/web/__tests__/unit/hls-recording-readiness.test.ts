@@ -5,19 +5,22 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+
 const mocks = vi.hoisted(() => ({
 	progress: null as UploadProgress | null,
 	status: 204,
+	hlsSupported: true,
 	handlers: new Map<string, (...args: unknown[]) => void>(),
 	pause: vi.fn(),
 	stopLoad: vi.fn(),
-	refresh: vi.fn(),
 	loadSource: vi.fn(),
+	destroy: vi.fn(),
 	hlsConfig: {} as { startPosition?: number },
 }));
 
 vi.mock("next/navigation", () => ({
-	useRouter: () => ({ refresh: mocks.refresh }),
+	useRouter: () => router,
 }));
 vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => ({ invalidateQueries: vi.fn() }),
@@ -70,7 +73,7 @@ vi.mock("motion/react", async () => {
 });
 vi.mock("hls.js", () => ({
 	default: class {
-		static isSupported = () => true;
+		static isSupported = () => mocks.hlsSupported;
 		static Events = {
 			ERROR: "error",
 			MANIFEST_LOADED: "manifestLoaded",
@@ -87,7 +90,7 @@ vi.mock("hls.js", () => ({
 		attachMedia() {}
 		startLoad() {}
 		stopLoad = mocks.stopLoad;
-		destroy() {}
+		destroy = mocks.destroy;
 		on(event: string, callback: (...args: unknown[]) => void) {
 			mocks.handlers.set(event, callback);
 		}
@@ -146,8 +149,10 @@ describe("Instant player readiness and failure UX", () => {
 			lastUpdated: new Date(),
 		};
 		mocks.status = 204;
+		mocks.hlsSupported = true;
 		mocks.handlers.clear();
 		mocks.loadSource.mockReset();
+		mocks.destroy.mockClear();
 		mocks.hlsConfig = {};
 		container = document.createElement("div");
 		document.body.append(container);
@@ -181,6 +186,60 @@ describe("Instant player readiness and failure UX", () => {
 		act(async () => {
 			videoRef.current?.dispatchEvent(new Event("loadeddata"));
 		});
+
+	it.each([true, false])(
+		"keeps the stream attached across control updates (hls.js: %s)",
+		async (hlsSupported) => {
+			mocks.hlsSupported = hlsSupported;
+			vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue(
+				"probably",
+			);
+			const nativeLoad = vi
+				.spyOn(HTMLMediaElement.prototype, "load")
+				.mockImplementation(() => {});
+			const load = hlsSupported ? mocks.loadSource : nativeLoad;
+			const props = {
+				videoId: "recording" as Parameters<typeof HLSVideoPlayer>[0]["videoId"],
+				videoSrc: "/api/playlist?videoId=recording&videoType=master",
+				videoRef,
+				chaptersSrc: "",
+				captionsSrc: "",
+			};
+			await act(async () => root.render(createElement(HLSVideoPlayer, props)));
+			expect(load).toHaveBeenCalledTimes(1);
+			const video = videoRef.current;
+			if (!video) throw new Error("Expected a mounted video");
+			Object.defineProperty(video, "duration", { value: 120 });
+
+			await act(async () => video.dispatchEvent(new Event("loadedmetadata")));
+			await decodeFrame();
+			await act(async () => video.dispatchEvent(new Event("play")));
+			await act(async () =>
+				root.render(
+					createElement(HLSVideoPlayer, {
+						...props,
+						captionsSrc: "blob:translated-captions",
+						captionLanguage: "fr",
+					}),
+				),
+			);
+
+			expect(mocks.destroy).not.toHaveBeenCalled();
+			expect(load).toHaveBeenCalledTimes(1);
+
+			await act(async () =>
+				root.render(
+					createElement(HLSVideoPlayer, {
+						...props,
+						videoSrc:
+							"/api/playlist?videoId=recording&videoType=segments-master",
+					}),
+				),
+			);
+			expect(mocks.destroy).toHaveBeenCalledTimes(hlsSupported ? 1 : 0);
+			expect(load).toHaveBeenCalledTimes(2);
+		},
+	);
 
 	it("waits for a decoded frame, not just a parsed playlist", async () => {
 		await render();
