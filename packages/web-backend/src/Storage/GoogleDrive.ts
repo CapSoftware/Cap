@@ -493,10 +493,10 @@ const sendDriveRequest = (
 	init?: RequestInit,
 ) =>
 	Effect.tryPromise({
-		try: () => {
+		try: (signal) => {
 			const headers = new Headers(init?.headers);
 			headers.set("Authorization", `Bearer ${accessToken}`);
-			return fetch(url, { ...init, headers });
+			return fetch(url, { ...init, headers, signal: init?.signal ?? signal });
 		},
 		catch: (cause) => new Storage.StorageError({ cause }),
 	});
