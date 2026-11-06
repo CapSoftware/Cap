@@ -25,7 +25,7 @@ const CommentComponent: React.FC<{
 	replies: CommentType[];
 	onReply: (commentId: Comment.CommentId) => void;
 	replyingToId: Comment.CommentId | null;
-	handleReply: (content: string, commentId: Comment.CommentId) => void;
+	handleReply: (content: string, commentId: Comment.CommentId) => Promise<void>;
 	onCancelReply: () => void;
 	onDelete: (
 		commentId: Comment.CommentId,
