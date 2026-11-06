@@ -78,6 +78,7 @@ function createServerEnv() {
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
+			WORKOS_WEBHOOK_SECRET: z.string().optional(),
 
 			/// Generic OIDC
 			OIDC_ISSUER: z.string().optional(),
