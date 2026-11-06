@@ -2,6 +2,7 @@ use cap_project::XY;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+use super::ChromaKeyPass;
 use crate::{
     CompositeVideoFrameUniforms, DecodedFrame, PixelFormat,
     composite_frame::CompositeVideoFramePipeline,
@@ -28,6 +29,8 @@ pub struct CameraLayer {
     blur_bind_group: Option<wgpu::BindGroup>,
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
+    chroma_key: Option<(ChromaKeyPass, wgpu::BindGroup)>,
+    chroma_key_active: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +100,8 @@ impl CameraLayer {
             blur_bind_group: None,
             blur_active: false,
             blur_cache: None,
+            chroma_key: None,
+            chroma_key_active: false,
         }
     }
 
@@ -108,6 +113,7 @@ impl CameraLayer {
         frame_data: Option<(XY<u32>, &DecodedFrame, f32)>,
     ) {
         self.blur_active = false;
+        self.chroma_key_active = false;
 
         let Some(uniforms) = uniforms else {
             self.hidden = true;
@@ -377,6 +383,7 @@ impl CameraLayer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         self.blur_active = false;
+        self.chroma_key_active = false;
 
         let Some(uniforms) = uniforms else {
             self.hidden = true;
@@ -557,7 +564,44 @@ impl CameraLayer {
         if self.hidden || self.last_recording_time.is_none() {
             return None;
         }
-        Some(&self.frame_textures[self.current_texture])
+        Some(match &self.chroma_key {
+            Some((pass, _)) if self.chroma_key_active => pass.output_texture(),
+            _ => &self.frame_textures[self.current_texture],
+        })
+    }
+
+    /// Keys this frame's texture. Background blur and the composite then read
+    /// the keyed copy until the next `prepare`.
+    pub fn apply_chroma_key(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        key: &cap_project::ChromaKey,
+    ) {
+        if self.hidden || self.last_recording_time.is_none() {
+            return;
+        }
+        let keyed_bind_group = |pass: &ChromaKeyPass| {
+            self.pipeline
+                .bind_group(device, &self.uniforms_buffer, pass.output_view())
+        };
+        let (pass, bind_group) = self.chroma_key.get_or_insert_with(|| {
+            let pass = ChromaKeyPass::new(device);
+            let bind_group = keyed_bind_group(&pass);
+            (pass, bind_group)
+        });
+        if pass.render(
+            device,
+            queue,
+            encoder,
+            &self.frame_textures[self.current_texture],
+            &self.frame_texture_views[self.current_texture],
+            key,
+        ) {
+            *bind_group = keyed_bind_group(pass);
+        }
+        self.chroma_key_active = true;
     }
 
     pub fn attach_shared_blur(
@@ -606,6 +650,11 @@ impl CameraLayer {
         self.blur_active = true;
     }
 
+    #[cfg(test)]
+    pub fn has_chroma_key_pass(&self) -> bool {
+        self.chroma_key.is_some()
+    }
+
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -613,12 +662,14 @@ impl CameraLayer {
             return;
         }
 
+        let source = match &self.chroma_key {
+            Some((_, keyed)) if self.chroma_key_active => Some(keyed),
+            _ => self.bind_groups[self.current_texture].as_ref(),
+        };
         let bind_group = if self.blur_active {
-            self.blur_bind_group
-                .as_ref()
-                .or(self.bind_groups[self.current_texture].as_ref())
+            self.blur_bind_group.as_ref().or(source)
         } else {
-            self.bind_groups[self.current_texture].as_ref()
+            source
         };
 
         if let Some(bind_group) = bind_group {

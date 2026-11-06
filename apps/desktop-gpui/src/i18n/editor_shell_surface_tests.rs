@@ -421,6 +421,40 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::camera::blur::remove(),
             "Remove Background",
         ),
+        (tr::editor::tabs::camera::green_screen::blue(), "Blue"),
+        (
+            tr::editor::tabs::camera::green_screen::description(),
+            "Removes a solid green or blue backdrop from behind you.",
+        ),
+        (tr::editor::tabs::camera::green_screen::green(), "Green"),
+        (
+            tr::editor::tabs::camera::green_screen::key_color(),
+            "Key Color",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::no_backdrop(),
+            "No solid backdrop color found at the edges of the camera.",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::pick_from_camera(),
+            "Pick from Camera",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::softness(),
+            "Softness",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::spill(),
+            "Spill Removal",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::title(),
+            "Green Screen",
+        ),
+        (
+            tr::editor::tabs::camera::green_screen::tolerance(),
+            "Tolerance",
+        ),
         (tr::editor::tabs::camera::corner_style(), "Corner Style"),
         (
             tr::editor::tabs::camera::custom_position(),

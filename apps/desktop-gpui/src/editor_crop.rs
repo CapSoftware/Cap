@@ -2289,6 +2289,21 @@ async fn decode_display_frame(
     project: &cap_project::ProjectConfiguration,
     time_secs: f64,
 ) -> Option<Arc<RenderImage>> {
+    let mut frame = decode_frame_rgba(instance, project, time_secs, false).await?;
+    // gpui's `RenderImage` is BGRA behind an `RgbaImage`, which is the same
+    // swap `editor_window::frame_image` does for the player's frames.
+    cap_gpui_kernels::frame::swap_red_blue(&mut frame);
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(frame)
+    ])))
+}
+
+pub(crate) async fn decode_frame_rgba(
+    instance: &cap_editor::EditorInstance,
+    project: &cap_project::ProjectConfiguration,
+    time_secs: f64,
+    camera: bool,
+) -> Option<image::RgbaImage> {
     use cap_rendering::{PixelFormat, cpu_yuv};
 
     let (segment_time, segment) = project.get_segment_time(time_secs)?;
@@ -2304,34 +2319,38 @@ async fn decode_display_frame(
 
     let frames = medias
         .decoders
-        .get_frames(segment_time as f32, false, true, clip_offsets)
+        .get_frames(segment_time as f32, camera, !camera, clip_offsets)
         .await?;
-    let screen = frames.screen_frame?;
-    let width = screen.width();
-    let height = screen.height();
+    let frame = if camera {
+        frames.camera_frame
+    } else {
+        frames.screen_frame
+    }?;
+    let width = frame.width();
+    let height = frame.height();
 
-    let mut rgba = match screen.format() {
-        PixelFormat::Rgba => screen.data().to_vec(),
+    let rgba = match frame.format() {
+        PixelFormat::Rgba => frame.data().to_vec(),
         PixelFormat::Nv12 => {
-            let y = screen.y_plane()?;
-            let uv = screen.uv_plane()?;
+            let y = frame.y_plane()?;
+            let uv = frame.uv_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
             cpu_yuv::nv12_to_rgba_with_matrix(
                 y,
                 uv,
                 width,
                 height,
-                screen.y_stride(),
-                screen.uv_stride(),
+                frame.y_stride(),
+                frame.uv_stride(),
                 &mut out,
-                screen.matrix(),
+                frame.matrix(),
             );
             out
         }
         PixelFormat::Yuv420p => {
-            let y = screen.y_plane()?;
-            let u = screen.u_plane()?;
-            let v = screen.v_plane()?;
+            let y = frame.y_plane()?;
+            let u = frame.u_plane()?;
+            let v = frame.v_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
             cpu_yuv::yuv420p_to_rgba_with_matrix(
                 y,
@@ -2339,21 +2358,15 @@ async fn decode_display_frame(
                 v,
                 width,
                 height,
-                screen.y_stride(),
-                screen.uv_stride(),
+                frame.y_stride(),
+                frame.uv_stride(),
                 &mut out,
-                screen.matrix(),
+                frame.matrix(),
             );
             out
         }
     };
-    // gpui's `RenderImage` is BGRA behind an `RgbaImage`, which is the same
-    // swap `editor_window::frame_image` does for the player's frames.
-    cap_gpui_kernels::frame::swap_red_blue(&mut rgba);
-    let buffer = image::RgbaImage::from_raw(width, height, rgba)?;
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(buffer)
-    ])))
+    image::RgbaImage::from_raw(width, height, rgba)
 }
 
 // ---------------------------------------------------------------------------

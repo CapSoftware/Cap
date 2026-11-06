@@ -12,7 +12,7 @@ use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::DisplayNotch;
+use crate::{ChromaKey, DisplayNotch};
 
 #[cfg(test)]
 mod clip_transition_tests;
@@ -570,6 +570,8 @@ pub struct Camera {
     pub scale_during_zoom: f32,
     #[serde(default)]
     pub background_blur: BackgroundBlurConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chroma_key: Option<ChromaKey>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -591,6 +593,18 @@ impl Camera {
 
     fn default_scale_during_zoom() -> f32 {
         0.7
+    }
+
+    pub fn active_chroma_key(&self) -> Option<ChromaKey> {
+        self.chroma_key
+            .filter(|key| key.enabled)
+            .map(|key| key.sanitized())
+    }
+
+    /// The camera draws as a free-standing subject, so its rounding, shadow
+    /// and edge padding stop applying.
+    pub fn is_cutout(&self) -> bool {
+        self.background_blur.removes_background() || self.active_chroma_key().is_some()
     }
 }
 
@@ -614,6 +628,7 @@ impl Default for Camera {
             rounding_type: CornerStyle::default(),
             scale_during_zoom: Self::default_scale_during_zoom(),
             background_blur: BackgroundBlurConfig::default(),
+            chroma_key: None,
         }
     }
 }
@@ -752,7 +767,7 @@ impl CursorRippleConfig {
     }
 }
 
-fn clamp_finite(value: f32, range: (f32, f32), fallback: f32) -> f32 {
+pub(crate) fn clamp_finite(value: f32, range: (f32, f32), fallback: f32) -> f32 {
     if value.is_finite() {
         value.clamp(range.0, range.1)
     } else {
