@@ -1375,9 +1375,12 @@ pub struct TimelineModel {
     /// Imported audio peak tables, keyed by the segment's config `path`.
     pub imported_waveforms: Arc<HashMap<String, ImportedWaveform>>,
     pub waveform_paths: Arc<WaveformPaths>,
-    /// The span a live ghost trim is removing, in output time. Drawn as a gap
-    /// with a red duration badge, the way Blip's ghost resize marks the cut.
-    pub clip_ghost_gap: Option<(f64, f64)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipPreview {
+    pub clips: Vec<Segment>,
+    pub ghost_gap: Option<(f64, f64)>,
 }
 
 impl TimelineModel {
@@ -1629,7 +1632,6 @@ impl TimelineModel {
             system_waveforms: Vec::new(),
             imported_waveforms: Arc::default(),
             waveform_paths: Arc::default(),
-            clip_ghost_gap: None,
         };
         model.rows = build_rows(
             config,
@@ -1914,6 +1916,7 @@ impl Default for TimelineView {
 /// is a `Vec` and the view is `Copy` on the playback path.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SegmentUi<'a> {
+    pub clip_preview: Option<&'a ClipPreview>,
     /// `editorState.timeline.selection`.
     pub selection: Option<&'a Selection>,
     /// `editorState.timeline.interactMode === "split"`, which swaps the cursor
@@ -1940,7 +1943,16 @@ pub struct SegmentUi<'a> {
     pub camera3d_editing_end: bool,
 }
 
-impl SegmentUi<'_> {
+impl<'a> SegmentUi<'a> {
+    pub fn segments_for(&self, model: &'a TimelineModel, row: TrackRow) -> &'a [Segment] {
+        if row.kind == TrackKind::Clip
+            && let Some(preview) = self.clip_preview
+        {
+            return &preview.clips;
+        }
+        model.segments_for(row)
+    }
+
     fn is_selected(&self, kind: TrackKind, index: usize) -> bool {
         self.selection
             .is_some_and(|selection| selection.contains(kind, index))
@@ -1953,8 +1965,8 @@ impl SegmentUi<'_> {
     fn row_selected(&self, model: &TimelineModel, row: TrackRow) -> bool {
         self.selection.is_some_and(|selection| {
             selection.track == row.kind
-                && model
-                    .segments_for(row)
+                && self
+                    .segments_for(model, row)
                     .iter()
                     .enumerate()
                     .any(|(index, segment)| {
@@ -2338,7 +2350,7 @@ fn render_track_content(
 ) -> AnyElement {
     let width = content_width(viewport_width);
     let secs_per_pixel = view.transform.secs_per_pixel(width);
-    let segments = model.segments_for(row);
+    let segments = ui.segments_for(model, row);
 
     let mut content = div().relative().size_full();
 
@@ -2455,7 +2467,7 @@ fn render_track_content(
     }
 
     if row.kind == TrackKind::Clip
-        && let Some((gap_start, gap_end)) = model.clip_ghost_gap
+        && let Some((gap_start, gap_end)) = ui.clip_preview.and_then(|preview| preview.ghost_gap)
     {
         let x = ((gap_start - view.transform.position) / secs_per_pixel) as f32;
         let width = ((gap_end - gap_start) / secs_per_pixel) as f32;
@@ -4506,6 +4518,56 @@ mod tests {
     }
 
     // -- The model ----------------------------------------------------------
+
+    #[test]
+    fn clip_preview_selection_accepts_a_shorter_lived_model() {
+        let segment = |lane| Segment {
+            start: 0.,
+            end: 1.,
+            lane,
+            detail: SegmentDetail::Mask { label: "Highlight" },
+        };
+        let preview = ClipPreview {
+            clips: vec![segment(2)],
+            ghost_gap: None,
+        };
+        let selection = Selection {
+            track: TrackKind::Clip,
+            indices: vec![0],
+        };
+        let ui = SegmentUi {
+            clip_preview: Some(&preview),
+            selection: Some(&selection),
+            ..Default::default()
+        };
+        let row = TrackRow {
+            kind: TrackKind::Clip,
+            lane: 2,
+        };
+        {
+            let model = TimelineModel {
+                clips: vec![segment(0)],
+                ..Default::default()
+            };
+            assert!(ui.row_selected(&model, row));
+            assert!(std::ptr::eq(
+                ui.segments_for(&model, row),
+                preview.clips.as_slice()
+            ));
+            let base_ui = SegmentUi {
+                clip_preview: None,
+                ..ui
+            };
+            assert!(!base_ui.row_selected(&model, row));
+            let base_row = TrackRow { lane: 0, ..row };
+            assert!(base_ui.row_selected(&model, base_row));
+            assert!(std::ptr::eq(
+                base_ui.segments_for(&model, base_row),
+                model.clips.as_slice()
+            ));
+        }
+        assert!(ui.is_selected(TrackKind::Clip, 0));
+    }
 
     #[test]
     fn lane_counts_follow_the_highest_used_lane() {
