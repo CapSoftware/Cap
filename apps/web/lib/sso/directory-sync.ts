@@ -152,7 +152,7 @@ async function provisionDirectoryUser(
 	remote: RemoteDirectoryUser & { email: string },
 	link: DirectoryLink | undefined,
 ) {
-	await db().transaction(async (tx) => {
+	return db().transaction(async (tx) => {
 		const organization = await lockOrganization(
 			tx,
 			organizationId,
@@ -243,6 +243,7 @@ async function provisionDirectoryUser(
 			});
 		}
 		await enqueueLoopsSync(tx, userId, !member);
+		return userId;
 	});
 }
 
@@ -448,6 +449,7 @@ async function reconcileDirectory(
 	const linksById = new Map(links.map((link) => [link.id, link]));
 	const memberIds = new Set(members.map((member) => member.userId));
 	const result = emptyResult("synced");
+	const provisionedUserIds = new Set<User.UserId>();
 
 	for (const remote of remoteUsers.values()) {
 		if (!remote.active) continue;
@@ -468,11 +470,13 @@ async function reconcileDirectory(
 			continue;
 		}
 		if (Date.now() > deadline) throw new DeadlineReached();
-		await provisionDirectoryUser(
-			organizationId,
-			workosOrganizationId,
-			{ ...remote, email },
-			link,
+		provisionedUserIds.add(
+			await provisionDirectoryUser(
+				organizationId,
+				workosOrganizationId,
+				{ ...remote, email },
+				link,
+			),
 		);
 		result.added++;
 	}
@@ -486,16 +490,34 @@ async function reconcileDirectory(
 	const removals = managedLinks.filter(
 		(link) => !remoteUsers.get(link.id)?.active,
 	);
+	const ownerId = record.organization.ownerId;
+	const removalIds = new Set(removals.map((link) => link.id));
+	const retainedUserIds = new Set([
+		...provisionedUserIds,
+		...managedLinks
+			.filter((link) => !removalIds.has(link.id))
+			.map((link) => link.userId),
+	]);
+	const leavingUserIds = new Set(
+		removals
+			.map((link) => link.userId)
+			.filter((userId) => userId !== ownerId && !retainedUserIds.has(userId)),
+	);
+	const managedUserIds = new Set(
+		managedLinks
+			.map((link) => link.userId)
+			.filter((userId) => userId !== ownerId),
+	);
 	if (
-		removals.length >= MASS_REMOVAL_MIN &&
-		removals.length > managedLinks.length * MASS_REMOVAL_RATIO &&
+		leavingUserIds.size >= MASS_REMOVAL_MIN &&
+		leavingUserIds.size > managedUserIds.size * MASS_REMOVAL_RATIO &&
 		!removalsApproved
 	) {
-		result.held = removals.length;
+		result.held = leavingUserIds.size;
 		console.error("Directory sync held a large removal", {
 			organizationId,
-			removals: removals.length,
-			managed: managedLinks.length,
+			removals: leavingUserIds.size,
+			managed: managedUserIds.size,
 		});
 		return result;
 	}
@@ -619,7 +641,7 @@ export async function runDueDirectorySyncs(deadline: number) {
 				),
 			),
 		)
-		.orderBy(organizationDirectorySync.syncedAt)
+		.orderBy(organizationDirectorySync.requestedAt)
 		.limit(50);
 	let processed = 0;
 	let failed = 0;
