@@ -2339,6 +2339,16 @@ struct SourceToEditedMapping {
     timescale: f64,
 }
 
+impl SourceToEditedMapping {
+    fn edited_end(&self) -> f64 {
+        self.edited_start + (self.source_end - self.source_start) / self.timescale
+    }
+
+    fn source_time(&self, edited_time: f64) -> f64 {
+        self.source_start + (edited_time - self.edited_start) * self.timescale
+    }
+}
+
 /// `buildSourceToEditedMappings` (`captions.ts:98-128`), with the recording
 /// offsets built from `editorInstance.recordings.segments[].display.duration`
 /// -- here the pre-flight's `clip_display_durations`.
@@ -2404,11 +2414,8 @@ pub fn map_edited_time_to_source(
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
     let mut fallback = None;
     for mapping in build_source_to_edited_mappings(timeline, recording_durations) {
-        let edited_end =
-            mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
-        if edited_time >= mapping.edited_start && edited_time <= edited_end {
-            let source_time =
-                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale;
+        if edited_time >= mapping.edited_start && edited_time <= mapping.edited_end() {
+            let source_time = mapping.source_time(edited_time);
             if let Some((range_start, range_end)) = source_range
                 && range_start < mapping.source_end
                 && range_end > mapping.source_start
@@ -2470,8 +2477,13 @@ pub fn sync_caption_words_with_text(
 /// `updateSelectedCaption`'s source write-through (`CaptionsTab.tsx:257-315`):
 /// after a track segment's start/end/text was edited in output time, route
 /// the timing and content back onto the source-time caption master so the
-/// edit survives future clip changes. Style overrides stay on the track and
-/// are carried across by source id when re-derived.
+/// edit survives future clip changes. Only the words this piece shows are
+/// rewritten, so a cut that splits the caption leaves its other pieces alone.
+/// A moved or resized piece retimes its words within its own clip, stopping
+/// at the clip's edges and at the longest word projection keeps; a word
+/// shared with another piece keeps its part outside this clip. Style
+/// overrides stay on the track and are carried across by source id when
+/// re-derived.
 pub fn write_caption_edit_to_source(
     project: &mut ProjectConfiguration,
     index: usize,
@@ -2483,7 +2495,7 @@ pub fn write_caption_edit_to_source(
     let Some(track_segment) = timeline.caption_segments.get(index) else {
         return;
     };
-    let source_id = source_caption_id(&track_segment.id).to_string();
+    let track_id = track_segment.id.clone();
     let (track_start, track_end, track_text) = (
         track_segment.start,
         track_segment.end,
@@ -2500,29 +2512,159 @@ pub fn write_caption_edit_to_source(
     let Some(source) = captions
         .segments
         .iter_mut()
-        .find(|segment| segment.id == source_id)
+        .find(|segment| segment.id == source_caption_id(&track_id))
     else {
         return;
     };
 
-    let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
-        map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
-    {
+    let Some(piece) = cap_project::caption_piece(source, &track_id, timeline, recording_durations)
+    else {
+        return;
+    };
+    let clip = piece.clip.and_then(|clip| {
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .into_iter()
+            .nth(clip)
+    });
+    let (clip_start, clip_end) = clip
+        .as_ref()
+        .map_or((f64::NEG_INFINITY, f64::INFINITY), |clip| {
+            (clip.source_start, clip.source_end)
+        });
+    let in_clip = |time: f32| f64::from(time).clamp(clip_start, clip_end);
+    let original: Vec<CaptionWord> = piece
+        .source_words
+        .iter()
+        .map(|&index| {
+            let word = &source.words[index];
+            CaptionWord {
+                text: word.text.clone(),
+                start: word.start,
+                end: word.end.min(word.start + MAX_CAPTION_WORD_DURATION),
+            }
+        })
+        .collect();
+    let mut words: Vec<CaptionWord> = original
+        .iter()
+        .map(|word| CaptionWord {
+            text: word.text.clone(),
+            start: in_clip(word.start) as f32,
+            end: in_clip(word.end) as f32,
+        })
+        .collect();
+    let (shown_start, shown_end) = if words.is_empty() {
+        (in_clip(source.start), in_clip(source.end))
+    } else {
+        words
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(start, end), word| {
+                (
+                    start.min(f64::from(word.start)),
+                    end.max(f64::from(word.end)),
+                )
+            })
+    };
+
+    let (mut start, mut end) = (shown_start, shown_end);
+    if let Some(clip) = &clip {
+        let holds = timeline.hold_windows();
+        let effective = |time: f64| time - held_time_before(&holds, time);
+        let (first, last) = (clip.edited_start, clip.edited_end());
+        let (start_moved, end_moved) = (track_start != piece.start, track_end != piece.end);
+        let (mut edited_start, mut edited_end) = (effective(track_start), effective(track_end));
+        if start_moved && end_moved {
+            let overflow = (first - edited_start).max(0.) + (last - edited_end).min(0.);
+            edited_start += overflow;
+            edited_end += overflow;
+        }
+        if start_moved {
+            start = clip.source_time(edited_start.clamp(first, last));
+        }
+        if end_moved {
+            end = clip.source_time(edited_end.clamp(first, last));
+        }
+        let longest_word = words
+            .iter()
+            .map(|word| f64::from(word.end - word.start))
+            .fold(0., f64::max);
+        if longest_word > 0. {
+            let longest_span =
+                (shown_end - shown_start) * f64::from(MAX_CAPTION_WORD_DURATION) / longest_word;
+            if end - start > longest_span {
+                if end_moved {
+                    end = start + longest_span;
+                } else {
+                    start = end - longest_span;
+                }
+            }
+        }
+        if end <= start {
+            (start, end) = (shown_start, shown_end);
+        }
+    }
+    if (start, end) != (shown_start, shown_end) && shown_end > shown_start {
+        let scale = (end - start) / (shown_end - shown_start);
+        let retime = |time: f32| (start + (f64::from(time) - shown_start) * scale) as f32;
+        for word in &mut words {
+            word.start = retime(word.start);
+            word.end = retime(word.end);
+        }
+    }
+    let words = sync_caption_words_with_text(&track_text, &words, start, end);
+    let starts_caption = piece.source_words.first().is_none_or(|&index| index == 0);
+    let ends_caption = piece
+        .source_words
+        .last()
+        .is_none_or(|&index| index + 1 == source.words.len());
+    if words.len() == piece.source_words.len() {
+        for ((&index, mut word), original) in piece.source_words.iter().zip(words).zip(&original) {
+            if f64::from(original.start) < clip_start {
+                word.start = original.start;
+                word.end = word.end.min(original.start + MAX_CAPTION_WORD_DURATION);
+            }
+            if f64::from(original.end) > clip_end {
+                word.end = original.end;
+                word.start = word.start.max(original.end - MAX_CAPTION_WORD_DURATION);
+            }
+            source.words[index] = word;
+        }
+    } else {
+        let insert_at = piece.source_words.first().copied().unwrap_or(0);
+        for (&index, original) in piece.source_words.iter().zip(&original).rev() {
+            let mut outside = Vec::new();
+            if f64::from(original.start) < clip_start {
+                let end = clip_start as f32;
+                outside.push(CaptionWord {
+                    end: if f64::from(end) > clip_start {
+                        end.next_down()
+                    } else {
+                        end
+                    },
+                    ..original.clone()
+                });
+            }
+            if f64::from(original.end) > clip_end {
+                let start = clip_end as f32;
+                outside.push(CaptionWord {
+                    start: if f64::from(start) < clip_end {
+                        start.next_up()
+                    } else {
+                        start
+                    },
+                    ..original.clone()
+                });
+            }
+            source.words.splice(index..=index, outside);
+        }
+        source.words.splice(insert_at..insert_at, words);
+    }
+    if starts_caption {
         source.start = start as f32;
     }
-    if let Some(end) =
-        map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
-    {
+    if ends_caption {
         source.end = end as f32;
     }
-    source.text = track_text;
-    source.words = sync_caption_words_with_text(
-        &source.text,
-        &source.words,
-        f64::from(source.start),
-        f64::from(source.end),
-    );
+    source.text = caption_text_from_words(&source.words);
 }
 
 /// `applyCaptionResultToProject` (`captions.ts:469-527`): set the captions
@@ -2838,6 +2980,317 @@ mod tests {
                     .all(|pair| pair[0].end <= pair[1].start)
             );
         }
+    }
+
+    type ShownPiece = (String, f64, f64, Vec<(f32, f32)>);
+
+    fn shown_pieces(project: &ProjectConfiguration) -> Vec<ShownPiece> {
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|piece| {
+                (
+                    piece.text.clone(),
+                    piece.start,
+                    piece.end,
+                    word_timings(&piece.words),
+                )
+            })
+            .collect()
+    }
+
+    fn edit_caption_piece(
+        project: &mut ProjectConfiguration,
+        index: usize,
+        edit: impl FnOnce(&mut CaptionTrackSegment),
+    ) -> (f64, f64) {
+        let durations = [10.0];
+        let piece = &mut project.timeline.as_mut().unwrap().caption_segments[index];
+        edit(piece);
+        let edited = (piece.start, piece.end);
+        write_caption_edit_to_source(project, index, &durations);
+        cap_project::synchronize_captions(project, &durations);
+        edited
+    }
+
+    fn cut_caption_project(
+        clips: &[(f64, f64, f64)],
+        words: &[(&str, f32, f32)],
+    ) -> ProjectConfiguration {
+        let segments: Vec<_> = clips
+            .iter()
+            .map(|(start, end, timescale)| {
+                serde_json::json!({
+                    "recordingSegment": 0, "timescale": timescale, "start": start, "end": end
+                })
+            })
+            .collect();
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(
+                serde_json::json!({ "segments": segments, "zoomSegments": [] }),
+            )),
+            captions: Some(CaptionsData {
+                segments: vec![caption(
+                    "caption",
+                    words
+                        .iter()
+                        .map(|word| word.1)
+                        .fold(f32::INFINITY, f32::min),
+                    words.iter().map(|word| word.2).fold(0.0, f32::max),
+                    words,
+                )],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        project
+    }
+
+    #[test]
+    fn editing_one_piece_of_a_cut_caption_keeps_the_other_piece() {
+        type Edit = fn(&mut CaptionTrackSegment);
+        let edits: [(usize, Edit, &str); 5] = [
+            (0, |piece| piece.text = "hi there".into(), "hi there"),
+            (0, |piece| piece.start = 1.25, "hello there"),
+            (
+                1,
+                |piece| piece.text = "big wide world".into(),
+                "big wide world",
+            ),
+            (
+                1,
+                |piece| (piece.start, piece.end) = (2.5, 3.5),
+                "big world",
+            ),
+            (1, |piece| piece.end = 3.5, "big world"),
+        ];
+        for (index, edit, edited_text) in edits {
+            let mut project = cut_caption_project(
+                &[(0.0, 2.0, 1.0), (5.0, 8.0, 1.0)],
+                &[
+                    ("hello", 1.0, 1.5),
+                    ("there", 1.5, 2.0),
+                    ("big", 5.0, 5.5),
+                    ("world", 5.5, 6.0),
+                ],
+            );
+            let before = shown_pieces(&project);
+            assert_eq!(before[0].0, "hello there");
+            assert_eq!(before[1].0, "big world");
+
+            let edited = edit_caption_piece(&mut project, index, edit);
+
+            let after = shown_pieces(&project);
+            assert_eq!(after.len(), 2);
+            assert_eq!(after[index].0, edited_text);
+            assert_eq!((after[index].1, after[index].2), edited);
+            assert_eq!(after[1 - index], before[1 - index]);
+        }
+    }
+
+    #[test]
+    fn resizing_a_piece_keeps_its_shared_word_in_the_other_piece() {
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("two", 8.0, 9.0)],
+        );
+        let before = shown_pieces(&project);
+        assert_eq!(before[0].0, "one shared");
+        assert_eq!(before[1].0, "shared two");
+
+        let edited = edit_caption_piece(&mut project, 0, |piece| piece.start = 0.5);
+
+        let after = shown_pieces(&project);
+        assert_eq!((after[0].1, after[0].2), edited);
+        assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn resizing_a_piece_maps_through_its_own_clip_in_a_cross_fade() {
+        let mut project =
+            cut_caption_project(&[(0.0, 5.0, 1.0), (3.0, 10.0, 1.0)], &[("word", 5.0, 6.0)]);
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .transitions
+            .push(cap_project::ClipTransition {
+                segment_index: 1,
+                kind: cap_project::ClipTransitionType::CrossFade,
+                duration: 1.0,
+            });
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let before = shown_pieces(&project);
+        assert_eq!((before[0].1, before[0].2), (6.0, 7.0));
+
+        edit_caption_piece(&mut project, 0, |piece| piece.start = 4.5);
+
+        let spans: Vec<_> = shown_pieces(&project)
+            .iter()
+            .map(|piece| (piece.1, piece.2))
+            .collect();
+        assert_eq!(spans, [(3.5, 5.0), (4.5, 7.0)]);
+    }
+
+    #[test]
+    fn dragging_a_piece_past_its_clip_stops_at_the_clip_edge() {
+        let mut project =
+            cut_caption_project(&[(0.0, 5.0, 1.0), (5.0, 10.0, 1.0)], &[("word", 1.0, 2.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            (piece.start, piece.end) = (6.0, 7.0);
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            (after[0].0.as_str(), after[0].1, after[0].2),
+            ("word", 4.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn dragging_a_piece_across_reversed_clips_keeps_its_word() {
+        let mut project =
+            cut_caption_project(&[(5.0, 10.0, 1.0), (0.0, 5.0, 1.0)], &[("word", 6.0, 7.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            (piece.start, piece.end) = (4.5, 5.5);
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            (after[0].0.as_str(), after[0].1, after[0].2),
+            ("word", 4.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn retyping_a_piece_keeps_its_shared_word_in_the_other_piece() {
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("two", 8.0, 9.0)],
+        );
+        let before = shown_pieces(&project);
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            piece.text = "one new shared".into();
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after[0].0, "one new shared");
+        assert_eq!(after[1], before[1]);
+    }
+
+    #[test]
+    fn editing_unsorted_shared_words_keeps_their_other_pieces() {
+        type Edit = fn(&mut CaptionTrackSegment);
+        let edits: [Edit; 5] = [
+            |piece| piece.text = "One shared last".into(),
+            |piece| piece.start += 0.25,
+            |piece| piece.end -= 0.25,
+            |piece| piece.text = "one new shared last".into(),
+            |piece| piece.text = "replacement".into(),
+        ];
+        for (clips, words, index) in [
+            (
+                [(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+                [("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("last", 3.0, 4.0)],
+                0,
+            ),
+            (
+                [(0.0, 4.0, 1.0), (5.0, 10.0, 1.0)],
+                [("one", 8.0, 9.0), ("shared", 3.5, 5.5), ("last", 6.0, 7.0)],
+                1,
+            ),
+        ] {
+            for edit in edits {
+                let mut project = cut_caption_project(&clips, &words);
+                let before = shown_pieces(&project);
+                assert_eq!(before[index].0, "one shared last");
+                assert_eq!(before[1 - index].0, "shared");
+
+                edit_caption_piece(&mut project, index, edit);
+
+                let after = shown_pieces(&project);
+                assert_eq!(after.len(), before.len());
+                assert_eq!(after[1 - index], before[1 - index]);
+            }
+        }
+    }
+
+    #[test]
+    fn retyping_at_fractional_cuts_keeps_old_words_outside_the_edited_clip() {
+        for (index, text) in [(0, "one new shared"), (1, "shared new last")] {
+            let mut project = cut_caption_project(
+                &[(0.0, 5.1, 1.0), (6.3, 10.0, 1.0)],
+                &[("one", 1.0, 2.0), ("shared", 4.5, 6.5), ("last", 8.0, 9.0)],
+            );
+            let before = shown_pieces(&project);
+
+            edit_caption_piece(&mut project, index, |piece| piece.text = text.into());
+
+            let after = shown_pieces(&project);
+            assert_eq!(after[index].0, text);
+            assert_eq!(after[1 - index], before[1 - index]);
+        }
+    }
+
+    #[test]
+    fn stretching_a_word_stops_at_the_longest_word_projection_keeps() {
+        let mut project = cut_caption_project(&[(0.0, 10.0, 1.0)], &[("word", 1.0, 2.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| piece.end = 5.0);
+
+        let after = shown_pieces(&project);
+        assert_eq!((after[0].1, after[0].2), (1.0, 3.5));
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(word_timings(&source.words), [(1.0, 3.5)]);
+    }
+
+    #[test]
+    fn spelling_edits_stick_at_a_rounded_clip_end() {
+        let mut project = cut_caption_project(&[(0.0, 1.0, 1.5)], &[("hi", 0.5, 1.0)]);
+
+        edit_caption_piece(&mut project, 0, |piece| piece.text = "Hi".into());
+
+        assert_eq!(shown_pieces(&project)[0].0, "Hi");
+    }
+
+    #[test]
+    fn editing_a_piece_of_unsorted_caption_words_keeps_the_other_piece() {
+        let mut project = cut_caption_project(
+            &[(0.0, 5.0, 1.0), (6.0, 10.0, 1.0)],
+            &[
+                ("late-first", 4.0, 4.5),
+                ("second-clip", 7.0, 7.5),
+                ("early-last", 1.0, 1.5),
+            ],
+        );
+        let before = shown_pieces(&project);
+        assert_eq!(before[0].0, "late-first early-last");
+        assert_eq!(before[1].0, "second-clip");
+
+        edit_caption_piece(&mut project, 0, |piece| {
+            piece.text = "Late-first early-last".into();
+        });
+
+        let after = shown_pieces(&project);
+        assert_eq!(after[0].0, "Late-first early-last");
+        assert_eq!(after[0].3, before[0].3);
+        assert_eq!(after[1], before[1]);
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(source.text, "Late-first second-clip early-last");
+    }
+
+    fn word_timings(words: &[CaptionWord]) -> Vec<(f32, f32)> {
+        words.iter().map(|word| (word.start, word.end)).collect()
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
