@@ -6,6 +6,8 @@ import { getGitHubReleases } from "@/utils/releases";
 
 export const metadata: Metadata = buildMarketingMetadata({
 	title: "Download — Cap",
+	description:
+		"Download Cap for macOS, Windows and Linux, add it to Chrome, or install the Cap CLI.",
 	path: "/download",
 	ogTitle: "Download Cap for macOS, Windows, Linux & Chrome",
 	ogTag: "Download",
