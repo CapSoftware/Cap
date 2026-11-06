@@ -179,6 +179,7 @@ jobs:
           __tests__/unit/video-create-atomicity.test.ts
           __tests__/unit/video-download-permissions.test.ts
           __tests__/unit/voice-note-playback.test.ts
+          __tests__/unit/web-recorder-reliability.test.ts
 
       - name: Typecheck
         run: bun run typecheck
