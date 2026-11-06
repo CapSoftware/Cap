@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-	folders,
 	organizationMembers,
 	organizations,
 	sharedVideos,
@@ -105,27 +104,6 @@ export async function removeVideosFromOrganization(
 					inArray(sharedVideos.videoId, existingVideoIds),
 				),
 			);
-
-		// Clear folderId for videos that are being removed from the organization and are currently in folders within that organization
-		// First, get all folder IDs that belong to this organization
-		const organizationFolders = await db()
-			.select({ id: folders.id })
-			.from(folders)
-			.where(eq(folders.organizationId, organizationId));
-
-		const organizationFolderIds = organizationFolders.map((f) => f.id);
-
-		if (organizationFolderIds.length > 0) {
-			await db()
-				.update(videos)
-				.set({ folderId: null })
-				.where(
-					and(
-						inArray(videos.id, existingVideoIds),
-						inArray(videos.folderId, organizationFolderIds),
-					),
-				);
-		}
 
 		revalidatePath(`/dashboard/spaces/${organizationId}`);
 		revalidatePath("/dashboard/caps");

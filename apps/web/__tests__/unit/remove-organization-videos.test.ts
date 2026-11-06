@@ -83,6 +83,27 @@ beforeEach(() => {
 });
 
 describe("removing videos from an organization", () => {
+	it.each([
+		["member", "member-user", "member", ownVideo],
+		["owner", "org-owner", null, colleagueVideo],
+		["admin", "admin-user", "admin", colleagueVideo],
+	])(
+		"preserves personal folder placement when a %s unshares a Cap",
+		async (_, userId, role, videoId) => {
+			mocks.user.mockResolvedValue({ id: userId });
+			memberRole = role;
+
+			const result = await removeVideosFromOrganization(organizationId, [
+				videoId,
+			]);
+
+			expect(result).toMatchObject({ success: true });
+			expect(writes).toEqual([
+				{ table: "shared_videos", params: [organizationId, videoId] },
+			]);
+		},
+	);
+
 	it("leaves a colleague's shared video in place for a plain member", async () => {
 		const result = await removeVideosFromOrganization(organizationId, [
 			colleagueVideo,
@@ -95,7 +116,7 @@ describe("removing videos from an organization", () => {
 		expect(writes).toEqual([]);
 	});
 
-	it("only removes and unfiles the member's own videos from a mixed request", async () => {
+	it("only removes the member's own shares from a mixed request", async () => {
 		const result = await removeVideosFromOrganization(organizationId, [
 			ownVideo,
 			colleagueVideo,
@@ -104,7 +125,6 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, ownVideo] },
-			{ table: "videos", params: [ownVideo, "folder-1"] },
 		]);
 	});
 
@@ -122,7 +142,6 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, colleagueVideo] },
-			{ table: "videos", params: [colleagueVideo, "folder-1"] },
 		]);
 	});
 
