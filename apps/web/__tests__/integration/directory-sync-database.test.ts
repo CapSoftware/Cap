@@ -706,6 +706,90 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await memberIds(org.organizationId)).size).toBe(3);
 		});
 
+		it("keeps a member an admin removed in Cap out until they are invited again", async () => {
+			const org = await makeOrganization();
+			const alice = directoryUser(org.directoryId, `alice@${org.domain}`);
+			fixture.users.set(org.directoryId, [alice]);
+			await syncOrganizationDirectory(org.organizationId, later());
+			const aliceUser = await userByEmail(`alice@${org.domain}`);
+			if (!aliceUser) throw new Error("Alice was not provisioned.");
+			await database()
+				.delete(organizationMembers)
+				.where(
+					and(
+						eq(organizationMembers.organizationId, org.organizationId),
+						eq(organizationMembers.userId, aliceUser.id),
+					),
+				);
+
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ added: 0, removed: 0 });
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				false,
+			);
+
+			const profileId = `prof_fixture_${id()}`;
+			await database().insert(accounts).values({
+				id: id(),
+				userId: aliceUser.id,
+				type: "oauth",
+				provider: "workos",
+				providerAccountId: profileId,
+			});
+			const identity: ValidatedSsoIdentity = {
+				organizationId: org.organizationId,
+				workosOrganizationId: org.workosOrganizationId,
+				connectionId: `conn_fixture_${id()}`,
+				profileId,
+				email: `alice@${org.domain}`,
+			};
+			await expect(
+				provisionSsoMembership(aliceUser.id, identity),
+			).rejects.toThrow("no longer have access");
+
+			await database()
+				.insert(organizationInvites)
+				.values({
+					id: id(),
+					organizationId: org.organizationId,
+					invitedEmail: `alice@${org.domain}`,
+					invitedByUserId: org.ownerId,
+					role: "member",
+				});
+			await provisionSsoMembership(aliceUser.id, identity);
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				true,
+			);
+		});
+
+		it("only applies an approval up to the number of removals confirmed", async () => {
+			const org = await makeOrganization();
+			const people = Array.from({ length: 30 }, (_, index) =>
+				directoryUser(org.directoryId, `bulk${index}@${org.domain}`),
+			);
+			fixture.users.set(org.directoryId, people);
+			await syncOrganizationDirectory(org.organizationId, later());
+			expect((await memberIds(org.organizationId)).size).toBe(31);
+
+			fixture.users.set(org.directoryId, people.slice(12));
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 12, removed: 0 });
+			await database()
+				.update(organizationDirectorySync)
+				.set({ removalsApprovedAt: new Date(), heldRemovals: 12 })
+				.where(
+					eq(organizationDirectorySync.organizationId, org.organizationId),
+				);
+
+			fixture.users.set(org.directoryId, people.slice(25));
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 25, removed: 0 });
+			expect((await memberIds(org.organizationId)).size).toBe(31);
+		});
+
 		it("keeps SSO from re-adding a member the directory removed", async () => {
 			const org = await makeOrganization();
 			const alice = directoryUser(org.directoryId, `alice@${org.domain}`);
@@ -736,7 +820,7 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 			await expect(
 				provisionSsoMembership(aliceUser.id, identity),
-			).rejects.toThrow("no longer grants access");
+			).rejects.toThrow("no longer have access");
 			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
 				false,
 			);
