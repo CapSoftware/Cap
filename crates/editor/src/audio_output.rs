@@ -30,6 +30,10 @@ use cpal::{
     SampleFormat,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use ringbuf::{
+    HeapProd, HeapRb,
+    traits::{Consumer, Observer, Producer, Split},
+};
 use tokio::sync::watch;
 use tracing::{error, info};
 
@@ -217,6 +221,10 @@ enum ControlMsg {
     },
     StopPlayback {
         generation: u64,
+    },
+    /// Interleaved stereo at [`crate::AudioRenderer::SAMPLE_RATE`].
+    Scrub {
+        samples: Vec<f32>,
     },
     Shutdown,
 }
@@ -639,6 +647,16 @@ impl AudioOutput {
             .send(ControlMsg::StopPlayback { generation });
     }
 
+    /// `samples` are interleaved stereo at
+    /// [`crate::AudioRenderer::SAMPLE_RATE`]. Ignored while playback owns the
+    /// stream.
+    pub fn play_snippet(&self, samples: Vec<f32>) {
+        if samples.is_empty() {
+            return;
+        }
+        let _ = self.control_tx.send(ControlMsg::Scrub { samples });
+    }
+
     /// Tears down the stream and thread. Also happens on drop.
     pub fn shutdown(&self) {
         let _ = self.control_tx.send(ControlMsg::Shutdown);
@@ -720,6 +738,7 @@ struct TypedStreamHandle {
     install: Box<dyn Fn(Box<PlaySpec>, u64, SourceAcknowledgement) -> Result<(), String>>,
     install_progressive: Box<InstallProgressiveAudio>,
     remove: Box<dyn Fn(Option<u64>)>,
+    play_snippet: Box<dyn Fn(Vec<f32>)>,
 }
 
 struct StreamState {
@@ -783,6 +802,9 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
     let mut state: Option<StreamState> = None;
     let mut idle = IdleTimer::new(Instant::now());
     let mut awake_holds = 0usize;
+    // After a stream fails to open for a scrub slice, slices are dropped
+    // until this passes instead of reopening the device every ~100 ms.
+    let mut scrub_retry_at: Option<Instant> = None;
 
     loop {
         let msg = if state.as_ref().is_some_and(StreamState::idle_pausable) {
@@ -893,6 +915,19 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
                     |stream| stream.failed.load(Ordering::Acquire),
                     |stream, generation| (stream.handle.remove)(Some(generation)),
                 );
+            }
+            ControlMsg::Scrub { samples } => {
+                let now = Instant::now();
+                if scrub_retry_at.is_none_or(|retry_at| now >= retry_at) {
+                    if ensure_stream(&mut state) {
+                        scrub_retry_at = None;
+                        if let Some(stream) = &state {
+                            (stream.handle.play_snippet)(samples);
+                        }
+                    } else {
+                        scrub_retry_at = Some(now + SCRUB_RETRY_AFTER_FAILURE);
+                    }
+                }
             }
             ControlMsg::Retire(source) => drop(source),
             ControlMsg::Realign(realign) => realign(),
@@ -1427,6 +1462,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     generation: Some(generation),
                 });
             }
+            ControlMsg::Scrub { .. } => {}
             ControlMsg::Retire(source) => drop(source),
             ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
@@ -1560,6 +1596,7 @@ fn control_thread_offline(
                 });
             }
             ControlMsg::EnsureStream | ControlMsg::HoldAwake | ControlMsg::ReleaseAwake => {}
+            ControlMsg::Scrub { .. } => {}
             ControlMsg::Retire(source) => drop(source),
             ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
@@ -1688,16 +1725,60 @@ where
     let source_active = Arc::new(AtomicBool::new(false));
 
     let mut active: Option<ActiveSource<T>> = None;
+    // Scrub slices arrive already in the device's format; played-out buffers
+    // go back to the output thread so the callback never frees memory. Both
+    // rings are preallocated, so neither side allocates to hand one over.
+    let (snippet_tx, mut snippet_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE).split();
+    let (mut spent_tx, spent_rx) = HeapRb::<Vec<T>>::new(SCRUB_QUEUE * 2).split();
+    let mut snippet: Option<(Vec<T>, usize)> = None;
+    let mut replaced: Option<(Vec<T>, usize)> = None;
+    let scrub_channels = output_info.channels.max(1);
+    let crossfade_frames = (output_info.sample_rate as usize / 200).max(1);
     let callback_source_active = source_active.clone();
     let stream = device
         .build_output_stream(
             &config,
             move |buffer: &mut [T], info| {
                 drain_source_commands(&mut active, &source_rx);
-                callback_source_active.store(active.is_some(), Ordering::Release);
+                while spent_tx.vacant_len()
+                    > usize::from(snippet.is_some()) + usize::from(replaced.is_some())
+                    && let Some(next) = snippet_rx.try_pop()
+                {
+                    retire_snippet(&mut spent_tx, &mut replaced);
+                    if snippet
+                        .as_ref()
+                        .is_some_and(|(samples, position)| *position < samples.len())
+                    {
+                        replaced = snippet.take();
+                    } else {
+                        retire_snippet(&mut spent_tx, &mut snippet);
+                    }
+                    snippet = Some((next, 0));
+                }
+                if active.is_some() {
+                    retire_snippet(&mut spent_tx, &mut replaced);
+                    retire_snippet(&mut spent_tx, &mut snippet);
+                }
+                callback_source_active
+                    .store(active.is_some() || snippet.is_some(), Ordering::Release);
 
                 let Some(source) = active.as_mut() else {
-                    buffer.fill(T::EQUILIBRIUM);
+                    let Some(current) = snippet.as_mut() else {
+                        buffer.fill(T::EQUILIBRIUM);
+                        return;
+                    };
+                    if !write_scrub_slice(
+                        buffer,
+                        current,
+                        replaced.as_ref(),
+                        scrub_channels,
+                        crossfade_frames,
+                    ) {
+                        retire_snippet(&mut spent_tx, &mut replaced);
+                    }
+                    if current.1 >= current.0.len() {
+                        retire_snippet(&mut spent_tx, &mut snippet);
+                    }
                     return;
                 };
 
@@ -1761,17 +1842,182 @@ where
         let _ = source_tx.send(SourceCommand::Remove { generation });
     });
 
+    let spent_rx = std::cell::RefCell::new(spent_rx);
+    let snippet_tx = std::cell::RefCell::new(snippet_tx);
+    let play_snippet = Box::new(move |samples: Vec<f32>| {
+        spent_rx.borrow_mut().clear();
+        let _ = snippet_tx.borrow_mut().try_push(convert_snippet::<T>(
+            &samples,
+            crate::AudioRenderer::SAMPLE_RATE,
+            output_info.sample_rate,
+            output_info.channels,
+        ));
+    });
+
     Ok(TypedStreamHandle {
         stream,
         source_active,
         install,
         install_progressive,
         remove,
+        play_snippet,
     })
+}
+
+/// Hands a scrub slice back to the output thread. It is only let go when the
+/// spent ring has room, otherwise it stays (finished, so silent) until there
+/// is, so the audio callback never frees it.
+fn retire_snippet<T>(spent: &mut HeapProd<Vec<T>>, slot: &mut Option<(Vec<T>, usize)>) {
+    if !spent.is_full()
+        && let Some((samples, _)) = slot.take()
+    {
+        let _ = spent.try_push(samples);
+    }
+}
+
+/// A slice that replaced one still playing starts with the old one fading out
+/// under it: cutting the old slice mid-waveform clicks.
+fn write_scrub_slice<T>(
+    buffer: &mut [T],
+    (samples, position): &mut (Vec<T>, usize),
+    replaced: Option<&(Vec<T>, usize)>,
+    channels: usize,
+    crossfade_frames: usize,
+) -> bool
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    let as_f32 = |sample: T| cpal::Sample::to_sample::<f32>(cpal::Sample::to_float_sample(sample));
+    let count = (samples.len() - *position).min(buffer.len());
+    for (offset, out) in buffer[..count].iter_mut().enumerate() {
+        let index = *position + offset;
+        let frame = index / channels;
+        *out = match replaced.and_then(|(old, start)| old.get(start + index)) {
+            Some(&previous) if frame < crossfade_frames => {
+                let gain = 1.0 - frame as f32 / crossfade_frames as f32;
+                T::from_sample_(as_f32(samples[index]) + as_f32(previous) * gain)
+            }
+            _ => samples[index],
+        };
+    }
+    buffer[count..].fill(T::EQUILIBRIUM);
+    *position += count;
+    replaced.is_some_and(|(old, start)| {
+        *position / channels < crossfade_frames && start + *position < old.len()
+    })
+}
+
+/// Scrub slices waiting for the callback; a drag sends one every ~100 ms.
+const SCRUB_QUEUE: usize = 4;
+
+const SCRUB_RETRY_AFTER_FAILURE: Duration = Duration::from_secs(2);
+
+/// Converts an interleaved stereo slice at `source_rate` to the device's
+/// rate (linear interpolation), channel count (left/right on the first two
+/// channels, their mix on a mono device, silence on any others) and sample
+/// type.
+fn convert_snippet<T: cpal::FromSample<f32>>(
+    samples: &[f32],
+    source_rate: u32,
+    output_rate: u32,
+    output_channels: usize,
+) -> Vec<T> {
+    let output_channels = output_channels.max(1);
+    let source_frames = samples.len() / 2;
+    if source_frames == 0 || source_rate == 0 || output_rate == 0 {
+        return Vec::new();
+    }
+    let output_frames =
+        (source_frames as u64 * u64::from(output_rate) / u64::from(source_rate)).max(1) as usize;
+    let step = f64::from(source_rate) / f64::from(output_rate);
+    let frame = |index: usize| {
+        let index = index.min(source_frames - 1);
+        (samples[index * 2], samples[index * 2 + 1])
+    };
+    let mut out = Vec::with_capacity(output_frames * output_channels);
+    for n in 0..output_frames {
+        let position = n as f64 * step;
+        let base = position.floor() as usize;
+        let t = (position - base as f64) as f32;
+        let (l0, r0) = frame(base);
+        let (l1, r1) = frame(base + 1);
+        let (left, right) = (l0 + (l1 - l0) * t, r0 + (r1 - r0) * t);
+        for channel in 0..output_channels {
+            let value = match (output_channels, channel) {
+                (1, _) => (left + right) * 0.5,
+                (_, 0) => left,
+                (_, 1) => right,
+                _ => 0.0,
+            };
+            out.push(T::from_sample_(value));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod native_tests;
+
+#[cfg(test)]
+mod scrub_snippet_tests {
+    use super::{HeapRb, Split, convert_snippet, retire_snippet, write_scrub_slice};
+
+    #[test]
+    fn a_replaced_slice_fades_out_under_the_new_one() {
+        let old = (vec![1.0f32; 8], 2);
+        let mut new = (vec![0.0f32; 8], 0);
+        let mut buffer = [9.0f32; 4];
+        assert!(write_scrub_slice(&mut buffer, &mut new, Some(&old), 1, 8));
+        assert_eq!(buffer, [1.0, 0.875, 0.75, 0.625]);
+        assert!(!write_scrub_slice(&mut buffer, &mut new, Some(&old), 1, 8));
+        assert_eq!(buffer, [0.5, 0.375, 0.0, 0.0]);
+
+        let mut alone = (vec![0.5f32; 3], 0);
+        assert!(!write_scrub_slice(&mut buffer, &mut alone, None, 1, 4));
+        assert_eq!(buffer, [0.5, 0.5, 0.5, 0.0]);
+        assert_eq!(alone.1, 3);
+    }
+
+    #[test]
+    fn a_full_spent_ring_keeps_the_slice_instead_of_freeing_it() {
+        let (mut spent, _rx) = HeapRb::<Vec<f32>>::new(1).split();
+        let mut slot = Some((vec![1.0], 1));
+        retire_snippet(&mut spent, &mut slot);
+        assert!(slot.is_none());
+        let mut slot = Some((vec![2.0], 1));
+        retire_snippet(&mut spent, &mut slot);
+        assert_eq!(slot, Some((vec![2.0], 1)));
+    }
+
+    #[test]
+    fn snippets_are_resampled_and_mapped_to_the_device_layout() {
+        let stereo: Vec<f32> = (0..480).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        let same: Vec<f32> = convert_snippet(&stereo, 48_000, 48_000, 2);
+        assert_eq!(same, stereo);
+
+        let down: Vec<f32> = convert_snippet(&stereo, 48_000, 24_000, 2);
+        assert_eq!(down.len(), 480);
+        assert_eq!(&down[..4], &[0.0, 0.0, 2.0, -2.0]);
+
+        let mono: Vec<f32> = convert_snippet(&stereo, 48_000, 48_000, 1);
+        assert_eq!(mono.len(), 480);
+        assert!(
+            mono.iter().all(|sample| *sample == 0.0),
+            "L and -L mix to silence"
+        );
+
+        let surround: Vec<f32> = convert_snippet(&stereo, 48_000, 44_100, 6);
+        assert_eq!(surround.len(), 441 * 6);
+        assert!(
+            surround
+                .chunks(6)
+                .all(|frame| frame[2..].iter().all(|s| *s == 0.0))
+        );
+
+        let ints: Vec<i16> = convert_snippet(&[1.0, -1.0], 48_000, 48_000, 2);
+        assert_eq!(ints, vec![i16::MAX, i16::MIN]);
+    }
+}
 
 #[cfg(test)]
 mod tests {

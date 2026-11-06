@@ -211,6 +211,7 @@ impl EditorVerticalLayout {
     }
 }
 
+const SCRUB_SLICE_SECS: f64 = 0.09;
 const PRESETS_MENU_WIDTH: f32 = 288.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
 const PRESET_SUBMENU_HEIGHT: f32 = 5. * 32. + 4. * 2. + 8.;
@@ -1409,6 +1410,9 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    audio_scrub: bool,
+    scrub_audio_busy: bool,
+    scrub_audio_next: Option<f64>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2201,6 +2205,9 @@ impl EditorWindow {
             total: 0.0,
             transport: None,
             scrub: None,
+            audio_scrub: crate::store::audio_scrub_enabled(),
+            scrub_audio_busy: false,
+            scrub_audio_next: None,
             stats: None,
             play_mark: None,
             timeline: TimelineModel::default(),
@@ -4531,6 +4538,7 @@ impl EditorWindow {
             // `applyScrub()` runs immediately on mousedown.
             self.scrub = Some(Scrub::Ruler);
             self.seek_to_time(time, cx);
+            self.scrub_audio_at(time, cx);
         } else {
             self.scrub = Some(Scrub::Press { time });
         }
@@ -4559,6 +4567,37 @@ impl EditorWindow {
         // in-flight work when it sees a newer instruction
         // (`editor_instance.rs:563-575`).
         self.scrub_to_time(time, cx);
+        self.scrub_audio_at(time, cx);
+    }
+
+    fn scrub_audio_at(&mut self, time: f64, cx: &mut Context<Self>) {
+        if self.playing || !self.audio_scrub {
+            return;
+        }
+        if self.scrub_audio_busy {
+            self.scrub_audio_next = Some(time);
+            return;
+        }
+        let Some(instance) = self.instance.clone() else {
+            return;
+        };
+        self.scrub_audio_busy = true;
+        let slice = gpui_tokio::Tokio::spawn(cx, async move {
+            instance.scrub_audio(time, SCRUB_SLICE_SECS).await;
+        });
+        cx.spawn(async move |this, cx| {
+            let _ = slice.await;
+            cx.background_executor()
+                .timer(Duration::from_millis(60))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.scrub_audio_busy = false;
+                if let Some(next) = this.scrub_audio_next.take() {
+                    this.scrub_audio_at(next, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// The **timeline's own** mouseup, the one the source registers on
@@ -11448,6 +11487,31 @@ impl EditorWindow {
                                     },
                                 )),
                             ),
+                    )
+                    .child(
+                        ui::EditorButton::plain(&theme, "transport-audio-scrub")
+                            .left_icon(if self.audio_scrub {
+                                "icons/volume-2.svg"
+                            } else {
+                                "icons/volume-x.svg"
+                            })
+                            .tooltip(
+                                &theme,
+                                if self.audio_scrub {
+                                    "Audio while scrubbing: on"
+                                } else {
+                                    "Audio while scrubbing: off"
+                                },
+                            )
+                            .pressed(self.audio_scrub)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.audio_scrub = !this.audio_scrub;
+                                if !crate::store::set_audio_scrub_enabled(this.audio_scrub) {
+                                    tracing::warn!("could not save the audio scrub preference");
+                                }
+                                cx.notify();
+                                window.refresh();
+                            })),
                     )
                     .child(self.header_divider())
                     // `IconCapZoomOut` -> `updateZoom(zoom * 1.1,
