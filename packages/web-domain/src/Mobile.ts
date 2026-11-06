@@ -32,6 +32,20 @@ export const isMobileRecordingDurationAllowed = ({
 		mobileFreeRecordingDurationSeconds +
 			mobileRecordingDurationToleranceSeconds;
 
+// The total and the segment durations are both client-reported; gating on the larger stops a client that
+// only understates the total. Authoritative enforcement needs the length measured after processing.
+export const mobileRecordingGateDurationSeconds = ({
+	durationSeconds,
+	videoSegments,
+}: {
+	durationSeconds: number;
+	videoSegments: ReadonlyArray<{ duration: number }>;
+}) =>
+	Math.max(
+		durationSeconds,
+		videoSegments.reduce((total, segment) => total + segment.duration, 0),
+	);
+
 export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	try {
 		const redirectUrl = new URL(redirectUri);
