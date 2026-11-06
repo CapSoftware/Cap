@@ -13,7 +13,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -41,6 +41,7 @@ const fixture = vi.hoisted(() => ({
 	users: new Map<string, FakeUser[]>(),
 	pageSize: 2,
 	listUserCalls: 0,
+	scimDenied: new Set<string>(),
 }));
 
 function page<T>(items: T[], after: string | undefined) {
@@ -88,6 +89,10 @@ vi.mock("@cap/database/auth/sso", async (importOriginal) => ({
 			},
 		},
 	}),
+}));
+vi.mock("@/lib/sso/scim-billing", () => ({
+	hasScimSubscription: async (organizationId: string) =>
+		!fixture.scimDenied.has(organizationId),
 }));
 vi.mock("@cap/utils", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@cap/utils")>()),
@@ -477,6 +482,26 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await memberIds(org.organizationId)).size).toBe(13);
 		});
 
+		it("does nothing for an organization without the SCIM add-on", async () => {
+			const org = await makeOrganization();
+			fixture.users.set(org.directoryId, [
+				directoryUser(org.directoryId, `alice@${org.domain}`),
+			]);
+			await syncOrganizationDirectory(org.organizationId, later());
+			expect((await memberIds(org.organizationId)).size).toBe(2);
+
+			fixture.scimDenied.add(org.organizationId);
+			fixture.users.set(org.directoryId, [
+				directoryUser(org.directoryId, `bob@${org.domain}`),
+			]);
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ status: "inactive", added: 0, removed: 0 });
+			expect((await memberIds(org.organizationId)).size).toBe(2);
+			expect(await userByEmail(`bob@${org.domain}`)).toBeUndefined();
+			fixture.scimDenied.delete(org.organizationId);
+		});
+
 		it("never removes anyone when the directory disconnects or SSO billing lapses", async () => {
 			const org = await makeOrganization();
 			fixture.users.set(org.directoryId, [
@@ -571,6 +596,15 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.users.set(due.directoryId, [
 				directoryUser(due.directoryId, `alice@${due.domain}`),
 			]);
+			await database()
+				.update(organizationDirectorySync)
+				.set({
+					syncedAt: new Date(),
+					requestedAt: new Date(Date.now() - 60_000),
+				})
+				.where(
+					ne(organizationDirectorySync.organizationId, due.organizationId),
+				);
 			const summary = await runDueDirectorySyncs(later());
 			expect(summary.failed).toBe(0);
 			expect((await memberIds(due.organizationId)).size).toBe(2);

@@ -12,6 +12,9 @@ vi.mock("@cap/ui", () => ({
 	CardHeader: "header",
 	CardTitle: "h2",
 }));
+vi.mock("hooks/useCurrency", () => ({
+	useCurrency: () => ({ currency: "usd" }),
+}));
 vi.mock("@/actions/organization/directory-sync", () => ({
 	approveDirectorySyncRemovals: vi.fn(),
 	getOrganizationDirectorySync: vi.fn(),
@@ -24,6 +27,7 @@ const { DirectorySyncCard } = await import(
 
 const organizationId = Organisation.OrganisationId.make("org_fixture");
 const base: OrganizationDirectorySync = {
+	entitled: true,
 	available: true,
 	directories: [],
 	syncedMembers: 0,
@@ -43,6 +47,16 @@ function render(status: Partial<OrganizationDirectorySync>) {
 }
 
 describe("DirectorySyncCard", () => {
+	it("offers the paid add-on to organizations without it", () => {
+		const markup = render({ entitled: false, available: false });
+		expect(markup).toContain("$200.00");
+		expect(markup).toContain("/month add-on");
+		expect(markup).toContain("hello@cap.so");
+		expect(markup).toContain(">Add-on<");
+		expect(markup).not.toContain("Set up directory sync");
+		expect(markup).not.toContain("Verify your organization");
+	});
+
 	it("asks for a verified domain before setup", () => {
 		const markup = render({ available: false });
 		expect(markup).toContain("Verify your organization&#x27;s domain");
@@ -52,7 +66,7 @@ describe("DirectorySyncCard", () => {
 	it("offers setup when no directory exists", () => {
 		const markup = render({});
 		expect(markup).toContain("Set up directory sync");
-		expect(markup).toContain("Included with SAML SSO");
+		expect(markup).toContain("Ready to set up");
 	});
 
 	it("shows a connected directory, sync counts, and a held removal", () => {
