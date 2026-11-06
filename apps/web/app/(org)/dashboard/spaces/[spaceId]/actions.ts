@@ -39,6 +39,23 @@ const addSpaceMembersSchema = z.object({
 	role: spaceRole,
 });
 
+export async function getSpaceMemberIds(
+	spaceId: Space.SpaceIdOrOrganisationId,
+) {
+	const currentUser = await getCurrentUser();
+	if (!currentUser) {
+		throw new Error("Unauthorized");
+	}
+
+	await requireSpaceManager(currentUser.id, spaceId);
+	const members = await db()
+		.select({ userId: spaceMembers.userId })
+		.from(spaceMembers)
+		.where(eq(spaceMembers.spaceId, spaceId));
+
+	return members.map((member) => member.userId);
+}
+
 export async function addSpaceMember(
 	data: z.infer<typeof addSpaceMemberSchema>,
 ) {

@@ -106,6 +106,7 @@ jobs:
           bun run --cwd apps/web test
           __tests__/unit/add-videos-dialog-retry.test.ts
           __tests__/unit/analytics-track-route.test.ts
+          __tests__/unit/browse-space-members.test.ts
           __tests__/unit/caps-analytics-round-trips.test.ts
           __tests__/unit/caps-keyboard.test.ts
           __tests__/unit/caption-translation-ownership.test.ts
@@ -124,6 +125,7 @@ jobs:
           __tests__/unit/folder-delete.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/generate-ai-duration.test.ts
+          __tests__/unit/get-space-member-ids.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
           __tests__/unit/invite-decline-pro-seat.test.ts
           __tests__/unit/invite-decline.test.ts
