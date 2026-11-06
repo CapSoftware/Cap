@@ -905,7 +905,7 @@ pub fn spawn_cursor_recorder(
                         x,
                         y,
                     };
-                    response.moves.push(mouse_event);
+                    response.push_move_deduped(mouse_event);
                 }
             }
 
