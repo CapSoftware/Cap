@@ -392,7 +392,7 @@ fn normalize_relative_path(path: &mut RelativePathBuf) {
 
     if MEDIA_ROOTS.iter().any(|root| normalized.starts_with(root)) {
         if normalized.as_ref() != original {
-            *path = RelativePathBuf::from(normalized.as_ref());
+            *path = RelativePathBuf::from(normalized.into_owned());
         }
         return;
     }
