@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { captureVideoFrameDataUrl } from "@/app/s/[videoId]/_components/video-frame-thumbnail";
+import {
+	captureVideoFrameDataUrl,
+	MAX_LIVE_THUMBNAIL_DRIFT_SECONDS,
+	shouldCaptureLiveThumbnail,
+} from "@/app/s/[videoId]/_components/video-frame-thumbnail";
 
 function createMockCanvas(options?: {
 	contextReturnsNull?: boolean;
@@ -187,5 +191,88 @@ describe("captureVideoFrameDataUrl", () => {
 			createCanvas: factory,
 		});
 		expect(factory).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("shouldCaptureLiveThumbnail", () => {
+	it("exports default drift threshold of 1.5 seconds", () => {
+		expect(MAX_LIVE_THUMBNAIL_DRIFT_SECONDS).toBe(1.5);
+	});
+
+	it("returns true when hoverTime is within drift threshold of currentTime", () => {
+		expect(shouldCaptureLiveThumbnail({ hoverTime: 10, currentTime: 10 })).toBe(
+			true,
+		);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 11.2, currentTime: 10 }),
+		).toBe(true);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 8.8, currentTime: 10 }),
+		).toBe(true);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 11.5, currentTime: 10 }),
+		).toBe(true);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 8.5, currentTime: 10 }),
+		).toBe(true);
+	});
+
+	it("returns false when hoverTime drifts beyond drift threshold", () => {
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 11.51, currentTime: 10 }),
+		).toBe(false);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 8.49, currentTime: 10 }),
+		).toBe(false);
+		expect(
+			shouldCaptureLiveThumbnail({ hoverTime: 200, currentTime: 10 }),
+		).toBe(false);
+		expect(shouldCaptureLiveThumbnail({ hoverTime: 0, currentTime: 10 })).toBe(
+			false,
+		);
+	});
+
+	it("supports custom maxDriftSeconds", () => {
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: 13,
+				currentTime: 10,
+				maxDriftSeconds: 3,
+			}),
+		).toBe(true);
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: 13.1,
+				currentTime: 10,
+				maxDriftSeconds: 3,
+			}),
+		).toBe(false);
+	});
+
+	it("returns false for non-finite values", () => {
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: Number.NaN,
+				currentTime: 10,
+			}),
+		).toBe(false);
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: 10,
+				currentTime: Number.NaN,
+			}),
+		).toBe(false);
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: Number.POSITIVE_INFINITY,
+				currentTime: 10,
+			}),
+		).toBe(false);
+		expect(
+			shouldCaptureLiveThumbnail({
+				hoverTime: 10,
+				currentTime: Number.NEGATIVE_INFINITY,
+			}),
+		).toBe(false);
 	});
 });

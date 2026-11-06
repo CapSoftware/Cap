@@ -41,6 +41,7 @@ vi.mock("@/app/s/[videoId]/_components/mp4-level-patch", () => ({
 }));
 vi.mock("@/app/s/[videoId]/_components/video-frame-thumbnail", () => ({
 	captureVideoFrameDataUrl: () => undefined,
+	shouldCaptureLiveThumbnail: () => true,
 }));
 
 const actEnvironment = globalThis as typeof globalThis & {
