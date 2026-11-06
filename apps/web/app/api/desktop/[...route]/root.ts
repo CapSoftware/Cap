@@ -20,7 +20,6 @@ import {
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
@@ -41,6 +40,7 @@ import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
 	canEditOrganizationBranding,
