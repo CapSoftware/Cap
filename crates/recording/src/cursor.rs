@@ -51,9 +51,6 @@ impl CursorActorResponse {
                 return;
             }
         }
-        if self.moves.len() >= MAX_IN_MEMORY_CURSOR_MOVES && self.moves.capacity() > MAX_IN_MEMORY_CURSOR_MOVES * 2 {
-            self.moves.shrink_to(MAX_IN_MEMORY_CURSOR_MOVES);
-        }
         self.moves.push(ev);
     }
 }
@@ -939,7 +936,11 @@ pub fn spawn_cursor_recorder(
             );
             last_keys = current_keys;
 
-            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
+            if has_incremental_outputs
+                && (last_flush.elapsed() >= flush_interval
+                    || response.moves.len().saturating_sub(flushed.moves)
+                        >= MAX_IN_MEMORY_CURSOR_MOVES)
+            {
                 let delta = flushed.take(&incremental_outputs, &response);
                 match &writer {
                     Some(writer) => writer.flush(delta),
