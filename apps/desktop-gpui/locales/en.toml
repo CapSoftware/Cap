@@ -2544,6 +2544,7 @@ shape_label = "Shape"
 size_during_zoom = "Size During Zoom"
 size_label = "Size"
 title = "Camera"
+zoom_avoids_camera = "Keep zooms clear of camera"
 
 [editor.tabs.camera.blur]
 heavy = "Heavy Blur"

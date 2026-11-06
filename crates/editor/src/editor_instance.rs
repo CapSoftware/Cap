@@ -1123,11 +1123,7 @@ impl EditorInstance {
                     }
 
                     if let Some(previous) = refresh_project_snapshot(&mut project_rx, &mut project)
-                        && !ZoomTransformTimeline::project_inputs_match(
-                            &previous,
-                            &project,
-                            self.render_constants.options.screen_size,
-                        )
+                        && !self.render_constants.zoom_inputs_match(&previous, &project)
                     {
                         zoom_timelines.clear();
                         outgoing_zoom_timelines.clear();
@@ -1222,7 +1218,7 @@ impl EditorInstance {
                                         &project,
                                         &segment_medias.cursor,
                                         total_duration,
-                                        self.render_constants.options.screen_size,
+                                        self.render_constants.zoom_layout(segment.recording_clip),
                                         segment.recording_clip,
                                     )
                                 });
@@ -1275,7 +1271,7 @@ impl EditorInstance {
                                                 &project,
                                                 &outgoing_media.cursor,
                                                 total_duration,
-                                                self.render_constants.options.screen_size,
+                                                self.render_constants.zoom_layout(outgoing.segment.recording_clip),
                                                 outgoing.segment.recording_clip,
                                             )
                                         });

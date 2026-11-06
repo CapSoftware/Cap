@@ -2542,6 +2542,7 @@ shape_label = "形状"
 size_during_zoom = "缩放时的大小"
 size_label = "大小"
 title = "摄像头"
+zoom_avoids_camera = "缩放时避开摄像头"
 
 [editor.tabs.camera.blur]
 heavy = "强模糊"

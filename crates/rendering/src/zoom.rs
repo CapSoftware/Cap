@@ -80,6 +80,176 @@ impl SegmentBounds {
     }
 }
 
+const EXIT_BLEND_RATIO: f64 = 2.0;
+const INFEASIBLE_EXIT_PENALTY: f64 = 4.0;
+const MIN_EXIT_EDGE_INSET: f64 = 0.1;
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct CameraZone {
+    pub top_left: XY<f64>,
+    pub bottom_right: XY<f64>,
+    pub content_aspect: f64,
+}
+
+impl CameraZone {
+    pub(crate) fn contains(&self, point: XY<f64>) -> bool {
+        const EDGE_SLACK: f64 = 1e-9;
+        point.x > self.top_left.x + EDGE_SLACK
+            && point.x < self.bottom_right.x - EDGE_SLACK
+            && point.y > self.top_left.y + EDGE_SLACK
+            && point.y < self.bottom_right.y - EDGE_SLACK
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct ZoneExitSides {
+    pub(crate) leading_x: bool,
+    pub(crate) leading_y: bool,
+}
+
+fn smoothstep(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+impl SegmentBounds {
+    pub(crate) fn focus_on_screen(amount: f64, focus: XY<f64>, center: XY<f64>) -> XY<f64> {
+        let travel = amount - 1.0;
+        XY::new(
+            focus.x * amount - center.x * travel,
+            focus.y * amount - center.y * travel,
+        )
+    }
+
+    // Each zone edge inside the frame is an exit. Per axis only one side is
+    // considered, and that choice is carried across steps by the caller: a
+    // fresh cheapest-side pick every step jumped the framing across the
+    // whole zone where the cheaper side flipped, and averaging the two sides
+    // cancelled out for a focus near the zone's middle. The two axes are
+    // blended by cost so the stronger exit is taken in full and the other
+    // only adds to it, keeping the target continuous. Exits the clamped
+    // center cannot fully reach are penalised by the shortfall rather than
+    // dropped, which keeps the costs continuous as well.
+    pub(crate) fn center_avoiding_zone(
+        amount: f64,
+        focus: XY<f64>,
+        center: XY<f64>,
+        zone: &CameraZone,
+        sides: Option<ZoneExitSides>,
+    ) -> (XY<f64>, Option<ZoneExitSides>) {
+        let travel = amount - 1.0;
+        if travel.is_nan() || travel <= 1e-6 || !zone.content_aspect.is_finite() {
+            return (center, None);
+        }
+        let on_screen = Self::focus_on_screen(amount, focus, center);
+        if !zone.contains(on_screen) {
+            return (center, None);
+        }
+
+        let exit = |horizontal: bool, target: f64| {
+            // A camera sits a little inside the frame, and the sliver past it
+            // would pin the focus against the edge.
+            if !(MIN_EXIT_EDGE_INSET..=1.0 - MIN_EXIT_EDGE_INSET).contains(&target) {
+                return None;
+            }
+            let (axis_focus, axis_screen, axis_center, weight) = if horizontal {
+                (focus.x, on_screen.x, center.x, zone.content_aspect)
+            } else {
+                (focus.y, on_screen.y, center.y, 1.0)
+            };
+            let wanted = (axis_focus * amount - target) / travel;
+            let reached = wanted.clamp(0.0, 1.0);
+            let shortfall = (wanted - reached).abs() * travel;
+            let cost =
+                ((target - axis_screen).abs() + shortfall * INFEASIBLE_EXIT_PENALTY) * weight;
+            Some((cost, reached - axis_center, shortfall <= 1e-9))
+        };
+        let pick = |leading: Option<(f64, f64, bool)>,
+                    trailing: Option<(f64, f64, bool)>,
+                    held: Option<bool>| match (leading, trailing, held) {
+            (Some(leading), _, Some(true)) => Some((true, leading)),
+            (_, Some(trailing), Some(false)) => Some((false, trailing)),
+            (Some(leading), Some(trailing), _) => Some(if trailing.0 < leading.0 {
+                (false, trailing)
+            } else {
+                (true, leading)
+            }),
+            (Some(leading), None, _) => Some((true, leading)),
+            (None, Some(trailing), _) => Some((false, trailing)),
+            (None, None, _) => None,
+        };
+        let choose = |sides: Option<ZoneExitSides>| {
+            (
+                pick(
+                    exit(true, zone.top_left.x),
+                    exit(true, zone.bottom_right.x),
+                    sides.map(|sides| sides.leading_x),
+                ),
+                pick(
+                    exit(false, zone.top_left.y),
+                    exit(false, zone.bottom_right.y),
+                    sides.map(|sides| sides.leading_y),
+                ),
+            )
+        };
+        let (mut horizontal, mut vertical) = choose(sides);
+        // Held sides yield only once neither can clear the zone. The target
+        // then jumps across it, which the spring smooths; the alternative is
+        // leaving the focus covered for the rest of the segment.
+        if ![horizontal, vertical]
+            .iter()
+            .flatten()
+            .any(|(_, (_, _, clears))| *clears)
+        {
+            (horizontal, vertical) = choose(None);
+        }
+
+        let Some(best) = [horizontal, vertical]
+            .iter()
+            .flatten()
+            .map(|(_, (cost, ..))| *cost)
+            .min_by(f64::total_cmp)
+        else {
+            return (center, None);
+        };
+        let weighted = |choice: Option<(bool, (f64, f64, bool))>| {
+            choice.map_or(0.0, |(_, (cost, shift, _))| {
+                let weight = if best <= f64::EPSILON {
+                    if cost <= f64::EPSILON { 1.0 } else { 0.0 }
+                } else {
+                    smoothstep((EXIT_BLEND_RATIO - cost / best) / (EXIT_BLEND_RATIO - 1.0))
+                };
+                weight * shift
+            })
+        };
+        let chosen = ZoneExitSides {
+            leading_x: horizontal.is_none_or(|(leading, _)| leading),
+            leading_y: vertical.is_none_or(|(leading, _)| leading),
+        };
+        let blended = XY::new(
+            center.x + weighted(horizontal),
+            center.y + weighted(vertical),
+        );
+        if !zone.contains(Self::focus_on_screen(amount, focus, blended)) {
+            return (blended, Some(chosen));
+        }
+        // The cheapest exit can be one that cannot reach, which leaves the
+        // exit that can with too little weight to clear the zone.
+        let clearing = |choice: Option<(bool, (f64, f64, bool))>| {
+            choice
+                .filter(|(_, (_, _, clears))| *clears)
+                .map(|(_, (cost, shift, _))| (cost, shift))
+        };
+        let moved = match (clearing(horizontal), clearing(vertical)) {
+            (Some(x), Some(y)) if x.0 <= y.0 => XY::new(center.x + x.1, center.y),
+            (_, Some(y)) => XY::new(center.x, center.y + y.1),
+            (Some(x), None) => XY::new(center.x + x.1, center.y),
+            (None, None) => blended,
+        };
+        (moved, Some(chosen))
+    }
+}
+
 fn clamp_unit(v: f64) -> f64 {
     if v.is_finite() {
         v.clamp(0.0, 1.0)
@@ -206,6 +376,324 @@ mod test {
         // A corner-flush framing keeps the frame fully covered at any amount.
         let bounds = SegmentBounds::from_amount_center(2.0, XY::new(1.0, 1.0));
         assert!(bounds.top_left.x <= 0.0 && bounds.bottom_right.x >= 1.0);
+    }
+
+    fn zone(left: f64, top: f64, right: f64, bottom: f64) -> CameraZone {
+        CameraZone {
+            top_left: XY::new(left, top),
+            bottom_right: XY::new(right, bottom),
+            content_aspect: 16.0 / 9.0,
+        }
+    }
+
+    fn assert_in_frame(amount: f64, focus: XY<f64>, center: XY<f64>) {
+        assert!((0.0..=1.0).contains(&center.x) && (0.0..=1.0).contains(&center.y));
+        let bounds = SegmentBounds::from_amount_center(amount, center);
+        assert!(bounds.top_left.x <= 1e-9 && bounds.bottom_right.x >= 1.0 - 1e-9);
+        assert!(bounds.top_left.y <= 1e-9 && bounds.bottom_right.y >= 1.0 - 1e-9);
+        let screen = SegmentBounds::focus_on_screen(amount, focus, center);
+        assert!((-1e-9..=1.0 + 1e-9).contains(&screen.x), "{screen:?}");
+        assert!((-1e-9..=1.0 + 1e-9).contains(&screen.y), "{screen:?}");
+    }
+
+    fn assert_clear(amount: f64, focus: XY<f64>, center: XY<f64>, zone: &CameraZone) {
+        assert_in_frame(amount, focus, center);
+        let screen = SegmentBounds::focus_on_screen(amount, focus, center);
+        assert!(
+            !zone.contains(screen),
+            "focus {focus:?} still under camera at {screen:?}"
+        );
+    }
+
+    fn largest_screen_step(
+        amount: f64,
+        zone: &CameraZone,
+        path: impl Iterator<Item = XY<f64>>,
+        center_for: impl Fn(XY<f64>) -> XY<f64>,
+    ) -> f64 {
+        let mut previous: Option<XY<f64>> = None;
+        let mut sides = None;
+        let mut largest: f64 = 0.0;
+        for focus in path {
+            let (moved, chosen) =
+                SegmentBounds::center_avoiding_zone(amount, focus, center_for(focus), zone, sides);
+            sides = chosen;
+            assert_in_frame(amount, focus, moved);
+            let screen = SegmentBounds::focus_on_screen(amount, focus, moved);
+            if let Some(previous) = previous {
+                let step = screen - previous;
+                largest = largest.max(step.x.abs().max(step.y.abs()));
+            }
+            previous = Some(screen);
+        }
+        largest
+    }
+
+    fn manual_center(focus: XY<f64>) -> XY<f64> {
+        focus
+    }
+
+    fn follow_center(focus: XY<f64>) -> XY<f64> {
+        let (x, y) = SegmentBounds::calculate_follow_center((focus.x, focus.y), 0.25);
+        XY::new(x, y)
+    }
+
+    #[test]
+    fn camera_avoidance_leaves_clear_focus_alone() {
+        let camera = zone(0.75, 0.7, 1.05, 1.05);
+        let center = XY::new(0.5, 0.5);
+        let moved =
+            SegmentBounds::center_avoiding_zone(2.0, XY::new(0.5, 0.5), center, &camera, None).0;
+        assert_eq!(moved, center);
+    }
+
+    #[test]
+    fn camera_avoidance_moves_toward_the_frame_not_into_the_sliver_past_the_camera() {
+        let camera = zone(0.75, 0.65, 0.95, 0.92);
+        let focus = XY::new(0.86, 0.86);
+        let moved = SegmentBounds::center_avoiding_zone(2.0, focus, focus, &camera, None).0;
+        assert_clear(2.0, focus, moved, &camera);
+        let screen = SegmentBounds::focus_on_screen(2.0, focus, moved);
+        assert!(screen.x <= 0.75 || screen.y <= 0.65, "{screen:?}");
+    }
+
+    #[test]
+    fn camera_avoidance_uses_a_reachable_exit_when_the_cheapest_cannot_reach() {
+        let camera = CameraZone {
+            top_left: XY::new(0.1, 0.3),
+            bottom_right: XY::new(0.79, 0.945),
+            content_aspect: 0.25,
+        };
+        let focus = XY::new(0.5, 0.5);
+        let moved = SegmentBounds::center_avoiding_zone(1.5, focus, focus, &camera, None).0;
+        assert_clear(1.5, focus, moved, &camera);
+    }
+
+    #[test]
+    fn camera_avoidance_gives_up_a_held_side_that_can_no_longer_clear() {
+        let camera = zone(0.38, 0.33, 0.62, 0.67);
+        let amount = 1.25;
+        let mut sides = None;
+        let mut focus = XY::new(0.4, 0.5);
+        let mut center = focus;
+        for step in 0..=25 {
+            focus = XY::new(0.4 + 0.01 * f64::from(step), 0.5);
+            let (moved, chosen) = SegmentBounds::center_avoiding_zone(
+                amount,
+                focus,
+                follow_center(focus),
+                &camera,
+                sides,
+            );
+            sides = chosen;
+            center = moved;
+        }
+        assert_clear(amount, focus, center, &camera);
+    }
+
+    #[test]
+    fn camera_avoidance_clears_each_corner() {
+        let amount = 2.0;
+        let corners = [
+            (zone(-0.05, -0.05, 0.3, 0.4), XY::new(0.27, 0.25)),
+            (zone(0.7, -0.05, 1.05, 0.4), XY::new(0.73, 0.25)),
+            (zone(-0.05, 0.6, 0.3, 1.05), XY::new(0.27, 0.75)),
+            (zone(0.7, 0.6, 1.05, 1.05), XY::new(0.73, 0.75)),
+        ];
+        for (camera, focus) in corners {
+            let before = SegmentBounds::focus_on_screen(amount, focus, focus);
+            assert!(camera.contains(before), "setup: {focus:?} not under camera");
+            let moved = SegmentBounds::center_avoiding_zone(amount, focus, focus, &camera, None).0;
+            assert_clear(amount, focus, moved, &camera);
+            let after = SegmentBounds::focus_on_screen(amount, focus, moved);
+            assert!(
+                (after.x - before.x) * (0.5 - before.x) >= 0.0,
+                "{before:?} -> {after:?}"
+            );
+            assert!(
+                (after.y - before.y) * (0.5 - before.y) >= 0.0,
+                "{before:?} -> {after:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn camera_avoidance_takes_a_clearly_shorter_exit_alone() {
+        let camera = zone(0.6, 0.6, 1.05, 1.05);
+        let amount = 2.0;
+        let focus = XY::new(0.62, 0.8);
+        let moved = SegmentBounds::center_avoiding_zone(amount, focus, focus, &camera, None).0;
+        let after = SegmentBounds::focus_on_screen(amount, focus, moved);
+        assert!((after.x - 0.6).abs() < 1e-9, "{after:?}");
+        assert!((after.y - 0.8).abs() < 1e-9, "{after:?}");
+    }
+
+    #[test]
+    fn camera_avoidance_clears_a_focus_dead_centre_under_a_centred_camera() {
+        let camera = zone(0.38, 0.33, 0.62, 0.67);
+        for amount in [1.5, 2.0, 3.0] {
+            let focus = XY::new(0.5, 0.5);
+            let (moved, sides) =
+                SegmentBounds::center_avoiding_zone(amount, focus, focus, &camera, None);
+            assert_clear(amount, focus, moved, &camera);
+            let (again, kept) =
+                SegmentBounds::center_avoiding_zone(amount, focus, focus, &camera, sides);
+            assert_eq!(again, moved);
+            assert_eq!(kept, sides);
+        }
+    }
+
+    #[test]
+    fn camera_avoidance_keeps_its_side_across_the_middle() {
+        let camera = zone(0.38, 0.33, 0.62, 0.67);
+        let amount = 2.0;
+        let start = XY::new(0.42, 0.5);
+        let (_, sides) = SegmentBounds::center_avoiding_zone(amount, start, start, &camera, None);
+        let sides = sides.expect("focus under the camera");
+        let past_middle = XY::new(0.56, 0.5);
+        let (_, kept) = SegmentBounds::center_avoiding_zone(
+            amount,
+            past_middle,
+            past_middle,
+            &camera,
+            Some(sides),
+        );
+        assert_eq!(kept, Some(sides));
+        let (_, fresh) =
+            SegmentBounds::center_avoiding_zone(amount, past_middle, past_middle, &camera, None);
+        assert_ne!(fresh, Some(sides));
+    }
+
+    #[test]
+    fn camera_avoidance_respects_frame_bounds() {
+        let camera = zone(0.7, 0.65, 1.05, 1.05);
+        let corner = XY::new(1.0, 1.0);
+        let moved = SegmentBounds::center_avoiding_zone(2.0, corner, corner, &camera, None).0;
+        assert_eq!(moved, corner);
+
+        for amount in [1.25, 1.5, 2.0, 3.0, 4.0] {
+            for focus_x in [0.6, 0.7, 0.8, 0.9, 0.95, 1.0] {
+                for focus_y in [0.6, 0.7, 0.8, 0.9, 0.95, 1.0] {
+                    let focus = XY::new(focus_x, focus_y);
+                    let moved = SegmentBounds::center_avoiding_zone(
+                        amount,
+                        focus,
+                        follow_center(focus),
+                        &camera,
+                        None,
+                    )
+                    .0;
+                    assert_in_frame(amount, focus, moved);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn camera_avoidance_is_off_without_zoom() {
+        let camera = zone(0.0, 0.0, 1.0, 1.0);
+        let center = XY::new(0.4, 0.4);
+        assert_eq!(
+            SegmentBounds::center_avoiding_zone(1.0, XY::new(0.4, 0.4), center, &camera, None).0,
+            center
+        );
+    }
+
+    #[test]
+    fn smaller_camera_during_zoom_needs_less_shift() {
+        let amount = 2.0;
+        let focus = XY::new(0.8, 0.8);
+        let full = zone(0.6, 0.55, 1.05, 1.05);
+        let shrunk = zone(0.72, 0.68, 1.05, 1.05);
+        let shift = |camera: &CameraZone| {
+            let moved = SegmentBounds::center_avoiding_zone(amount, focus, focus, camera, None).0;
+            assert_clear(amount, focus, moved, camera);
+            let before = SegmentBounds::focus_on_screen(amount, focus, focus);
+            let after = SegmentBounds::focus_on_screen(amount, focus, moved);
+            ((after.x - before.x).powi(2) + (after.y - before.y).powi(2)).sqrt()
+        };
+        assert!(shift(&shrunk) < shift(&full));
+        let tiny = zone(0.85, 0.85, 1.05, 1.05);
+        assert_eq!(
+            SegmentBounds::center_avoiding_zone(amount, focus, focus, &tiny, None).0,
+            focus
+        );
+    }
+
+    #[test]
+    fn camera_avoidance_is_continuous_entering_the_zone() {
+        let camera = zone(0.7, 0.65, 1.05, 1.05);
+        let path = (0..=160).map(|step| XY::new(0.6 + f64::from(step) * 0.001, 0.85));
+        let largest = largest_screen_step(2.0, &camera, path, manual_center);
+        assert!(largest < 0.01, "focus jumped {largest}");
+    }
+
+    #[test]
+    fn camera_avoidance_is_continuous_where_the_cheapest_exit_flips() {
+        let bottom_centre = zone(0.38, 0.7, 0.62, 1.05);
+        let bottom_right = zone(0.55, 0.5, 1.05, 1.05);
+        for amount in [1.25, 1.5] {
+            for center_for in [manual_center as fn(XY<f64>) -> XY<f64>, follow_center] {
+                let across = (0..=100).map(|step| XY::new(0.4 + f64::from(step) * 0.001, 0.9));
+                let largest = largest_screen_step(amount, &bottom_centre, across, center_for);
+                assert!(
+                    largest < 0.015,
+                    "bottom centre at {amount}: jumped {largest}"
+                );
+
+                let diagonal = (0..=300).map(|step| {
+                    let t = f64::from(step) / 300.0;
+                    XY::new(0.6 + 0.35 * t, 0.95 - 0.4 * t)
+                });
+                let largest = largest_screen_step(amount, &bottom_right, diagonal, center_for);
+                assert!(
+                    largest < 0.015,
+                    "bottom right at {amount}: jumped {largest}"
+                );
+
+                let back = (0..=100).map(|step| XY::new(0.6 - f64::from(step) * 0.001, 0.9));
+                let largest = largest_screen_step(amount, &bottom_centre, back, center_for);
+                assert!(
+                    largest < 0.015,
+                    "bottom centre back at {amount}: jumped {largest}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn camera_avoidance_flips_sides_at_most_once_crossing_the_camera() {
+        let camera = zone(0.38, 0.7, 0.62, 1.05);
+        for amount in [1.25, 1.5] {
+            for center_for in [manual_center as fn(XY<f64>) -> XY<f64>, follow_center] {
+                let mut sides = None;
+                let mut previous: Option<XY<f64>> = None;
+                let mut jumps = 0;
+                let mut last = (XY::new(0.0, 0.0), XY::new(0.0, 0.0));
+                for step in 0..=200 {
+                    let focus = XY::new(0.4 + f64::from(step) * 0.001, 0.9);
+                    let (moved, chosen) = SegmentBounds::center_avoiding_zone(
+                        amount,
+                        focus,
+                        center_for(focus),
+                        &camera,
+                        sides,
+                    );
+                    sides = chosen;
+                    let screen = SegmentBounds::focus_on_screen(amount, focus, moved);
+                    if previous.is_some_and(|previous| {
+                        let step = screen - previous;
+                        step.x.abs().max(step.y.abs()) >= 0.015
+                    }) {
+                        jumps += 1;
+                    }
+                    previous = Some(screen);
+                    last = (focus, moved);
+                }
+                assert!(jumps <= 1, "{jumps} jumps at {amount}");
+                assert_clear(amount, last.0, last.1, &camera);
+            }
+        }
     }
 
     #[test]

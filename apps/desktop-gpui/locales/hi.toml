@@ -2542,6 +2542,7 @@ shape_label = "आकृति"
 size_during_zoom = "ज़ूम के दौरान आकार"
 size_label = "आकार"
 title = "कैमरा"
+zoom_avoids_camera = "ज़ूम को कैमरे से दूर रखें"
 
 [editor.tabs.camera.blur]
 heavy = "ज़्यादा ब्लर"

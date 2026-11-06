@@ -89,12 +89,7 @@ async fn main() {
         project.timeline.as_mut().unwrap().mask_segments = (0..total)
             .map(|index| segment(index, total, active))
             .collect();
-        let zoom = ZoomTransformTimeline::from_project(
-            &project,
-            &cursor,
-            10.0,
-            constants.options.screen_size,
-        );
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 10.0, &constants.options);
         let project = std::sync::Arc::new(project);
         let prepare = |frame: u32| {
             ProjectUniforms::new(

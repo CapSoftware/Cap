@@ -134,7 +134,7 @@ impl PresetsStore {
 /// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
 /// rounding and the default screen-movement spring.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
-    let mut config = ProjectConfiguration::default();
+    let mut config = ProjectConfiguration::for_new_recording();
     if config.background.padding <= f64::EPSILON {
         config.background.padding = 10.0;
     }
@@ -172,7 +172,12 @@ pub fn apply_preset(
     config: &Value,
     current: &ProjectConfiguration,
 ) -> Option<ProjectConfiguration> {
-    let next = serde_json::from_value(config.clone()).ok()?;
+    let mut next: ProjectConfiguration = serde_json::from_value(config.clone()).ok()?;
+    // Presets saved before camera-aware zoom existed carry no opinion on it,
+    // so they keep whatever the project already has instead of turning it off.
+    if config.pointer("/camera/zoomAvoidsCamera").is_none() {
+        next.camera.zoom_avoids_camera = current.camera.zoom_avoids_camera;
+    }
     Some(current.with_preset(next))
 }
 
@@ -191,6 +196,19 @@ mod tests {
                 .collect(),
             default,
         }
+    }
+
+    #[test]
+    fn old_presets_leave_camera_aware_zoom_alone() {
+        let current = ProjectConfiguration::for_new_recording();
+        let old_preset = json!({ "camera": { "size": 40.0 } });
+        let applied = apply_preset(&old_preset, &current).unwrap();
+        assert_eq!(applied.camera.size, 40.0);
+        assert!(applied.camera.zoom_avoids_camera);
+
+        let off_preset = json!({ "camera": { "zoomAvoidsCamera": false } });
+        let applied = apply_preset(&off_preset, &current).unwrap();
+        assert!(!applied.camera.zoom_avoids_camera);
     }
 
     #[test]

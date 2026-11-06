@@ -103,7 +103,12 @@ async fn main() {
             ..Default::default()
         };
         project.timeline.as_mut().unwrap().shape_segments = shapes(total);
-        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 10.0, SCREEN);
+        let zoom = ZoomTransformTimeline::from_project(
+            &project,
+            &cursor,
+            10.0,
+            cap_rendering::ZoomLayoutInputs::screen_only(SCREEN),
+        );
         let project = std::sync::Arc::new(project);
         let prepare = |frame: u32| {
             ProjectUniforms::new(

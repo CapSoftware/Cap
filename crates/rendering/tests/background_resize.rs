@@ -71,7 +71,12 @@ async fn image_background_resize_matches_fresh_layers() {
                 AspectRatio::Wide,
             ] {
                 project.aspect_ratio = Some(aspect);
-                let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, screen_size);
+                let zoom = ZoomTransformTimeline::from_project(
+                    &project,
+                    &cursor,
+                    1.0,
+                    cap_rendering::ZoomLayoutInputs::screen_only(screen_size),
+                );
                 let uniforms = ProjectUniforms::new(
                     &constants,
                     &std::sync::Arc::new(project.clone()),
