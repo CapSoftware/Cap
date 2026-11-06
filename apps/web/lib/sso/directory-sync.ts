@@ -26,6 +26,8 @@ import { deleteOrganizationMembership } from "@/lib/organization-member-removal"
 const LEASE_MS = 10 * 60_000;
 const RETRY_DELAY_MS = 2 * 60_000;
 const SNAPSHOT_RETRY_DELAY_MS = 60 * 60_000;
+const FULL_SNAPSHOT_BUDGET_MS = 200_000;
+const MIN_ORGANIZATION_BUDGET_MS = 60_000;
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 const REMOVAL_APPROVAL_MS = 60 * 60_000;
 const MASS_REMOVAL_MIN = 10;
@@ -590,7 +592,13 @@ export async function syncOrganizationDirectory(
 			.where(eq(organizationDirectorySync.organizationId, organizationId));
 		return result;
 	} catch (error) {
-		if (error instanceof DeadlineReached) {
+		const snapshotTooSlow =
+			error instanceof SnapshotTooSlow &&
+			deadline - startedAt.getTime() >= FULL_SNAPSHOT_BUDGET_MS;
+		if (
+			error instanceof DeadlineReached ||
+			(error instanceof SnapshotTooSlow && !snapshotTooSlow)
+		) {
 			await db()
 				.update(organizationDirectorySync)
 				.set({ leaseExpiresAt: null, requestedAt: new Date() })
@@ -603,9 +611,7 @@ export async function syncOrganizationDirectory(
 			.set({
 				leaseExpiresAt: new Date(
 					Date.now() +
-						(error instanceof SnapshotTooSlow
-							? SNAPSHOT_RETRY_DELAY_MS
-							: RETRY_DELAY_MS),
+						(snapshotTooSlow ? SNAPSHOT_RETRY_DELAY_MS : RETRY_DELAY_MS),
 				),
 				lastError: (error instanceof Error
 					? error.message
@@ -646,7 +652,7 @@ export async function runDueDirectorySyncs(deadline: number) {
 	let processed = 0;
 	let failed = 0;
 	for (const { organizationId } of due) {
-		if (Date.now() > deadline) break;
+		if (deadline - Date.now() < MIN_ORGANIZATION_BUDGET_MS) break;
 		try {
 			const result = await syncOrganizationDirectory(
 				Organisation.OrganisationId.make(organizationId),
