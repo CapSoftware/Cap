@@ -2919,13 +2919,14 @@ fn format_recording_project_name(
     let formatted = template
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
-        .replace("{target_kind}", target_kind)
-        .replace("{target_name}", &target_name);
+        .replace("{target_kind}", target_kind);
     let formatted = replace_datetime_template_token(&formatted, "date", "%Y-%m-%d", datetime);
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
     let formatted =
         replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
-    formatted
+    // Last, so a window title keeps any placeholder it contains, as it does
+    // `{random}`.
+    formatted.replace("{target_name}", &target_name)
 }
 
 fn replace_random_template_tokens(input: &str) -> String {
@@ -2981,8 +2982,16 @@ fn replace_datetime_template_token(
         if token == name {
             output.push_str(&datetime.format(default_format).to_string());
         } else if let Some(custom_format) = token.strip_prefix(&format!("{name}:")) {
+            use std::fmt::Write as _;
             let format = cap_utils::moment_format_to_chrono(custom_format);
-            output.push_str(&datetime.format(&format).to_string());
+            // A format chrono cannot render (a stray `%`) stays as typed, like
+            // an unknown placeholder: `to_string` would panic the start.
+            let mut rendered = String::new();
+            if write!(rendered, "{}", datetime.format(&format)).is_ok() {
+                output.push_str(&rendered);
+            } else {
+                output.push_str(&candidate[..=end]);
+            }
         } else {
             output.push_str(&candidate[..=end]);
         }
@@ -3222,6 +3231,44 @@ mod tests {
         );
 
         assert!(name.contains("Implement {random} placeholder"));
+    }
+
+    #[test]
+    fn recording_project_names_keep_a_custom_format_chrono_cannot_render() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{date:YYYY 100%}-{moment:YYYY %Q}-{time:HH.mm}"),
+                "Example Window",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "{date:YYYY 100%}-{moment:YYYY %Q}-09.15"
+        );
+    }
+
+    #[test]
+    fn recording_project_names_keep_date_placeholders_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{target_name} {date}"),
+                "Notes {date} {time:100%}",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "Notes {date} {time:100%} 2026-08-25"
+        );
     }
 
     #[test]
