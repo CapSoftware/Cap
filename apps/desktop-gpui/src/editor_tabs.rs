@@ -3014,7 +3014,30 @@ impl EditorWindow {
                     .label(tr::editor::tabs::captions::download((model.label)()))
             };
 
-            let mut column = div().flex().flex_col().gap(px(8.)).child(download_button);
+            let mut column = div().flex().flex_col().gap(px(8.));
+            if model.name == "best" && snapshot.recommended_outdated {
+                column = column.child(
+                    div()
+                        .id("caption-model-updated")
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(tr::editor::tabs::captions::model_updated()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(tr::editor::tabs::captions::model_updated_description()),
+                        ),
+                );
+            }
+            column = column.child(download_button);
             if is_downloading {
                 column = column
                     .child(

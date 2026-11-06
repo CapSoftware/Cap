@@ -214,6 +214,13 @@ fn parakeet_model_installed(_dir: &Path) -> bool {
     false
 }
 
+/// A download from before the Recommended model's encoder changed: the old
+/// int8 encoder is there and the current files are not. Only these installs
+/// are asked to download again.
+fn parakeet_model_outdated(dir: &Path) -> bool {
+    dir.join("encoder-model.int8.onnx").is_file() && !parakeet_model_installed(dir)
+}
+
 // ---------------------------------------------------------------------------
 // Shared UI state -- the stand-in for Tauri's MODEL_DOWNLOADS + events
 // ---------------------------------------------------------------------------
@@ -240,6 +247,8 @@ struct Hub {
     download: Option<ModelDownload>,
     /// `None` until the first disk scan.
     downloaded: Option<HashSet<String>>,
+    /// The disk holds the Recommended model from before its encoder changed.
+    recommended_outdated: bool,
     deleting: Option<String>,
     generating: HashSet<PathBuf>,
     generation_errors: HashMap<PathBuf, String>,
@@ -275,6 +284,8 @@ fn hub() -> std::sync::MutexGuard<'static, Hub> {
 pub struct CaptionsUiSnapshot {
     pub download: Option<ModelDownload>,
     pub downloaded: HashSet<String>,
+    /// [`parakeet_model_outdated`] for the Recommended model.
+    pub recommended_outdated: bool,
     pub deleting: Option<String>,
     pub generating: bool,
     pub generation_error: Option<String>,
@@ -287,6 +298,7 @@ pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
     CaptionsUiSnapshot {
         download: hub.download.clone(),
         downloaded: hub.downloaded.clone().unwrap_or_default(),
+        recommended_outdated: hub.recommended_outdated,
         deleting: hub.deleting.clone(),
         generating: hub.generating.contains(project_path),
         generation_error: hub.generation_errors.get(project_path).cloned(),
@@ -314,7 +326,10 @@ pub fn refresh_downloaded_models() {
         .filter(|model| model_files_present(model))
         .map(|model| (*model).to_string())
         .collect();
-    hub().downloaded = Some(downloaded);
+    let recommended_outdated = supports_parakeet() && parakeet_model_outdated(&model_path("best"));
+    let mut hub = hub();
+    hub.downloaded = Some(downloaded);
+    hub.recommended_outdated = recommended_outdated;
 }
 
 pub fn begin_download(model: &str) -> bool {
@@ -3387,6 +3402,46 @@ mod tests {
                 .all(|word| word.text != "um"),
             "the cut word stays cut"
         );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn update_note_shows_only_for_the_old_recommended_download() {
+        let root = tempfile::tempdir().unwrap();
+        let install = |dir: &str, files: &[&str]| {
+            let dir = root.path().join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in files {
+                std::fs::write(dir.join(file), b"x").unwrap();
+            }
+            dir
+        };
+        let old = install(
+            "old/parakeet-best",
+            &[
+                "encoder-model.int8.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+        let current = install(
+            "current/parakeet-best",
+            &[
+                "encoder-model.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+
+        assert!(parakeet_model_outdated(&old));
+        assert!(!parakeet_model_outdated(&current));
+        assert!(!parakeet_model_outdated(
+            &root.path().join("fresh/parakeet-best")
+        ));
+        assert!(!parakeet_model_outdated(&install(
+            "empty/parakeet-best",
+            &[]
+        )));
     }
 
     #[test]
