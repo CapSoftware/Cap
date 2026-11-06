@@ -122,7 +122,7 @@ export const buildOEmbedVideo = ({
 	const embedUrl = new URL(`/embed/${video.id}`, webUrl).toString();
 	const thumbnailUrl = new URL("/api/video/og", webUrl);
 	thumbnailUrl.searchParams.set("videoId", video.id);
-	const html = `<iframe src="${embedUrl}" width="${dimensions.width}" height="${dimensions.height}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="Cap video player" style="border:0;width:100%;aspect-ratio:${dimensions.width}/${dimensions.height}" loading="lazy"></iframe>`;
+	const html = `<iframe src="${embedUrl}" width="${dimensions.width}" height="${dimensions.height}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="Cap video player" style="border:0;width:100%;height:auto;aspect-ratio:${dimensions.width}/${dimensions.height}" loading="lazy"></iframe>`;
 
 	return {
 		version: "1.0",
