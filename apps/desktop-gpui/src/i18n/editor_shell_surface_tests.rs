@@ -567,6 +567,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Smallest download",
         ),
         (tr::editor::tabs::captions::model_label(), "Model"),
+        (
+            tr::editor::tabs::captions::model_updated(),
+            "Recommended model updated",
+        ),
+        (
+            tr::editor::tabs::captions::model_updated_description(),
+            "Download the new version for more accurate transcripts.",
+        ),
         (tr::editor::tabs::captions::position(), "Position"),
         (tr::editor::tabs::captions::preset::classic(), "Classic"),
         (
@@ -1115,6 +1123,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::transcript::no_audio(),
             "This recording has no audio to transcribe.",
+        ),
+        (
+            tr::editor::transcript::no_speech(),
+            "No speech found in this recording",
         ),
         (tr::editor::transcript::pauses::apply(), "Shorten"),
         (tr::editor::transcript::pauses::keep(), "Shorten to"),

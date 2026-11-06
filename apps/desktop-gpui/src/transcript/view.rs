@@ -2172,6 +2172,21 @@ impl EditorWindow {
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
         let generating = snapshot.generating;
+        let no_speech = snapshot.no_speech;
+        let outdated = !downloaded && model.name == "best" && snapshot.recommended_outdated;
+        let (title, description) = if outdated {
+            (
+                tr::editor::tabs::captions::model_updated(),
+                Some(tr::editor::tabs::captions::model_updated_description()),
+            )
+        } else if no_speech {
+            (tr::editor::transcript::no_speech(), None)
+        } else {
+            (
+                tr::editor::transcript::empty_title(),
+                Some(tr::editor::transcript::empty_description()),
+            )
+        };
 
         let action: AnyElement = if !has_audio {
             div()
@@ -2242,17 +2257,17 @@ impl EditorWindow {
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.editor.text_1))
-                    .child(tr::editor::transcript::empty_title()),
+                    .child(title),
             )
-            .child(
+            .children(description.map(|description| {
                 div()
                     .max_w(px(300.))
                     .text_size(px(12.))
                     .line_height(px(18.))
                     .text_center()
                     .text_color(Hsla::from(theme.editor.text_2))
-                    .child(tr::editor::transcript::empty_description()),
-            )
+                    .child(description)
+            }))
             .child(div().pt(px(6.)).child(action))
             .children(snapshot.generation_error.map(|error| {
                 div()
