@@ -24,6 +24,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
+      ios: ${{ steps.filter.outputs.ios }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,6 +64,8 @@ jobs:
             gpui-patches:
               - 'apps/desktop-gpui/patches/**'
               - 'scripts/prepare-gpui-dependency.sh'
+            ios:
+              - 'apps/mobile-ios/**'
 
   typecheck:
     name: Typecheck
@@ -183,31 +186,26 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  mobile:
-    name: Mobile
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+  ios:
+    name: iOS
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-26
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-js
+      - name: Test CapKit
+        working-directory: apps/mobile-ios/CapKit
+        run: swift test
 
-      - name: Check Expo dependencies
-        env:
-          EXPO_OFFLINE: "1"
-        run: bun run --cwd apps/mobile expo install --check
-
-      - name: Run Expo Doctor
-        env:
-          EXPO_OFFLINE: "1"
-        working-directory: apps/mobile
-        run: bunx expo-doctor@1.20.1
-
-      - name: Typecheck
-        run: bun run --cwd apps/mobile typecheck
-
-      - name: Test
-        run: bun run --cwd apps/mobile test
+      - name: Build app
+        working-directory: apps/mobile-ios
+        run: >-
+          xcodebuild -project Cap.xcodeproj -scheme Cap -configuration Release
+          -destination "generic/platform=iOS Simulator"
+          -derivedDataPath "$RUNNER_TEMP/cap-ios"
+          CODE_SIGNING_ALLOWED=NO build
 
   format-biome:
     name: Format (Biome)

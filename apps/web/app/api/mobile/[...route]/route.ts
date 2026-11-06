@@ -3403,7 +3403,10 @@ const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
 	);
 	if (
 		!Mobile.isMobileRecordingDurationAllowed({
-			durationSeconds: input.durationSeconds,
+			durationSeconds: Mobile.mobileRecordingGateDurationSeconds({
+				durationSeconds: input.durationSeconds,
+				videoSegments,
+			}),
 			isPro: userIsPro(userRow),
 		})
 	) {
