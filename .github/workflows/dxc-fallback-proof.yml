@@ -10,13 +10,15 @@ permissions:
   contents: read
 
 jobs:
-  bundle:
+  proof:
     runs-on: windows-2022
     timeout-minutes: 90
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@1.88.0
 
@@ -35,19 +37,44 @@ jobs:
           RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
         run: node scripts/setup.js
 
-      - name: Build cap-rendering test binaries
+      - name: Add FFmpeg DLLs to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Fallback unit tests (bundled DXC intact)
+        shell: bash
+        run: |
+          cargo test --locked -p cap-rendering --lib dx12_compiler_fallback_tests -- --nocapture 2>&1 | tee unit.txt
+          echo "----- summary -----"
+          grep -h "device created on FXC\|dx12 init error\|no bundled DXC\|test result\|^test " unit.txt
+
+      - name: WARP-only runner, unloadable DXC (this branch)
+        shell: bash
+        run: |
+          cargo test --locked -p cap-rendering --test dxc_fallback_e2e -- --nocapture > after.txt 2>&1
+          echo "----- summary -----"
+          grep -h "PROOF RESULT\|retrying with FXC\|test result" after.txt
+
+      - name: WARP-only runner, unloadable DXC (main's lib.rs)
+        shell: bash
+        run: |
+          git show origin/main:crates/rendering/src/lib.rs > crates/rendering/src/lib.rs
+          cargo test --locked -p cap-rendering --test dxc_fallback_e2e -- --nocapture > before.txt 2>&1
+          echo "----- summary -----"
+          grep -h "PROOF RESULT\|retrying with FXC\|test result" before.txt
+          git checkout -- crates/rendering/src/lib.rs
+
+      - name: Build test bundle for the GPU box
         shell: bash
         run: |
           mkdir -p bundle
           cargo test --locked -p cap-rendering --no-run --message-format=json \
             | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' \
             > executables.txt
-          cat executables.txt
           while read -r exe; do cp "$(cygpath -u "$exe")" bundle/; done < executables.txt
           cp target/ffmpeg/bin/*.dll bundle/
           cp target/debug/dxcompiler.dll target/debug/dxil.dll bundle/
-          ls -la bundle
-          du -sh bundle
+          ls bundle
 
       - uses: actions/upload-artifact@v4
         with:
