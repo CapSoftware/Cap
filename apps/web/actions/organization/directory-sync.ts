@@ -16,11 +16,13 @@ import { and, count, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getSsoBilling } from "@/lib/sso/billing";
 import { requestDirectorySync } from "@/lib/sso/directory-sync";
+import { hasScimSubscription } from "@/lib/sso/scim-billing";
 import { requireOrganizationSettingsManager } from "./authorization";
 
 const settingsPath = "/dashboard/settings/organization/security";
 
 export type OrganizationDirectorySync = {
+	entitled: boolean;
 	available: boolean;
 	directories: Array<{ id: string; name: string; state: string }>;
 	syncedMembers: number;
@@ -48,11 +50,13 @@ async function requireDirectorySyncManager(
 	if (!organization) throw new Error("Organization not found.");
 	const env = serverEnv();
 	const billing = await getSsoBilling(organizationId);
+	const entitled =
+		Boolean(env.WORKOS_API_KEY && env.WORKOS_CLIENT_ID) &&
+		hasSsoAccess(billing) &&
+		(await hasScimSubscription(organizationId));
 	return {
-		workosOrganizationId:
-			env.WORKOS_API_KEY && env.WORKOS_CLIENT_ID && hasSsoAccess(billing)
-				? organization.workosOrganizationId
-				: null,
+		entitled,
+		workosOrganizationId: entitled ? organization.workosOrganizationId : null,
 	};
 }
 
@@ -69,9 +73,10 @@ async function getVerifiedWorkosOrganization(workosOrganizationId: string) {
 export async function getOrganizationDirectorySync(
 	organizationId: Organisation.OrganisationId,
 ): Promise<OrganizationDirectorySync> {
-	const { workosOrganizationId } =
+	const { entitled, workosOrganizationId } =
 		await requireDirectorySyncManager(organizationId);
 	const unavailable = {
+		entitled,
 		available: false,
 		directories: [],
 		syncedMembers: 0,
@@ -115,6 +120,7 @@ export async function getOrganizationDirectorySync(
 		await requestDirectorySync(organizationId);
 	}
 	return {
+		entitled,
 		available: true,
 		directories: directories.data.map((directory) => ({
 			id: directory.id,
@@ -134,7 +140,7 @@ export async function openOrganizationDirectorySyncPortal(
 	const { workosOrganizationId } =
 		await requireDirectorySyncManager(organizationId);
 	if (!workosOrganizationId)
-		throw new Error("An active SAML SSO add-on is required.");
+		throw new Error("The SCIM directory sync add-on is required.");
 	const remote = await getVerifiedWorkosOrganization(workosOrganizationId);
 	if (!remote) throw new Error("Verify your organization's domain first.");
 	await requestDirectorySync(organizationId);
@@ -156,7 +162,7 @@ export async function approveDirectorySyncRemovals(
 	const { workosOrganizationId } =
 		await requireDirectorySyncManager(organizationId);
 	if (!workosOrganizationId)
-		throw new Error("An active SAML SSO add-on is required.");
+		throw new Error("The SCIM directory sync add-on is required.");
 	const now = new Date();
 	await db()
 		.update(organizationDirectorySync)

@@ -1,7 +1,9 @@
 "use client";
 
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import { SCIM_PRICE_PER_MONTH } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
+import { useCurrency } from "hooks/useCurrency";
 import { ExternalLink, RefreshCw, Users } from "lucide-react";
 import { useState, useTransition } from "react";
 import {
@@ -10,6 +12,7 @@ import {
 	type OrganizationDirectorySync,
 	openOrganizationDirectorySyncPortal,
 } from "@/actions/organization/directory-sync";
+import { formatAmount } from "@/utils/currency";
 
 type DirectoryAction = "portal" | "approve" | "refresh";
 
@@ -37,6 +40,7 @@ export function DirectorySyncCard({
 	organizationName: string;
 	initialStatus: OrganizationDirectorySync;
 }) {
+	const { currency } = useCurrency();
 	const [status, setStatus] = useState(initialStatus);
 	const [pendingAction, setPendingAction] = useState<DirectoryAction | null>(
 		null,
@@ -96,7 +100,11 @@ export function DirectorySyncCard({
 						connected ? "bg-green-50 text-green-700" : "bg-gray-3 text-gray-11"
 					}`}
 				>
-					{connected ? "Active" : "Included with SAML SSO"}
+					{connected
+						? "Active"
+						: status.entitled
+							? "Ready to set up"
+							: "Add-on"}
 				</span>
 			</div>
 
@@ -109,7 +117,16 @@ export function DirectorySyncCard({
 					your directory aren't affected.
 				</p>
 
-				{!status.available ? (
+				{!status.entitled ? (
+					<p className="text-sm text-gray-11">
+						Directory sync is a {formatAmount(SCIM_PRICE_PER_MONTH, currency)}
+						/month add-on. Contact{" "}
+						<a className="underline" href="mailto:hello@cap.so">
+							hello@cap.so
+						</a>{" "}
+						to add it to {organizationName}.
+					</p>
+				) : !status.available ? (
 					<p className="text-sm text-gray-11">
 						Verify your organization's domain above to set up directory sync.
 					</p>
