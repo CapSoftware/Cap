@@ -206,7 +206,48 @@ AI_CHAT_MODEL=your-model     # Support chat
 AI_STREAM_MODEL=your-model   # Streaming docs Ask AI
 ```
 
-To keep transcription in the EU, set:
+### Asynchronous transcription service
+
+For recorded videos and editable-transcript backfills, an administrator can
+configure an asynchronous transcription service instead of AssemblyAI:
+
+```bash
+ASYNC_TRANSCRIPTION_URL=http://asr:8080
+ASYNC_TRANSCRIPTION_API_KEY=your-token
+ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS=21600
+```
+
+Both URL and key are required; HTTP is supported for private networks. The
+optional timeout defaults to six hours and accepts 1–86400 seconds. It is a
+client-side maximum, not a guarantee that the platform permits a request to run
+that long. Polling runs within one workflow step and does not resume after the
+process restarts. Setting an async URL or key selects this provider and errors
+do not fall back to AssemblyAI. Instant live transcription still requires
+AssemblyAI.
+
+The service must implement the following protocol. This is a distinct async
+protocol, not the OpenAI audio transcription API:
+
+- `POST /v1/transcriptions` accepts the raw audio bytes, `Content-Type`,
+  `X-Filename`, and `Authorization: Bearer <token>`, and returns JSON `{ "id": "job-id" }`.
+- `GET /v1/transcriptions/{id}` returns `status` as `queued`, `processing`,
+  `error`, or `completed`. On completion, `result` has `audio_duration`
+  (seconds), `language_code` (string or null), `speech_model_used` (string),
+  and `words`, an array of `{ "text": "word", "start": 0, "end": 400 }`.
+  Word times are milliseconds on the original audio timeline. `confidence`,
+  `speaker`, and `channel` may be included on each word.
+- `DELETE /v1/transcriptions/{id}` removes the job and its audio. Cap makes a
+  best-effort cleanup request on completion, failure, or timeout after receiving
+  a job ID. If Cap loses the response to the POST, or stops before receiving a
+  job ID, it cannot remove that job. Configure a retention policy for abandoned
+  jobs. Cap does not automatically retry failed async calls because a retry
+  could create a duplicate job; retry the recording after resolving the error.
+
+The configured service must be reachable by the Cap web container and protect
+its endpoint and storage. Redirects are rejected. Language is determined by
+the service; the organization's language setting is not sent by this protocol.
+
+To keep AssemblyAI transcription in the EU, set:
 
 ```bash
 ASSEMBLY_BASE_URL=https://api.eu.assemblyai.com

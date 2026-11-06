@@ -129,6 +129,18 @@ function createServerEnv() {
 				),
 
 			/// AI providers
+			ASYNC_TRANSCRIPTION_URL: z
+				.string()
+				.optional()
+				.describe("Async transcription service base URL"),
+			ASYNC_TRANSCRIPTION_API_KEY: z
+				.string()
+				.optional()
+				.describe("Async transcription service bearer token"),
+			ASYNC_TRANSCRIPTION_TIMEOUT_SECONDS: z
+				.string()
+				.optional()
+				.describe("Async transcription timeout in seconds"),
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
 			ASSEMBLY_BASE_URL: z
 				.string()
