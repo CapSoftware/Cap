@@ -14,6 +14,7 @@ mod preparing_preview;
 mod preview_speed;
 mod preview_stretch;
 mod segments;
+mod speech_analysis;
 mod telemetry;
 mod thumbnail;
 
@@ -62,6 +63,7 @@ pub use segments::{
     audio_segment_from_decoded, get_audio_segments, load_music_tracks, load_music_tracks_uncached,
     music_track_ranges,
 };
+pub use speech_analysis::analyze_clip_speech;
 pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
     PlaybackTelemetryEvent,
