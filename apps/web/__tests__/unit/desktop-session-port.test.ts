@@ -1,4 +1,3 @@
-import { zValidator } from "@/utils/zod-validator";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +7,7 @@ import {
 	escapeHtmlAttribute,
 	serializeStateForScript,
 } from "@/lib/desktop-session";
+import { zValidator } from "@/utils/zod-validator";
 
 describe("desktop session request `port` validation", () => {
 	it("accepts a real numeric loopback port and coerces it to a number", () => {
