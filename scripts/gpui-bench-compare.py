@@ -26,7 +26,8 @@ def executable(directory: Path) -> Path:
     for name in ("frame.exe", "frame"):
         candidate = directory / name
         if candidate.exists():
-            return candidate
+            # Each run executes from its own CRITERION_HOME.
+            return candidate.resolve()
     sys.exit(f"error: no frame benchmark executable in {directory}")
 
 
