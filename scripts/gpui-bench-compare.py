@@ -2,7 +2,8 @@
 """Interleaved A/B run of two builds of Cap's GPUI frame benchmarks.
 
     python scripts/gpui-bench-compare.py --base <dir> --head <dir> --out <dir>
-        [--rounds 5] [--measurement-time 3] [--filter REGEX] [--summary FILE]
+        [--rounds 5] [--measurement-time 2] [--sample-size 20] [--filter REGEX]
+        [--summary FILE]
 
 <dir> holds the `frame` (or `frame.exe`) executable built by
 scripts/gpui-bench-build.sh. Both executables run on the same machine in
@@ -39,6 +40,8 @@ def run(binary: Path, home: Path, args: argparse.Namespace, log: Path) -> dict:
         str(args.warm_up_time),
         "--measurement-time",
         str(args.measurement_time),
+        "--sample-size",
+        str(args.sample_size),
     ]
     if args.filter:
         command.append(args.filter)
@@ -77,7 +80,12 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--warm-up-time", type=float, default=1.0)
-    parser.add_argument("--measurement-time", type=float, default=3.0)
+    parser.add_argument("--measurement-time", type=float, default=2.0)
+    # Criterion's default of 100 linearly growing samples runs a 10 ms frame
+    # 5 050 times per benchmark regardless of --measurement-time; 20 samples
+    # keep a round to about a minute while the paired rounds carry the
+    # statistics.
+    parser.add_argument("--sample-size", type=int, default=20)
     parser.add_argument("--filter", default="")
     parser.add_argument("--label", default="")
     parser.add_argument("--summary", type=Path)
