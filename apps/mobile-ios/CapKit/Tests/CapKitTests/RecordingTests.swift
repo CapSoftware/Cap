@@ -227,6 +227,38 @@ final class CompletionLog: Sendable {
         #expect(completion.audioSegments.isEmpty)
     }
 
+    @Test func anUploadedSegmentIsOnlyDeletedOnceItsStateIsSaved() async throws {
+        let root = makeRoot()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent().deletingLastPathComponent()) }
+        StorageStub.failFirst.withLock { $0.removeAll() }
+        let completed = CompletionLog()
+        let (uploads, _) = makeUploads(root: root, completed: completed)
+        let recording = RecordingJob(userId: testCredentials.userId, title: "Cap Recording", format: .init(width: 1080, height: 1920, fps: 30), organizationId: nil, folderId: nil, hasAudio: false)
+        RecordingUploads.markActive(recording.id, true)
+        defer { RecordingUploads.markActive(recording.id, false) }
+        uploads.begin(recording)
+        let segments = (0...2).map { RecordedSegment(track: .video, index: $0, duration: $0 == 0 ? 0 : 2, bytes: 32) }
+        for segment in segments { try write(segment, in: uploads, job: recording.id) }
+        let directory = uploads.directory(for: recording.id)
+
+        // A file may only be gone once job.json on disk already says it was uploaded, or a crash in
+        // between would find a pending segment with nothing to upload.
+        func checkInvariant() throws {
+            let saved = try? CapJSON.decoder().decode(RecordingJob.self, from: Data(contentsOf: directory.appending(path: "job.json")))
+            for segment in segments where !FileManager.default.fileExists(atPath: directory.appending(path: segment.fileName).path(percentEncoded: false)) {
+                let state = saved?.segments.first { $0.subpath == segment.subpath }?.state
+                #expect(state == .uploaded, "\(segment.fileName) was deleted before its upload was saved")
+            }
+        }
+        for _ in 0..<80 {
+            try checkInvariant()
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        await waitFor { segments.allSatisfy { !FileManager.default.fileExists(atPath: directory.appending(path: $0.fileName).path(percentEncoded: false)) } }
+        try checkInvariant()
+        #expect(segments.allSatisfy { !FileManager.default.fileExists(atPath: directory.appending(path: $0.fileName).path(percentEncoded: false)) }, "files still go once their uploads are saved")
+    }
+
     /// The screen recorder stops at once and Cap uploads the rest; a recording still being captured
     /// in the other process is left alone.
     @Test func aHandedOffRecordingIsFinishedByCapOnce() async throws {

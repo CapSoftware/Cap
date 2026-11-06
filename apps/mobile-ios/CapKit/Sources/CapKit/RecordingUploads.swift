@@ -9,16 +9,10 @@ public enum RecordingUploadEvent: Sendable {
     case failed(RecordingJob, String)
 }
 
-/// Uploads a recording's segments while it is still being recorded, so the link works moments
-/// after stopping. Segments go through a background `URLSession`, so the tail keeps uploading
-/// if Cap is left or suspended, and each recording is persisted so a relaunch can finish it.
 public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate {
     public static let sessionIdentifier = "so.cap.mobile.recordings"
-    /// Screen recordings, which the broadcast extension hands to Cap to finish.
     public static let screenSessionIdentifier = "so.cap.mobile.screen-recordings"
-    /// Left in a recording's folder by the process that stopped working on it.
     static let handOffMarker = "handed-off"
-    /// A recording another process hasn't touched for this long is abandoned and can be taken over.
     static let abandonedAfter: TimeInterval = 30
     private static let log = Logger(subsystem: "so.cap.mobile", category: "recordings")
     static let maxConcurrentUploads = 3
@@ -35,16 +29,22 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         var jobs: [String: RecordingJob] = [:]
         var targets: [String: [String: CachedTarget]] = [:]
         var inFlight: [String: Set<String>] = [:]
-        /// Network calls running per job: "create", "targets", "complete".
         var busy: Set<String> = []
         var failures: [String: Int] = [:]
         var retryScheduled: Set<String> = []
         var dirty: Set<String> = []
         var persistScheduled = false
+        var uploadedFiles: [String: [String]] = [:]
+
+        mutating func removeJob(_ id: String) -> RecordingJob? {
+            uploadedFiles[id] = nil
+            return jobs.removeValue(forKey: id)
+        }
         var finishEvents: (@Sendable () -> Void)?
     }
 
     private let state = Mutex(State())
+    private let persistQueue = DispatchQueue(label: "so.cap.mobile.recording-uploads.persist", qos: .utility)
     private let session = Mutex<URLSession?>(nil)
     private let api: CapAPI
     private let engine: UploadEngine
@@ -55,7 +55,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
     public let root: URL
     private let adoptsHandOffs: Bool
 
-    /// - Parameter keepAlive: begins background time for a network call and returns a closure ending it.
     public init(
         root: URL,
         api: CapAPI,
@@ -80,7 +79,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         self.session.withLock { $0 = session }
     }
 
-    /// - Parameter sharedContainer: the app group the recordings live in, when it isn't the app's own folder.
     public static func makeConfiguration(identifier: String = sessionIdentifier, sharedContainer: String? = nil) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
         configuration.sharedContainerIdentifier = sharedContainer
@@ -99,14 +97,12 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
 
     // MARK: Recording lifecycle
 
-    /// Creates the folder a new recording's segments are written to.
     public func directory(for jobId: String) -> URL {
         let directory = root.appending(path: jobId, directoryHint: .isDirectory)
         Self.prepare(directory: directory)
         return directory
     }
 
-    /// Starts tracking a recording; the Cap is created on the server straight away.
     public func begin(_ job: RecordingJob) {
         _ = directory(for: job.id)
         state.withLock { $0.jobs[job.id] = job }
@@ -114,7 +110,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         pump(job.id)
     }
 
-    /// Hands over a segment the encoder has written into the recording's folder.
     public func add(_ segment: RecordedSegment, to jobId: String) {
         let added = state.withLock { state -> Bool in
             // A writer's last segment can trail its finish callback by a moment.
@@ -129,7 +124,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         pump(jobId)
     }
 
-    /// Capture has ended; upload whatever is left and finish the Cap.
     public func finish(_ jobId: String, durationSeconds: Double) {
         let changed = state.withLock { state -> Bool in
             guard var job = state.jobs[jobId], job.phase == .recording else { return false }
@@ -143,13 +137,12 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         pump(jobId)
     }
 
-    /// Throws a recording away: stops its uploads and deletes its files. Returns the Cap id, if one was created.
     @discardableResult
     public func discard(_ jobId: String) async -> String? {
         let job = state.withLock { state -> RecordingJob? in
             state.inFlight[jobId] = nil
             state.targets[jobId] = nil
-            return state.jobs.removeValue(forKey: jobId)
+            return state.removeJob(jobId)
         }
         if let session = session.withLock({ $0 }) {
             for task in await session.allTasks where Self.parse(task.taskDescription)?.jobId == jobId {
@@ -160,7 +153,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         return job?.capId
     }
 
-    /// Cancels everything and deletes every recording. Used on sign out.
     public func discardAll() async {
         for id in state.withLock({ Array($0.jobs.keys) }) {
             await discard(id)
@@ -175,7 +167,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         state.withLock { $0.jobs[id] }
     }
 
-    /// Picks up recordings left unfinished: after a relaunch, an unlock, or coming back online.
     public func resumeAll() async {
         let live: Set<String>
         if let session = session.withLock({ $0 }) {
@@ -225,13 +216,12 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
 
     // MARK: Handing over between processes
 
-    /// Stops working on a recording and leaves it on disk for Cap to finish, so the screen recorder
-    /// can end the moment the user stops instead of waiting for the last uploads.
+    /// Lets the screen recorder end the moment the user stops instead of waiting for the last uploads.
     public func handOff(_ jobId: String, durationSeconds: Double?) async {
         guard var job = state.withLock({ state -> RecordingJob? in
             state.inFlight[jobId] = nil
             state.targets[jobId] = nil
-            return state.jobs.removeValue(forKey: jobId)
+            return state.removeJob(jobId)
         }) else { return }
         if let session = session.withLock({ $0 }) {
             for task in await session.allTasks where Self.parse(task.taskDescription)?.jobId == jobId {
@@ -251,8 +241,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         FileManager.default.createFile(atPath: directory.appending(path: Self.handOffMarker).path(percentEncoded: false), contents: nil)
     }
 
-    /// Takes over recordings handed off by, or abandoned in, another process, and reports the
-    /// ones whose Cap already exists so its link shows straight away.
     public func adopt() async {
         guard adoptsHandOffs else { return }
         let known = state.withLock { Set($0.jobs.keys) }
@@ -269,7 +257,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         await resumeAll()
     }
 
-    /// Handed off, or untouched long enough that whoever was recording it is gone.
     static func isAdoptable(_ directory: URL, now: Date = .now) -> Bool {
         let manager = FileManager.default
         if manager.fileExists(atPath: directory.appending(path: handOffMarker).path(percentEncoded: false)) { return true }
@@ -284,7 +271,7 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
 
     // MARK: Active capture
 
-    /// Recordings this process is capturing right now. Anything else marked as recording is a leftover.
+    /// Anything else marked as recording is a leftover from a crash.
     private static let active = Mutex<Set<String>>([])
 
     public static func markActive(_ jobId: String, _ isActive: Bool) {
@@ -439,7 +426,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
                 task.countOfBytesClientExpectsToReceive = 1024
                 task.resume()
             } catch .fileUnavailable {
-                // The file is gone, so the recording can't be completed in full.
                 fail(jobId, message: RecordingError.missingSegments.errorDescription ?? "")
                 return
             } catch {
@@ -466,7 +452,7 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
                 try await api.completeRecording(capId, completion)
                 release(jobId, "complete")
                 guard let done = state.withLock({ state -> RecordingJob? in
-                    guard var job = state.jobs.removeValue(forKey: jobId) else { return nil }
+                    guard var job = state.removeJob(jobId) else { return nil }
                     job.phase = .completed
                     state.targets[jobId] = nil
                     state.inFlight[jobId] = nil
@@ -524,7 +510,6 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         continuation.yield(.failed(failed, message))
     }
 
-    /// Forgets a failed recording once the user has seen it.
     public func dismissFailed(_ jobId: String) async {
         guard state.withLock({ $0.jobs[jobId]?.phase == .failed }) else { return }
         await discard(jobId)
@@ -565,8 +550,8 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         // A discarded recording's cancelled tasks land here too.
         guard let outcome else { return }
         if let file = outcome.file {
-            // Storage has it; free the disk as the recording goes.
-            try? FileManager.default.removeItem(at: root.appending(path: jobId, directoryHint: .isDirectory).appending(path: file))
+            // Storage has it; the file goes once job.json says so, or a crash before then would find it missing.
+            state.withLock { $0.uploadedFiles[jobId, default: []].append(file) }
         }
         continuation.yield(.progress(jobId: jobId, uploaded: outcome.uploaded, total: outcome.total))
         schedulePersist(jobId)
@@ -607,12 +592,28 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
     // MARK: Storage
 
     private func persistNow(_ jobId: String) {
-        let job = state.withLock { state -> RecordingJob? in
-            state.dirty.remove(jobId)
-            return state.jobs[jobId]
+        persistQueue.sync { writeSnapshot([jobId]) }
+    }
+
+    /// Runs on `persistQueue` only, so writes land in order and an older snapshot never replaces a newer one.
+    private func writeSnapshot(_ ids: Set<String>?) {
+        let snapshot = state.withLock { state -> [(RecordingJob, [String])] in
+            let chosen = ids ?? state.dirty
+            state.dirty.subtract(chosen)
+            if ids == nil { state.persistScheduled = false }
+            return chosen.compactMap { id in
+                guard let job = state.jobs[id] else { return nil }
+                return (job, state.uploadedFiles.removeValue(forKey: id) ?? [])
+            }
         }
-        guard let job else { return }
-        Self.write(job, to: root)
+        for (job, files) in snapshot {
+            let directory = root.appending(path: job.id, directoryHint: .isDirectory)
+            if Self.write(job, to: root) {
+                for file in files { try? FileManager.default.removeItem(at: directory.appending(path: file)) }
+            } else if !files.isEmpty {
+                state.withLock { $0.uploadedFiles[job.id, default: []].append(contentsOf: files) }
+            }
+        }
     }
 
     /// Segments land every second or so; coalesce their writes. A crash loses at most the last few
@@ -626,25 +627,22 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
             return min(5, max(1, Double(state.jobs[jobId]?.segments.count ?? 0) / 300))
         }
         guard let delay else { return }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [self] in
-            let snapshot = state.withLock { state -> [RecordingJob] in
-                let jobs = state.dirty.compactMap { state.jobs[$0] }
-                state.dirty.removeAll()
-                state.persistScheduled = false
-                return jobs
-            }
-            for job in snapshot { Self.write(job, to: root) }
+        persistQueue.asyncAfter(deadline: .now() + delay) { [self] in writeSnapshot(nil) }
+    }
+
+    @discardableResult
+    private static func write(_ job: RecordingJob, to root: URL) -> Bool {
+        guard let data = try? CapJSON.encoder().encode(job) else { return false }
+        let directory = root.appending(path: job.id, directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return false }
+        do {
+            try data.write(to: directory.appending(path: "job.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return true
+        } catch {
+            return false
         }
     }
 
-    private static func write(_ job: RecordingJob, to root: URL) {
-        guard let data = try? CapJSON.encoder().encode(job) else { return }
-        let directory = root.appending(path: job.id, directoryHint: .isDirectory)
-        guard FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return }
-        try? data.write(to: directory.appending(path: "job.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-    }
-
-    /// - Parameter adoptableOnly: skips recordings another process is still working on.
     private static func loadJobs(in root: URL, adoptableOnly: Bool = false) -> [String: RecordingJob] {
         guard let items = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [:] }
         var jobs: [String: RecordingJob] = [:]

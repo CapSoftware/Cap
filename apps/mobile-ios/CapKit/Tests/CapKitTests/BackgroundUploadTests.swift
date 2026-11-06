@@ -37,6 +37,24 @@ import Testing
         #expect(BackgroundUploads(directory: directory, configuration: .ephemeral).records.isEmpty)
     }
 
+    @Test func savesFromManyThreadsLeaveTheNewestStateOnDisk() throws {
+        let directory = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let uploads = BackgroundUploads(directory: directory, configuration: .ephemeral)
+        let count = 40
+        for index in 0..<count {
+            let source = try staged(directory, "clip \(index).mov")
+            let prepared = PreparedUploadRequest(request: URLRequest(url: URL(string: "https://example.invalid/put")!), bodyFile: source, temporaryBody: nil)
+            uploads.start(prepared, record: record("cap_\(index)", source: source))
+        }
+        DispatchQueue.concurrentPerform(iterations: count) { index in
+            if index % 2 == 0 { uploads.remove(capId: "cap_\(index)") }
+        }
+        let onDisk = Set(BackgroundUploads(directory: directory, configuration: .ephemeral).records.map(\.capId))
+        #expect(onDisk == Set(uploads.records.map(\.capId)))
+        #expect(onDisk.count == count / 2)
+    }
+
     @Test func orphanCleanupKeepsReferencedFiles() throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

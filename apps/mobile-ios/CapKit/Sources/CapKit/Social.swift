@@ -1,6 +1,6 @@
 import Foundation
 
-/// The share page's reaction set, in its order.
+/// Matches the share page's reaction set and order.
 public enum Reactions {
     public static let emojis = ["😂", "😍", "😮", "🙌", "👍", "👎"]
 }
@@ -13,8 +13,7 @@ public struct CommentThread: Identifiable, Sendable, Hashable {
 }
 
 public enum CommentThreads {
-    /// Groups text comments one level deep, oldest first, like the share page.
-    /// Replies to replies join their top-level thread; replies whose thread is gone are hidden.
+    /// Matches the share page: replies to replies join their top-level thread; orphaned replies are hidden.
     public static func build(_ comments: [CapComment]) -> [CommentThread] {
         let text = comments.filter { $0.type == .text }
         let byId = Dictionary(text.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -59,7 +58,6 @@ public struct TimelineMarker: Identifiable, Sendable, Hashable {
 
     public var count: Int { textCount + reactionCount }
 
-    /// The most used emoji in the marker, shown when it holds only reactions.
     public var leadingEmoji: String? {
         guard textCount == 0 else { return nil }
         var counts: [String: Int] = [:]
@@ -69,7 +67,6 @@ public struct TimelineMarker: Identifiable, Sendable, Hashable {
 }
 
 public enum TimelineMarkers {
-    /// Buckets timestamped comments and reactions so nearby ones share one marker.
     public static func build(_ comments: [CapComment], duration: Double, buckets: Int) -> [TimelineMarker] {
         guard duration.isFinite, duration > 0, buckets > 0 else { return [] }
         let threads = Set(CommentThreads.build(comments).map(\.id))
@@ -104,7 +101,6 @@ public enum TimelineMarkers {
 }
 
 extension TranscriptCue {
-    /// The cue playing at `time`, found by binary search over cues sorted by start.
     public static func active(in cues: [TranscriptCue], at time: Double) -> TranscriptCue? {
         var low = 0
         var high = cues.count - 1
@@ -124,16 +120,15 @@ extension TranscriptCue {
 }
 
 public enum TranscriptExport {
-    /// Paragraphs broken at pauses, like the share page's "Formatted text" copy.
+    /// Matches the share page's "Formatted text" copy.
     public static func plainText(_ cues: [TranscriptCue]) -> String {
         var paragraphs: [[String]] = []
         var previousEnd: Double?
         for cue in cues {
             let text = cue.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            if let previousEnd, cue.start - previousEnd < 2, var last = paragraphs.popLast(), last.count < 6 {
-                last.append(text)
-                paragraphs.append(last)
+            if let previousEnd, cue.start - previousEnd < 2, let last = paragraphs.indices.last, paragraphs[last].count < 6 {
+                paragraphs[last].append(text)
             } else {
                 paragraphs.append([text])
             }

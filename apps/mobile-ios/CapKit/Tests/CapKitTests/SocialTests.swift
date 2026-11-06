@@ -61,6 +61,10 @@ private func comment(_ id: String, _ kind: CommentKind = .text, content: String 
     @Test func transcriptExports() {
         let cues = [TranscriptCue(id: 0, start: 0, end: 2, text: "Hello"), TranscriptCue(id: 1, start: 2.5, end: 4, text: "there."), TranscriptCue(id: 2, start: 70, end: 72.25, text: "Later")]
         #expect(TranscriptExport.plainText(cues) == "Hello there.\n\nLater")
+        let run = (0..<13).map { TranscriptCue(id: $0, start: Double($0), end: Double($0) + 0.9, text: "w\($0)") }
+        let paragraphs = TranscriptExport.plainText(run).components(separatedBy: "\n\n")
+        #expect(paragraphs.map { $0.split(separator: " ").count } == [6, 6, 1])
+        #expect(paragraphs.joined(separator: " ") == run.map(\.text).joined(separator: " "))
         #expect(TranscriptExport.timestamped(cues) == "[0:00] Hello\n[0:02] there.\n[1:10] Later")
         #expect(TranscriptExport.vtt(cues).hasPrefix("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello"))
         #expect(TranscriptExport.vtt(cues).contains("00:01:10.000 --> 00:01:12.250"))

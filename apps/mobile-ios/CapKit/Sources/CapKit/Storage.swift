@@ -4,8 +4,20 @@ import Synchronization
 
 public protocol CredentialPersisting: Sendable {
     func load() -> CredentialSnapshot?
+    func read() -> CredentialRead
     func save(_ credentials: CredentialSnapshot) throws
     func delete()
+}
+
+/// A locked phone can't read a `WhenUnlocked` keychain item; that isn't the same as having no session.
+public enum CredentialRead: Sendable, Equatable {
+    case found(CredentialSnapshot)
+    case missing
+    case locked
+}
+
+extension CredentialPersisting {
+    public func read() -> CredentialRead { load().map(CredentialRead.found) ?? .missing }
 }
 
 public enum KeychainError: Error, Sendable, Equatable {
@@ -17,8 +29,7 @@ public struct KeychainCredentialStore: CredentialPersisting {
     private let account: String
     private let accessGroup: String?
 
-    /// - Parameter accessGroup: set by Cap's extensions to read the app's session; the app itself
-    ///   leaves it nil and uses its default group, which is the same one.
+    /// Extensions pass the app's group; the app passes nil, as its default group is the same one.
     public init(service: String = "so.cap.mobile.session", account: String = "primary", accessGroup: String? = nil) {
         self.service = service
         self.account = account
@@ -42,17 +53,24 @@ public struct KeychainCredentialStore: CredentialPersisting {
     }
 
     public func load() -> CredentialSnapshot? {
+        if case let .found(credentials) = read() { return credentials }
+        return nil
+    }
+
+    public func read() -> CredentialRead {
         var query = baseQuery
         query[kSecReturnData as String] = kCFBooleanTrue
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecInteractionNotAllowed { return .locked }
+        guard status == errSecSuccess,
               let data = item as? Data,
               let payload = try? JSONDecoder().decode(Payload.self, from: data),
               APIKeyValidator.isPlausible(payload.apiKey),
               CapID(payload.userId) != nil
-        else { return nil }
-        return CredentialSnapshot(apiKey: payload.apiKey, userId: payload.userId)
+        else { return .missing }
+        return .found(CredentialSnapshot(apiKey: payload.apiKey, userId: payload.userId))
     }
 
     public func save(_ credentials: CredentialSnapshot) throws {
@@ -83,26 +101,45 @@ public final class InMemoryCredentialStore: CredentialPersisting {
 }
 
 public final class CredentialVault: Sendable {
+    private struct Current {
+        var credentials: CredentialSnapshot?
+        /// The last read hit a locked keychain, so the next access reads again.
+        var unread: Bool
+    }
+
     private let store: any CredentialPersisting
-    private let current: Mutex<CredentialSnapshot?>
+    private let current: Mutex<Current>
 
     public init(store: any CredentialPersisting) {
         self.store = store
-        current = Mutex(store.load())
+        current = Mutex(Self.current(from: store.read()))
     }
 
-    public var credentials: CredentialSnapshot? { current.withLock { $0 } }
+    private static func current(from read: CredentialRead) -> Current {
+        switch read {
+        case let .found(credentials): Current(credentials: credentials, unread: false)
+        case .missing: Current(credentials: nil, unread: false)
+        case .locked: Current(credentials: nil, unread: true)
+        }
+    }
+
+    public var credentials: CredentialSnapshot? {
+        current.withLock { value in
+            if value.unread { value = Self.current(from: store.read()) }
+            return value.credentials
+        }
+    }
 
     public func replace(with credentials: CredentialSnapshot) throws {
         try store.save(credentials)
-        current.withLock { $0 = credentials }
+        current.withLock { $0 = Current(credentials: credentials, unread: false) }
     }
 
     @discardableResult
     public func clear(ifMatching expected: CredentialSnapshot? = nil) -> Bool {
         let cleared = current.withLock { value -> Bool in
-            if let expected, value != expected { return false }
-            value = nil
+            if let expected, value.credentials != expected { return false }
+            value = Current(credentials: nil, unread: false)
             return true
         }
         if cleared { store.delete() }

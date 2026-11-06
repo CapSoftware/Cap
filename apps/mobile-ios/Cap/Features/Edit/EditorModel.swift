@@ -3,8 +3,8 @@ import CapKit
 import QuartzCore
 import SwiftUI
 
-/// The editor's state. Edits never render on the phone: the preview is an `AVMutableComposition` of the kept clips,
-/// rebuilt in a few milliseconds per change, and Save sends the clip list to Cap, which renders the new version.
+/// Edits never render on the phone: the preview is an `AVMutableComposition` of the kept clips, rebuilt
+/// in a few milliseconds per change, and Cap renders the saved version.
 @MainActor
 @Observable
 final class EditorModel {
@@ -39,7 +39,6 @@ final class EditorModel {
     private(set) var isSaving = false
     var errorMessage: String?
 
-    /// Filmstrip frames, evenly spaced across the source.
     private(set) var thumbnails: [UIImage] = []
     static let thumbnailCount = 24
 
@@ -110,7 +109,7 @@ final class EditorModel {
         }
     }
 
-    /// The MP4 Cap edits. Playback is an MP4 for every editable Cap; the download link covers anything else.
+    /// Playback is an MP4 for every editable Cap; the download link covers anything else.
     private func sourceURL() async throws -> URL {
         let environment = session.services.environment
         let playback = try await session.api.playback(capId)
@@ -160,7 +159,6 @@ final class EditorModel {
         }
     }
 
-    /// The filmstrip frame nearest a source time.
     func thumbnail(atSource time: Double) -> UIImage? {
         guard !thumbnails.isEmpty, timeline.sourceDuration > 0 else { return nil }
         let index = Int((time / timeline.sourceDuration) * Double(thumbnails.count))
@@ -169,8 +167,8 @@ final class EditorModel {
 
     // MARK: Composition
 
-    /// Rebuilds the preview from the timeline. Only track references change, so building costs milliseconds; the
-    /// new item loads on the hidden player and replaces the visible one when its first frame is ready.
+    /// Only track references change, so building costs milliseconds; the new item loads on the hidden
+    /// player and replaces the visible one when its first frame is ready.
     private func rebuild(seekTo output: Double) throws {
         guard let videoTrack else { return }
         let started = CACurrentMediaTime()
@@ -221,7 +219,6 @@ final class EditorModel {
         }
     }
 
-    /// Applies a timeline change, rebuilding the preview only when the video itself changes.
     private func show(_ next: EditTimeline, previous: EditTimeline, seekTo output: Double) {
         if next.playsSame(as: previous) {
             outputTime = min(max(0, output), next.outputDuration)
@@ -264,7 +261,7 @@ final class EditorModel {
 
     private(set) var isScrubbing = false
     private var seekInFlight = false
-    private var pendingSeek: (time: Double, exact: Bool)?
+    private var pendingSeek: (source: Bool, time: Double, exact: Bool)?
     private var seekIssuedAt: CFTimeInterval = 0
     private var settleTask: Task<Void, Never>?
 
@@ -313,7 +310,7 @@ final class EditorModel {
         let player = source ? sourcePlayer : self.player
         guard !seekInFlight else {
             // The newest target wins; the settle seek always comes last, so an exact landing is never lost.
-            pendingSeek = (time, exact)
+            pendingSeek = (source, time, exact)
             return
         }
         seekInFlight = true
@@ -326,7 +323,7 @@ final class EditorModel {
                 self.seekInFlight = false
                 if let next = self.pendingSeek {
                     self.pendingSeek = nil
-                    self.chaseSeek(source: source, to: next.time, exact: next.exact)
+                    self.chaseSeek(source: next.source, to: next.time, exact: next.exact)
                 }
             }
         }
@@ -380,7 +377,7 @@ final class EditorModel {
     // MARK: Trimming
 
     enum Edge { case start, end }
-    /// The timeline as it looks mid-drag; committed as one undo step when the finger lifts.
+    /// Committed as one undo step when the finger lifts.
     private(set) var trimPreview: EditTimeline?
     private var trimMark: CFTimeInterval = 0
 
@@ -396,7 +393,6 @@ final class EditorModel {
         trimMark = CACurrentMediaTime()
     }
 
-    /// Moves a clip edge to a source time and shows that frame from the untouched video.
     func trim(clip index: Int, edge: Edge, toSource time: Double) {
         let base = timeline
         let next = edge == .start ? base.trimming(clipAt: index, start: time) : base.trimming(clipAt: index, end: time)
@@ -466,7 +462,6 @@ final class EditorModel {
     enum EditorError: Error { case noVideo }
 }
 
-/// What opening and using the editor cost, kept in Caches/EditorStats.jsonl so device runs can be read back.
 @MainActor
 final class EditorMetrics {
     private var start: CFTimeInterval = 0
@@ -481,7 +476,6 @@ final class EditorMetrics {
         samples = [:]
     }
 
-    /// Milliseconds since the editor opened, recorded the first time only.
     func mark(_ name: String) {
         guard marks[name] == nil else { return }
         marks[name] = (CACurrentMediaTime() - start) * 1000
@@ -515,8 +509,8 @@ final class EditorMetrics {
 extension EditorModel: Identifiable {}
 
 #if DEBUG
-/// Debug-only: `CAP_DEBUG_ROUTE=edit:<id>` opens a Cap and its editor; `CAP_DEBUG_EDITOR_SCRIPT=1` then runs a fixed
-/// session (two splits, a delete, a fast scrub, a trim, undo and redo, a little playback) and writes the stats.
+/// Debug-only: `CAP_DEBUG_ROUTE=edit:<id>` opens a Cap and its editor; `CAP_DEBUG_EDITOR_SCRIPT=1` then runs a
+/// fixed session and writes the stats.
 @MainActor
 enum EditorDebug {
     static var openOnLoad = false

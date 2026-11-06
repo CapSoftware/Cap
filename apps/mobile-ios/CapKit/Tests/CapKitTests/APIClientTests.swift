@@ -228,4 +228,32 @@ func bodyJSON(_ request: URLRequest) throws -> [String: Any] {
         #expect(vault.credentials == nil)
         #expect(store.load() == nil)
     }
+
+    @Test func readsAgainAfterALockedKeychain() {
+        let store = LockableStore(testCredentials)
+        let vault = CredentialVault(store: store)
+        #expect(vault.credentials == nil)
+        store.unlock()
+        #expect(vault.credentials == testCredentials)
+    }
+
+    @Test func aMissingSessionStaysSignedOut() {
+        let store = LockableStore(nil)
+        store.unlock()
+        let vault = CredentialVault(store: store)
+        #expect(vault.credentials == nil)
+        try? store.save(testCredentials)
+        #expect(vault.credentials == nil)
+    }
+}
+
+private final class LockableStore: CredentialPersisting, @unchecked Sendable {
+    private var stored: CredentialSnapshot?
+    private var locked = true
+    init(_ stored: CredentialSnapshot?) { self.stored = stored }
+    func unlock() { locked = false }
+    func load() -> CredentialSnapshot? { locked ? nil : stored }
+    func read() -> CredentialRead { locked ? .locked : stored.map(CredentialRead.found) ?? .missing }
+    func save(_ credentials: CredentialSnapshot) throws { stored = credentials }
+    func delete() { stored = nil }
 }

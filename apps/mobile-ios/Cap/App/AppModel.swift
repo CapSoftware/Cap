@@ -13,7 +13,6 @@ nonisolated final class AppServices: Sendable {
     let uploads: UploadEngine
     let backgroundUploads: BackgroundUploads
     let recordings: RecordingUploads
-    /// Screen recordings the broadcast extension hands over; nil if the shared folder is missing.
     let screenRecordings: RecordingUploads?
     let unauthorized: AsyncStream<CredentialSnapshot>
     /// True on the first launch after an install, when stale keychain items are wiped.
@@ -21,8 +20,7 @@ nonisolated final class AppServices: Sendable {
 
     private static let installMarkerKey = "so.cap.mobile.installed"
 
-    /// One instance per process, created on first use: by the UI, or by a background launch that only
-    /// exists to finish an upload.
+    /// Created on first use: by the UI, or by a background launch that only exists to finish an upload.
     static let shared: AppServices = {
         let store = KeychainCredentialStore()
         let defaults = UserDefaults.standard
@@ -101,8 +99,6 @@ nonisolated final class AppServices: Sendable {
     }
 }
 
-/// Background time for short network calls made from any thread, such as telling Cap a recording
-/// finished after the user has already left the app.
 nonisolated enum BackgroundTime {
     private final class Token: @unchecked Sendable {
         // Only touched on the main queue.
@@ -172,6 +168,17 @@ final class AppModel {
             services.backgroundUploads.removeOrphanedFiles()
         }
         observeUnauthorized()
+        observeUnlock()
+    }
+
+    /// A background launch on a locked phone can't read the session yet; pick it up once the phone unlocks.
+    private func observeUnlock() {
+        NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, case .signedOut = self.phase, let credentials = self.services.vault.credentials else { return }
+                self.phase = .signedIn(SessionModel(services: self.services, credentials: credentials))
+            }
+        }
     }
 
     #if DEBUG

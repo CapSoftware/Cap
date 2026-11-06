@@ -1,12 +1,9 @@
 import Foundation
 import Synchronization
 
-/// An upload handed to the background session. Persisted so a relaunched app can finish it.
 public struct PendingUpload: Codable, Sendable, Hashable, Identifiable {
     public enum State: String, Codable, Sendable {
-        /// Bytes are moving to storage.
         case uploading
-        /// Storage has the file; Cap still needs to be told so processing can start.
         case uploaded
     }
 
@@ -47,8 +44,6 @@ public enum BackgroundUploadEvent: Sendable {
     case failed(PendingUpload, UploadError)
 }
 
-/// Runs uploads in a background `URLSession`, so they keep going when Cap is suspended or quit,
-/// and keeps a small on-disk record of each one so it can be completed after a relaunch.
 public final class BackgroundUploads: NSObject, Sendable, URLSessionDataDelegate {
     public static let sessionIdentifier = "so.cap.mobile.uploads"
 
@@ -61,7 +56,7 @@ public final class BackgroundUploads: NSObject, Sendable, URLSessionDataDelegate
     private let session = Mutex<URLSession?>(nil)
     private let continuation: AsyncStream<BackgroundUploadEvent>.Continuation
     public let events: AsyncStream<BackgroundUploadEvent>
-    /// Prepared files and multipart bodies live here, outside tmp, until their upload ends.
+    /// Outside tmp so staged files last until their upload ends.
     public let directory: URL
     private let storeURL: URL
 
@@ -107,28 +102,25 @@ public final class BackgroundUploads: NSObject, Sendable, URLSessionDataDelegate
         state.withLock { Array($0.records.values) }.sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// Drops a finished or abandoned upload and deletes its files.
     public func remove(capId: String) {
         var removed: PendingUpload?
         save { records in removed = records.removeValue(forKey: capId) }
         if let removed { Self.deleteFiles(of: removed) }
     }
 
-    /// Cancels everything and deletes every staged file. Used on sign out.
     public func cancelAll() async {
         let all = state.withLock { state -> [PendingUpload] in
             let all = Array(state.records.values)
             state.records.removeAll()
+            persist([:])
             return all
         }
-        persist([:])
         for record in all { Self.deleteFiles(of: record) }
         if let session = session.withLock({ $0 }) {
             for task in await session.allTasks { task.cancel() }
         }
     }
 
-    /// Reports uploads whose transfer the system no longer knows about, so they don't stay pending forever.
     public func reconcile() async {
         guard let session = session.withLock({ $0 }) else { return }
         let live = Set(await session.allTasks.map(\.taskIdentifier))
@@ -190,12 +182,12 @@ public final class BackgroundUploads: NSObject, Sendable, URLSessionDataDelegate
         state.withLock { $0.records.values.first { $0.taskIdentifier == task.taskIdentifier } }
     }
 
+    // Written under the lock: saving after unlocking let an older snapshot land after a newer one.
     private func save(_ change: (inout [String: PendingUpload]) -> Void) {
-        let snapshot = state.withLock { state in
+        state.withLock { state in
             change(&state.records)
-            return state.records
+            persist(state.records)
         }
-        persist(snapshot)
     }
 
     private func persist(_ records: [String: PendingUpload]) {
@@ -221,9 +213,7 @@ public final class BackgroundUploads: NSObject, Sendable, URLSessionDataDelegate
         if let body = record.temporaryBody { try? FileManager.default.removeItem(atPath: body) }
     }
 
-    /// Deletes staged files that no pending upload references, such as leftovers from a crash mid-prepare.
-    /// Matches by file name: staged files have unique names, and the same folder can be reported
-    /// through different paths (`/var` and `/private/var`).
+    /// Matches by file name: the same folder can be reported as `/var` and `/private/var`.
     public func removeOrphanedFiles(olderThan: TimeInterval = 10 * 60) {
         let referenced = state.withLock { state in
             Set(state.records.values.flatMap { [$0.sourceFile, $0.temporaryBody].compactMap { $0 } }.map { URL(fileURLWithPath: $0).lastPathComponent })
