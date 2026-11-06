@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { beginRequest } from "./lib/lifecycle";
+import { urlPolicyMiddleware } from "./lib/url-policy";
 import audio from "./routes/audio";
 import health from "./routes/health";
 import liveTranscribe from "./routes/live-transcribe";
@@ -18,6 +19,8 @@ app.use("*", async (c, next) => {
 		end();
 	}
 });
+app.use("/audio/*", urlPolicyMiddleware);
+app.use("/video/*", urlPolicyMiddleware);
 
 app.route("/health", health);
 app.route("/audio", audio);

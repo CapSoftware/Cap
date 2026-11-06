@@ -109,6 +109,7 @@ import {
 import { getRuntimeReport } from "../lib/runtime-report";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
+import { blockedUrlPayload, fetchAllowed } from "../lib/url-policy";
 import {
 	getActiveDirectVideoProcessCount,
 	getMaxConcurrentDirectVideoProcesses,
@@ -553,6 +554,9 @@ video.post("/probe", async (c) => {
 	} catch (err) {
 		console.error("[video/probe] Error:", err);
 
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
+
 		if (isBusyError(err)) {
 			return c.json(
 				{
@@ -632,6 +636,9 @@ video.post("/thumbnail", async (c) => {
 		});
 	} catch (err) {
 		console.error("[video/thumbnail] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(
@@ -776,6 +783,9 @@ video.post("/convert", async (c) => {
 			...getVideoCapacitySnapshot(),
 		});
 		console.error("[video/convert] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
@@ -2902,7 +2912,7 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetch(url, { signal: budget });
+					const response = await fetchAllowed(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;

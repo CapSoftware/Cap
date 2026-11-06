@@ -10,6 +10,7 @@ import {
 	releaseInstanceDir,
 	sweepOrphanedInstanceDirs,
 } from "./temp-files";
+import { fetchAllowed } from "./url-policy";
 
 const targetSchema = z.object({
 	version: z.literal(1),
@@ -175,6 +176,15 @@ export async function withMediaTransfers<T>(
 			});
 		}
 	});
+}
+
+export function consumeMediaTransferBytes(bytes: number): void {
+	const context = transfers.getStore();
+	if (!context) return;
+	context.controller.signal.throwIfAborted();
+	if (context.bytes + context.reserved + bytes > context.limit)
+		throw new MediaTransferBudgetError();
+	context.bytes += bytes;
 }
 
 export async function getMediaDownloadTarget(
@@ -489,7 +499,7 @@ export async function fetchMedia(
 		init.signal ?? undefined,
 		headers.get("if-match") ?? undefined,
 	);
-	if (!local) return fetch(input, init);
+	if (!local) return fetchAllowed(input, init);
 	const range = headers.get("range");
 	const match = range?.match(/^bytes=(\d+)-(\d*)$/);
 	const start = match ? Number(match[1]) : 0;

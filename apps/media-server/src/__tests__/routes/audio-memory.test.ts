@@ -1,9 +1,27 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	test,
+} from "bun:test";
 import { join } from "node:path";
 import { getActiveProcessCount } from "../../lib/media-audio";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
-const TEST_VIDEO_WITH_AUDIO = `file://${join(FIXTURES_DIR, "test-with-audio.mp4")}`;
+// The routes only accept http(s) URLs, so serve the fixture locally.
+const fixtureServer = Bun.serve({
+	port: 0,
+	fetch: () =>
+		new Response(Bun.file(join(FIXTURES_DIR, "test-with-audio.mp4"))),
+});
+const TEST_VIDEO_WITH_AUDIO = `${fixtureServer.url}test-with-audio.mp4`;
+
+afterAll(() => {
+	fixtureServer.stop(true);
+});
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
 	"Content-Type": "application/json",

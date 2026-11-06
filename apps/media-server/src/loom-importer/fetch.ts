@@ -1,4 +1,5 @@
 import { open, rename, rm } from "node:fs/promises";
+import { fetchAllowed } from "../lib/url-policy";
 
 export class LoomSourceRejectedError extends Error {}
 
@@ -77,7 +78,23 @@ export function createAllowedFetch(allowedHosts: string[]): typeof fetch {
 					? input.href
 					: input;
 		assertAllowedSourceUrl(url, allowedHosts);
-		return fetch(input, { ...init, redirect: "error" });
+		if (!(input instanceof Request))
+			return fetchAllowed(url, { ...init, redirect: "error" });
+		const request = new Request(input, init);
+		return fetchAllowed(url, {
+			method: request.method,
+			headers: request.headers,
+			body: request.body,
+			signal: request.signal,
+			cache: request.cache,
+			credentials: request.credentials,
+			integrity: request.integrity,
+			keepalive: request.keepalive,
+			mode: request.mode,
+			referrer: request.referrer,
+			referrerPolicy: request.referrerPolicy,
+			redirect: "error",
+		});
 	};
 	return Object.assign(allowedFetch, { preconnect: fetch.preconnect });
 }
