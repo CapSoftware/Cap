@@ -35,7 +35,7 @@ PY
 
 cd "$zed_dir"
 messages="$out_dir/cargo-messages.json"
-cargo +1.95.0 bench -p gpui_cap_benches --bench frame --no-run --message-format json > "$messages"
+cargo "+${GPUI_BENCH_TOOLCHAIN:-1.95.0}" bench -p gpui_cap_benches --bench frame --no-run --message-format json > "$messages"
 executable="$("$python_bin" - "$messages" <<'PY'
 import json, sys
 found = None
