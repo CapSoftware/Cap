@@ -224,8 +224,7 @@ impl Muxer for WindowsMuxer {
                             Ok(guard) => guard,
                             Err(poisoned) => {
                                 return Err(anyhow!(
-                                    "ScreenSoftwareEncoder: failed to lock output mutex: {}",
-                                    poisoned
+                                    "ScreenSoftwareEncoder: failed to lock output mutex: {poisoned}"
                                 ));
                             }
                         };
@@ -409,7 +408,7 @@ impl Muxer for WindowsMuxer {
                                     );
                                     encoder_preferences.force_software_only();
                                 }
-                                Err(anyhow!("Hardware encoder error: {}", e))
+                                Err(anyhow!("Hardware encoder error: {e}"))
                             }
                         }
                     }
@@ -768,8 +767,7 @@ impl Muxer for WindowsCameraMuxer {
                             Ok(guard) => guard,
                             Err(poisoned) => {
                                 return Err(anyhow!(
-                                    "CameraSoftwareEncoder: failed to lock output mutex: {}",
-                                    poisoned
+                                    "CameraSoftwareEncoder: failed to lock output mutex: {poisoned}"
                                 ));
                             }
                         };
@@ -941,7 +939,7 @@ impl Muxer for WindowsCameraMuxer {
                                     );
                                     encoder_preferences.force_software_only();
                                 }
-                                return Err(anyhow!("Camera hardware encoder error: {}", e));
+                                return Err(anyhow!("Camera hardware encoder error: {e}"));
                             }
                         }
 
@@ -1369,7 +1367,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
         cap_camera_windows::PixelFormat::YUV420P => ffmpeg::format::Pixel::YUV420P,
         cap_camera_windows::PixelFormat::YV12 => ffmpeg::format::Pixel::YUV420P,
         cap_camera_windows::PixelFormat::NV21 => ffmpeg::format::Pixel::NV12,
-        other => anyhow::bail!("Unsupported camera pixel format: {:?}", other),
+        other => anyhow::bail!("Unsupported camera pixel format: {other:?}"),
     };
 
     let buffer_guard = frame
@@ -1378,7 +1376,7 @@ pub(crate) fn camera_frame_to_ffmpeg(
         .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
     let lock = buffer_guard
         .lock()
-        .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
+        .map_err(|e| anyhow!("Failed to lock MF buffer: {e:?}"))?;
     let data = &*lock;
     let width = frame.width as usize;
     let height = frame.height as usize;
@@ -1642,7 +1640,7 @@ fn decode_mjpeg_frame(
         .map_err(|_| anyhow!("Failed to lock camera buffer"))?;
     let lock = buffer_guard
         .lock()
-        .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
+        .map_err(|e| anyhow!("Failed to lock MF buffer: {e:?}"))?;
     let data = &*lock;
 
     mjpeg_decoder.decode(data)

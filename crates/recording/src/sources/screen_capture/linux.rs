@@ -1010,10 +1010,7 @@ fn frame_from_pipewire_data(
     let target_stride = frame.stride(0);
     if target_stride < row_bytes {
         bail!(
-            "PipeWire target frame stride was too small: {} for {}x{}",
-            target_stride,
-            crop_width,
-            crop_height
+            "PipeWire target frame stride was too small: {target_stride} for {crop_width}x{crop_height}"
         );
     }
 
