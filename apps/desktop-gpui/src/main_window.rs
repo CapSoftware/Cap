@@ -2134,7 +2134,6 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
-        // `CAP_GPUI_AUTO_DELETE=1`: end with the bar's Delete instead of Stop.
         let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
