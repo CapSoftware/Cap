@@ -12,7 +12,7 @@ import { Tooltip } from "@/components/Tooltip";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: ImageUpload.ImageUrl | null;
-	onChange?: (file: File | null) => void;
+	onChange?: (file: File) => Promise<void>;
 	onRemove?: () => void;
 	disabled?: boolean;
 	isUploading?: boolean;
@@ -43,27 +43,36 @@ export function ProfileImage({
 		}
 	}, [initialPreviewUrl]);
 
-	const handleFileChange = () => {
-		const file = fileInputRef.current?.files?.[0];
-		if (!file) return;
+	useEffect(() => {
+		return () => {
+			if (previewUrl && isLocalPreview) {
+				URL.revokeObjectURL(previewUrl);
+			}
+		};
+	}, [previewUrl, isLocalPreview]);
+
+	const handleFileChange = async () => {
+		const input = fileInputRef.current;
+		const file = input?.files?.[0];
+		if (!input || !file) return;
+		input.value = "";
 		const sizeLimit = 1024 * 1024 * 1;
 		if (file.size > sizeLimit) {
 			toast.error("File size must be 1MB or less");
 			return;
 		}
-		if (previewUrl && isLocalPreview) {
-			URL.revokeObjectURL(previewUrl);
-		}
 		const objectUrl = URL.createObjectURL(file);
 		setPreviewUrl(ImageUpload.ImageUrl.make(objectUrl));
 		setIsLocalPreview(true);
-		onChange?.(file);
+		try {
+			await onChange?.(file);
+		} catch {
+			setPreviewUrl(initialPreviewUrl ?? null);
+			setIsLocalPreview(false);
+		}
 	};
 
 	const handleRemove = () => {
-		if (previewUrl && isLocalPreview) {
-			URL.revokeObjectURL(previewUrl);
-		}
 		setPreviewUrl(null);
 		setIsLocalPreview(false);
 		if (fileInputRef.current) {

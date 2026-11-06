@@ -15,7 +15,7 @@ import {
 } from "@cap/ui";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -159,11 +159,12 @@ export const Settings = () => {
 		uploadProfileImageMutation.isPending ||
 		removeProfileImageMutation.isPending;
 
-	const handleProfileImageChange = (file: File | null) => {
-		if (!file || isProfileImageMutating) {
+	const handleProfileImageChange = async (file: File) => {
+		if (isProfileImageMutating) {
 			return;
 		}
-		uploadProfileImageMutation.mutate(file);
+		const result = await uploadProfileImageMutation.mutateAsync(file);
+		if (Exit.isFailure(result)) throw result.cause;
 	};
 
 	const handleProfileImageRemove = () => {
