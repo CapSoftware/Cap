@@ -1660,6 +1660,7 @@ position = "पोज़िशन"
 
 [screenshot_editor.error]
 encode = "स्क्रीनशॉट एक्सपोर्ट एनकोड नहीं हो सका: {error}"
+load_config = "स्क्रीनशॉट सेटिंग्स लोड नहीं हो सकीं: {error}"
 load_meta = "स्क्रीनशॉट मेटाडेटा लोड नहीं हो सका: {error}"
 load_metadata = "स्क्रीनशॉट मेटाडेटा लोड नहीं हो सका: {error}"
 no_image = "{path} में कोई PNG नहीं मिला"

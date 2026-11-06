@@ -4,7 +4,7 @@ use std::{
     fmt,
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, Weak},
 };
 
@@ -3339,6 +3339,34 @@ impl ProjectConfiguration {
         Ok(config)
     }
 
+    /// [`Self::load`] for an editor, which saves what this returns. A missing
+    /// file is the default. So is one that cannot be read, after it is moved
+    /// to a `project-config.unreadable.json` beside it, so saving does not
+    /// replace the only copy of the edits. When it cannot be moved, this is
+    /// an error rather than a default the editor would save over it.
+    pub fn load_for_editing(project_path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let project_path = project_path.as_ref();
+        let error = match Self::load(project_path) {
+            Ok(config) => return Ok(config),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => error,
+        };
+        let backup = set_aside_unreadable_config(project_path).map_err(|move_error| {
+            std::io::Error::new(
+                move_error.kind(),
+                format!("project-config.json could not be read ({error}) or kept ({move_error})"),
+            )
+        })?;
+        tracing::warn!(
+            %error,
+            backup = %backup.display(),
+            "Opening with default settings: project-config.json could not be read"
+        );
+        Ok(Self::default())
+    }
+
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
         self.validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -3368,6 +3396,17 @@ impl ProjectConfiguration {
             .as_ref()
             .map_or(1.0, |timeline| timeline.cursor_visibility_at(output_time))
     }
+}
+
+fn set_aside_unreadable_config(project_path: &Path) -> std::io::Result<PathBuf> {
+    let mut backup = project_path.join("project-config.unreadable.json");
+    let mut copy = 1;
+    while backup.try_exists()? {
+        copy += 1;
+        backup = project_path.join(format!("project-config.unreadable-{copy}.json"));
+    }
+    std::fs::rename(project_path.join("project-config.json"), &backup)?;
+    Ok(backup)
 }
 
 pub const SLOW_SMOOTHING_SAMPLES: usize = 24;

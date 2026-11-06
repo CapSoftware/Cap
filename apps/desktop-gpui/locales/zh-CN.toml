@@ -1660,6 +1660,7 @@ position = "位置"
 
 [screenshot_editor.error]
 encode = "无法编码导出的截图：{error}"
+load_config = "无法加载截图设置：{error}"
 load_meta = "无法加载截图元数据：{error}"
 load_metadata = "无法加载截图元数据：{error}"
 no_image = "在 {path} 中找不到 PNG"
