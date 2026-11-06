@@ -141,6 +141,13 @@ test("the Windows installer ends idle MCP servers but never a CLI recording", ()
 	assert.match(end, /\$\$_\.ExecutablePath -eq \$\$cli/);
 	assert.match(end, /-match '\\smcp\\s\+serve\(\\s\|\$\$\)'/);
 	assert.match(end, /Join-Path \$\$env:CAP_INSTALL_DIR 'cap-cli\.exe'/);
+	const lines = end
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	assert.equal(lines[0], "Push $0");
+	assert.deepEqual(lines.slice(-2), ["Pop $0", "Pop $0"]);
+	assert.equal(lines.filter((line) => line.startsWith("Push ")).length, 1);
 });
 
 test("platform resources point at the shared native dependencies", () => {

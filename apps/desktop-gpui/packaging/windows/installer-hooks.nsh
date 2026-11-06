@@ -8,10 +8,13 @@ SetCompressorDictSize 128
 ; error. The server holds no state, so it is ended. Any other cap-cli.exe, such
 ; as a detached recording worker, is left alone so its recording is never cut
 ; short. The install directory goes through the environment so no quoting can
-; break the command.
+; break the command. The caller's $0 is saved and restored around the exit code
+; nsExec pushes.
 !macro EndCapMcpServers
+  Push $0
   System::Call 'kernel32::SetEnvironmentVariable(t "CAP_INSTALL_DIR", t "$INSTDIR")i'
   nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$cli = Join-Path $$env:CAP_INSTALL_DIR 'cap-cli.exe'; Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'cap-cli.exe' -and $$_.ExecutablePath -eq $$cli -and $$_.CommandLine -match '\smcp\s+serve(\s|$$)' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue; Wait-Process -Id $$_.ProcessId -Timeout 5 -ErrorAction SilentlyContinue }"`
+  Pop $0
   Pop $0
 !macroend
 
