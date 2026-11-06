@@ -287,6 +287,11 @@ async function deleteCapDatabase(
 
 	const videoId = Video.VideoId.make(payload.snapshot.id);
 	await db().transaction(async (tx) => {
+		await tx
+			.select({ id: Db.videos.id })
+			.from(Db.videos)
+			.where(eq(Db.videos.id, videoId))
+			.for("update");
 		await tx.delete(Db.comments).where(eq(Db.comments.videoId, videoId));
 		await tx
 			.delete(Db.notifications)

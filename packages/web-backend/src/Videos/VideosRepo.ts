@@ -112,15 +112,13 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 					await db
 						.delete(Db.videoProcessingJobs)
 						.where(Dz.eq(Db.videoProcessingJobs.videoId, id));
-					if (ownerId) {
-						const [video] = await db
-							.select({ ownerId: Db.videos.ownerId })
-							.from(Db.videos)
-							.where(Dz.eq(Db.videos.id, id))
-							.for("update");
-						if (!video || video.ownerId !== ownerId) {
-							throw new Error("Video owner changed during deletion");
-						}
+					const [video] = await db
+						.select({ ownerId: Db.videos.ownerId })
+						.from(Db.videos)
+						.where(Dz.eq(Db.videos.id, id))
+						.for("update");
+					if (ownerId && (!video || video.ownerId !== ownerId)) {
+						throw new Error("Video owner changed during deletion");
 					}
 					await Promise.all([
 						db
@@ -128,6 +126,10 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							.where(Dz.eq(Db.sharedVideos.videoId, id)),
 						db.delete(Db.spaceVideos).where(Dz.eq(Db.spaceVideos.videoId, id)),
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
+						db.delete(Db.comments).where(Dz.eq(Db.comments.videoId, id)),
+						db
+							.delete(Db.notifications)
+							.where(Dz.eq(Db.notifications.videoId, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
 							.delete(Db.videoUploads)
