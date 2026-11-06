@@ -120,7 +120,7 @@ test("the Windows installer compresses with a window large enough to span both b
 	);
 });
 
-test("the Windows installer ends every bundled binary that loads the shared DLLs", () => {
+test("the Windows installer ends idle MCP servers but never a CLI recording", () => {
 	const hooks = readFileSync(
 		path.join(gpuiDirectory, gpuiConfig.bundle.windows.nsis.installerHooks),
 		"utf8",
@@ -129,20 +129,18 @@ test("the Windows installer ends every bundled binary that loads the shared DLLs
 		hooks.match(
 			new RegExp(`!macro ${name}\\r?\\n([\\s\\S]*?)!macroend`),
 		)?.[1] ?? "";
-	const checked = (name) =>
-		[...macro(name).matchAll(/CheckIfAppIsRunning "([^"]+)"/g)].map(
-			(match) => match[1],
-		);
-	assert.deepEqual(checked("NSIS_HOOK_PREINSTALL"), [
-		"cap-gpui.exe",
-		"cap-cli.exe",
-	]);
-	assert.deepEqual(checked("NSIS_HOOK_PREUNINSTALL"), ["cap-cli.exe"]);
-	assert.ok(
-		gpuiConfig.bundle.externalBin.some(
-			(binary) => path.basename(binary) === "cap-cli",
-		),
+	for (const hook of ["NSIS_HOOK_PREINSTALL", "NSIS_HOOK_PREUNINSTALL"]) {
+		assert.match(macro(hook), /!insertmacro EndCapMcpServers/, hook);
+	}
+	assert.match(
+		macro("NSIS_HOOK_PREINSTALL"),
+		/CheckIfAppIsRunning "cap-gpui\.exe"/,
 	);
+	assert.doesNotMatch(hooks, /CheckIfAppIsRunning "cap-cli\.exe"/);
+	const end = macro("EndCapMcpServers");
+	assert.match(end, /\$\$_\.ExecutablePath -eq \$\$cli/);
+	assert.match(end, /-match '\\smcp\\s\+serve\(\\s\|\$\$\)'/);
+	assert.match(end, /Join-Path \$\$env:CAP_INSTALL_DIR 'cap-cli\.exe'/);
 });
 
 test("platform resources point at the shared native dependencies", () => {
