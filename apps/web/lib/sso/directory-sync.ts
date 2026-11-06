@@ -584,8 +584,10 @@ export async function syncOrganizationDirectory(
 				leaseExpiresAt: null,
 				lastError: null,
 				heldRemovals: result.held,
-				...(result.removed > 0 || result.held === 0
-					? { removalsApprovedAt: null }
+				...(state?.removalsApprovedAt
+					? {
+							removalsApprovedAt: sql`CASE WHEN ${organizationDirectorySync.removalsApprovedAt} = ${sql.param(state.removalsApprovedAt, organizationDirectorySync.removalsApprovedAt)} THEN NULL ELSE ${organizationDirectorySync.removalsApprovedAt} END`,
+						}
 					: {}),
 			})
 			.where(eq(organizationDirectorySync.organizationId, organizationId));
