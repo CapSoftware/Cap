@@ -15,6 +15,7 @@
 //!
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{LazyLock, Mutex},
     time::Duration,
 };
@@ -127,6 +128,13 @@ fn font_option_label(font: &str) -> SharedString {
         "System Serif" => tr::editor::tabs::font::system_serif().into(),
         "System Monospace" => tr::editor::tabs::font::system_monospace().into(),
         other => SharedString::from(other.to_string()),
+    }
+}
+
+fn caption_font_label(settings: &CaptionSettings) -> SharedString {
+    match settings.custom_font.as_deref().and_then(Path::file_stem) {
+        Some(name) => name.to_string_lossy().into_owned().into(),
+        None => font_option_label(&settings.font),
     }
 }
 
@@ -877,7 +885,16 @@ impl EditorWindow {
                 .collect(),
             SidebarMenu::CaptionFont => FONT_OPTIONS
                 .iter()
-                .map(|font| ui::MenuItem::new(font_option_label(font), *font == captions.font))
+                .map(|font| {
+                    ui::MenuItem::new(
+                        font_option_label(font),
+                        captions.custom_font.is_none() && *font == captions.font,
+                    )
+                })
+                .chain([ui::MenuItem::new(
+                    tr::editor::tabs::captions::load_font(),
+                    false,
+                )])
                 .collect(),
             SidebarMenu::CaptionHighlightStyle => CAPTION_HIGHLIGHT_STYLES
                 .iter()
@@ -1086,12 +1103,17 @@ impl EditorWindow {
                 }
             }
             SidebarMenu::CaptionFont => {
+                if index == FONT_OPTIONS.len() {
+                    self.pick_caption_font(window, cx);
+                    return;
+                }
                 let Some(font) = FONT_OPTIONS.get(index) else {
                     return;
                 };
                 let font = font.to_string();
                 self.set_caption_setting("caption-font", window, cx, move |settings| {
-                    settings.font = font
+                    settings.font = font;
+                    settings.custom_font = None;
                 });
             }
             SidebarMenu::CaptionHighlightStyle => {
@@ -2766,7 +2788,7 @@ impl EditorWindow {
                 tr::editor::tabs::captions::language::auto(),
                 |(_, label)| label(),
             );
-        let font_label = font_option_label(&settings.font);
+        let font_label = caption_font_label(&settings);
         let position_label = CAPTION_POSITIONS
             .iter()
             .find(|(value, _)| *value == settings.position)
@@ -3492,6 +3514,29 @@ impl EditorWindow {
                     })),
             )
             .into_any_element()
+    }
+
+    fn pick_caption_font(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let filters = [(
+                tr::editor::tabs::captions::font_filter(),
+                &["ttf", "otf"][..],
+            )];
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(&filters, None, cx).await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::import::pick_import_file(&filters, cx).await;
+            let Some(source) = source else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.set_caption_setting("caption-font", window, cx, move |settings| {
+                    settings.custom_font = Some(source)
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn apply_caption_preset(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -4299,6 +4344,23 @@ mod tests {
         for (style, ..) in CURSOR_STYLES {
             assert!(style.preset().is_some(), "{style:?} has no preset");
         }
+    }
+
+    #[test]
+    fn caption_font_label_names_the_loaded_file_over_the_system_font() {
+        let system = CaptionSettings {
+            font: "System Serif".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            caption_font_label(&system),
+            SharedString::from(tr::editor::tabs::font::system_serif())
+        );
+        let custom = CaptionSettings {
+            custom_font: Some("/fonts/Brand Sans Bold.otf".into()),
+            ..system
+        };
+        assert_eq!(caption_font_label(&custom), "Brand Sans Bold");
     }
 
     #[test]

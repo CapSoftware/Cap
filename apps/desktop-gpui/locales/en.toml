@@ -2570,6 +2570,7 @@ download_note = "One time download to your system. All captions are stored local
 downloading = "Downloading {model}... {percent}%"
 fade_duration = "Fade Duration"
 font_family = "Font Family"
+font_filter = { text = "Fonts", context = "File type filter name in the caption font file picker." }
 font_settings = "Font Settings"
 font_weight = "Font Weight"
 generate = "Generate Captions"
@@ -2582,6 +2583,7 @@ horizontal_position = "Horizontal Position"
 intel_unavailable = "Parakeet caption models are unavailable on Intel Macs. Whisper models remain available."
 keep_open = "Keep Cap open while the model downloads. Editor reloads will reconnect automatically."
 language_label = "Language"
+load_font = { text = "Load Font…", context = "Last Font Family menu item; opens a picker for a .ttf or .otf file." }
 model_downloaded = "{model} model downloaded"
 model_label = "Model"
 position = "Position"
