@@ -75,7 +75,7 @@ SAML SSO does **not** enforce SSO-only login or provide SAML single logout. Stan
 
 ## Directory sync (SCIM)
 
-Directory sync is included with the SAML SSO add-on and uses WorkOS Directory Sync. Owners and admins open **Directory sync** under **Settings → Organization → Security & Compliance**, which opens the WorkOS Admin Portal with the `dsync` intent. The organization needs an active SSO entitlement and at least one verified WorkOS domain.
+Directory sync is a separate $200/month add-on on top of SAML SSO and uses WorkOS Directory Sync. An organization is entitled when the owner's or SSO billing customer has an `active` or `past_due` Stripe subscription that contains `STRIPE_SCIM_PRICE_ID` and whose `metadata.organizationId` is that organization. The add-on is sold by the team, so set that metadata when creating the subscription. The organization also needs an active SSO entitlement and at least one verified WorkOS domain. Owners and admins then open **Directory sync** under **Settings → Organization → Security & Compliance**, which opens the WorkOS Admin Portal with the `dsync` intent. Without the add-on, the card shows the price and a contact link, and syncs do nothing.
 
 Cap reconciles state rather than replaying events. A sync reads the WorkOS organization, its directories, and every user of each `active` directory, then compares that list with `directory_users`, the table of directory users Cap has linked to Cap accounts:
 
@@ -85,7 +85,7 @@ Cap reconciles state rather than replaying events. A sync reads the WorkOS organ
 - The directory is the source of truth for linked users. Removing a linked member in Cap is undone at the next sync, so remove them in the directory instead.
 - SSO sign-in does not re-add someone whose only directory links were deprovisioned, even if the IdP still allows them through SAML. Re-assign them in the directory, or invite them in Cap, which lets their next SSO sign-in through.
 - A user still linked through another active directory user stays a member.
-- Directories that are not `active` (disconnected, invalid credentials, deleting) and lapsed SSO billing pause sync. Neither removes anyone.
+- Directories that are not `active` (disconnected, invalid credentials, deleting), lapsed SSO billing, and a lapsed SCIM add-on pause sync. None of them removes anyone.
 - If one sync would remove at least 10 linked members and more than 20% of them, the removals are held and shown in settings. An owner or admin confirms with **Remove N members**. The approval is valid for an hour.
 
 The `POST /api/webhooks/workos` webhook (any `dsync.*` event) and opening the portal only request a sync. The `/api/cron/directory-sync` cron runs every minute, runs requested syncs, and refreshes every tracked organization every 15 minutes. A burst of directory events therefore costs at most one sync per organization per minute, and a missed webhook only delays changes. A lease on `organization_directory_sync` lets only one sync run per organization at a time. A sync that hits its time budget while adding members stops and is resumed by the next cron run. A directory must be readable within one run (roughly 50,000 users). If a run with a full budget cannot read it, the sync records an error and retries after an hour. A run that only had part of the cron budget left resumes on the next run instead, and the cron does not start an organization with less than a minute left. Other failed syncs are retried after two minutes.
