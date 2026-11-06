@@ -324,39 +324,44 @@ export const createS3BucketAccess = Effect.gen(function* () {
 				ifNoneMatch?: string;
 			},
 		) =>
-			wrapS3Promise(
-				provider.getInternal.pipe(
-					Effect.flatMap((client) =>
-						Effect.gen(function* () {
-							let _body: S3.PutObjectCommandInput["Body"];
+			provider.getInternal.pipe(
+				Effect.flatMap((client) =>
+					Effect.gen(function* () {
+						let _body: S3.PutObjectCommandInput["Body"];
 
-							if (typeof body === "string" || body instanceof Uint8Array) {
-								_body = body;
-							} else if (body instanceof ArrayBuffer) {
-								_body = new Uint8Array(body);
-							} else {
-								_body = body.pipe(
-									Stream.toReadableStreamRuntime(yield* Effect.runtime()),
-									(s) =>
-										Readable.fromWeb(s as unknown as NodeReadableWebStream),
-								);
-							}
-
-							return client.send(
-								new S3.PutObjectCommand({
-									Bucket: provider.bucket,
-									Key: key,
-									Body: _body,
-									ContentType: fields?.contentType,
-									ContentLength: fields?.contentLength,
-									IfMatch: fields?.ifMatch,
-									IfNoneMatch: fields?.ifNoneMatch,
-								}),
+						if (typeof body === "string" || body instanceof Uint8Array) {
+							_body = body;
+						} else if (body instanceof ArrayBuffer) {
+							_body = new Uint8Array(body);
+						} else {
+							_body = body.pipe(
+								Stream.toReadableStreamRuntime(yield* Effect.runtime()),
+								(s) =>
+									Readable.fromWeb(s as unknown as NodeReadableWebStream),
 							);
-						}),
-					),
+						}
+
+						return yield* Effect.tryPromise({
+							try: (signal) =>
+								client.send(
+									new S3.PutObjectCommand({
+										Bucket: provider.bucket,
+										Key: key,
+										Body: _body,
+										ContentType: fields?.contentType,
+										ContentLength: fields?.contentLength,
+										IfMatch: fields?.ifMatch,
+										IfNoneMatch: fields?.ifNoneMatch,
+									}),
+									{ abortSignal: signal },
+								),
+							catch: (cause) => new S3Error({ cause }),
+						}).pipe(Effect.tapError(Effect.logError));
+					}),
 				),
-			).pipe(
+				Effect.catchTag("UnknownException", (cause) =>
+					Effect.fail(new S3Error({ cause })),
+				),
 				Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
 			),
 		/** Copy an object within the same bucket */

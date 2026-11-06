@@ -865,11 +865,12 @@ const makeGoogleDriveAccess = ({
 			const uploadBody =
 				body instanceof Uint8Array ? new Uint8Array(body).buffer : body;
 			const response = yield* Effect.tryPromise({
-				try: () =>
+				try: (signal) =>
 					fetch(uploadUrl, {
 						method: "PUT",
 						headers: getGoogleDriveUploadHeaders(contentType, contentLength),
 						body: uploadBody,
+						signal,
 					}),
 				catch: (cause) => new StorageDomain.StorageError({ cause }),
 			});

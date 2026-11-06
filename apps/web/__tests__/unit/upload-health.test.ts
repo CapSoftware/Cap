@@ -117,6 +117,43 @@ describe("storage effect execution", () => {
 		).rejects.toThrow("failed");
 		expect(events).toEqual(["write", "delete"]);
 	});
+
+	it("aborts in-flight promise writes before running cleanup on timeout", async () => {
+		vi.useFakeTimers();
+		try {
+			const events: string[] = [];
+			const promise = Effect.runPromise(
+				checkUploadStorage({
+					userId: "owner",
+					bytes: new Uint8Array([1]),
+					put: () =>
+						Effect.tryPromise({
+							try: (signal) =>
+								new Promise<void>((_resolve, reject) => {
+									events.push("write");
+									signal.addEventListener("abort", () => {
+										events.push("abort");
+										reject(signal.reason);
+									});
+								}),
+							catch: (cause) =>
+								new TestStorageError({ message: String(cause) }),
+						}),
+					remove: () =>
+						Effect.sync(() => {
+							events.push("delete");
+						}),
+					onCleanupFailure: () => {},
+				}),
+			);
+			const assertion = expect(promise).rejects.toThrow();
+			await vi.advanceTimersByTimeAsync(10_000);
+			await assertion;
+			expect(events).toEqual(["write", "abort", "delete"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 describe("upload probe rate limit", () => {
