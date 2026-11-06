@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	create: vi.fn(),
-	trigger: vi.fn(),
+	initiate: vi.fn(),
+	uploader: vi.fn(),
+	finalize: vi.fn(),
+	cancel: vi.fn(),
+	processingStarted: vi.fn(),
+	CompletionUncertain: class extends Error {},
 	progress: vi.fn(),
 	createImage: vi.fn(),
 	deleteVideo: vi.fn(),
@@ -16,8 +21,17 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/actions/video/create-for-processing", () => ({
 	createVideoForServerProcessing: mocks.create,
 }));
-vi.mock("@/actions/video/trigger-processing", () => ({
-	triggerVideoProcessing: mocks.trigger,
+vi.mock("@cap/recorder-core/instant-mp4-uploader", () => ({
+	initiateMultipartUpload: mocks.initiate,
+	MultipartCompletionUncertainError: mocks.CompletionUncertain,
+	InstantRecordingUploader: class {
+		constructor(options: unknown) {
+			mocks.uploader(options);
+		}
+		finalize = mocks.finalize;
+		cancel = mocks.cancel;
+		getProcessingStarted = mocks.processingStarted;
+	},
 }));
 vi.mock("@/actions/video/upload", () => ({
 	createVideoAndGetUploadUrl: mocks.createImage,
@@ -82,6 +96,7 @@ const total = 8 * 1024 ** 3;
 
 describe("dashboard video import progress", () => {
 	beforeEach(() => {
+		vi.clearAllMocks();
 		vi.useFakeTimers();
 		vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest);
 		MockXMLHttpRequest.current = undefined;
@@ -96,7 +111,13 @@ describe("dashboard video import progress", () => {
 			},
 		});
 		mocks.progress.mockResolvedValue(undefined);
-		mocks.trigger.mockResolvedValue({ success: true });
+		mocks.initiate.mockResolvedValue({
+			uploadId: "upload-123",
+			provider: "s3",
+		});
+		mocks.finalize.mockResolvedValue(undefined);
+		mocks.cancel.mockResolvedValue(undefined);
+		mocks.processingStarted.mockReturnValue(true);
 	});
 
 	afterEach(() => {
@@ -109,44 +130,45 @@ describe("dashboard video import progress", () => {
 		async (outcome) => {
 			const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 			Object.defineProperty(file, "size", { value: total });
+			let finishUpload: (error?: Error) => void = () => {};
+			mocks.finalize.mockReturnValue(
+				new Promise<void>((resolve, reject) => {
+					finishUpload = (error) => (error ? reject(error) : resolve());
+				}),
+			);
 			const importing = importMediaFile({
 				file,
 				orgId: Organisation.OrganisationId.make("org-123"),
 				setUploadStatus: vi.fn(),
 			});
-			const request = await vi.waitFor(() => {
-				if (!MockXMLHttpRequest.current) throw new Error("Upload not started");
-				return MockXMLHttpRequest.current;
+			const uploader = await vi.waitFor(() => {
+				const options = mocks.uploader.mock.lastCall?.[0];
+				if (!options) throw new Error("Upload not started");
+				return options;
 			});
 
-			request.progress(total / 16, total);
+			uploader.sendProgressUpdate(total / 16, total);
 			for (let tick = 1; tick <= 8; tick++) {
 				await vi.advanceTimersByTimeAsync(500);
-				request.progress(((tick + 1) * total) / 16, total);
+				uploader.sendProgressUpdate(((tick + 1) * total) / 16, total);
 			}
 
 			expect(mocks.progress.mock.calls).toEqual([
 				[videoId, total / 4, total],
 				[videoId, total / 2, total],
 			]);
-			expect(mocks.trigger).not.toHaveBeenCalled();
 
 			if (outcome === "success") {
-				request.progress(total, total);
+				uploader.sendProgressUpdate(total, total);
 				await vi.advanceTimersByTimeAsync(2000);
 				expect(mocks.progress).toHaveBeenCalledTimes(2);
-				expect(mocks.trigger).not.toHaveBeenCalled();
-				request.status = 200;
-				request.onload?.();
+				finishUpload();
 			} else {
 				vi.spyOn(console, "error").mockImplementation(() => {});
-				request.onerror?.();
+				finishUpload(new Error("network error"));
 			}
 
 			expect(await importing).toBe(outcome === "success");
-			expect(mocks.trigger).toHaveBeenCalledTimes(
-				outcome === "success" ? 1 : 0,
-			);
 			if (outcome === "success") {
 				expect(mocks.progress).toHaveBeenLastCalledWith(videoId, total, total);
 			}
@@ -156,6 +178,31 @@ describe("dashboard video import progress", () => {
 			expect(vi.getTimerCount()).toBe(0);
 		},
 	);
+
+	it("sends the video as a multipart upload of the raw upload key", async () => {
+		const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+		Object.defineProperty(file, "size", { value: total });
+
+		expect(
+			await importMediaFile({
+				file,
+				orgId: Organisation.OrganisationId.make("org-123"),
+				setUploadStatus: vi.fn(),
+			}),
+		).toBe(true);
+
+		expect(mocks.initiate).toHaveBeenCalledExactlyOnceWith({
+			videoId,
+			contentType: "video/mp4",
+			subpath: "raw-upload.mp4",
+		});
+		expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({
+			finalBlob: file,
+			durationSeconds: 60,
+			subpath: "raw-upload.mp4",
+		});
+		expect(MockXMLHttpRequest.current).toBeUndefined();
+	});
 
 	describe("failed uploads", () => {
 		const startImport = async (file: File) => {
@@ -175,6 +222,12 @@ describe("dashboard video import progress", () => {
 			Object.defineProperty(file, "size", { value: total });
 			return file;
 		};
+		const importVideo = () =>
+			importMediaFile({
+				file: videoFile(),
+				orgId: Organisation.OrganisationId.make("org-123"),
+				setUploadStatus: vi.fn(),
+			});
 		const imageFile = () =>
 			new File(["image"], "shot.png", { type: "image/png" });
 
@@ -189,7 +242,6 @@ describe("dashboard video import progress", () => {
 				);
 			mocks.toastError.mockReset();
 			mocks.toastSuccess.mockReset();
-			mocks.trigger.mockReset().mockResolvedValue({ success: true });
 			mocks.createImage.mockResolvedValue({
 				id: videoId,
 				uploadTarget: {
@@ -201,16 +253,22 @@ describe("dashboard video import progress", () => {
 		});
 
 		it("deletes the Cap when a video upload stops partway", async () => {
-			const { importing, request } = await startImport(videoFile());
-			request.progress(total / 2, total);
-			request.onerror?.();
+			mocks.finalize.mockRejectedValue(new Error("Failed to upload part 3"));
 
-			expect(await importing).toBe(false);
+			expect(await importVideo()).toBe(false);
+			expect(mocks.cancel).toHaveBeenCalledOnce();
 			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
-			expect(mocks.trigger).not.toHaveBeenCalled();
 			expect(mocks.toastError).toHaveBeenCalledWith(
 				"Failed to upload video. Please try again.",
 			);
+		});
+
+		it("deletes the Cap when the video upload cannot start", async () => {
+			mocks.initiate.mockRejectedValue(new Error("initiate failed"));
+
+			expect(await importVideo()).toBe(false);
+			expect(mocks.finalize).not.toHaveBeenCalled();
+			expect(mocks.deleteVideo).toHaveBeenCalledExactlyOnceWith(videoId);
 		});
 
 		it("deletes the Cap when an image upload stops partway", async () => {
@@ -291,33 +349,26 @@ describe("dashboard video import progress", () => {
 
 		it("still reports the upload failure when the delete fails", async () => {
 			mocks.deleteVideo.mockRejectedValue(new Error("delete failed"));
-			const { importing, request } = await startImport(videoFile());
-			request.onerror?.();
+			mocks.finalize.mockRejectedValue(new Error("network error"));
 
-			expect(await importing).toBe(false);
+			expect(await importVideo()).toBe(false);
 			expect(mocks.toastError).toHaveBeenCalledWith(
 				"Failed to upload video. Please try again.",
 			);
 		});
 
-		it("keeps the Cap when every byte was sent before the request failed", async () => {
-			const { importing, request } = await startImport(videoFile());
-			request.progress(total, total);
-			request.onerror?.();
+		it("keeps the Cap when every part may have landed before the request failed", async () => {
+			mocks.finalize.mockRejectedValue(new mocks.CompletionUncertain());
 
-			expect(await importing).toBe(true);
-			expect(mocks.trigger).toHaveBeenCalledTimes(1);
+			expect(await importVideo()).toBe(false);
+			expect(mocks.cancel).not.toHaveBeenCalled();
 			expect(mocks.deleteVideo).not.toHaveBeenCalled();
 		});
 
 		it("keeps the uploaded Cap when processing fails to start", async () => {
-			mocks.trigger.mockRejectedValue(new Error("workflow unavailable"));
-			const { importing, request } = await startImport(videoFile());
-			request.status = 200;
-			request.progress(total, total);
-			request.onload?.();
+			mocks.processingStarted.mockReturnValue(false);
 
-			expect(await importing).toBe(false);
+			expect(await importVideo()).toBe(false);
 			expect(mocks.deleteVideo).not.toHaveBeenCalled();
 			expect(mocks.toastError).toHaveBeenCalledWith(
 				"Failed to start video processing. Please try again.",
