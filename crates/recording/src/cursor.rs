@@ -16,6 +16,12 @@ use std::{
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+/// Maximum in-memory cursor move events buffered before incremental disk flush.
+/// Prevents unbounded Vec growth (5GB+ RSS on 2min+ high-DPI recordings).
+const MAX_IN_MEMORY_CURSOR_MOVES: usize = 4_096;
+/// Minimum Euclidean distance (in normalized coordinates) required to record a redundant cursor move.
+const MIN_CURSOR_MOVE_DELTA_SQ: f64 = 1e-7;
+
 #[derive(Clone)]
 pub struct Cursor {
     pub file_name: String,
@@ -33,6 +39,23 @@ pub struct CursorActorResponse {
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
     pub keyboard_presses: Vec<KeyPressEvent>,
+}
+
+impl CursorActorResponse {
+    #[inline]
+    pub fn push_move_deduped(&mut self, ev: CursorMoveEvent) {
+        if let Some(last) = self.moves.last() {
+            let dx = ev.x - last.x;
+            let dy = ev.y - last.y;
+            if last.cursor_id == ev.cursor_id && (dx * dx + dy * dy) < MIN_CURSOR_MOVE_DELTA_SQ {
+                return;
+            }
+        }
+        if self.moves.len() >= MAX_IN_MEMORY_CURSOR_MOVES && self.moves.capacity() > MAX_IN_MEMORY_CURSOR_MOVES * 2 {
+            self.moves.shrink_to(MAX_IN_MEMORY_CURSOR_MOVES);
+        }
+        self.moves.push(ev);
+    }
 }
 
 pub struct CursorActor {
