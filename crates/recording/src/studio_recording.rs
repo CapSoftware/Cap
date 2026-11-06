@@ -2755,8 +2755,6 @@ fn snap_nearby_start_time(
     }
 }
 
-/// What a recording settled when it started, for the metadata written when it
-/// stops.
 #[derive(Default)]
 struct RecordingStartDetails<'a> {
     display_notch: Option<cap_project::DisplayNotch>,

@@ -2880,8 +2880,6 @@ fn create_project_dir(
     Ok(base.join(filename))
 }
 
-/// The name the library, editor and exports show: the bundle's file name,
-/// which the project name template produced.
 fn project_pretty_name(project_path: &std::path::Path) -> String {
     project_path
         .file_stem()
