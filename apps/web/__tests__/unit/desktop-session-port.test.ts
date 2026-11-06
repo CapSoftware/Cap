@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "@/utils/zod-validator";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
