@@ -257,9 +257,16 @@ export async function provisionSsoMembership(
 				directoryLinks.length > 0 &&
 				!directoryLinks.some((link) => link.active)
 			) {
-				throw new Error(
-					"Your directory no longer grants access to this organization.",
-				);
+				const [invite] = await tx
+					.select({ id: organizationInvites.id })
+					.from(organizationInvites)
+					.where(pendingInvites)
+					.limit(1);
+				if (!invite) {
+					throw new Error(
+						"Your directory no longer grants access to this organization.",
+					);
+				}
 			}
 			const [adminInvite] = await tx
 				.select({ id: organizationInvites.id })
