@@ -740,8 +740,7 @@ pub(crate) fn wait_for_blocking_thread_finish(
         if start.elapsed() > timeout {
             drop(spawn_blocking_thread_timeout_cleanup(handle, label));
             return BlockingThreadFinish::TimedOut(anyhow!(
-                "{label} did not finish within {:?}",
-                timeout
+                "{label} did not finish within {timeout:?}"
             ));
         }
 
@@ -3695,8 +3694,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         Ok(d) => d,
                         Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
                             return Err(anyhow!(
-                                "Video stream timestamp anomaly: {} consecutive anomalies exceeded threshold",
-                                count
+                                "Video stream timestamp anomaly: {count} consecutive anomalies exceeded threshold"
                             ));
                         }
                     };

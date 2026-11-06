@@ -564,15 +564,15 @@ fn create_d3d_capturer(
         // skips minimized windows, so a target minimized between selection
         // and capture setup would fail to start despite still existing.
         Some(window_id) => Window::from_id_direct(window_id)
-            .ok_or_else(|| anyhow!("Window not found for ID: {:?}", window_id))?
+            .ok_or_else(|| anyhow!("Window not found for ID: {window_id:?}"))?
             .raw_handle()
             .try_as_capture_item()
-            .map_err(|e| anyhow!("Failed to create window GraphicsCaptureItem: {}", e))?,
+            .map_err(|e| anyhow!("Failed to create window GraphicsCaptureItem: {e}"))?,
         None => Display::from_id(params.display_id)
             .ok_or_else(|| anyhow!("Display not found for ID: {:?}", params.display_id))?
             .raw_handle()
             .try_as_capture_item()
-            .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {}", e))?,
+            .map_err(|e| anyhow!("Failed to create GraphicsCaptureItem: {e}"))?,
     };
 
     scap_direct3d::Capturer::new(
