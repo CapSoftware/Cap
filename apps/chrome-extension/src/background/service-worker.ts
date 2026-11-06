@@ -4,6 +4,7 @@ import {
 	fetchBootstrap,
 	parseAuthResponse,
 	revokeAuth,
+	SESSION_EXPIRED_MESSAGE,
 } from "../shared/api";
 import {
 	isRecordingStatusBroadcast,
@@ -1135,6 +1136,25 @@ const requireBootstrapGeneration = (generation: number) => {
 	}
 };
 
+// Sign-in and sign-out on a rejected key both read and write the stored key
+// across awaits, so they run one at a time.
+let authWrites: Promise<void> = Promise.resolve();
+const serializeAuthWrite = (write: () => Promise<void>) => {
+	const next = authWrites.then(write, write);
+	authWrites = next.catch(() => undefined);
+	return next;
+};
+
+const signOutIfAuthRejected = (authApiKey: string) =>
+	serializeAuthWrite(async () => {
+		const current = await loadAuth().catch(() => null);
+		if (current?.authApiKey !== authApiKey) return;
+		// Saved first so a popup reacting to the cleared key can read it.
+		await saveAuthError(SESSION_EXPIRED_MESSAGE);
+		await clearAuth();
+		await resetBootstrapCache();
+	});
+
 const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 	if (bootstrapRefreshInFlight) return bootstrapRefreshInFlight;
 	const generation = bootstrapGeneration;
@@ -1145,6 +1165,12 @@ const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 			await saveCachedBootstrap(bootstrap);
 			requireBootstrapGeneration(generation);
 			return bootstrap;
+		})
+		.catch(async (error: unknown) => {
+			if (error instanceof ApiRequestError && error.status === 401) {
+				await signOutIfAuthRejected(auth.authApiKey);
+			}
+			throw error;
 		})
 		.finally(() => {
 			if (bootstrapRefreshInFlight === refresh) {
@@ -1715,8 +1741,10 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
-			await saveAuth(auth);
-			await resetBootstrapCache();
+			await serializeAuthWrite(async () => {
+				await saveAuth(auth);
+				await resetBootstrapCache();
+			});
 			void refreshBootstrap(settings, auth).catch(() => undefined);
 		})
 		.catch(async (error: unknown) => {
@@ -2117,6 +2145,11 @@ const handleRequest = async (
 
 	if (message.type === "confirm-result") {
 		resolveRecordingConfirmation(message.requestId, message.confirmed);
+		return { ok: true };
+	}
+
+	if (message.type === "auth-rejected") {
+		await signOutIfAuthRejected(message.authApiKey);
 		return { ok: true };
 	}
 

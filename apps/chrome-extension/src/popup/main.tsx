@@ -10,9 +10,11 @@ import {
 } from "../shared/preferences";
 import { sendServiceWorkerMessage } from "../shared/runtime";
 import {
+	AUTH_KEY,
 	defaultSettings,
 	FAILED_RECORDINGS_KEY,
 	loadAuth,
+	loadAuthError,
 	loadCachedBootstrap,
 	loadFailedRecordings,
 	loadMediaAccessState,
@@ -350,6 +352,15 @@ function App() {
 			areaName: string,
 		) => {
 			if (areaName !== "local") return;
+			if (changes[AUTH_KEY] && changes[AUTH_KEY].newValue === undefined) {
+				setAuth(null);
+				setBootstrap(null);
+				void loadAuthError()
+					.then((authError) => {
+						if (authError) setError(authError);
+					})
+					.catch(() => undefined);
+			}
 			if (changes[MEDIA_ACCESS_KEY]) {
 				void loadMediaAccessState()
 					.then(setMediaAccess)
