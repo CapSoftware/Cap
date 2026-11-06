@@ -46,12 +46,38 @@ jobs:
 
       - name: Whole cap-rendering suite with an unloadable bundled DXC (every GPU test on FXC)
         shell: bash
+        env:
+          RUST_BACKTRACE: "0"
         run: |
           cargo test --locked -p cap-rendering --no-run
           printf '' > target/debug/deps/dxcompiler.dll
           printf '' > target/debug/deps/dxil.dll
           ls -la target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
-          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: --skip loadable_bundled_dxc_is_kept 2>&1 | tee fxc-suite.txt
+          set +e
+          cargo test --locked --no-fail-fast -p cap-rendering -- --test-threads=1 --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: --skip loadable_bundled_dxc_is_kept > fxc-suite.txt 2>&1
+          echo "exit=$?"
+          set -e
           echo "----- summary -----"
-          grep -h "test result\|FAILED\|panicked" fxc-suite.txt
+          grep -h "test result\|FAILED\|panicked\|device is lost\|Device lost\|DEVICE_REMOVED\|removed\|Running " fxc-suite.txt | head -200
           grep -h "test result" fxc-suite.txt | awk '{p+=$4; f+=$6} END {print "TOTAL passed", p, "failed", f}'
+
+      - name: Same suite on DXC, single-threaded (baseline)
+        if: always()
+        shell: bash
+        run: |
+          rm -f target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
+          set +e
+          cargo test --locked --no-fail-fast -p cap-rendering -- --test-threads=1 --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model:: > dxc-suite.txt 2>&1
+          echo "exit=$?"
+          set -e
+          echo "----- summary -----"
+          grep -h "test result\|FAILED\|panicked\|device is lost\|Running " dxc-suite.txt | head -200
+          grep -h "test result" dxc-suite.txt | awk '{p+=$4; f+=$6} END {print "TOTAL passed", p, "failed", f}'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: suite-logs
+          path: |
+            fxc-suite.txt
+            dxc-suite.txt
