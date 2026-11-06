@@ -134,19 +134,15 @@ export const Comments = Object.assign(
 				setOptimisticComments(optimisticComment);
 			});
 
-			try {
-				const data = await newComment({
-					content,
-					videoId,
-					authorImage: user.imageUrl,
-					parentCommentId: "" as Comment.CommentId,
-					type: "text",
-					timestamp: currentTime,
-				});
-				handleCommentSuccess(data);
-			} catch (error) {
-				console.error("Error posting comment:", error);
-			}
+			const data = await newComment({
+				content,
+				videoId,
+				authorImage: user.imageUrl,
+				parentCommentId: "" as Comment.CommentId,
+				type: "text",
+				timestamp: currentTime,
+			});
+			handleCommentSuccess(data);
 		};
 
 		const handleReply = useCallback(
@@ -187,29 +183,25 @@ export const Comments = Object.assign(
 					setOptimisticComments(optimisticReply);
 				});
 
-				try {
-					const data = await newComment({
-						content,
-						videoId,
-						parentCommentId: actualParentId,
-						type: "text",
-						timestamp: currentTime,
-						authorImage: user.imageUrl,
+				const data = await newComment({
+					content,
+					videoId,
+					parentCommentId: actualParentId,
+					type: "text",
+					timestamp: currentTime,
+					authorImage: user.imageUrl,
+				});
+
+				handleCommentSuccess(data);
+
+				const newReplyElement = document.getElementById(`comment-${data.id}`);
+				if (newReplyElement) {
+					newReplyElement.scrollIntoView({
+						behavior: "smooth",
+						block: "center",
 					});
-
-					handleCommentSuccess(data);
-
-					const newReplyElement = document.getElementById(`comment-${data.id}`);
-					if (newReplyElement) {
-						newReplyElement.scrollIntoView({
-							behavior: "smooth",
-							block: "center",
-						});
-					}
-					setReplyingTo(null);
-				} catch (error) {
-					console.error("Error posting reply:", error);
 				}
+				setReplyingTo(null);
 			},
 			[
 				user,
@@ -313,7 +305,7 @@ export const Comments = Object.assign(
 			props: PropsWithChildren<{
 				setShowAuthOverlay: (v: boolean) => void;
 				commentInputProps?: {
-					onSubmit?: (content: string) => void;
+					onSubmit?: (content: string) => void | Promise<void>;
 					disabled?: boolean;
 				};
 				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;

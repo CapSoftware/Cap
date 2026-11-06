@@ -427,7 +427,7 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 }
 ```
 
-Credits are debited when the upload completes. Cap bills 5,000 micro-credits per minute using the greater of the submitted duration and a minimum based on the part sizes reported by storage, capped at four hours. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
+Credits are debited when the upload completes. Cap bills 5,000 micro-credits per minute using the greater of the submitted duration and a minimum based on the part sizes reported by storage, capped at four hours. The video's stored `duration` is that billed duration. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
 
 Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }` without charging again. Uploads for deleted videos return `404`. To upload a new file, create a new video.
 
@@ -473,7 +473,7 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes) |
+| `duration` | number \| null | Billed duration in seconds: the submitted duration, or the storage size minimum when that is longer (null until upload completes) |
 | `width` | number \| null | Video width in pixels (null until upload completes) |
 | `height` | number \| null | Video height in pixels (null until upload completes) |
 | `fps` | number \| null | Frames per second (null until upload completes) |
