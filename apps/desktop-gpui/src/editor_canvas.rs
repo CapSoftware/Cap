@@ -365,13 +365,14 @@ fn overlay_nudge_center(rect: NormRect, direction: (f64, f64), shift: bool) -> X
     }
 }
 
-fn overlay_rect_from_center_size(segment: &cap_project::MaskSegment) -> Option<NormRect> {
-    Some(NormRect {
-        x: segment.center.x - segment.size.x / 2.,
-        y: segment.center.y - segment.size.y / 2.,
-        w: segment.size.x,
-        h: segment.size.y,
-    })
+fn mask_rect_at(segment: &cap_project::MaskSegment, time: f64) -> NormRect {
+    let (center, size) = segment.rect_at(time - segment.start);
+    NormRect {
+        x: center.x - size.x / 2.,
+        y: center.y - size.y / 2.,
+        w: size.x,
+        h: size.y,
+    }
 }
 
 /// The whole move mapping, pure, so a scripted drag can be predicted.
@@ -754,12 +755,7 @@ impl EditorWindow {
                 if !(t >= segment.start && t < segment.end) {
                     continue;
                 }
-                rects.push(NormRect {
-                    x: segment.center.x - segment.size.x / 2.,
-                    y: segment.center.y - segment.size.y / 2.,
-                    w: segment.size.x,
-                    h: segment.size.y,
-                });
+                rects.push(mask_rect_at(segment, t));
             }
         }
         if exclude == CanvasSelection::Captions {
@@ -800,7 +796,7 @@ impl EditorWindow {
             | CanvasSelection::Text(_)
             | CanvasSelection::Image(_)
             | CanvasSelection::Captions => true,
-            | CanvasSelection::Shape(_) => true,
+            CanvasSelection::Shape(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -1138,6 +1134,7 @@ impl EditorWindow {
                     "canvas camera drag"
                 ),
                 CanvasSelection::Mask(index) => {
+                    self.rebuild_timeline();
                     tracing::info!(index, "canvas mask drag");
                 }
                 CanvasSelection::Text(index) => {
@@ -1235,6 +1232,9 @@ impl EditorWindow {
                 self.write_overlay_rect(selected, optimistic, cx);
             }
             CanvasSelection::Captions => self.write_caption_center(center, cx),
+        }
+        if matches!(selected, CanvasSelection::Mask(_)) {
+            self.rebuild_timeline();
         }
         self.schedule_save(window, cx);
         true
@@ -1356,9 +1356,10 @@ impl EditorWindow {
                 {
                     return Some(rect);
                 }
-                overlay_rect_from_center_size(
+                Some(mask_rect_at(
                     self.project.timeline.as_ref()?.mask_segments.get(index)?,
-                )
+                    self.preview_or_playhead(),
+                ))
             }
             CanvasSelection::Shape(index) => Some(crate::editor_shapes::shape_bounds(
                 self.project.timeline.as_ref()?.shape_segments.get(index)?,
@@ -1398,6 +1399,7 @@ impl EditorWindow {
             x: rect.w.max(0.01),
             y: rect.h.max(0.01),
         };
+        let time = self.preview_or_playhead();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
@@ -1413,10 +1415,7 @@ impl EditorWindow {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
                     return;
                 };
-                segment.center = center;
-                segment.size = size;
-                segment.keyframes.position.clear();
-                segment.keyframes.size.clear();
+                segment.set_rect_at(time - segment.start, center, size);
             }
             CanvasSelection::Text(index) => {
                 let Some(segment) = timeline.text_segments.get_mut(index) else {
@@ -1487,6 +1486,7 @@ impl EditorWindow {
         if !self.canvas_overlay_visible()
             || (!self.player_panel_hovered
                 && self.canvas_drag.is_none()
+                && self.mask_tracking_points.is_none()
                 && self.shape_drag.is_none()
                 && self.shape_tool.is_none())
         {
@@ -1507,6 +1507,13 @@ impl EditorWindow {
             .w(player.frame.size.width)
             .h(player.frame.size.height)
             .overflow_hidden();
+
+        if let Some(picking) = self.mask_tracking_points.as_ref()
+            && self.show_mask_tracking
+            && picking.time == self.preview_or_playhead()
+        {
+            return Some(self.render_mask_point_picker(layer, picking, (cw, ch), cx));
+        }
 
         if self.canvas_selection.is_some() || self.selection.is_some() {
             layer = layer.child(
@@ -1544,6 +1551,9 @@ impl EditorWindow {
             for track in overlay_order.iter().rev() {
                 match track.kind {
                     OverlayTrackKind::Mask => {
+                        if !self.show_mask_tracking {
+                            continue;
+                        }
                         for (index, segment) in timeline
                             .mask_segments
                             .iter()
@@ -1554,6 +1564,14 @@ impl EditorWindow {
                                 continue;
                             }
                             let element = CanvasSelection::Mask(index);
+                            if self.canvas_selection == Some(element) {
+                                layer =
+                                    layer.child(crate::editor_mask_tracking::render_motion_path(
+                                        &self.theme,
+                                        segment,
+                                        (cw, ch),
+                                    ));
+                            }
                             if let Some(rect) = self.element_rect(element) {
                                 layer = layer.child(self.render_element_box(
                                     element,

@@ -128,6 +128,7 @@ const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// handles still own the outer pixels.
 pub const CAMERA3D_POSE_DOT: f32 = 6.;
 pub const CAMERA3D_POSE_DOT_INSET: f32 = 5.;
+pub const MASK_MARKER_DOT: f32 = 6.;
 /// The waveform's ceiling inside a row, so it never climbs into the labels.
 const WAVEFORM_MAX_HEIGHT: f32 = 18.;
 
@@ -1289,6 +1290,7 @@ pub enum SegmentDetail {
     /// `TL/MaskTrack.tsx:349-350`.
     Mask {
         label: &'static str,
+        markers: Arc<[f64]>,
     },
     /// The shape's kind, and its stroke (or fill) colour as a swatch.
     Shape {
@@ -1515,6 +1517,7 @@ impl TimelineModel {
                         MaskKind::Sensitive => tr::editor::timeline::segment::sensitive(),
                         MaskKind::Highlight => tr::editor::timeline::segment::highlight(),
                     },
+                    markers: segment.tracking_marker_times().into(),
                 },
             })
             .collect();
@@ -2963,6 +2966,20 @@ fn render_segment(
         }
     }
 
+    if let SegmentDetail::Mask { markers, .. } = &segment.detail {
+        for time in markers.iter() {
+            fill = fill.child(
+                div()
+                    .absolute()
+                    .bottom(px(6.))
+                    .left(px((time / secs_per_pixel) as f32 - MASK_MARKER_DOT / 2.))
+                    .size(px(MASK_MARKER_DOT))
+                    .rounded_full()
+                    .bg(color),
+            );
+        }
+    }
+
     // The selected 3D shot's two pose dots: the end the panel is editing, and
     // the other one a click away. They sit `CAMERA3D_POSE_DOT_INSET` inside
     // the box so the resize handles keep the edges themselves.
@@ -3888,11 +3905,11 @@ fn label_body(
         }
 
         // -- Mask (`TL/MaskTrack.tsx:481-495`) ----------------------------
-        (SegmentDetail::Mask { label }, LabelTier::Full) => label_row()
+        (SegmentDetail::Mask { label, .. }, LabelTier::Full) => label_row()
             .child(label_primary(theme, color).child(tr::editor::timeline::track::mask()))
             .child(label_secondary(theme, color).child(*label))
             .into_any_element(),
-        (SegmentDetail::Mask { label }, LabelTier::Compact) => label_row()
+        (SegmentDetail::Mask { label, .. }, LabelTier::Compact) => label_row()
             .child(label_primary(theme, color).child(*label))
             .into_any_element(),
         // The mask track passes no `glyph`.
@@ -4513,7 +4530,10 @@ mod tests {
             start: 0.,
             end: 1.,
             lane,
-            detail: SegmentDetail::Mask { label: "Highlight" },
+            detail: SegmentDetail::Mask {
+                label: "Highlight",
+                markers: Arc::from([]),
+            },
         };
         assert_eq!(lane_count(&[]), 0);
         assert_eq!(lane_count(&[segment(0)]), 1);
