@@ -2128,7 +2128,7 @@ impl Message<Unlock> for CameraFeed {
 
 /// Test-only camera feeds driven by a synthetic device instead of hardware,
 /// so recording tests exercise the real feed, lock and pipeline paths.
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod synthetic {
     use super::*;
 
