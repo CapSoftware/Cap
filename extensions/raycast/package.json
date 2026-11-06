@@ -1,0 +1,61 @@
+{
+	"$schema": "https://www.raycast.com/schemas/extension.json",
+	"name": "cap-screen-recorder",
+	"title": "Cap Screen Recorder",
+	"description": "Start and stop Cap.so recordings and open your Cap dashboard directly from Raycast.",
+	"icon": "cap-icon.svg",
+	"author": "CapSoftware",
+	"categories": ["Media", "Productivity", "Developer Tools"],
+	"license": "MIT",
+	"commands": [
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"description": "Start a new Cap screen recording with your default capture settings",
+			"mode": "no-view"
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the active Cap recording and copy the shareable video link",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-dashboard",
+			"title": "Open Cap Dashboard",
+			"description": "Open your Cap.so web dashboard in the default browser",
+			"mode": "no-view"
+		}
+	],
+	"preferences": [
+		{
+			"name": "captureMode",
+			"title": "Default Capture Mode",
+			"description": "Default recording mode when invoking Start Recording",
+			"type": "dropdown",
+			"required": false,
+			"default": "fullscreen",
+			"data": [
+				{ "title": "Full Screen", "value": "fullscreen" },
+				{ "title": "Window", "value": "window" },
+				{ "title": "Area", "value": "area" }
+			]
+		},
+		{
+			"name": "dashboardUrl",
+			"title": "Cap Dashboard URL",
+			"description": "Your Cap web instance URL (defaults to https://cap.so/dashboard)",
+			"type": "textfield",
+			"required": false,
+			"default": "https://cap.so/dashboard"
+		}
+	],
+	"dependencies": {
+		"@raycast/api": "^1.83.1"
+	},
+	"devDependencies": {
+		"@raycast/eslint-config": "^1.0.11",
+		"@types/node": "20.8.10",
+		"typescript": "^5.4.5"
+	}
+}
