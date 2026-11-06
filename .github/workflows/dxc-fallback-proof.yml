@@ -10,9 +10,11 @@ permissions:
   contents: read
 
 jobs:
-  proof:
+  bundle:
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -33,40 +35,22 @@ jobs:
           RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
         run: node scripts/setup.js
 
-      - name: Add FFmpeg DLLs to PATH
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
-
-      - name: Render one frame on FXC and on DXC with wgpu logs
+      - name: Build cap-rendering test binaries
         shell: bash
         run: |
-          cargo test --locked -p cap-rendering --test fxc_debug --no-run
-          set +e
-          printf '' > target/debug/deps/dxcompiler.dll
-          printf '' > target/debug/deps/dxil.dll
-          cargo test --locked -p cap-rendering --test fxc_debug imported_portrait -- --nocapture > fxc-debug.txt 2>&1
-          echo "fxc exit=$?"
-          rm -f target/debug/deps/dxcompiler.dll target/debug/deps/dxil.dll
-          cargo test --locked -p cap-rendering --test fxc_debug imported_portrait -- --nocapture > dxc-debug.txt 2>&1
-          echo "dxc exit=$?"
-          set -e
-          for f in fxc-debug.txt dxc-debug.txt; do
-            echo "===== $f"
-            grep -a "FXC DEBUG\|ERROR\|WARN\|lost\|Lost\|removed\|failed\|D3D12\|test result\|panicked" "$f" | cut -c1-400 | head -80
-          done
-
-      - name: Display driver events
-        if: always()
-        shell: pwsh
-        run: |
-          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddHours(-2)} -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProviderName -match 'Display|dxgkrnl|BasicRender|Dxgkrnl' -or $_.Id -eq 4101 } |
-            Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 400
+          mkdir -p bundle
+          cargo test --locked -p cap-rendering --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' \
+            > executables.txt
+          cat executables.txt
+          while read -r exe; do cp "$(cygpath -u "$exe")" bundle/; done < executables.txt
+          cp target/ffmpeg/bin/*.dll bundle/
+          cp target/debug/dxcompiler.dll target/debug/dxil.dll bundle/
+          ls -la bundle
+          du -sh bundle
 
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: fxc-debug-logs
-          path: |
-            fxc-debug.txt
-            dxc-debug.txt
+          name: rendering-test-bundle
+          path: bundle
+          retention-days: 2
