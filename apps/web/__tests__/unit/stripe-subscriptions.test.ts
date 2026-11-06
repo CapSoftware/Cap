@@ -3,14 +3,55 @@ import {
 	isProSubscription,
 	isSsoPrice,
 	isSsoSubscription,
+	isStandaloneScimSubscription,
 	STRIPE_SAML_SSO_LEGACY_PRICE_ID,
 	STRIPE_SAML_SSO_PRICE_ID,
 	STRIPE_SAML_SSO_PRODUCT_ID,
+	STRIPE_SCIM_PRICE_ID,
 	STRIPE_SIGNED_BAA_PRICE_IDS,
 } from "@cap/utils";
 import { describe, expect, it } from "vitest";
 
 describe("Stripe subscription classification", () => {
+	it("keeps standalone SCIM subscriptions out of Pro", () => {
+		const scimOnly = {
+			items: { data: [{ price: { id: STRIPE_SCIM_PRICE_ID } }] },
+		};
+		const taggedScim = {
+			metadata: { type: "scim" },
+			items: { data: [{ price: { id: "price_test_scim" } }] },
+		};
+		expect(isStandaloneScimSubscription(scimOnly)).toBe(true);
+		expect(isProSubscription(scimOnly)).toBe(false);
+		expect(isStandaloneScimSubscription(taggedScim)).toBe(true);
+		expect(isProSubscription(taggedScim)).toBe(false);
+	});
+
+	it("keeps Pro and BAA subscriptions with a SCIM line classified as before", () => {
+		const proWithScim = {
+			items: {
+				data: [
+					{ price: { id: "price_pro" } },
+					{ price: { id: STRIPE_SCIM_PRICE_ID } },
+				],
+			},
+		};
+		const baaWithScim = {
+			metadata: { type: "signed_baa" },
+			items: {
+				data: [
+					{ price: { id: STRIPE_SIGNED_BAA_PRICE_IDS.production } },
+					{ price: { id: STRIPE_SCIM_PRICE_ID } },
+				],
+			},
+		};
+		expect(isStandaloneScimSubscription(proWithScim)).toBe(false);
+		expect(isProSubscription(proWithScim)).toBe(true);
+		expect(isStandaloneScimSubscription(baaWithScim)).toBe(false);
+		expect(isProSubscription(baaWithScim)).toBe(false);
+		expect(isProSubscription({ items: { data: [] } })).toBe(true);
+	});
+
 	it.each([STRIPE_SAML_SSO_PRICE_ID, STRIPE_SAML_SSO_LEGACY_PRICE_ID])(
 		"recognizes paid SSO price %s without metadata",
 		(priceId) => {
