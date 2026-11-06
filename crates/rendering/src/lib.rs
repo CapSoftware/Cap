@@ -336,6 +336,21 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
 static DX12_SHADER_COMPILER: std::sync::OnceLock<wgpu::Dx12Compiler> = std::sync::OnceLock::new();
 
 #[cfg(target_os = "windows")]
+static DX12_FXC_FALLBACK: AtomicBool = AtomicBool::new(false);
+
+/// WARP crashes on the first frame rendered with FXC-compiled shaders, so the
+/// FXC fallback only renders on hardware adapters.
+#[cfg(not(target_arch = "wasm32"))]
+fn software_adapters_unusable() -> bool {
+    #[cfg(target_os = "windows")]
+    let unusable = DX12_FXC_FALLBACK.load(Ordering::Acquire);
+    #[cfg(not(target_os = "windows"))]
+    let unusable = false;
+
+    unusable
+}
+
+#[cfg(target_os = "windows")]
 fn dx12_instance_descriptor(shader_compiler: wgpu::Dx12Compiler) -> wgpu::InstanceDescriptor {
     wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
@@ -370,6 +385,7 @@ fn dx12_instance_with_fxc_fallback(
         error = dx12_init_error(compiler),
         "DX12 with bundled DXC failed to initialise; retrying with FXC"
     );
+    DX12_FXC_FALLBACK.store(true, Ordering::Release);
     (
         dx12_instance(wgpu::Dx12Compiler::Fxc),
         wgpu::Dx12Compiler::Fxc,
@@ -2674,6 +2690,9 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     if force_software_adapter {
         tracing::warn!("Forcing software WGPU adapter");
     }
+    let usable = |adapter: &wgpu::Adapter| {
+        !software_adapters_unusable() || !is_software_wgpu_adapter(&adapter.get_info())
+    };
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
     let preferred = if force_software_adapter {
@@ -2697,7 +2716,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let mut last_error = None;
     let mut created = None;
-    if let Some(adapter) = preferred {
+    if let Some(adapter) = preferred.filter(usable) {
         match try_rendering_device(adapter).await {
             Ok(found) => created = Some(found),
             Err(error) => last_error = Some(error),
@@ -2707,7 +2726,11 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     // without compute shaders, a broken install). Only then are the others
     // enumerated, hardware first, then the fallback adapter.
     if created.is_none() {
-        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter)
+            .await
+            .into_iter()
+            .filter(usable)
+        {
             match try_rendering_device(adapter).await {
                 Ok(found) => {
                     created = Some(found);
