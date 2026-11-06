@@ -3,8 +3,18 @@ import { getWorkOS } from "@cap/database/auth/sso";
 import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Organisation } from "@cap/web-domain";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+	HttpServerRequest,
+	HttpServerResponse,
+} from "@effect/platform";
 import { eq } from "drizzle-orm";
+import { Effect, Layer, Option } from "effect";
 import { after } from "next/server";
+import { apiToHandler } from "@/lib/server";
 import {
 	requestDirectorySync,
 	syncOrganizationDirectory,
@@ -14,7 +24,27 @@ import { verifyWorkosSignature } from "@/lib/sso/workos-webhook";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
+const MAX_BODY_BYTES = 1_000_000;
 const SYNC_BUDGET_MS = 240_000;
+
+class Api extends HttpApi.make("WorkosWebhookApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("receiveWorkosEvent")`/api/webhooks/workos`,
+	),
+) {}
+
+const textResponse = (body: string, status: number) =>
+	HttpServerResponse.text(body, {
+		status,
+		headers: { "Cache-Control": "private, no-store" },
+	});
+
+const received = () =>
+	HttpServerResponse.text(JSON.stringify({ received: true }), {
+		status: 200,
+		contentType: "application/json; charset=utf-8",
+		headers: { "Cache-Control": "private, no-store" },
+	});
 
 function eventOrganization(data: unknown) {
 	if (!data || typeof data !== "object") return null;
@@ -40,32 +70,10 @@ function eventDirectory(data: unknown) {
 	return null;
 }
 
-export async function POST(request: Request) {
-	const secret = serverEnv().WORKOS_WEBHOOK_SECRET;
-	if (!secret) return new Response("Not configured", { status: 503 });
-	const payload = await request.text();
-	if (
-		!verifyWorkosSignature(
-			payload,
-			request.headers.get("workos-signature"),
-			secret,
-		)
-	) {
-		return new Response("Invalid signature", { status: 400 });
-	}
-	let event: { event?: unknown; data?: unknown };
-	try {
-		event = JSON.parse(payload);
-	} catch {
-		return new Response("Invalid payload", { status: 400 });
-	}
-	if (typeof event.event !== "string" || !event.event.startsWith("dsync.")) {
-		return Response.json({ received: true });
-	}
-
-	let workosOrganizationId = eventOrganization(event.data);
+async function findOrganization(data: unknown) {
+	let workosOrganizationId = eventOrganization(data);
 	if (!workosOrganizationId) {
-		const directoryId = eventDirectory(event.data);
+		const directoryId = eventDirectory(data);
 		if (directoryId) {
 			const directory = await getWorkOS()
 				.directorySync.getDirectory(directoryId)
@@ -73,21 +81,76 @@ export async function POST(request: Request) {
 			workosOrganizationId = directory?.organizationId ?? null;
 		}
 	}
-	if (!workosOrganizationId) return Response.json({ received: true });
-
+	if (!workosOrganizationId) return null;
 	const [organization] = await db()
 		.select({ id: organizations.id })
 		.from(organizations)
 		.where(eq(organizations.workosOrganizationId, workosOrganizationId))
 		.limit(1);
-	if (!organization) return Response.json({ received: true });
-
-	const organizationId = Organisation.OrganisationId.make(organization.id);
-	await requestDirectorySync(organizationId);
-	after(() =>
-		syncOrganizationDirectory(organizationId, Date.now() + SYNC_BUDGET_MS)
-			.then(() => undefined)
-			.catch(() => undefined),
-	);
-	return Response.json({ received: true });
+	return organization
+		? Organisation.OrganisationId.make(organization.id)
+		: null;
 }
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("receiveWorkosEvent", () =>
+				Effect.gen(function* () {
+					const secret = serverEnv().WORKOS_WEBHOOK_SECRET;
+					if (!secret) return textResponse("Not configured", 503);
+					const request = yield* HttpServerRequest.HttpServerRequest;
+					const payload = yield* request.text.pipe(
+						HttpServerRequest.withMaxBodySize(Option.some(MAX_BODY_BYTES)),
+						Effect.catchAll(() => Effect.succeed("")),
+					);
+					if (
+						!verifyWorkosSignature(
+							payload,
+							request.headers["workos-signature"] ?? null,
+							secret,
+						)
+					) {
+						return textResponse("Invalid signature", 400);
+					}
+					let event: { event?: unknown; data?: unknown };
+					try {
+						event = JSON.parse(payload);
+					} catch {
+						return textResponse("Invalid payload", 400);
+					}
+					if (
+						typeof event.event !== "string" ||
+						!event.event.startsWith("dsync.")
+					) {
+						return received();
+					}
+					const organizationId = yield* Effect.tryPromise(() =>
+						findOrganization(event.data),
+					).pipe(Effect.orElseSucceed(() => undefined));
+					if (organizationId === undefined)
+						return textResponse("Lookup failed", 500);
+					if (!organizationId) return received();
+					const requested = yield* Effect.tryPromise(() =>
+						requestDirectorySync(organizationId),
+					).pipe(
+						Effect.as(true),
+						Effect.orElseSucceed(() => false),
+					);
+					if (!requested) return textResponse("Lookup failed", 500);
+					after(() =>
+						syncOrganizationDirectory(
+							organizationId,
+							Date.now() + SYNC_BUDGET_MS,
+						)
+							.then(() => undefined)
+							.catch(() => undefined),
+					);
+					return received();
+				}),
+			),
+		),
+	),
+);
+
+export const POST = apiToHandler(ApiLive);
