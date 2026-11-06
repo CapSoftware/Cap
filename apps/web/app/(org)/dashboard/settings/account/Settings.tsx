@@ -68,7 +68,7 @@ export const Settings = () => {
 		mutationFn: async () => {
 			await patchAccountSettings(
 				firstName.trim(),
-				lastName.trim() ? lastName.trim() : undefined,
+				lastName.trim(),
 				defaultOrgId,
 			);
 		},
