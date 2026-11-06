@@ -11,7 +11,7 @@
 	},
 	"dependencies": {
 		"@mediabunny/server": "^1.45.2",
-		"hono": "^4.12.12",
+		"hono": "^4.13.16",
 		"mediabunny": "^1.45.2",
 		"node-av": "^5.2.4",
 		"zod": "^3.24.2"

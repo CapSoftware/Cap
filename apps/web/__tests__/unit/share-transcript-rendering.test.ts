@@ -182,11 +182,11 @@ async function type(text: string) {
 
 describe("share transcript rendering", () => {
 	it.each(["original", "ja"])(
-		"preserves millisecond timestamps in the %s caption download",
+		"preserves cue timing and text in the %s caption download",
 		async (language) => {
 			mocks.language = language;
 			mocks.content =
-				"WEBVTT\n\n1\n00:00:01.001 --> 00:00:02.000\n日本語 café مرحبا\n\n2\n01:00:05.009 --> 01:00:06.000\nSecond cue\n";
+				"WEBVTT\n\n1\n00:00:01.001 --> 00:00:02.125\n日本語 café مرحبا\n\n2\n01:00:05.009 --> 01:00:10.250\nSecond cue\n\n3\n01:00:06.500 --> 01:00:07.750\nOverlapping final cue\n";
 			const createObjectURL = vi
 				.fn<(blob: Blob) => string>()
 				.mockReturnValue("blob:transcript");
@@ -214,9 +214,7 @@ describe("share transcript rendering", () => {
 			if (!(blob instanceof Blob)) throw new Error("Missing caption blob");
 			expect(blob.type).toBe("text/vtt");
 			const content = await blob.text();
-			expect(content).toContain("00:00:01.001 --> ");
-			expect(content).toContain("01:00:05.009 --> ");
-			expect(content).toContain("日本語 café مرحبا");
+			expect(content).toBe(mocks.content);
 			expect(filenames).toEqual([
 				`transcript-${video.id}${language === "original" ? "" : `.${language}`}.vtt`,
 			]);
