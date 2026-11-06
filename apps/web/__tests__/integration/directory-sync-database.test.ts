@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+	accounts,
 	authApiKeys,
 	directoryUsers,
 	mcpOAuthTokens,
@@ -15,6 +16,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { createPool, type Pool } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ValidatedSsoIdentity } from "../../../../packages/database/auth/sso";
 
 type FakeUser = {
 	id: string;
@@ -94,6 +96,9 @@ vi.mock("@cap/utils", async (importOriginal) => ({
 	},
 }));
 
+const { provisionSsoMembership } = await import(
+	"../../../../packages/database/auth/sso"
+);
 const { runDueDirectorySyncs, syncOrganizationDirectory } = await import(
 	"@/lib/sso/directory-sync"
 );
@@ -533,14 +538,49 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(state?.leaseExpiresAt).toBeNull();
 		});
 
-		it("stops at the deadline and leaves the sync requested", async () => {
+		it("backs off and reports a directory that cannot be read before the deadline", async () => {
 			const org = await makeOrganization();
 			fixture.users.set(org.directoryId, [
 				directoryUser(org.directoryId, `alice@${org.domain}`),
 			]);
-			expect(
-				await syncOrganizationDirectory(org.organizationId, Date.now() - 1),
-			).toMatchObject({ status: "partial" });
+			await expect(
+				syncOrganizationDirectory(org.organizationId, Date.now() - 1),
+			).rejects.toThrow("could not be read");
+			const [state] = await database()
+				.select()
+				.from(organizationDirectorySync)
+				.where(
+					eq(organizationDirectorySync.organizationId, org.organizationId),
+				);
+			expect(state?.syncedAt).toBeNull();
+			expect(state?.lastError).toContain("could not be read");
+			expect(state?.leaseExpiresAt?.getTime()).toBeGreaterThan(
+				Date.now() + 30 * 60_000,
+			);
+			expect((await memberIds(org.organizationId)).size).toBe(1);
+		});
+
+		it("resumes provisioning when the deadline passes after the directory is read", async () => {
+			const org = await makeOrganization();
+			fixture.users.set(org.directoryId, [
+				directoryUser(org.directoryId, `alice@${org.domain}`),
+				directoryUser(org.directoryId, `bob@${org.domain}`),
+			]);
+			const realNow = Date.now;
+			const deadline = realNow() + 60_000;
+			const calls = fixture.listUserCalls;
+			const clock = vi
+				.spyOn(Date, "now")
+				.mockImplementation(() =>
+					fixture.listUserCalls > calls ? realNow() + 120_000 : realNow(),
+				);
+			try {
+				expect(
+					await syncOrganizationDirectory(org.organizationId, deadline),
+				).toMatchObject({ status: "partial" });
+			} finally {
+				clock.mockRestore();
+			}
 			const [state] = await database()
 				.select()
 				.from(organizationDirectorySync)
@@ -549,7 +589,77 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			expect(state?.syncedAt).toBeNull();
 			expect(state?.leaseExpiresAt).toBeNull();
-			expect((await memberIds(org.organizationId)).size).toBe(1);
+			expect(state?.requestedAt).toBeInstanceOf(Date);
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ status: "synced", added: 2 });
+			expect((await memberIds(org.organizationId)).size).toBe(3);
+		});
+
+		it("keeps SSO from re-adding a member the directory removed", async () => {
+			const org = await makeOrganization();
+			const alice = directoryUser(org.directoryId, `alice@${org.domain}`);
+			fixture.users.set(org.directoryId, [alice]);
+			await syncOrganizationDirectory(org.organizationId, later());
+			const aliceUser = await userByEmail(`alice@${org.domain}`);
+			if (!aliceUser) throw new Error("Alice was not provisioned.");
+			const profileId = `prof_fixture_${id()}`;
+			await database().insert(accounts).values({
+				id: id(),
+				userId: aliceUser.id,
+				type: "oauth",
+				provider: "workos",
+				providerAccountId: profileId,
+			});
+			const identity: ValidatedSsoIdentity = {
+				organizationId: org.organizationId,
+				workosOrganizationId: org.workosOrganizationId,
+				connectionId: `conn_fixture_${id()}`,
+				profileId,
+				email: `alice@${org.domain}`,
+			};
+
+			fixture.users.set(org.directoryId, []);
+			await syncOrganizationDirectory(org.organizationId, later());
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				false,
+			);
+			await expect(
+				provisionSsoMembership(aliceUser.id, identity),
+			).rejects.toThrow("no longer grants access");
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				false,
+			);
+
+			fixture.users.set(org.directoryId, [alice]);
+			await syncOrganizationDirectory(org.organizationId, later());
+			await provisionSsoMembership(aliceUser.id, identity);
+			expect((await memberIds(org.organizationId)).has(aliceUser.id)).toBe(
+				true,
+			);
+
+			const outsider = User.UserId.make(id());
+			const outsiderProfile = `prof_fixture_${id()}`;
+			await database()
+				.insert(users)
+				.values({
+					id: outsider,
+					email: `outsider@${org.domain}`,
+					activeOrganizationId: org.organizationId,
+				});
+			await database().insert(accounts).values({
+				id: id(),
+				userId: outsider,
+				type: "oauth",
+				provider: "workos",
+				providerAccountId: outsiderProfile,
+			});
+			await provisionSsoMembership(outsider, {
+				...identity,
+				profileId: outsiderProfile,
+				email: `outsider@${org.domain}`,
+			});
+			expect((await memberIds(org.organizationId)).has(outsider)).toBe(true);
 		});
 	},
 );
