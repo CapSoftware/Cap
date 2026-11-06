@@ -2015,6 +2015,11 @@ impl EditorWindow {
         crate::theme::bind_window(window, cx);
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                if let Some(crop) = this.crop.as_mut()
+                    && crop.keys.release()
+                {
+                    cx.notify();
+                }
                 let minimap_canceled = this.minimap_drag.take().is_some();
                 let lane_reorder_canceled = this.lane_reorder.is_some();
                 if lane_reorder_canceled {
@@ -13766,6 +13771,49 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    /// An arrow held in the crop dialog keeps nudging every frame until its
+    /// key-up. A window that loses focus mid-hold (Cmd-Tab) never gets that
+    /// key-up, so deactivation has to release the keys itself.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn deactivating_the_window_releases_a_held_crop_nudge(cx: &mut gpui::TestAppContext) {
+        use crate::editor_crop::{CropBounds, CropState};
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.crop = Some(CropState::new(
+                (1920, 1080),
+                (401., 226.),
+                CropBounds::new(100., 50., 100., 50.),
+            ));
+            editor.crop.as_mut().unwrap().keys.keys.insert("right");
+            editor.start_crop_ticker(window, cx);
+        });
+        let start = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let held = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        assert!(held > start, "the held arrow nudges while focused");
+
+        cx.deactivate_window();
+        let released = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            let crop = editor.crop.as_ref().unwrap();
+            assert!(crop.keys.keys.is_empty());
+            assert_eq!(
+                crop.raw.x, released,
+                "no nudges after the window lost focus"
+            );
+        });
+        drop(project);
     }
 
     #[cfg(target_os = "linux")]
