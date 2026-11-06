@@ -5,7 +5,11 @@ use clap::ValueEnum;
 use reqwest::Method;
 use serde_json::{Value, json};
 
-use crate::{OutputFormat, caps::AgentClient, resolve_format, write_json};
+use crate::{
+    OutputFormat,
+    caps::{AgentApiError, AgentClient},
+    finish_json, resolve_format, write_json,
+};
 
 pub fn print_value(value: &Value, format: OutputFormat) -> Result<(), String> {
     match format {
@@ -21,12 +25,11 @@ pub fn print_value(value: &Value, format: OutputFormat) -> Result<(), String> {
 }
 
 pub async fn read(path: &str, global_json: bool, format: OutputFormat) -> Result<(), String> {
-    let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
-    let value = client
-        .get_json(path)
-        .await
-        .map_err(|error| error.to_string())?;
-    print_value(&value, resolve_format(global_json, format))
+    let result = match AgentClient::from_credentials() {
+        Ok(client) => client.get_json(path).await,
+        Err(error) => Err(error),
+    };
+    print_result(result, resolve_format(global_json, format))
 }
 
 pub async fn mutate(
@@ -36,12 +39,11 @@ pub async fn mutate(
     global_json: bool,
     format: OutputFormat,
 ) -> Result<(), String> {
-    let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
-    let value = client
-        .mutate_json(method, path, body)
-        .await
-        .map_err(|error| error.to_string())?;
-    print_value(&value, resolve_format(global_json, format))
+    let result = match AgentClient::from_credentials() {
+        Ok(client) => client.mutate_json(method, path, body).await,
+        Err(error) => Err(error),
+    };
+    print_result(result, resolve_format(global_json, format))
 }
 
 pub async fn mutate_confirmed(
@@ -51,12 +53,20 @@ pub async fn mutate_confirmed(
     global_json: bool,
     format: OutputFormat,
 ) -> Result<(), String> {
-    let client = AgentClient::from_credentials().map_err(|error| error.to_string())?;
-    let value = client
-        .mutate_json_confirmed(method, path, body)
-        .await
-        .map_err(|error| error.to_string())?;
-    print_value(&value, resolve_format(global_json, format))
+    let result = match AgentClient::from_credentials() {
+        Ok(client) => client.mutate_json_confirmed(method, path, body).await,
+        Err(error) => Err(error),
+    };
+    print_result(result, resolve_format(global_json, format))
+}
+
+fn print_result(result: Result<Value, AgentApiError>, format: OutputFormat) -> Result<(), String> {
+    finish_json(
+        format,
+        result
+            .map_err(|error| error.to_string())
+            .and_then(|value| print_value(&value, format)),
+    )
 }
 
 pub fn query(parameters: &[(&str, Option<String>)]) -> String {
