@@ -8374,9 +8374,9 @@ mod tests {
             "openUxWalkNotes" => {
                 fork_brand::mode_text("open notes for your current or most recent %walk% recording")
             }
-            "recordDiatribe" => {
-                "start recording your screen and microphone now, then turn what you say into notes and action items".into()
-            }
+            "recordDiatribe" => fork_brand::mode_text(
+                "switch %walk% to Diatribe and record your voice and screen now, then turn what you say into notes and action items",
+            ),
             "openRecordingPicker" => "open Cap so you can choose what to record".into(),
             "cycleRecordingMode" => "switch between Studio, Instant and Screenshot mode".into(),
             "stopRecording" => "stop the current recording".into(),

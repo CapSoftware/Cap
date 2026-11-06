@@ -121,7 +121,7 @@ pub(super) fn row_icon(item: &RecordingItem) -> &'static str {
 
 pub(super) fn row_label(item: &RecordingItem) -> &'static str {
     match shown_walk(item) {
-        Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_SHORT_NAME,
+        Some(walk) if walk.diatribe => crate::mode_choice::DIATRIBE_NAME,
         Some(_) => fork_brand::WALK_MODE_NAME,
         None => item.mode.label(),
     }

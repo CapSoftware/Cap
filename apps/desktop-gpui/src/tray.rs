@@ -86,8 +86,6 @@ pub enum TrayItem {
     ModeScreenshot,
     #[cfg(target_os = "macos")]
     StartWalkthrough,
-    #[cfg(target_os = "macos")]
-    RecordDiatribe,
 }
 
 /// A global hotkey as the menu renders it: the NSMenuItem key equivalent on
@@ -244,7 +242,6 @@ fn row_symbol(item: &TrayItem) -> Option<&'static str> {
         TrayItem::TakeScreenshot => Some("camera.on.rectangle"),
         TrayItem::ImportMedia => Some("square.and.arrow.down"),
         TrayItem::OpenSettings => Some("gear"),
-        TrayItem::RecordDiatribe => Some("waveform"),
         _ => None,
     }
 }
@@ -658,8 +655,6 @@ fn hotkey_action(item: &TrayItem) -> Option<HotkeyAction> {
         }
         TrayItem::ScreenshotWindow => Some(HotkeyAction::ScreenshotWindow),
         TrayItem::ScreenshotArea => Some(HotkeyAction::ScreenshotArea),
-        #[cfg(all(target_os = "macos", feature = "ux-walk"))]
-        TrayItem::RecordDiatribe => Some(HotkeyAction::RecordDiatribe),
         _ => None,
     }
 }
@@ -688,7 +683,6 @@ fn current_menu_entries(cx: &App, mode: Mode, previous: &[PreviousItem]) -> Vec<
     }
     let mode = ux_walk::menu_mode(mode, cx);
     let mut entries = build_menu(mode, previous, crate::menus::app_version());
-    ux_walk::add_menu_items(&mut entries);
     decorate_accelerators(&mut entries, cx);
     entries
 }
@@ -749,8 +743,6 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::ModeScreenshot => set_mode(Mode::Screenshot, cx),
         #[cfg(target_os = "macos")]
         TrayItem::StartWalkthrough => crate::ux_walk::start(cx),
-        #[cfg(target_os = "macos")]
-        TrayItem::RecordDiatribe => crate::ux_walk::start_diatribe(cx),
     }
 }
 
@@ -957,8 +949,6 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
         "mode_screenshot" => TrayItem::ModeScreenshot,
         #[cfg(target_os = "macos")]
         "walkthrough" => TrayItem::StartWalkthrough,
-        #[cfg(target_os = "macos")]
-        "diatribe" => TrayItem::RecordDiatribe,
         _ => return None,
     })
 }

@@ -407,6 +407,11 @@ impl ControlsWindow {
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
         let has_walk = session.walk.journal.is_some();
+        let diatribe = session
+            .walk
+            .journal
+            .as_ref()
+            .is_some_and(|journal| journal.request.is_diatribe());
         let pause_tooltip = if session.pause_uncertain() {
             tr::controls::pause::unconfirmed()
         } else if pause_pending {
@@ -512,7 +517,9 @@ impl ControlsWindow {
                             .child(
                                 self.action_button(
                                     "settings",
-                                    if has_walk {
+                                    if diatribe {
+                                        crate::mode_choice::DIATRIBE_ICON
+                                    } else if has_walk {
                                         "icons/ux-walk.svg"
                                     } else {
                                         "icons/settings.svg"
@@ -521,7 +528,15 @@ impl ControlsWindow {
                                 )
                                 .when(has_walk, |this| {
                                     this.tooltip(move |_, cx| {
-                                        ui::Tooltip::new(&theme, "Walk notes & chapters").view(cx)
+                                        ui::Tooltip::new(
+                                            &theme,
+                                            if diatribe {
+                                                "Diatribe notes"
+                                            } else {
+                                                "Walk notes & chapters"
+                                            },
+                                        )
+                                        .view(cx)
                                     })
                                     .on_click(|_, _, cx| cx.defer(crate::ux_walk_window::open))
                                 }),

@@ -19,7 +19,7 @@ Worm combines [Cap](https://github.com/CapSoftware/Cap)'s screen recorder and ed
 
 ## What you get
 
-- **Worm Mode in every mode picker.** Open a fresh Chrome window from the menu, recorder or mode picker, already selected for capture. Onboarding introduces it alongside Instant, Studio and Screenshot.
+- **Worm Mode in every mode picker.** Open a fresh Chrome window from the menu, recorder or mode picker, already selected for capture. Onboarding introduces it alongside Instant, Studio and Screenshot. Choose **Diatribe** inside Worm Mode to skip the browser and just talk; you get notes and action items.
 - **One settings window.** Walk defaults live in General, the output folder in Recordings, and providers in Transcription. The CLI reads the same preferences.
 - **Your transcription provider.** ElevenLabs Scribe, AssemblyAI, Descript, or no transcription. Existing Keychain entries are reused. Cap editor captions keep their local models.
 - **Evidence an agent can read.** Video, screenshots, timestamped notes, chapters and a local report stay together. The walk's Chrome window adds semantic clicks, console warnings/errors, page exceptions and redacted failed-request diagnostics. Reports show when browser evidence is partial or unavailable.

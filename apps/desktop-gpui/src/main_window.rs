@@ -2385,6 +2385,10 @@ impl MainWindow {
         {
             return;
         }
+        if self.diatribe_selected(cx) {
+            self.start_diatribe(Some((target, excluded_windows)), cx);
+            return;
+        }
         // An armed editor recording target forces Studio before this window's
         // own mode is consulted -- the front half of the same rule
         // `start_recording` applies (`src-tauri/src/recording.rs:1492-1494`),
@@ -4040,7 +4044,9 @@ impl MainWindow {
                     .gap(px(8.))
                     .overflow_y_scroll()
                     .children(self.ux_walk_setup(cx))
-                    .child(self.render_targets(cx))
+                    .when(!self.diatribe_selected(cx), |this| {
+                        this.child(self.render_targets(cx))
+                    })
                     .child(self.render_base_controls(cx)),
             ),
         }
@@ -6989,6 +6995,7 @@ impl MainWindow {
 
     /// `BaseControls`: camera, microphone, system audio.
     fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let diatribe = self.diatribe_selected(cx);
         div()
             .flex()
             .flex_col()
@@ -7000,47 +7007,53 @@ impl MainWindow {
                     .text_size(px(10.))
                     .line_height(px(14.))
                     .text_color(self.theme.gray_11)
-                    .child(tr::main::device::heading()),
+                    .child(if diatribe {
+                        "Choose your microphone"
+                    } else {
+                        tr::main::device::heading()
+                    }),
             )
-            .child(
-                div().flex().flex_col().child(
-                    self.render_device_row(
-                        "camera-row",
-                        "icons/camera.svg",
-                        self.camera
-                            .as_ref()
-                            .map(|camera| camera_label(&camera.label))
-                            .unwrap_or_else(|| tr::main::device::no_camera().into()),
-                        if self.camera.is_some()
-                            && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
-                        {
-                            pill
-                        } else if self.camera.is_some() {
-                            if self.devices.cameras.iter().any(|camera| {
-                                Some(&camera.device_id)
-                                    == self.camera.as_ref().map(|selected| &selected.device_id)
-                            }) {
-                                PillState::On
+            .when(!diatribe, |this| {
+                this.child(
+                    div().flex().flex_col().child(
+                        self.render_device_row(
+                            "camera-row",
+                            "icons/camera.svg",
+                            self.camera
+                                .as_ref()
+                                .map(|camera| camera_label(&camera.label))
+                                .unwrap_or_else(|| tr::main::device::no_camera().into()),
+                            if self.camera.is_some()
+                                && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
+                            {
+                                pill
+                            } else if self.camera.is_some() {
+                                if self.devices.cameras.iter().any(|camera| {
+                                    Some(&camera.device_id)
+                                        == self.camera.as_ref().map(|selected| &selected.device_id)
+                                }) {
+                                    PillState::On
+                                } else {
+                                    PillState::Disconnected
+                                }
                             } else {
-                                PillState::Disconnected
+                                PillState::Off
+                            },
+                            Some(DeviceMenu::Camera),
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // Through `open_panel`, so the filter field takes focus
+                            // the way it already does for the display and window
+                            // panels -- before the field was real there was nothing
+                            // to focus into.
+                            if !this.enumerating && this.device_changes_allowed(cx) {
+                                this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
                             }
-                        } else {
-                            PillState::Off
-                        },
-                        Some(DeviceMenu::Camera),
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Through `open_panel`, so the filter field takes focus
-                        // the way it already does for the display and window
-                        // panels -- before the field was real there was nothing
-                        // to focus into.
-                        if !this.enumerating && this.device_changes_allowed(cx) {
-                            this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
-                        }
-                    })),
-                ),
-            )
+                        })),
+                    ),
+                )
+            })
             .child(
                 div().flex().flex_col().child(
                     self.render_device_row(
@@ -7049,7 +7062,13 @@ impl MainWindow {
                         self.microphone
                             .as_ref()
                             .map(|mic| mic.name.clone())
-                            .unwrap_or_else(|| tr::main::device::no_microphone().into()),
+                            .unwrap_or_else(|| {
+                                if diatribe {
+                                    "Default microphone".into()
+                                } else {
+                                    tr::main::device::no_microphone().into()
+                                }
+                            }),
                         if self.microphone.is_some()
                             && let Some(pill) = self.access_pill(OSPermission::Microphone, cx)
                         {
@@ -7063,6 +7082,8 @@ impl MainWindow {
                             } else {
                                 PillState::Disconnected
                             }
+                        } else if diatribe {
+                            PillState::On
                         } else {
                             PillState::Off
                         },

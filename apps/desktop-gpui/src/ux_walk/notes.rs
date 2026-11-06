@@ -142,7 +142,6 @@ mod tests {
         assert!(!applies(ModeChoice::Capture(Mode::Studio), true));
         assert!(!applies(ModeChoice::Capture(Mode::Screenshot), false));
         assert!(!applies(ModeChoice::UxWalk, false));
-        assert!(!applies(ModeChoice::Diatribe, false));
     }
 
     #[test]

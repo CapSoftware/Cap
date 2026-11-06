@@ -320,7 +320,7 @@ impl SettingsWindow {
     pub(crate) fn render_ux_walk_recordings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.section(
             fork_brand::mode_text_static("%walk% recordings"),
-            Some("Walks keep their video, notes, chapters and reports together in this folder."),
+            Some("Walks and diatribes keep their video, notes, chapters and reports together in this folder."),
             None,
             vec![
                 self.rows(vec![self.ux_walk_field(2, cx)])

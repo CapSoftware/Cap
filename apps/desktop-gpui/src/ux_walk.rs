@@ -13,11 +13,11 @@ pub fn start(cx: &mut gpui::App) {
     crate::app_windows::show_main_window(cx);
 }
 
-/// Record Diatribe: an Instant screen and microphone recording that starts at once and is
-/// processed like a walk into notes and action items. The recorder's mode is left as it was.
+/// The Diatribe shortcut: switch to Worm Mode's Diatribe choice and start recording at once.
 pub fn start_diatribe(cx: &mut gpui::App) {
     let main = cx.global::<crate::app_windows::AppWindows>().main;
-    main.update(cx, |view, _, cx| view.start_diatribe(cx)).ok();
+    main.update(cx, |view, _, cx| view.record_diatribe_now(cx))
+        .ok();
 }
 
 pub const DIATRIBE_TOPIC: &str = "Diatribe";
