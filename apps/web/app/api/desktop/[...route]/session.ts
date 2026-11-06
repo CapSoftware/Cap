@@ -4,7 +4,6 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { authApiKeys, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { User } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
@@ -13,6 +12,7 @@ import {
 	createDesktopRedirectPage,
 	desktopSessionRequestQuerySchema,
 } from "@/lib/desktop-session";
+import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono();
 
