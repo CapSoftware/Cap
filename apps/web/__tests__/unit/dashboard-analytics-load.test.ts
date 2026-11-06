@@ -233,6 +233,59 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 describe("dashboard analytics loader", () => {
+	it.each([
+		{ spaceId: undefined, capId: undefined },
+		{ spaceId: "space-1", capId: undefined },
+		{ spaceId: undefined, capId: "cap-3" },
+	])(
+		"uses the exact 24-hour window for every breakdown: %o",
+		async ({ spaceId, capId }) => {
+			vi.setSystemTime(new Date("2026-01-08T12:34:56Z"));
+			await getOrgAnalyticsData("org-1", "24h", spaceId, capId);
+
+			expect(mocks.tinybirdQuery).toHaveBeenCalledTimes(capId ? 6 : 7);
+			for (const [statement] of mocks.tinybirdQuery.mock.calls) {
+				expect(statement).toContain("FROM analytics_events");
+				expect(statement).toContain("action = 'page_hit'");
+				expect(statement).toContain("tenant_id = 'org-1'");
+				expect(statement).toContain(
+					"timestamp BETWEEN toDateTime('2026-01-07 12:34:56') AND toDateTime('2026-01-08 12:34:56')",
+				);
+				if (spaceId || capId) {
+					expect(statement).toContain("AND pathname IN (");
+				}
+			}
+		},
+	);
+
+	it.each(["empty", "failure"])(
+		"keeps 24-hour results scoped when raw data returns %s",
+		async (result) => {
+			if (result === "failure") {
+				mocks.failTinybird = true;
+				vi.spyOn(console, "error").mockImplementation(() => {});
+			} else {
+				mocks.tinybirdQuery.mockResolvedValue({ data: [] });
+			}
+
+			const data = await getOrgAnalyticsData("org-1", "24h");
+			expect(data.counts).toEqual({
+				caps: 200,
+				views: 0,
+				comments: 800,
+				reactions: 1200,
+			});
+			expect(data.chart.every((row) => row.views === 0)).toBe(true);
+			expect(
+				Object.values(data.breakdowns).every((rows) => rows.length === 0),
+			).toBe(true);
+			expect(mocks.tinybirdQuery).toHaveBeenCalledTimes(7);
+			for (const [statement] of mocks.tinybirdQuery.mock.calls) {
+				expect(statement).toContain("FROM analytics_events");
+			}
+		},
+	);
+
 	it.each(["24h", "30d"] as const)(
 		"preserves %s range buckets",
 		async (range) => {
