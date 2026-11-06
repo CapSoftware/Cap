@@ -545,6 +545,79 @@ pub fn normalized_rect(annotation: &Annotation) -> Rect {
     }
 }
 
+/// Normalize two frame-space points into a non-negative `Rect`.
+pub fn rect_from_points(a: (f64, f64), b: (f64, f64)) -> Rect {
+    Rect {
+        x: a.0.min(b.0),
+        y: a.1.min(b.1),
+        width: (a.0 - b.0).abs(),
+        height: (a.1 - b.1).abs(),
+    }
+}
+
+/// Convert a frame-space selection rect inside `image_rect` into a source-image
+/// [`Crop`], accounting for any crop already active on the project.
+pub fn crop_from_selection_rect(
+    selection: Rect,
+    image_rect: Rect,
+    image_size: (u32, u32),
+    existing_crop: Option<&Crop>,
+) -> Option<Crop> {
+    if image_rect.width <= 0.
+        || image_rect.height <= 0.
+        || image_size.0 == 0
+        || image_size.1 == 0
+    {
+        return None;
+    }
+    let (right_edge, bottom_edge) = (
+        image_rect.x + image_rect.width,
+        image_rect.y + image_rect.height,
+    );
+    let raw_left = selection.x.min(selection.x + selection.width);
+    let raw_right = selection.x.max(selection.x + selection.width);
+    let raw_top = selection.y.min(selection.y + selection.height);
+    let raw_bottom = selection.y.max(selection.y + selection.height);
+    let left = clamp_value(raw_left, image_rect.x, right_edge);
+    let right = clamp_value(raw_right, image_rect.x, right_edge);
+    let top = clamp_value(raw_top, image_rect.y, bottom_edge);
+    let bottom = clamp_value(raw_bottom, image_rect.y, bottom_edge);
+    let sel_width = (right - left).max(0.);
+    let sel_height = (bottom - top).max(0.);
+    if sel_width < MIN_SIZE || sel_height < MIN_SIZE {
+        return None;
+    }
+
+    let (src_x, src_y, src_w, src_h) = match existing_crop {
+        Some(crop) => (
+            f64::from(crop.position.x),
+            f64::from(crop.position.y),
+            f64::from(crop.size.x.max(1)),
+            f64::from(crop.size.y.max(1)),
+        ),
+        None => (0., 0., f64::from(image_size.0), f64::from(image_size.1)),
+    };
+
+    let norm_x = (left - image_rect.x) / image_rect.width;
+    let norm_y = (top - image_rect.y) / image_rect.height;
+    let norm_w = sel_width / image_rect.width;
+    let norm_h = sel_height / image_rect.height;
+
+    let max_w = image_size.0;
+    let max_h = image_size.1;
+    let x = ((src_x + norm_x * src_w).round().max(0.) as u32).min(max_w.saturating_sub(1));
+    let y = ((src_y + norm_y * src_h).round().max(0.) as u32).min(max_h.saturating_sub(1));
+    let width = ((norm_w * src_w).round().max(1.) as u32).min(max_w.saturating_sub(x));
+    let height = ((norm_h * src_h).round().max(1.) as u32).min(max_h.saturating_sub(y));
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(Crop {
+        position: cap_project::XY::new(x, y),
+        size: cap_project::XY::new(width, height),
+    })
+}
+
 /// The eight (or four, or two) grips `SelectionHandles` draws (`:935-1039`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handle {
@@ -1048,6 +1121,11 @@ enum Gesture {
     Move(Dragging),
     /// `dragState.action === "resize"`.
     Resize(Dragging),
+    /// Dragging on empty screenshot space in Select mode to define a crop rect.
+    Crop {
+        start: (f64, f64),
+        current: (f64, f64),
+    },
 }
 
 struct Creating {
@@ -1200,6 +1278,8 @@ pub struct AnnotationState {
     /// which is what maps a pointer into frame space.
     layer: BoundsCell,
     gesture: Option<Gesture>,
+    /// Pending crop selection in frame space created by dragging on empty image space.
+    pub(crate) crop_selection: Option<Rect>,
     /// The annotation the pointer is over, for the text hover wash.
     hover: Option<String>,
     hover_cursor: Option<CursorStyle>,
@@ -1229,6 +1309,8 @@ struct LayerPaint {
     annotations: Vec<Annotation>,
     temp: Option<Annotation>,
     masks: Vec<MaskOverlay>,
+    crop_selection: Option<Rect>,
+    image_rect: Rect,
     selected: Option<String>,
     editing: Option<String>,
     hover: Option<String>,
@@ -1543,6 +1625,7 @@ impl ScreenshotEditorWindow {
             {
                 let id = annotation.id.clone();
                 let original = annotation.clone();
+                self.annotation_state.crop_selection = None;
                 self.annotation_state.gesture = Some(Gesture::Resize(Dragging {
                     id,
                     handle: Some(handle),
@@ -1558,6 +1641,7 @@ impl ScreenshotEditorWindow {
             }
 
             let annotation = annotation.clone();
+            self.annotation_state.crop_selection = None;
             self.selected_annotation = Some(annotation.id.clone());
             if click_count >= 2 && annotation.annotation_type == AnnotationType::Text {
                 self.begin_text_edit(annotation.id, window, cx);
@@ -1578,9 +1662,30 @@ impl ScreenshotEditorWindow {
         }
 
         // `e.target === e.currentTarget` (`:168-173`): a press on bare canvas
-        // drops the selection. The `false` then lets the caller start the pan,
-        // which is `onBackgroundMouseDown` over there.
+        // drops the selection. Dragging on empty screenshot space starts an
+        // inline crop selection (`#3636`); pressing outside the image rect
+        // falls through to background pan.
         if self.selected_annotation.take().is_some() {
+            cx.notify();
+        }
+        let rect = self.annotation_image_rect();
+        if self.image_size.is_some()
+            && rect.width > 0.
+            && rect.height > 0.
+            && point.0 >= rect.x
+            && point.0 <= rect.x + rect.width
+            && point.1 >= rect.y
+            && point.1 <= rect.y + rect.height
+        {
+            self.annotation_state.crop_selection = None;
+            self.annotation_state.gesture = Some(Gesture::Crop {
+                start: point,
+                current: point,
+            });
+            cx.notify();
+            return true;
+        }
+        if self.annotation_state.crop_selection.take().is_some() {
             cx.notify();
         }
         false
@@ -1693,6 +1798,21 @@ impl ScreenshotEditorWindow {
             Gesture::Resize(dragging) => {
                 self.drag_resize(&dragging, point, shift);
                 Gesture::Resize(dragging)
+            }
+            Gesture::Crop { start, .. } => {
+                let rect = self.annotation_image_rect();
+                let clamped = (
+                    clamp_value(point.0, rect.x, rect.x + rect.width),
+                    clamp_value(point.1, rect.y, rect.y + rect.height),
+                );
+                let selection = rect_from_points(start, clamped);
+                self.annotation_state.crop_selection =
+                    (selection.width >= MIN_SIZE && selection.height >= MIN_SIZE)
+                        .then_some(selection);
+                Gesture::Crop {
+                    start,
+                    current: clamped,
+                }
             }
         };
         self.annotation_state.gesture = Some(gesture);
@@ -1932,7 +2052,68 @@ impl ScreenshotEditorWindow {
             Gesture::Move(dragging) | Gesture::Resize(dragging) => {
                 self.finish_drag(dragging, window, cx)
             }
+            Gesture::Crop { start, current } => {
+                if edit_text {
+                    let selection = rect_from_points(start, current);
+                    self.annotation_state.crop_selection =
+                        (selection.width >= MIN_SIZE && selection.height >= MIN_SIZE)
+                            .then_some(selection);
+                } else {
+                    self.annotation_state.crop_selection = None;
+                }
+                cx.notify();
+            }
         }
+        true
+    }
+
+    pub(crate) fn clear_crop_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let had_gesture = matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. }));
+        if had_gesture {
+            self.annotation_state.gesture = None;
+        }
+        let had_selection = self.annotation_state.crop_selection.take().is_some();
+        if had_gesture || had_selection {
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn take_pending_crop_bounds(&mut self) -> Option<Crop> {
+        let selection = self.annotation_state.crop_selection.take()?;
+        let image_size = self.image_size?;
+        crop_from_selection_rect(
+            selection,
+            self.annotation_image_rect(),
+            image_size,
+            self.project.background.crop.as_ref(),
+        )
+    }
+
+    pub(crate) fn apply_crop_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
+            self.finish_annotation_gesture(true, window, cx);
+        }
+        let Some(crop) = self.take_pending_crop_bounds() else {
+            return false;
+        };
+        self.edit_project(
+            move |project| {
+                if project.background.crop.as_ref() == Some(&crop) {
+                    return false;
+                }
+                project.background.crop = Some(crop);
+                true
+            },
+            window,
+            cx,
+        );
+        window.refresh();
         true
     }
 
@@ -2398,7 +2579,7 @@ impl ScreenshotEditorWindow {
     pub(crate) fn render_annotation_layer(
         &self,
         content: (f32, f32),
-        _rect: Rect,
+        rect: Rect,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if self.frame_size.0 <= 0. || content.0 <= 0. {
@@ -2418,6 +2599,8 @@ impl ScreenshotEditorWindow {
                 .iter()
                 .filter_map(|entry| entry.value.clone())
                 .collect(),
+            crop_selection: self.annotation_state.crop_selection,
+            image_rect: rect,
             selected: self.selected_annotation.clone(),
             editing: self
                 .annotation_state
@@ -3680,6 +3863,67 @@ fn paint_layer(paint: &LayerPaint, bounds: Bounds<Pixels>, window: &mut Window, 
             paint_annotation(temp, origin, scale, window, cx);
         }
     }
+
+    if let Some(crop_rect) = paint.crop_selection {
+        paint_crop_selection(crop_rect, paint.image_rect, origin, scale, window);
+    }
+}
+
+fn paint_crop_selection(
+    crop_rect: Rect,
+    image_rect: Rect,
+    origin: Point<Pixels>,
+    scale: f32,
+    window: &mut Window,
+) {
+    let dim = gpui::hsla(0., 0., 0., 0.45);
+    let img_right = image_rect.x + image_rect.width;
+    let img_bottom = image_rect.y + image_rect.height;
+    let crop_right = crop_rect.x + crop_rect.width;
+    let crop_bottom = crop_rect.y + crop_rect.height;
+
+    let strips = [
+        Rect {
+            x: image_rect.x,
+            y: image_rect.y,
+            width: image_rect.width,
+            height: (crop_rect.y - image_rect.y).max(0.),
+        },
+        Rect {
+            x: image_rect.x,
+            y: crop_bottom,
+            width: image_rect.width,
+            height: (img_bottom - crop_bottom).max(0.),
+        },
+        Rect {
+            x: image_rect.x,
+            y: crop_rect.y,
+            width: (crop_rect.x - image_rect.x).max(0.),
+            height: crop_rect.height,
+        },
+        Rect {
+            x: crop_right,
+            y: crop_rect.y,
+            width: (img_right - crop_right).max(0.),
+            height: crop_rect.height,
+        },
+    ];
+
+    for strip in strips {
+        if strip.width > 0. && strip.height > 0. {
+            let mut fill = PathBuilder::fill();
+            push_rect(&mut fill, origin, scale, strip);
+            paint_fill(fill, dim, window);
+        }
+    }
+
+    let mut stroke = PathBuilder::stroke(px(2.));
+    push_rect(&mut stroke, origin, scale, crop_rect);
+    paint_fill(
+        stroke,
+        Hsla::from(gpui::rgb(SELECTION_BLUE)),
+        window,
+    );
 }
 
 fn screen_rect(origin: Point<Pixels>, scale: f32, rect: Rect) -> Bounds<Pixels> {
@@ -4706,6 +4950,58 @@ mod tests {
                 &next.value.as_ref().unwrap().image
             ));
         }
+    }
+
+    #[test]
+    fn crop_from_selection_rect_maps_frame_selection_into_source_image_bounds() {
+        let image_rect = Rect {
+            x: 100.,
+            y: 50.,
+            width: 500.,
+            height: 250.,
+        };
+        let selection = rect_from_points((350., 300.), (100., 50.));
+        let crop = crop_from_selection_rect(selection, image_rect, (2000, 1000), None)
+            .expect("valid crop");
+        assert_eq!(crop.position.x, 0);
+        assert_eq!(crop.position.y, 0);
+        assert_eq!(crop.size.x, 1000);
+        assert_eq!(crop.size.y, 1000);
+
+        let nested = crop_from_selection_rect(
+            Rect {
+                x: 350.,
+                y: 50.,
+                width: 250.,
+                height: 250.,
+            },
+            image_rect,
+            (2000, 1000),
+            Some(&Crop {
+                position: cap_project::XY::new(200, 100),
+                size: cap_project::XY::new(1000, 500),
+            }),
+        )
+        .expect("nested crop");
+        assert_eq!(nested.position.x, 700);
+        assert_eq!(nested.position.y, 100);
+        assert_eq!(nested.size.x, 500);
+        assert_eq!(nested.size.y, 500);
+
+        assert!(
+            crop_from_selection_rect(
+                Rect {
+                    x: 110.,
+                    y: 60.,
+                    width: 3.,
+                    height: 3.,
+                },
+                image_rect,
+                (2000, 1000),
+                None,
+            )
+            .is_none()
+        );
     }
 
     #[test]

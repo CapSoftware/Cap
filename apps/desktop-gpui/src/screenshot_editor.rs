@@ -1280,6 +1280,7 @@ impl ScreenshotEditorWindow {
     ) {
         self.project = config;
         self.bg_tab = BgTab::for_source(&self.project.background.source);
+        self.annotation_state.crop_selection = None;
         if let Some(id) = &self.selected_annotation
             && !self
                 .project
@@ -2606,6 +2607,7 @@ impl ScreenshotEditorWindow {
 
     fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = tool;
+        self.annotation_state.crop_selection = None;
         if tool != Tool::Select {
             self.selected_annotation = None;
         }
@@ -2740,9 +2742,17 @@ impl ScreenshotEditorWindow {
                     cx.notify();
                     return;
                 }
+                if self.clear_crop_selection(cx) {
+                    return;
+                }
                 self.set_tool(Tool::Select, cx);
                 self.selected_annotation = None;
                 cx.notify();
+            }
+            "enter" => {
+                if self.apply_crop_selection(window, cx) {
+                    cx.stop_propagation();
+                }
             }
             "p" => self.toggle_popover(Popover::Padding, window, cx),
             "b" => self.toggle_popover(Popover::Background, window, cx),
