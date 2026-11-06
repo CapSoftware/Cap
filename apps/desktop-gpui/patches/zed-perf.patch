@@ -1,0 +1,791 @@
+diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
+index 3470ac9..c64b672 100644
+--- a/crates/gpui/src/elements/text.rs
++++ b/crates/gpui/src/elements/text.rs
+@@ -693,8 +693,11 @@ impl TextLayout {
+                     return size;
+                 }
+ 
+-                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+                 let (text, runs) = if let Some(truncate_width) = truncate_width {
++                    // Only truncation measures with the line wrapper; checking one
++                    // out of the pool costs a font resolve and two pool locks.
++                    let mut line_wrapper =
++                        cx.text_system().line_wrapper(text_style.font(), font_size);
+                     if let Some(max_lines) = text_style.line_clamp
+                         && let Some(wrap_width) = wrap_width
+                     {
+diff --git a/crates/gpui/src/taffy.rs b/crates/gpui/src/taffy.rs
+index eb3c391..f406748 100644
+--- a/crates/gpui/src/taffy.rs
++++ b/crates/gpui/src/taffy.rs
+@@ -33,9 +33,10 @@ struct NodeContext {
+ }
+ pub struct TaffyLayoutEngine {
+     taffy: TaffyTree<NodeContext>,
+-    absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
+-    /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
+-    absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
++    /// Per node: its snapped absolute bounds, and its unrounded absolute
++    /// border-box top-left in device pixels (what children are placed from).
++    /// One map, because the two are always computed, read and evicted together.
++    absolute_layouts: FxHashMap<LayoutId, AbsoluteLayout>,
+     computed_layouts: FxHashSet<LayoutId>,
+     layout_bounds_scratch_space: Vec<LayoutId>,
+ }
+@@ -48,8 +49,7 @@ impl TaffyLayoutEngine {
+         taffy.disable_rounding();
+         TaffyLayoutEngine {
+             taffy,
+-            absolute_layout_bounds: FxHashMap::default(),
+-            absolute_outer_origins: FxHashMap::default(),
++            absolute_layouts: FxHashMap::default(),
+             computed_layouts: FxHashSet::default(),
+             layout_bounds_scratch_space: Vec::new(),
+         }
+@@ -57,8 +57,7 @@ impl TaffyLayoutEngine {
+ 
+     pub fn clear(&mut self) {
+         self.taffy.clear();
+-        self.absolute_layout_bounds.clear();
+-        self.absolute_outer_origins.clear();
++        self.absolute_layouts.clear();
+         self.computed_layouts.clear();
+     }
+ 
+@@ -211,8 +210,7 @@ impl TaffyLayoutEngine {
+             let stack = &mut self.layout_bounds_scratch_space;
+             stack.push(id);
+             while let Some(id) = stack.pop() {
+-                self.absolute_layout_bounds.remove(&id);
+-                self.absolute_outer_origins.remove(&id);
++                self.absolute_layouts.remove(&id);
+                 stack.extend(
+                     self.taffy
+                         .children(id.into())
+@@ -348,8 +346,8 @@ impl TaffyLayoutEngine {
+     // 1dp residual into descendants.
+ 
+     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
+-        if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
+-            return layout;
++        if let Some(layout) = self.absolute_layouts.get(&id) {
++            return layout.bounds;
+         }
+ 
+         let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
+@@ -361,16 +359,15 @@ impl TaffyLayoutEngine {
+             Some(parent_id) => {
+                 let parent_id = LayoutId::from(parent_id);
+                 self.layout_bounds(parent_id, scale_factor);
+-                let parent_origin = *self
+-                    .absolute_outer_origins
++                let parent_origin = self
++                    .absolute_layouts
+                     .get(&parent_id)
+-                    .expect("parent absolute outer origin should be cached");
++                    .expect("parent absolute outer origin should be cached")
++                    .outer_origin;
+                 parent_origin + Point::from(layout_location)
+             }
+             None => Point::from(layout_location),
+         };
+-        self.absolute_outer_origins
+-            .insert(id, absolute_outer_origin);
+ 
+         let absolute_far = absolute_outer_origin + Point::from(Size::from(layout_size));
+         let snapped_bounds = Bounds::from_corners(
+@@ -379,11 +376,23 @@ impl TaffyLayoutEngine {
+         );
+ 
+         let bounds = (snapped_bounds / scale_factor).map(Pixels);
+-        self.absolute_layout_bounds.insert(id, bounds);
++        self.absolute_layouts.insert(
++            id,
++            AbsoluteLayout {
++                bounds,
++                outer_origin: absolute_outer_origin,
++            },
++        );
+         bounds
+     }
+ }
+ 
++#[derive(Clone, Copy)]
++struct AbsoluteLayout {
++    bounds: Bounds<Pixels>,
++    outer_origin: Point<f32>,
++}
++
+ /// A unique identifier for a layout node, generated when requesting a layout from Taffy
+ #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+ #[repr(transparent)]
+diff --git a/crates/gpui/src/text_system.rs b/crates/gpui/src/text_system.rs
+index f3dc95b..838a7bd 100644
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -3,6 +3,8 @@ mod font_features;
+ mod line;
+ mod line_layout;
+ mod line_wrapper;
++#[cfg(test)]
++mod paint_tests;
+ 
+ pub use font_fallbacks::*;
+ pub use font_features::*;
+@@ -426,7 +428,9 @@ impl WindowTextSystem {
+             });
+         }
+ 
+-        let layout = self.layout_line(&text, font_size, runs, force_width);
++        // Pass the `SharedString` itself so a cache miss keys the layout with a
++        // clone of it instead of a fresh copy of the text.
++        let layout = self.layout_line_impl(&text, font_size, runs, force_width);
+ 
+         ShapedLine {
+             layout,
+@@ -649,6 +653,23 @@ impl WindowTextSystem {
+         runs: &[TextRun],
+         force_width: Option<Pixels>,
+     ) -> Arc<LineLayout> {
++        self.layout_line_impl(text, font_size, runs, force_width)
++    }
++
++    /// [`Self::layout_line`] over any text the line layout cache can key by.
++    /// The cache only converts `text` into a `SharedString` on a miss, so a hit
++    /// (the common case) does not copy the text.
++    fn layout_line_impl<Text>(
++        &self,
++        text: Text,
++        font_size: Pixels,
++        runs: &[TextRun],
++        force_width: Option<Pixels>,
++    ) -> Arc<LineLayout>
++    where
++        Text: AsRef<str>,
++        SharedString: From<Text>,
++    {
+         let mut last_run = None::<&TextRun>;
+         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+         font_runs.clear();
+@@ -681,12 +702,9 @@ impl WindowTextSystem {
+             }
+         }
+ 
+-        let layout = self.line_layout_cache.layout_line(
+-            &SharedString::new(text),
+-            font_size,
+-            &font_runs,
+-            force_width,
+-        );
++        let layout = self
++            .line_layout_cache
++            .layout_line(text, font_size, &font_runs, force_width);
+ 
+         self.font_runs_pool.lock().push(font_runs);
+ 
+diff --git a/crates/gpui/src/text_system/font_features.rs b/crates/gpui/src/text_system/font_features.rs
+index c1ab72b..569e8d5 100644
+--- a/crates/gpui/src/text_system/font_features.rs
++++ b/crates/gpui/src/text_system/font_features.rs
+@@ -1,12 +1,22 @@
+ use std::borrow::Cow;
+-use std::sync::Arc;
++use std::sync::{Arc, LazyLock};
+ 
+ use schemars::{JsonSchema, json_schema};
+ 
+ /// The OpenType features that can be configured for a given font.
+-#[derive(Default, Clone, Eq, PartialEq, Hash)]
++#[derive(Clone, Eq, PartialEq, Hash)]
+ pub struct FontFeatures(pub Arc<Vec<(String, u32)>>);
+ 
++impl Default for FontFeatures {
++    /// No features. Every default shares one empty list, so the
++    /// `TextStyle::default()` behind each `Window::text_style()` call does not
++    /// allocate; equality and hashing compare contents, not the `Arc`.
++    fn default() -> Self {
++        static NONE: LazyLock<Arc<Vec<(String, u32)>>> = LazyLock::new(Default::default);
++        Self(NONE.clone())
++    }
++}
++
+ impl FontFeatures {
+     /// Disables `calt`.
+     pub fn disable_ligatures() -> Self {
+diff --git a/crates/gpui/src/text_system/line.rs b/crates/gpui/src/text_system/line.rs
+index cb66359..c6748fa 100644
+--- a/crates/gpui/src/text_system/line.rs
++++ b/crates/gpui/src/text_system/line.rs
+@@ -373,8 +373,13 @@ fn paint_line(
+         let mut prev_glyph_position = Point::default();
+         let mut max_glyph_size = size(px(0.), px(0.));
+         let mut first_glyph_x = origin.x;
++        // A glyph's rendering inputs depend only on its run's font (subpixel
++        // rendering) and on its color (dilation), so resolve them once per run
++        // and per color rather than for every glyph.
++        let mut dilation_for_color: Option<(Hsla, u8)> = None;
+         for (run_ix, run) in layout.runs.iter().enumerate() {
+             max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
++            let mut run_subpixel_rendering: Option<bool> = None;
+ 
+             for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                 glyph_origin.x += glyph.position.x - prev_glyph_position.x;
+@@ -532,12 +537,25 @@ fn paint_line(
+                             layout.font_size,
+                         )?;
+                     } else {
+-                        window.paint_glyph(
++                        let subpixel_rendering = *run_subpixel_rendering.get_or_insert_with(|| {
++                            window.should_use_subpixel_rendering(run.font_id, layout.font_size)
++                        });
++                        let dilation = match dilation_for_color {
++                            Some((cached_color, dilation)) if cached_color == color => dilation,
++                            _ => {
++                                let dilation = text_system.glyph_dilation_for_color(color);
++                                dilation_for_color = Some((color, dilation));
++                                dilation
++                            }
++                        };
++                        window.paint_glyph_with_rendering(
+                             glyph_origin + baseline_offset + vertical_offset,
+                             run.font_id,
+                             glyph.id,
+                             layout.font_size,
+                             color,
++                            subpixel_rendering,
++                            dilation,
+                         )?;
+                     }
+                 }
+@@ -596,6 +614,16 @@ fn paint_line_background(
+         ),
+     );
+     window.paint_layer(line_bounds, |window| {
++        // Only runs with a background color paint anything below. Most text has
++        // none, so skip the per-glyph walk; the layer itself is still pushed so
++        // the scene's draw order is unchanged.
++        if decoration_runs
++            .iter()
++            .all(|run| run.background_color.is_none())
++        {
++            return Ok(());
++        }
++
+         let mut decoration_runs = decoration_runs.iter();
+         let mut wraps = wrap_boundaries.iter().peekable();
+         let mut run_end = 0;
+diff --git a/crates/gpui/src/text_system/paint_tests.rs b/crates/gpui/src/text_system/paint_tests.rs
+new file mode 100644
+index 0000000..9688c50
+--- /dev/null
++++ b/crates/gpui/src/text_system/paint_tests.rs
+@@ -0,0 +1,260 @@
++//! Scene-level tests for painting shaped text: every glyph sprite must carry
++//! the rendering inputs (dilation) of its own color, background runs must
++//! still paint, and cache hits must return the very layout a miss produced.
++
++use std::{borrow::Cow, rc::Rc, sync::Arc};
++
++use crate::{
++    AnyWindowHandle, App, AppCell, AppContext as _, BackgroundExecutor, Bounds, Context,
++    DevicePixels, Font, FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, Hsla,
++    IntoElement, LineLayout, NoopTextSystem, ParentElement as _, Pixels, PlatformTextSystem,
++    RenderGlyphParams, Result, Size, StyledText, TestAppContext, TestDispatcher, TestPlatform,
++    TextRenderingMode, TextRun, Window, WindowBounds, WindowOptions, WindowTextSystem,
++    app::GpuiMode, div, font, hsla, point, px, size,
++};
++
++// For the `#[crate::test]` macro, which expands to `gpui::` paths.
++use crate as gpui;
++
++/// The no-op text system, except that glyphs rasterize to a non-empty tile
++/// whose width encodes the dilation they were rendered with, and dilation
++/// follows the color's lightness.
++struct RasterizingTextSystem(NoopTextSystem);
++
++fn dilation_for(color: Hsla) -> u8 {
++    (color.l * 4.0).round() as u8
++}
++
++impl PlatformTextSystem for RasterizingTextSystem {
++    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
++        self.0.add_fonts(fonts)
++    }
++
++    fn all_font_names(&self) -> Vec<String> {
++        self.0.all_font_names()
++    }
++
++    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
++        self.0.font_id(descriptor)
++    }
++
++    fn font_metrics(&self, font_id: FontId) -> FontMetrics {
++        self.0.font_metrics(font_id)
++    }
++
++    fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
++        self.0.typographic_bounds(font_id, glyph_id)
++    }
++
++    fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
++        self.0.advance(font_id, glyph_id)
++    }
++
++    fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
++        self.0.glyph_for_char(font_id, ch)
++    }
++
++    fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
++        Ok(Bounds {
++            origin: point(DevicePixels(0), DevicePixels(-8)),
++            size: size(DevicePixels(1 + params.dilation as i32), DevicePixels(8)),
++        })
++    }
++
++    fn rasterize_glyph(
++        &self,
++        _params: &RenderGlyphParams,
++        raster_bounds: Bounds<DevicePixels>,
++    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
++        let len = (raster_bounds.size.width.0 * raster_bounds.size.height.0) as usize;
++        Ok((raster_bounds.size, vec![255; len]))
++    }
++
++    fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
++        self.0.layout_line(text, font_size, runs)
++    }
++
++    fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
++        self.0.recommended_rendering_mode(font_id, font_size)
++    }
++
++    fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
++        dilation_for(color)
++    }
++}
++
++fn app_with_rasterizing_text_system() -> Rc<AppCell> {
++    let dispatcher = Arc::new(TestDispatcher::new(0));
++    let background_executor = BackgroundExecutor::new(dispatcher.clone());
++    let foreground_executor = ForegroundExecutor::new(dispatcher);
++    let platform = TestPlatform::with_text_system(
++        background_executor,
++        foreground_executor,
++        Arc::new(RasterizingTextSystem(NoopTextSystem)),
++    );
++    let app = App::new_app(
++        platform,
++        Arc::new(()),
++        http_client::FakeHttpClient::with_404_response(),
++    );
++    app.borrow_mut().mode = GpuiMode::test();
++    app
++}
++
++struct Text {
++    text: &'static str,
++    runs: Vec<TextRun>,
++}
++
++impl crate::Render for Text {
++    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++        div().child(StyledText::new(self.text).with_runs(self.runs.clone()))
++    }
++}
++
++fn run(len: usize, color: Hsla, background_color: Option<Hsla>) -> TextRun {
++    TextRun {
++        len,
++        font: font("Test"),
++        color,
++        background_color,
++        underline: None,
++        strikethrough: None,
++    }
++}
++
++/// Paints `text` with `runs` on one line and returns, per monochrome sprite
++/// from left to right, its color and the dilation encoded in its tile width,
++/// plus the solid color of every quad in the scene (in paint order).
++fn paint(text: &'static str, runs: Vec<TextRun>) -> (Vec<(Hsla, u8)>, Vec<Hsla>) {
++    let app = app_with_rasterizing_text_system();
++    let mut app = app.borrow_mut();
++    let cx: &mut App = &mut app;
++    let window: AnyWindowHandle = cx
++        .open_window(
++            WindowOptions {
++                window_bounds: Some(WindowBounds::Windowed(Bounds {
++                    origin: point(px(0.), px(0.)),
++                    size: size(px(800.), px(600.)),
++                })),
++                ..Default::default()
++            },
++            |_, cx| cx.new(|_| Text { text, runs }),
++        )
++        .expect("open test window")
++        .into();
++    // The untyped handle leaves the root view unleased, so `draw` can render it.
++    window
++        .update(cx, |_, window, cx| {
++            window.draw(cx).clear();
++            let scene = &window.rendered_frame.scene;
++            let mut sprites: Vec<_> = scene.monochrome_sprites.iter().collect();
++            // The scene orders sprites by tile, not by position.
++            sprites.sort_by(|a, b| a.bounds.origin.x.0.total_cmp(&b.bounds.origin.x.0));
++            let glyphs = sprites
++                .into_iter()
++                .map(|sprite| (sprite.color, (sprite.bounds.size.width.0 as i32 - 1) as u8))
++                .collect();
++            let backgrounds = scene
++                .quads
++                .iter()
++                .map(|quad| quad.background.solid)
++                .collect();
++            (glyphs, backgrounds)
++        })
++        .expect("draw test window")
++}
++
++#[test]
++fn every_glyph_is_rendered_with_the_dilation_of_its_own_color() {
++    let dark = hsla(0., 0., 0., 1.);
++    let light = hsla(0., 0., 1., 1.);
++    let mid = hsla(0.6, 0.5, 0.5, 1.);
++    assert_ne!(dilation_for(dark), dilation_for(light));
++    assert_ne!(dilation_for(dark), dilation_for(mid));
++
++    // Colors alternate run to run, so a dilation remembered for the wrong
++    // color would show up on the glyphs after every switch.
++    let text = "aaabbbcccdddeee";
++    let runs = vec![
++        run(3, dark, None),
++        run(3, light, None),
++        run(3, dark, None),
++        run(3, mid, None),
++        run(3, light, None),
++    ];
++    let (glyphs, _) = paint(text, runs);
++
++    let expected_colors = [dark, light, dark, mid, light]
++        .into_iter()
++        .flat_map(|color| [color; 3])
++        .collect::<Vec<_>>();
++    assert_eq!(glyphs.len(), text.len());
++    for (ix, ((color, dilation), expected_color)) in glyphs.iter().zip(&expected_colors).enumerate()
++    {
++        assert_eq!(color, expected_color, "glyph {ix} color");
++        assert_eq!(*dilation, dilation_for(*color), "glyph {ix} dilation");
++    }
++}
++
++#[test]
++fn text_without_background_runs_paints_no_quads() {
++    let color = hsla(0., 0., 0.2, 1.);
++    let (glyphs, backgrounds) = paint("no backgrounds here", vec![run(19, color, None)]);
++    assert_eq!(glyphs.len(), 19);
++    assert!(backgrounds.is_empty(), "unexpected quads: {backgrounds:?}");
++}
++
++#[test]
++fn background_runs_still_paint_their_quads() {
++    let color = hsla(0., 0., 0.2, 1.);
++    let highlight = hsla(0.15, 1., 0.5, 1.);
++    let other = hsla(0.55, 1., 0.5, 1.);
++    let (glyphs, backgrounds) = paint(
++        "plain highlighted plain other",
++        vec![
++            run(6, color, None),
++            run(12, color, Some(highlight)),
++            run(6, color, None),
++            run(5, color, Some(other)),
++        ],
++    );
++    assert_eq!(glyphs.len(), 29);
++    assert_eq!(backgrounds, vec![highlight, other]);
++}
++
++#[crate::test]
++fn shaped_and_laid_out_lines_share_one_cached_layout(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let text_system = WindowTextSystem::new(cx.text_system().clone());
++        // Longer than an inline `SharedString`, so a copy would be a new heap string.
++        let text = "a line comfortably longer than twenty-three bytes";
++        let runs = [TextRun {
++            len: text.len(),
++            font: font("Test"),
++            color: Default::default(),
++            background_color: None,
++            underline: None,
++            strikethrough: None,
++        }];
++
++        let shaped = text_system.shape_line(text.into(), px(14.), &runs, None);
++        let laid_out = text_system.layout_line(text, px(14.), &runs, None);
++        let shaped_again = text_system.shape_line(text.into(), px(14.), &runs, None);
++        assert!(Arc::ptr_eq(&shaped.layout, &laid_out));
++        assert!(Arc::ptr_eq(&shaped.layout, &shaped_again.layout));
++        assert_eq!(shaped.text.as_ref(), text);
++
++        // The next frame reuses the previous frame's layout for both entry points.
++        text_system.finish_frame();
++        let laid_out_next_frame = text_system.layout_line(text, px(14.), &runs, None);
++        let shaped_next_frame = text_system.shape_line(text.into(), px(14.), &runs, None);
++        assert!(Arc::ptr_eq(&shaped.layout, &laid_out_next_frame));
++        assert!(Arc::ptr_eq(&shaped.layout, &shaped_next_frame.layout));
++
++        // Different text is a different layout.
++        let other =
++            text_system.layout_line("something else entirely, also long", px(14.), &runs, None);
++        assert!(!Arc::ptr_eq(&shaped.layout, &other));
++    });
++}
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 82cdc92..b5386ac 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -993,6 +993,11 @@ pub(crate) struct Frame {
+     pub(crate) window_active: bool,
+     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
+     accessed_element_states: Vec<(GlobalElementId, TypeId)>,
++    /// Ranges of `accessed_element_states` copied from the previous frame by
++    /// `reuse_prepaint`/`reuse_paint`. Only those keys can still have their
++    /// state in the previous frame when this one finishes: `with_element_state`
++    /// takes the state out of the previous frame on first access.
++    reused_element_state_ranges: Vec<Range<usize>>,
+     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
+     pub(crate) dispatch_tree: DispatchTree,
+     pub(crate) scene: Scene,
+@@ -1039,6 +1044,7 @@ impl Frame {
+             window_active: false,
+             element_states: FxHashMap::default(),
+             accessed_element_states: Vec::new(),
++            reused_element_state_ranges: Vec::new(),
+             mouse_listeners: Vec::new(),
+             dispatch_tree,
+             scene: Scene::default(),
+@@ -1064,6 +1070,7 @@ impl Frame {
+     pub(crate) fn clear(&mut self) {
+         self.element_states.clear();
+         self.accessed_element_states.clear();
++        self.reused_element_state_ranges.clear();
+         self.mouse_listeners.clear();
+         self.dispatch_tree.clear();
+         self.scene.clear();
+@@ -1134,11 +1141,20 @@ impl Frame {
+     }
+ 
+     pub(crate) fn finish(&mut self, prev_frame: &mut Self) {
+-        for element_state_key in &self.accessed_element_states {
+-            if let Some((element_state_key, element_state)) =
+-                prev_frame.element_states.remove_entry(element_state_key)
+-            {
+-                self.element_states.insert(element_state_key, element_state);
++        // Carry over the state of every element this frame reused from the
++        // previous one. Keys accessed through `with_element_state` already moved
++        // their state into this frame, so only the reused ranges can match.
++        // `truncate` may have shortened the accessed list since a range was
++        // recorded; clamping keeps the scan within the keys that are still there.
++        let accessed = self.accessed_element_states.len();
++        for range in &self.reused_element_state_ranges {
++            let range = range.start.min(accessed)..range.end.min(accessed);
++            for element_state_key in &self.accessed_element_states[range] {
++                if let Some((element_state_key, element_state)) =
++                    prev_frame.element_states.remove_entry(element_state_key)
++                {
++                    self.element_states.insert(element_state_key, element_state);
++                }
+             }
+         }
+ 
+@@ -3407,12 +3423,19 @@ impl Window {
+                 .iter_mut()
+                 .map(|request| request.take()),
+         );
++        let reused_start = self.next_frame.accessed_element_states.len();
+         self.next_frame.accessed_element_states.extend(
+             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                 ..range.end.accessed_element_states_index]
+                 .iter()
+                 .map(|(id, type_id)| (id.clone(), *type_id)),
+         );
++        let reused_end = self.next_frame.accessed_element_states.len();
++        if reused_end > reused_start {
++            self.next_frame
++                .reused_element_state_ranges
++                .push(reused_start..reused_end);
++        }
+         self.text_system
+             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+ 
+@@ -3477,12 +3500,19 @@ impl Window {
+                 .iter_mut()
+                 .map(|listener| listener.take()),
+         );
++        let reused_start = self.next_frame.accessed_element_states.len();
+         self.next_frame.accessed_element_states.extend(
+             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                 ..range.end.accessed_element_states_index]
+                 .iter()
+                 .map(|(id, type_id)| (id.clone(), *type_id)),
+         );
++        let reused_end = self.next_frame.accessed_element_states.len();
++        if reused_end > reused_start {
++            self.next_frame
++                .reused_element_state_ranges
++                .push(reused_start..reused_end);
++        }
+         self.next_frame.tab_stops.replay(
+             &self.rendered_frame.tab_stops.insertion_history
+                 [range.start.tab_handle_index..range.end.tab_handle_index],
+@@ -4440,6 +4470,35 @@ impl Window {
+         glyph_id: GlyphId,
+         font_size: Pixels,
+         color: Hsla,
++    ) -> Result<()> {
++        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
++        let dilation = self.text_system().glyph_dilation_for_color(color);
++        self.paint_glyph_with_rendering(
++            origin,
++            font_id,
++            glyph_id,
++            font_size,
++            color,
++            subpixel_rendering,
++            dilation,
++        )
++    }
++
++    /// [`Self::paint_glyph`] with the glyph's rendering inputs already resolved:
++    /// `subpixel_rendering` must equal `should_use_subpixel_rendering(font_id,
++    /// font_size)` and `dilation` must equal the text system's
++    /// `glyph_dilation_for_color(color)`. Painting a line resolves them once per
++    /// run and color instead of once per glyph; on macOS the former takes the
++    /// native window's lock.
++    pub(crate) fn paint_glyph_with_rendering(
++        &mut self,
++        origin: Point<Pixels>,
++        font_id: FontId,
++        glyph_id: GlyphId,
++        font_size: Pixels,
++        color: Hsla,
++        subpixel_rendering: bool,
++        dilation: u8,
+     ) -> Result<()> {
+         self.invalidator.debug_assert_paint();
+ 
+@@ -4461,8 +4520,6 @@ impl Window {
+             (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
+         );
+         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
+-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
+-        let dilation = self.text_system().glyph_dilation_for_color(color);
+         let params = RenderGlyphParams {
+             font_id,
+             glyph_id,
+@@ -4514,7 +4571,7 @@ impl Window {
+         Ok(())
+     }
+ 
+-    fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
++    pub(crate) fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
+         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
+             return false;
+         }
+@@ -7378,3 +7435,95 @@ mod tests {
+         assert_eq!(b_focus_count.get(), 1);
+     }
+ }
++
++#[cfg(test)]
++mod reused_element_state_tests {
++    use crate::{
++        AnyView, AnyWindowHandle, AppContext as _, Context, Entity, EntityId, IntoElement,
++        ParentElement as _, Render, StyleRefinement, Styled as _, TestAppContext, Window, canvas,
++        div,
++    };
++    use std::{cell::Cell, rc::Rc};
++
++    struct Child {
++        seen: Rc<Cell<Option<EntityId>>>,
++    }
++
++    impl Render for Child {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            let seen = self.seen.clone();
++            div().size_full().child(
++                canvas(
++                    move |_, window, cx| {
++                        let state = window.use_keyed_state("reused-state", cx, |_, _| 0usize);
++                        seen.set(Some(state.entity_id()));
++                    },
++                    |_, _, _, _| {},
++                )
++                .size_full(),
++            )
++        }
++    }
++
++    struct Root {
++        child: Entity<Child>,
++    }
++
++    impl Render for Root {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            div().size_full().child(
++                AnyView::from(self.child.clone()).cached(StyleRefinement::default().size_full()),
++            )
++        }
++    }
++
++    /// A cached view that is reused for a frame (its elements do not run) must
++    /// still hand its element state to the frame after, where it renders again.
++    #[test]
++    fn element_state_survives_frames_that_reuse_its_view() {
++        let mut cx = TestAppContext::single();
++        let seen = Rc::new(Cell::new(None));
++        let child = cx.new({
++            let seen = seen.clone();
++            |_| Child { seen }
++        });
++        let root = cx.add_window({
++            let child = child.clone();
++            move |_, _| Root { child }
++        });
++        let window: AnyWindowHandle = root.into();
++        let draw = |cx: &mut TestAppContext| {
++            cx.update_window(window, |_, window, cx| window.draw(cx).clear())
++                .unwrap();
++        };
++
++        draw(&mut cx);
++        let first = seen.take().expect("the child paints on the first frame");
++
++        // Only the root re-renders: the cached child is reused on these frames.
++        for _ in 0..3 {
++            root.update(&mut cx, |_, _, cx| cx.notify()).unwrap();
++            draw(&mut cx);
++            assert_eq!(
++                seen.take(),
++                None,
++                "the cached child should have been reused"
++            );
++        }
++
++        // The child renders again and finds the state it created on the first frame.
++        child.update(&mut cx, |_, cx| cx.notify());
++        draw(&mut cx);
++        assert_eq!(seen.take(), Some(first));
++
++        // And a frame where nothing is reused keeps it too.
++        cx.update_window(window, |_, window, cx| {
++            window.refresh();
++            window.draw(cx).clear();
++        })
++        .unwrap();
++        child.update(&mut cx, |_, cx| cx.notify());
++        draw(&mut cx);
++        assert_eq!(seen.take(), Some(first));
++    }
++}
