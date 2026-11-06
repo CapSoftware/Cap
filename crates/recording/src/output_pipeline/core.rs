@@ -3379,8 +3379,8 @@ async fn finish_build(
 /// its other tasks: past the video source's own 5s stop deadline.
 const UNOWNED_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// A muxer whose subprocess was not reaped, or whose encoder thread did not
-/// finish, may still be working, so its pipeline has not fully exited.
+/// A muxer whose subprocess was not reaped, or whose encoder or writer thread
+/// did not finish, may still be working, so its pipeline has not fully exited.
 fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool {
     let error = match muxer_result {
         Err(error) | Ok(Err(error)) => error,
@@ -3391,9 +3391,17 @@ fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool
         if cause.is::<BlockingThreadStillRunning>() {
             return true;
         }
-        cause
-            .downcast_ref::<super::oop_muxer::MuxerSubprocessFinishError>()
-            .is_some_and(|error| !error.child_reaped())
+        let stalled = |error: &(dyn std::error::Error + 'static)| {
+            error.is::<cap_enc_ffmpeg::StorageStalled>()
+        };
+        stalled(cause)
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| stalled(inner))
+            || cause
+                .downcast_ref::<super::oop_muxer::MuxerSubprocessFinishError>()
+                .is_some_and(|error| !error.child_reaped())
     })
 }
 
@@ -11800,6 +11808,8 @@ mod build_scope_tests {
         MuxSendAndVideoStop,
         MuxerFinish,
         MuxerFinishThreadRunning,
+        MuxerFinishWriterStalled,
+        MuxerFinishSegmentWriterStalled,
         None,
     }
 
@@ -12003,6 +12013,15 @@ mod build_scope_tests {
                     "encoder thread did not finish within 5s".into(),
                 ))));
             }
+            if self.0.stage == FailureStage::MuxerFinishWriterStalled {
+                return Err(cap_enc_ffmpeg::ogg::FinishError::StorageStalled(
+                    cap_enc_ffmpeg::StorageStalled,
+                )
+                .into());
+            }
+            if self.0.stage == FailureStage::MuxerFinishSegmentWriterStalled {
+                return Err(std::io::Error::from(cap_enc_ffmpeg::StorageStalled).into());
+            }
             Ok(Ok(()))
         }
     }
@@ -12121,12 +12140,22 @@ mod build_scope_tests {
         assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
     }
 
-    /// An encoder thread that did not finish may still be writing, so that
-    /// stop stays unconfirmed.
+    /// An encoder thread or output writer that did not finish may still be
+    /// writing, so that stop stays unconfirmed.
     #[tokio::test]
-    async fn encoder_thread_still_running_at_stop_stays_unconfirmed() {
+    async fn encoder_or_writer_still_running_at_stop_stays_unconfirmed() {
+        for stage in [
+            FailureStage::MuxerFinishThreadRunning,
+            FailureStage::MuxerFinishWriterStalled,
+            FailureStage::MuxerFinishSegmentWriterStalled,
+        ] {
+            encoder_still_running_case(stage).await;
+        }
+    }
+
+    async fn encoder_still_running_case(stage: FailureStage) {
         let scope = PipelineBuildScope::new();
-        let probe = Probe::new(FailureStage::MuxerFinishThreadRunning, &scope);
+        let probe = Probe::new(stage, &scope);
         let directory = tempfile::tempdir().unwrap();
         let pipeline = finish_pipeline_startup(
             &scope,
@@ -12141,9 +12170,13 @@ mod build_scope_tests {
             .await
             .unwrap();
         let Err(error) = result else {
-            panic!("Stop claimed capture stopped while the encoder thread ran");
+            panic!("Stop claimed capture stopped while the encoder or writer ran");
         };
-        assert!(format!("{error:#}").contains("did not finish"));
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("did not finish") || error.contains("storage stalled"),
+            "{error}"
+        );
     }
 
     impl AudioMuxer for Encoder {

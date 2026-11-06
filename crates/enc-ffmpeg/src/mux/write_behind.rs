@@ -80,15 +80,15 @@ pub(crate) trait MuxTarget: Send + 'static {
     fn packet_written(&mut self) {}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StorageStalled;
+/// The writer thread did not finish the output in time and may still write
+/// to it once storage recovers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("output storage stalled while finishing; recording left for recovery")]
+pub struct StorageStalled;
 
 impl From<StorageStalled> for std::io::Error {
-    fn from(_: StorageStalled) -> Self {
-        std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "output storage stalled while finishing; recording left for recovery",
-        )
+    fn from(stalled: StorageStalled) -> Self {
+        std::io::Error::new(std::io::ErrorKind::TimedOut, stalled)
     }
 }
 
