@@ -253,10 +253,7 @@ export async function provisionSsoMembership(
 						eq(directoryUsers.userId, userId),
 					),
 				);
-			if (
-				directoryLinks.length > 0 &&
-				!directoryLinks.some((link) => link.active)
-			) {
+			if (directoryLinks.length > 0) {
 				const [invite] = await tx
 					.select({ id: organizationInvites.id })
 					.from(organizationInvites)
@@ -264,7 +261,7 @@ export async function provisionSsoMembership(
 					.limit(1);
 				if (!invite) {
 					throw new Error(
-						"Your directory no longer grants access to this organization.",
+						"You no longer have access to this organization. Ask an admin to invite you again.",
 					);
 				}
 			}
