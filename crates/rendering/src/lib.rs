@@ -319,10 +319,13 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
 
     #[cfg(target_os = "windows")]
     let instance = match DX12_SHADER_COMPILER.get() {
-        Some(compiler) => dx12_instance(compiler.clone()),
+        Some((compiler, _)) => dx12_instance(compiler.clone()),
         None => {
-            let (instance, compiler) = dx12_instance_with_fxc_fallback(bundled_dxc_compiler());
-            let _ = DX12_SHADER_COMPILER.set(compiler);
+            let bundled = bundled_dxc_compiler();
+            let uses_dxc = !matches!(bundled, wgpu::Dx12Compiler::Fxc);
+            let (instance, compiler) = dx12_instance_with_fxc_fallback(bundled);
+            let fxc_fallback = uses_dxc && matches!(compiler, wgpu::Dx12Compiler::Fxc);
+            let _ = DX12_SHADER_COMPILER.set((compiler, fxc_fallback));
             instance
         }
     };
@@ -331,19 +334,19 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
 }
 
 /// The compiler the first instance ended up on, so later instances skip a
-/// DXC that already failed to load.
+/// DXC that already failed to load, and whether that is the FXC fallback.
 #[cfg(target_os = "windows")]
-static DX12_SHADER_COMPILER: std::sync::OnceLock<wgpu::Dx12Compiler> = std::sync::OnceLock::new();
-
-#[cfg(target_os = "windows")]
-static DX12_FXC_FALLBACK: AtomicBool = AtomicBool::new(false);
+static DX12_SHADER_COMPILER: std::sync::OnceLock<(wgpu::Dx12Compiler, bool)> =
+    std::sync::OnceLock::new();
 
 /// WARP crashes on the first frame rendered with FXC-compiled shaders, so the
 /// FXC fallback only renders on hardware adapters.
 #[cfg(not(target_arch = "wasm32"))]
 fn software_adapters_unusable() -> bool {
     #[cfg(target_os = "windows")]
-    let unusable = DX12_FXC_FALLBACK.load(Ordering::Acquire);
+    let unusable = DX12_SHADER_COMPILER
+        .get()
+        .is_some_and(|(_, fxc_fallback)| *fxc_fallback);
     #[cfg(not(target_os = "windows"))]
     let unusable = false;
 
@@ -385,7 +388,6 @@ fn dx12_instance_with_fxc_fallback(
         error = dx12_init_error(compiler),
         "DX12 with bundled DXC failed to initialise; retrying with FXC"
     );
-    DX12_FXC_FALLBACK.store(true, Ordering::Release);
     (
         dx12_instance(wgpu::Dx12Compiler::Fxc),
         wgpu::Dx12Compiler::Fxc,
