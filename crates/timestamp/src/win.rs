@@ -158,10 +158,12 @@ mod tests {
     #[test]
     fn duration_to_counter_ticks_preserves_long_recording_precision() {
         let freq = 24_000_000i64;
-        let one_hour = Duration::from_secs(3_600);
+        let non_power_of_two = Duration::from_nanos(3_600_000_123_456);
+        let expected = (non_power_of_two.as_nanos() * u128::try_from(freq).unwrap() + 500_000_000)
+            / 1_000_000_000;
         assert_eq!(
-            duration_to_counter_ticks(one_hour, freq),
-            i128::from(freq) * 3_600
+            duration_to_counter_ticks(non_power_of_two, freq),
+            expected as i128
         );
     }
 }

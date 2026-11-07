@@ -139,13 +139,18 @@ mod tests {
 
     #[test]
     fn apple_silicon_timebase_preserves_precision_over_long_recordings() {
-        // Apple Silicon mach_timebase_info is 125/3 (24 MHz counter) and can exceed 2^50 ticks on long uptimes.
         let numer = 125u128;
         let denom = 3u128;
-        let high_uptime_ticks: u64 = 1u64 << 52;
-        let step_ticks = nanos_to_ticks_with_ratio(3_600_000_000_000, numer, denom);
-        let later_ticks = high_uptime_ticks.saturating_add(step_ticks);
-        let elapsed_ns = ticks_to_nanos_with_ratio(later_ticks - high_uptime_ticks, numer, denom);
-        assert_eq!(elapsed_ns, 3_600_000_000_000);
+        let target_ns: u128 = 3_600_000_123_456;
+        let step_ticks = nanos_to_ticks_with_ratio(target_ns, numer, denom);
+        let high_uptime = MachAbsoluteTimestamp::new(1u64 << 52);
+        let later = MachAbsoluteTimestamp::new(high_uptime.0 + step_ticks);
+        let elapsed_ns = ticks_to_nanos_with_ratio(later.0 - high_uptime.0, numer, denom);
+        assert!((elapsed_ns as i128 - target_ns as i128).abs() <= 42);
+
+        let delta = Duration::from_nanos(3_600_000_123_456);
+        let roundtrip = (high_uptime + delta).duration_since(high_uptime);
+        let err_ns = (roundtrip.as_nanos() as i128 - delta.as_nanos() as i128).abs();
+        assert!(err_ns <= 100, "unexpected operator drift: {err_ns}ns");
     }
 }
