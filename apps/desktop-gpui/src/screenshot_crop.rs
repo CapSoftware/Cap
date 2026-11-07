@@ -111,7 +111,10 @@ impl ScreenshotEditorWindow {
             return;
         };
 
-        let initial = match &self.project.background.crop {
+        let initial = match self
+            .take_pending_crop_bounds()
+            .or_else(|| self.project.background.crop.clone())
+        {
             Some(crop) => CropBounds::new(
                 f64::from(crop.position.x),
                 f64::from(crop.position.y),
@@ -491,6 +494,10 @@ impl ScreenshotEditorWindow {
         }
         if key == "escape" {
             self.cancel_crop_dialog("escape", window, cx);
+            return true;
+        }
+        if key == "enter" {
+            self.save_crop_dialog(window, cx);
             return true;
         }
         let Some(nudge) = engine::is_nudge_key(key) else {

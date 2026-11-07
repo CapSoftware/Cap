@@ -1212,8 +1212,15 @@ impl ScreenshotEditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let prev_crop = self.project.background.crop.clone();
         if !change(&mut self.project) {
             return;
+        }
+        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
+            self.annotation_state.gesture = None;
+        }
+        if self.project.background.crop != prev_crop {
+            self.clear_crop_selection(cx);
         }
         // Padding, crop and aspect all move the content rect underneath the
         // masks; the clamp rides along in the same history entry.
@@ -1280,6 +1287,7 @@ impl ScreenshotEditorWindow {
     ) {
         self.project = config;
         self.bg_tab = BgTab::for_source(&self.project.background.source);
+        self.clear_crop_selection(cx);
         if let Some(id) = &self.selected_annotation
             && !self
                 .project
@@ -2606,6 +2614,7 @@ impl ScreenshotEditorWindow {
 
     fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = tool;
+        self.clear_crop_selection(cx);
         if tool != Tool::Select {
             self.selected_annotation = None;
         }
@@ -2740,9 +2749,17 @@ impl ScreenshotEditorWindow {
                     cx.notify();
                     return;
                 }
+                if self.clear_crop_selection(cx) {
+                    return;
+                }
                 self.set_tool(Tool::Select, cx);
                 self.selected_annotation = None;
                 cx.notify();
+            }
+            "enter" => {
+                if self.apply_crop_selection(window, cx) {
+                    cx.stop_propagation();
+                }
             }
             "p" => self.toggle_popover(Popover::Padding, window, cx),
             "b" => self.toggle_popover(Popover::Background, window, cx),
