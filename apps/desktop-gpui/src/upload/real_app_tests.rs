@@ -891,3 +891,72 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
         }
     }
 }
+
+/// A recording whose pipeline fails mid-capture (in the field an encoder or
+/// capture task error; here the debug build's injected task failure) is
+/// stopped by the app. Every capture task has already exited, so Stop must
+/// confirm, keep the media and show the failure, instead of retaining a Stop
+/// control that can never confirm and cancelling Quit.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_pipeline_failure_stops_and_keeps_its_media() {
+    for mode in ["instant", "studio"] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        let name = format!("pipeline-failure-{mode}");
+        let auto = format!("{mode}:90");
+        let app = sandbox.launch(
+            &name,
+            &[
+                ("CAP_GPUI_AUTO_RECORD", auto.as_str()),
+                ("CAP_RECORDING_FAIL_PIPELINE_AFTER_MS", "6000"),
+            ],
+        );
+        let ended = |log: &str| {
+            log.contains("Capture cleanup is unconfirmed")
+                || log.contains("recording failed to stop cleanly")
+                || log.contains("recording finished")
+        };
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the failed recording to stop",
+            Duration::from_secs(150),
+            || ended(&sandbox.log(&name)),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(&name));
+        assert!(
+            log.contains("Injected pipeline failure") && log.contains("recording pipeline failed"),
+            "{mode}: the injected failure never reached the session:\n{log}"
+        );
+        assert!(
+            !log.contains("Capture cleanup is unconfirmed"),
+            "{mode}: Stop was left waiting on a capture that had already ended:\n{log}"
+        );
+        assert!(
+            log.contains("recording failed to stop cleanly"),
+            "{mode}: the failure was not reported:\n{log}"
+        );
+        let projects = sandbox.projects();
+        assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
+        let project = &projects[0];
+        assert!(
+            media_files(project) > 0,
+            "{mode}: no media kept in {}",
+            project.display()
+        );
+        if mode == "studio" {
+            let status = meta(project).map(|meta| meta["status"].clone());
+            assert!(
+                status
+                    .as_ref()
+                    .is_some_and(|status| status["status"] == "Failed"),
+                "studio: project not marked Failed for the editor's salvage: {status:?}"
+            );
+        }
+    }
+}
