@@ -29,6 +29,10 @@ pub struct Request {
     /// journals written before projects existed, and when the recording has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The id of the outside caller's walk (`ux_walk::external`), when another app started it.
+    /// Live only: never written into the journal.
+    #[serde(skip)]
+    pub external: Option<String>,
 }
 
 impl Request {

@@ -143,6 +143,22 @@ pub enum DeepLinkAction {
     OpenSettings {
         page: Option<String>,
     },
+    /// Fork-only: start a walk or diatribe for another app (Z3, `cap-cli walk start`). It
+    /// runs exactly like one started from the recorder and reports each step, its folder and
+    /// any error to `ux_walk::external`'s status file for `id`, which the caller chose.
+    #[cfg(feature = "ux-walk")]
+    StartWalk {
+        id: String,
+        mode: crate::ux_walk::external::Mode,
+        topic: String,
+        #[serde(default)]
+        url: Option<String>,
+    },
+    /// Fork-only: stop the outside walk `id`, which then saves and processes as usual.
+    #[cfg(feature = "ux-walk")]
+    StopWalk {
+        id: String,
+    },
 }
 
 /// `ActionParseFromUrlError` (`deeplink_actions.rs:148-153`).
@@ -441,6 +457,63 @@ impl DeepLinkAction {
                         permit.cancel();
                     }
                 });
+                Ok(())
+            }
+            #[cfg(feature = "ux-walk")]
+            DeepLinkAction::StartWalk {
+                id,
+                mode,
+                topic,
+                url,
+            } => {
+                if !crate::ux_walk::external::valid_id(&id) {
+                    return Err("Invalid walk id".into());
+                }
+                let main = cx.global::<app_windows::AppWindows>().main;
+                let started = main
+                    .update(cx, |view, _, cx| {
+                        view.start_external_walk(id.clone(), mode, topic.clone(), url, cx)
+                    })
+                    .map_err(|_| "The recording window is unavailable".to_string())
+                    .and_then(|result| result);
+                if let Err(error) = &started {
+                    // A refused start still answers its caller, unless the id was a repeat.
+                    if crate::ux_walk::external::read(&id).is_none() {
+                        let mut status =
+                            crate::ux_walk::external::Status::starting(&id, mode, &topic);
+                        status.fail(error);
+                        let _ = crate::ux_walk::external::write_in(
+                            &crate::ux_walk::external::directory(),
+                            &status,
+                        );
+                    } else {
+                        crate::ux_walk::external::fail(Some(&id), error);
+                    }
+                }
+                started
+            }
+            #[cfg(feature = "ux-walk")]
+            DeepLinkAction::StopWalk { id } => {
+                let session = RecordingSession::global(cx);
+                let current = session.read(cx).walk_external_id();
+                if current.as_deref() != Some(id.as_str()) {
+                    // Not recording it (any more): a start still preparing is called off, a
+                    // walk already stopping or done is left to finish.
+                    if crate::ux_walk::external::read(&id).is_some_and(|status| {
+                        status.state == crate::ux_walk::external::State::Starting
+                    }) {
+                        let main = cx.global::<app_windows::AppWindows>().main;
+                        let _ = main.update(cx, |view, _, cx| {
+                            view.cancel_deep_link_start();
+                            cx.notify();
+                        });
+                        crate::ux_walk::external::fail(Some(&id), "Stopped before it started.");
+                    }
+                    return Ok(());
+                }
+                if matches!(session.read(cx).phase, Phase::Recording { .. }) {
+                    session.update(cx, |session, cx| session.stop(cx));
+                }
                 Ok(())
             }
             DeepLinkAction::StopRecording => {
@@ -1072,5 +1145,53 @@ mod tests {
             DeepLinkAction::try_from(&url),
             Err(ActionParseFromUrlError::Invalid)
         );
+    }
+
+    /// The outside-walk grammar `cap-cli walk` and Z3 send: snake_case action, lowercase mode,
+    /// `url` optional.
+    #[cfg(feature = "ux-walk")]
+    #[test]
+    fn parses_outside_walk_actions() {
+        use crate::ux_walk::external::Mode;
+        let start = |value: serde_json::Value| {
+            let url = Url::parse_with_params(
+                &format!("{}://action", fork_brand::URL_SCHEME),
+                &[("value", value.to_string())],
+            )
+            .unwrap();
+            DeepLinkAction::try_from(&url)
+        };
+        assert_eq!(
+            start(serde_json::json!({ "start_walk": {
+                "id": "run-1", "mode": "worm", "topic": "Checkout", "url": "https://example.com"
+            }})),
+            Ok(DeepLinkAction::StartWalk {
+                id: "run-1".into(),
+                mode: Mode::Walk,
+                topic: "Checkout".into(),
+                url: Some("https://example.com".into()),
+            })
+        );
+        assert_eq!(
+            start(serde_json::json!({ "start_walk": {
+                "id": "run-2", "mode": "diatribe", "topic": "Pricing"
+            }})),
+            Ok(DeepLinkAction::StartWalk {
+                id: "run-2".into(),
+                mode: Mode::Diatribe,
+                topic: "Pricing".into(),
+                url: None,
+            })
+        );
+        assert_eq!(
+            start(serde_json::json!({ "stop_walk": { "id": "run-2" } })),
+            Ok(DeepLinkAction::StopWalk { id: "run-2".into() })
+        );
+        assert!(matches!(
+            start(serde_json::json!({ "start_walk": {
+                "id": "run-3", "mode": "studio", "topic": "x"
+            }})),
+            Err(ActionParseFromUrlError::ParseFailed(_))
+        ));
     }
 }

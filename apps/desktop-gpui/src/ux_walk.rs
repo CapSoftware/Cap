@@ -4,6 +4,8 @@ pub use crate::ux_walk_preferences::*;
 
 #[path = "ux_walk/assets.rs"]
 pub(crate) mod assets;
+#[path = "ux_walk/external.rs"]
+pub(crate) mod external;
 #[path = "ux_walk/notes.rs"]
 pub(crate) mod notes;
 
@@ -79,6 +81,7 @@ pub fn request(topic: &str) -> Result<crate::ux_walk_journal::Request, String> {
             .collect(),
         kind: crate::ux_walk_journal::Kind::Walk,
         project: None,
+        external: None,
     })
 }
 

@@ -9,7 +9,12 @@ use gpui::{
 
 use super::{MainWindow, Mode, TargetType};
 use crate::{
-    app_windows, mode_choice::ModeChoice, session::Phase, theme::Theme, ui, ux_walk::notes,
+    app_windows,
+    mode_choice::ModeChoice,
+    session::Phase,
+    theme::Theme,
+    ui,
+    ux_walk::{external, notes},
     ux_walk_journal::Request,
 };
 
@@ -324,7 +329,7 @@ impl MainWindow {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::ux_walk_browser::open() })
+                .spawn(async move { crate::ux_walk_browser::open(None) })
                 .await;
             let unused = result.as_ref().ok().map(|window| window.id.to_string());
             let close_unused = move || {
@@ -488,12 +493,24 @@ impl MainWindow {
         target: Option<(ScreenCaptureTarget, Vec<scap_targets::WindowId>)>,
         cx: &mut Context<Self>,
     ) {
+        self.start_diatribe_request(start, target, crate::ux_walk::diatribe_request(), cx);
+    }
+
+    /// A diatribe for this request: the recorder's own, or one another app asked for.
+    fn start_diatribe_request(
+        &mut self,
+        start: DiatribeStart,
+        target: Option<(ScreenCaptureTarget, Vec<scap_targets::WindowId>)>,
+        request: Result<Request, String>,
+        cx: &mut Context<Self>,
+    ) {
         if self.diatribe_blocked(cx) {
             return;
         }
-        let request = match crate::ux_walk::diatribe_request() {
+        let request = match request {
             // The Diatribe choice records into the recorder's picked project; the shortcut
-            // takes the last-used project, else the default, without asking.
+            // (and an outside caller) takes the last-used project, else the default, without
+            // asking.
             Ok(mut request) => {
                 request.project = match start {
                     DiatribeStart::Chosen => self.walk.project.clone(),
@@ -544,6 +561,10 @@ impl MainWindow {
             return;
         }
         let Some((microphone, selected)) = microphone else {
+            crate::ux_walk::external::fail(
+                request.external.as_deref(),
+                "A diatribe needs a microphone. Connect one or choose it in the recorder.",
+            );
             self.session.update(cx, |session, cx| {
                 session.error = Some(
                     "A diatribe needs a microphone. Connect one or choose it in the recorder, then try again."
@@ -606,6 +627,172 @@ impl MainWindow {
             start_gate: None,
         };
         self.start_recording_config(config, cx);
+    }
+
+    /// A walk or diatribe another app asked for (`start_walk` deep link). It records exactly
+    /// like one started here, and reports each step to `ux_walk::external`. The recorder's own
+    /// walk mode and choices are left as they were.
+    pub(crate) fn start_external_walk(
+        &mut self,
+        id: String,
+        mode: external::Mode,
+        topic: String,
+        url: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let url = url
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty());
+        if let Some(url) = &url
+            && !reqwest::Url::parse(url)
+                .is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+        {
+            return Err(format!("Use an http or https start page, not {url}."));
+        }
+        if self.diatribe_blocked(cx) || self.walk.opening {
+            return Err("Another recording is in progress. Finish it, then try again.".into());
+        }
+        let mut request = crate::ux_walk::request(&topic)?;
+        request.external = Some(id.clone());
+        // An outside caller doesn't pick a project: it records into the last-used one.
+        request.project = crate::ux_walk_projects::recording_project();
+        external::begin(&id, mode, &request.topic)?;
+        self.watch_external_start(id.clone(), cx);
+        match mode {
+            external::Mode::Diatribe => {
+                request.kind = crate::ux_walk_journal::Kind::Diatribe;
+                request.url.clear();
+                self.start_diatribe_request(DiatribeStart::OneShot, None, Ok(request), cx);
+            }
+            external::Mode::Walk => {
+                if let Some(url) = &url {
+                    request.url = url.clone();
+                }
+                self.walk.opening = true;
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    let opened = cx
+                        .background_executor()
+                        .spawn(async move { crate::ux_walk_browser::open(url.as_deref()) })
+                        .await;
+                    let unused = opened.as_ref().ok().map(|window| window.id.to_string());
+                    let started = this.update(cx, |this, cx| {
+                        this.walk.opening = false;
+                        cx.notify();
+                        let window = opened?;
+                        if this.diatribe_blocked(cx) {
+                            return Err("Another recording started before the walk could begin."
+                                .to_string());
+                        }
+                        this.record_external_walk(request, window, cx);
+                        Ok(())
+                    });
+                    if let Err(error) =
+                        started.unwrap_or_else(|_| Err(format!("{} closed.", fork_brand::APP_NAME)))
+                    {
+                        if let Some(id) = &unused {
+                            crate::ux_walk_browser::close_window(id);
+                        }
+                        external::fail(Some(&id), &error);
+                    }
+                })
+                .detach();
+            }
+        }
+        Ok(())
+    }
+
+    /// The walk half of an outside start: a Studio recording of the walk's own Chrome window,
+    /// with the recorder's microphone and camera, as the Record button would start it.
+    fn record_external_walk(
+        &mut self,
+        request: Request,
+        window: crate::devices::WindowOption,
+        cx: &mut Context<Self>,
+    ) {
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
+            let feeds = crate::feeds::Feeds::global(cx);
+            feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
+            let feeds = feeds.read(cx);
+            (
+                feeds.camera_actor(),
+                feeds.mic_actor(),
+                feeds.mic_meter(),
+                feeds.input_readiness(),
+                feeds.requested_device_settings(),
+            )
+        };
+        self.devices.windows.retain(|known| known.id != window.id);
+        self.devices.windows.push(window.clone());
+        let config = crate::recording::StartConfig {
+            ux_walk: Some(request),
+            mode: crate::recording::RecordingMode::Studio,
+            target: ScreenCaptureTarget::Window { id: window.id },
+            device_settings,
+            input_readiness,
+            microphone: self.microphone.as_ref().map(|mic| mic.name.clone()),
+            camera: self.camera_id.clone(),
+            system_audio: self.system_audio,
+            excluded_windows: Vec::new(),
+            camera_feed,
+            mic_feed,
+            mic_meter,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
+            start_gate: None,
+        };
+        self.start_recording_config(config, cx);
+    }
+
+    /// An outside start that never reaches the recording (devices busy, a dismissed prompt,
+    /// a failed start) would otherwise stay "starting" forever: once the recorder is idle
+    /// again with nothing preparing, the walk is reported as failed with the recorder's error.
+    fn watch_external_start(&mut self, id: String, cx: &mut Context<Self>) {
+        // An error already showing belongs to an earlier recording, not this start.
+        let earlier = self.session.read(cx).error.clone();
+        cx.spawn(async move |this, cx| {
+            let mut idle_checks = 0;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                if external::read(&id)
+                    .is_none_or(|status| status.state != external::State::Starting)
+                {
+                    return;
+                }
+                let Ok(idle) = this.update(cx, |this, cx| {
+                    let session = this.session.read(cx);
+                    (session.phase == Phase::Idle && !this.is_preparing_recording()).then(|| {
+                        session
+                            .error
+                            .clone()
+                            .filter(|error| Some(error) != earlier.as_ref())
+                    })
+                }) else {
+                    external::fail(
+                        Some(&id),
+                        &format!(
+                            "{} closed before the recording started.",
+                            fork_brand::APP_NAME
+                        ),
+                    );
+                    return;
+                };
+                idle_checks = if idle.is_some() { idle_checks + 1 } else { 0 };
+                if idle_checks >= 6 {
+                    let error = idle.flatten().unwrap_or_else(|| {
+                        format!(
+                            "{app} could not start the recording. Open {app} to see why.",
+                            app = fork_brand::APP_NAME
+                        )
+                    });
+                    external::fail(Some(&id), &error);
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     pub(super) fn walk_deselect(&mut self, cx: &mut Context<Self>) {

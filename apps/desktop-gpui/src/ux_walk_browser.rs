@@ -306,11 +306,16 @@ mod owned {
         Ok(browser)
     }
 
-    pub fn open() -> Result<crate::devices::WindowOption, String> {
+    /// A fresh Chrome window for a walk, at `start` or else the start page in settings.
+    pub fn open(start: Option<&str>) -> Result<crate::devices::WindowOption, String> {
         let settings = crate::ux_walk::load()?;
-        let url = reqwest::Url::parse(crate::ux_walk::text(&settings, "url")).map_err(|_| {
-            fork_brand::mode_text_static("Enter a valid start page in %walk% settings.")
-        })?;
+        let url = match start {
+            Some(start) => reqwest::Url::parse(start)
+                .map_err(|_| format!("Not a valid start page: {start}"))?,
+            None => reqwest::Url::parse(crate::ux_walk::text(&settings, "url")).map_err(|_| {
+                fork_brand::mode_text_static("Enter a valid start page in %walk% settings.")
+            })?,
+        };
         if !matches!(url.scheme(), "http" | "https") {
             return Err("Use an http or https start page.".into());
         }
@@ -707,6 +712,7 @@ EOF
                     speakers: Vec::new(),
                     kind: crate::ux_walk_journal::Kind::Walk,
                     project: None,
+                    external: None,
                 },
                 directory.with_extension("cap"),
                 100000,
@@ -762,7 +768,7 @@ pub use owned::{
 };
 
 #[cfg(not(target_os = "macos"))]
-pub fn open() -> Result<crate::devices::WindowOption, String> {
+pub fn open(_start: Option<&str>) -> Result<crate::devices::WindowOption, String> {
     Err("Automatic browser windows are available on macOS.".into())
 }
 

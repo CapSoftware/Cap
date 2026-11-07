@@ -29,6 +29,8 @@ mod sharing;
 mod targets;
 mod update;
 mod upload;
+#[cfg(feature = "ux-walk")]
+mod walk;
 
 use std::{
     io::{IsTerminal, Write, stderr, stdout},
@@ -249,6 +251,9 @@ enum Commands {
     Mcp(mcp::McpArgs),
     /// Install Cap integrations for one explicitly selected agent
     Agents(agents::AgentsArgs),
+    /// Start, stop and follow a walk or diatribe in the desktop app (for agents and other apps)
+    #[cfg(feature = "ux-walk")]
+    Walk(walk::WalkArgs),
     /// List available capture targets and devices
     Targets(TargetsArgs),
     /// Report CLI environment and capture-readiness diagnostics
@@ -685,6 +690,8 @@ async fn run(cli: Cli) -> Result<(), String> {
         #[cfg(not(feature = "ux-walk"))]
         Commands::Mcp(args) => args.run().await,
         Commands::Agents(args) => args.run(json),
+        #[cfg(feature = "ux-walk")]
+        Commands::Walk(args) => args.run(json).await,
         Commands::Targets(args) => args.run(json),
         Commands::Doctor(args) => doctor::run_doctor(resolve_format(json, args.format)).await,
         Commands::Version(args) => {
