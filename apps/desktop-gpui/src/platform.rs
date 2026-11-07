@@ -2400,6 +2400,11 @@ mod mac {
         }
     }
 
+    pub fn window_is_minimized(window: &Window) -> bool {
+        use objc2::msg_send;
+        ns_window(window).is_some_and(|ns| unsafe { msg_send![&*ns, isMiniaturized] })
+    }
+
     /// `performZoom:` -- muda's Window > Zoom.
     pub fn zoom_native(native: &NativeWindow) {
         use objc2::msg_send;
@@ -3216,6 +3221,9 @@ mod stub {
     pub fn register_escape_hotkey() {}
     pub fn unregister_escape_hotkey() {}
     pub fn minimize_native(_native: &NativeWindow) {}
+    pub fn window_is_minimized(_window: &Window) -> bool {
+        false
+    }
     pub fn zoom_native(_native: &NativeWindow) {}
     pub fn toggle_fullscreen_native(_native: &NativeWindow) {}
     pub fn window_is_visible(_window: &Window) -> bool {

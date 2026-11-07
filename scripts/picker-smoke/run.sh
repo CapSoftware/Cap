@@ -19,7 +19,7 @@ env CAP_GPUI_APP_DATA_DIR="$OUT/profile" \
     "$APP" > "$OUT/app.log" 2>&1 &
 pid=$!
 
-for _ in $(seq 1 240); do
+for _ in $(seq 1 "${PICKER_SMOKE_POLLS:-240}"); do
     [ -s "$report" ] && break
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
