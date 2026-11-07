@@ -10771,17 +10771,9 @@ impl EditorWindow {
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white())
-            // gpui has no box-shadow, so the `inset 0 1px 0 rgba(255,255,255,
-            // .22)` highlight is a painted hairline instead.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(1.))
-                    .bg(gpui::hsla(0., 0., 1., 0.22)),
-            )
+            .shadow(vec![
+                gpui::BoxShadow::new(px(0.), px(1.), gpui::hsla(0., 0., 1., 0.22)).inset(),
+            ])
             .child(
                 svg()
                     .path("icons/upload-arrow.svg")
