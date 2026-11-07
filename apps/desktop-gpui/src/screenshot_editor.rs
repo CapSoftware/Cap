@@ -1086,6 +1086,15 @@ impl ScreenshotEditorWindow {
             this.hex_inputs.insert(target, input);
         }
         this.init_annotation_inputs(window, cx);
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active()
+                && let Some(dialog) = this.crop.as_mut()
+                && dialog.state.keys.release()
+            {
+                cx.notify();
+            }
+        })
+        .detach();
 
         this
     }
@@ -5756,6 +5765,52 @@ mod tests {
                 assert_synchronized(editor, &updates);
             });
         }
+    }
+
+    /// The screenshot crop dialog's held-arrow nudge stops when the window
+    /// loses focus, which is the only place its key-up would have come from.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn deactivating_the_window_releases_a_held_crop_dialog_nudge(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let bundle = project.path().to_path_buf();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            ScreenshotEditorWindow::new(bundle.clone(), window, cx)
+        });
+        let raw_x = |editor: &ScreenshotEditorWindow| editor.crop.as_ref().unwrap().state.raw.x;
+        editor.update_in(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.image_size = Some((1920, 1080));
+            editor.open_crop_dialog(window, cx);
+            let dialog = editor.crop.as_mut().unwrap();
+            dialog.state.raw.width /= 2.;
+            dialog.state.raw.height /= 2.;
+            let event = gpui::KeyDownEvent {
+                keystroke: gpui::Keystroke::parse("right").unwrap(),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            assert!(editor.crop_dialog_key_down(&event, window, cx));
+        });
+        let start = editor.read_with(cx, |editor, _| raw_x(editor));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let held = editor.read_with(cx, |editor, _| raw_x(editor));
+        assert!(held > start, "the held arrow nudges while focused");
+
+        cx.deactivate_window();
+        let released = editor.read_with(cx, |editor, _| raw_x(editor));
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert!(editor.crop.as_ref().unwrap().state.keys.keys.is_empty());
+            assert_eq!(
+                raw_x(editor),
+                released,
+                "no nudges after the window lost focus"
+            );
+        });
+        drop(project);
     }
 
     /// A pan follows and ends with the button that started it. The pan's
