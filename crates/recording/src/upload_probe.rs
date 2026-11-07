@@ -1,5 +1,9 @@
-use std::time::Duration;
+use std::{
+    sync::OnceLock,
+    time::Duration,
+};
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -12,6 +16,12 @@ pub const HIGH_SPEED_THRESHOLD_MBPS: f64 = 15.0;
 pub const STANDARD_SPEED_THRESHOLD_MBPS: f64 = 5.0;
 pub const DEFAULT_PROBE_PAYLOAD_BYTES: usize = 64 * 1024;
 
+static STARTUP_HEALTH: OnceLock<Mutex<Option<StartupHealthCheckStatus>>> = OnceLock::new();
+
+fn startup_health_slot() -> &'static Mutex<Option<StartupHealthCheckStatus>> {
+    STARTUP_HEALTH.get_or_init(|| Mutex::new(None))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdaptiveUploadTier {
@@ -22,7 +32,6 @@ pub enum AdaptiveUploadTier {
 }
 
 impl AdaptiveUploadTier {
-    // Classifies measured upload throughput in Mbps into an adaptive recording quality tier.
     pub fn from_mbps(mbps: f64) -> Self {
         if !mbps.is_finite() || mbps <= 0.0 {
             return Self::Offline;
@@ -36,7 +45,6 @@ impl AdaptiveUploadTier {
         Self::Low
     }
 
-    // Maps the upload tier to the maximum horizontal/vertical dimension for instant recordings.
     pub fn max_instant_resolution(self) -> u32 {
         match self {
             Self::High => PRO_INSTANT_MODE_MAX_RESOLUTION,
@@ -45,7 +53,6 @@ impl AdaptiveUploadTier {
         }
     }
 
-    // Maps the upload tier to the encoder quality preset.
     pub fn studio_quality(self) -> StudioQuality {
         match self {
             Self::High => StudioQuality::Ultra,
@@ -54,7 +61,6 @@ impl AdaptiveUploadTier {
         }
     }
 
-    // Produces compact indicator badge text for the desktop corner overlay.
     pub fn indicator_label(self, mbps: f64) -> String {
         match self {
             Self::High => format!("{mbps:.1} Mbps • HD Ready"),
@@ -73,7 +79,6 @@ pub struct SpeedProbeSample {
 }
 
 impl SpeedProbeSample {
-    // Calculates upload speed in megabits per second from transferred byte count and duration.
     pub fn throughput_mbps(&self) -> f64 {
         let secs = self.elapsed.as_secs_f64();
         if secs <= 0.0 || self.bytes_transferred == 0 {
@@ -94,7 +99,6 @@ pub struct StartupHealthCheckStatus {
     pub contact_support_required: bool,
 }
 
-// Evaluates startup health check outcome and builds the desktop corner indicator state.
 pub fn evaluate_startup_health(
     http_ok: bool,
     sample: Option<SpeedProbeSample>,
@@ -123,12 +127,29 @@ pub fn evaluate_startup_health(
     }
 }
 
-// Prevents upload speed probes from running while a recording session is already active.
+pub fn record_startup_health(
+    http_ok: bool,
+    sample: Option<SpeedProbeSample>,
+) -> StartupHealthCheckStatus {
+    let status = evaluate_startup_health(http_ok, sample);
+    *startup_health_slot().lock() = Some(status.clone());
+    status
+}
+
+pub fn latest_startup_health() -> Option<StartupHealthCheckStatus> {
+    startup_health_slot().lock().clone()
+}
+
+pub fn latest_upload_speed_mbps() -> Option<f64> {
+    latest_startup_health()
+        .filter(|status| status.upload_ok && status.speed_mbps > 0.0)
+        .map(|status| status.speed_mbps)
+}
+
 pub fn should_run_speed_probe(is_recording_active: bool) -> bool {
     !is_recording_active
 }
 
-// Builds a deterministic synthetic test pattern buffer for the startup upload health check.
 pub fn build_probe_payload(size_bytes: usize) -> Vec<u8> {
     let target_len = if size_bytes == 0 {
         DEFAULT_PROBE_PAYLOAD_BYTES
@@ -177,13 +198,15 @@ mod tests {
             bytes_transferred: 1_000_000,
             elapsed: Duration::from_millis(500),
         };
-        let healthy = evaluate_startup_health(true, Some(sample));
+        let healthy = record_startup_health(true, Some(sample));
         assert!(healthy.upload_ok);
         assert!(!healthy.contact_support_required);
         assert_eq!(healthy.tier, AdaptiveUploadTier::High);
+        assert_eq!(latest_upload_speed_mbps(), Some(16.0));
 
-        let failed = evaluate_startup_health(false, None);
+        let failed = record_startup_health(false, None);
         assert!(!failed.upload_ok);
         assert!(failed.contact_support_required);
+        assert_eq!(latest_upload_speed_mbps(), None);
     }
 }

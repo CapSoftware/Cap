@@ -3,19 +3,84 @@
 //! (lid closed, Sleep chosen, battery empty) the recording is paused first, so
 //! capture never dies inside sleep, and it waits paused for the user on wake.
 
-use gpui::App;
+use std::time::Instant;
 
-use crate::session::Phase;
+use cap_recording::{
+    RecordingDefaults,
+    upload_probe::{
+        DEFAULT_PROBE_PAYLOAD_BYTES, SpeedProbeSample, build_probe_payload, record_startup_health,
+        should_run_speed_probe,
+    },
+};
+use gpui::App;
+use serde_json::Value;
+
+use crate::session::{Phase, RecordingSession};
 
 pub(crate) fn holds_off_idle_sleep(phase: Phase) -> bool {
     phase != Phase::Idle
 }
 
 pub fn install(cx: &mut App) {
+    spawn_startup_upload_probe(cx);
     #[cfg(target_os = "macos")]
     macos::install(cx);
     #[cfg(not(target_os = "macos"))]
     let _ = cx;
+}
+
+fn spawn_startup_upload_probe(cx: &mut App) {
+    let phase = RecordingSession::global(cx).read(cx).phase;
+    let recording_active = holds_off_idle_sleep(phase);
+    if !should_run_speed_probe(recording_active) {
+        return;
+    }
+    gpui_tokio::Tokio::spawn(cx, run_startup_upload_probe()).detach();
+}
+
+async fn run_startup_upload_probe() {
+    let auth = crate::store::auth_snapshot();
+    let Some(token) = auth.token.filter(|token| !token.is_empty()) else {
+        return;
+    };
+    let Ok(client) = crate::auth::api_client() else {
+        return;
+    };
+    let server = crate::auth::server_url();
+    let url = format!("{server}/api/upload/health-check");
+    let payload = build_probe_payload(DEFAULT_PROBE_PAYLOAD_BYTES);
+    let bytes_transferred = payload.len();
+    let start = Instant::now();
+    let request = crate::auth::apply_desktop_headers(client.post(url))
+        .bearer_auth(token)
+        .header("Content-Type", "application/octet-stream")
+        .body(payload);
+
+    match request.send().await {
+        Ok(response) if response.status().is_success() => {
+            let sample = SpeedProbeSample {
+                bytes_transferred,
+                elapsed: start.elapsed(),
+            };
+            let status = record_startup_health(true, Some(sample));
+            apply_adaptive_recording_defaults(status.speed_mbps);
+        }
+        Ok(_) | Err(_) => {
+            record_startup_health(false, None);
+        }
+    }
+}
+
+fn apply_adaptive_recording_defaults(speed_mbps: f64) {
+    let adapted = RecordingDefaults::default().with_upload_speed_mbps(speed_mbps);
+    let current = crate::store::GeneralSettings::load().instant_mode_max_resolution;
+    if adapted.instant_mode_max_resolution < current {
+        crate::store::set_store_setting(
+            "general_settings",
+            "instantModeMaxResolution",
+            Value::from(adapted.instant_mode_max_resolution),
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
