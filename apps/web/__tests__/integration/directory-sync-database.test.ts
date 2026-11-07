@@ -41,6 +41,7 @@ const fixture = vi.hoisted(() => ({
 	users: new Map<string, FakeUser[]>(),
 	pageSize: 2,
 	listUserCalls: 0,
+	onListUsers: undefined as (() => Promise<void>) | undefined,
 	scimDenied: new Set<string>(),
 }));
 
@@ -79,6 +80,9 @@ vi.mock("@cap/database/auth/sso", async (importOriginal) => ({
 				),
 			listUsers: async (options: { directory: string; after?: string }) => {
 				fixture.listUserCalls++;
+				const hook = fixture.onListUsers;
+				fixture.onListUsers = undefined;
+				await hook?.();
 				return page(
 					(fixture.users.get(options.directory) ?? []).map((user) => ({
 						...user,
@@ -804,6 +808,45 @@ describe.runIf(Boolean(databaseUrl))(
 					eq(organizationDirectorySync.organizationId, org.organizationId),
 				);
 			expect(afterLargerHold?.removalsApprovedAt).toBeNull();
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 25, removed: 0 });
+			expect((await memberIds(org.organizationId)).size).toBe(31);
+		});
+
+		it("keeps the confirmed count when an approval lands during a running sync", async () => {
+			const org = await makeOrganization();
+			const people = Array.from({ length: 30 }, (_, index) =>
+				directoryUser(org.directoryId, `race${index}@${org.domain}`),
+			);
+			fixture.users.set(org.directoryId, people);
+			await syncOrganizationDirectory(org.organizationId, later());
+			fixture.users.set(org.directoryId, people.slice(12));
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 12 });
+
+			fixture.users.set(org.directoryId, people.slice(25));
+			fixture.onListUsers = async () => {
+				await database()
+					.update(organizationDirectorySync)
+					.set({ removalsApprovedAt: new Date(), heldRemovals: 12 })
+					.where(
+						eq(organizationDirectorySync.organizationId, org.organizationId),
+					);
+			};
+			expect(
+				await syncOrganizationDirectory(org.organizationId, later()),
+			).toMatchObject({ held: 25, removed: 0 });
+			const [afterRace] = await database()
+				.select()
+				.from(organizationDirectorySync)
+				.where(
+					eq(organizationDirectorySync.organizationId, org.organizationId),
+				);
+			expect(afterRace?.heldRemovals).toBe(12);
+			expect(afterRace?.removalsApprovedAt).toBeInstanceOf(Date);
+
 			expect(
 				await syncOrganizationDirectory(org.organizationId, later()),
 			).toMatchObject({ held: 25, removed: 0 });
