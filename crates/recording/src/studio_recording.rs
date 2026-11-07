@@ -4435,7 +4435,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path();
         std::fs::create_dir(path.join("content")).unwrap();
-        write_in_progress_meta(path).unwrap();
+        write_in_progress_meta(path, None).unwrap();
         let timestamps = Timestamps::now();
         let (screen_tx, screen_rx) = flume::bounded(4);
         #[cfg(target_os = "macos")]
