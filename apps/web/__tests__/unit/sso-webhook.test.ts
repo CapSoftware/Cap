@@ -118,6 +118,23 @@ describe("organization-scoped SAML SSO webhooks", () => {
 		},
 	);
 
+	it("acknowledges a checkout whose subscription is standalone SCIM", async () => {
+		mocks.retrieveSubscription.mockResolvedValue({
+			...subscription(STRIPE_SCIM_PRICE_ID),
+			id: "sub_scim",
+		});
+		const response = await deliver("checkout.session.completed", {
+			id: "cs_scim",
+			customer: "cus_owner",
+			subscription: "sub_scim",
+			metadata: {},
+			payment_status: "paid",
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.attachSsoCheckout).not.toHaveBeenCalled();
+		expectProUntouched();
+	});
+
 	it.each(["invoice.paid", "invoice.payment_failed"])(
 		"acknowledges a standalone SCIM %s without Pro dunning",
 		async (eventType) => {

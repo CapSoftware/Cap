@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
 	subscriptions: new Map<string, unknown[]>(),
 	listed: [] as string[],
 	stripeAvailable: true,
-	testPrice: undefined as string | undefined,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -25,9 +24,6 @@ vi.mock("@cap/database", () => ({
 			}),
 		}),
 	}),
-}));
-vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ STRIPE_SCIM_PRICE_ID: mocks.testPrice }),
 }));
 vi.mock("@cap/utils", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@cap/utils")>()),
@@ -72,7 +68,7 @@ describe("hasScimSubscription", () => {
 		mocks.subscriptions = new Map();
 		mocks.listed = [];
 		mocks.stripeAvailable = true;
-		mocks.testPrice = undefined;
+		vi.unstubAllEnvs();
 	});
 
 	it("accepts an active or past-due SCIM item tagged with the organization", async () => {
@@ -119,7 +115,7 @@ describe("hasScimSubscription", () => {
 			subscription({ prices: ["price_test_scim"] }),
 		]);
 		expect(await hasScimSubscription(organizationId)).toBe(false);
-		mocks.testPrice = "price_test_scim";
+		vi.stubEnv("STRIPE_SCIM_PRICE_ID", "price_test_scim");
 		expect(await hasScimSubscription(organizationId)).toBe(true);
 	});
 

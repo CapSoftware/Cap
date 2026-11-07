@@ -10,7 +10,7 @@ import {
 	STRIPE_SCIM_PRICE_ID,
 	STRIPE_SIGNED_BAA_PRICE_IDS,
 } from "@cap/utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("Stripe subscription classification", () => {
 	it("keeps standalone SCIM subscriptions out of Pro", () => {
@@ -25,6 +25,20 @@ describe("Stripe subscription classification", () => {
 		expect(isProSubscription(scimOnly)).toBe(false);
 		expect(isStandaloneScimSubscription(taggedScim)).toBe(true);
 		expect(isProSubscription(taggedScim)).toBe(false);
+	});
+
+	it("recognizes a configured test-mode SCIM price as standalone SCIM", () => {
+		const testScim = {
+			items: { data: [{ price: { id: "price_test_scim" } }] },
+		};
+		expect(isProSubscription(testScim)).toBe(true);
+		vi.stubEnv("STRIPE_SCIM_PRICE_ID", "price_test_scim");
+		try {
+			expect(isStandaloneScimSubscription(testScim)).toBe(true);
+			expect(isProSubscription(testScim)).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("keeps Pro and BAA subscriptions with a SCIM line classified as before", () => {
