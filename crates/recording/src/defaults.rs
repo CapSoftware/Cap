@@ -83,3 +83,13 @@ pub fn default_studio_recording_quality() -> StudioQuality {
         _ => StudioQuality::Balanced,
     }
 }
+
+impl RecordingDefaults {
+    // Adjusts instant mode resolution cap and studio quality tier based on pre-recording upload throughput.
+    pub fn with_upload_speed_mbps(mut self, mbps: f64) -> Self {
+        let tier = crate::upload_probe::AdaptiveUploadTier::from_mbps(mbps);
+        self.instant_mode_max_resolution = tier.max_instant_resolution();
+        self.studio_recording_quality = tier.studio_quality();
+        self
+    }
+}
