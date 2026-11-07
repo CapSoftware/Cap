@@ -14,23 +14,28 @@ export type SignableOgParams = {
 // Read directly from process.env (what serverEnv wraps) — signing must not
 // throw when the full env isn't validated, e.g. in unit tests. Sign + verify
 // only need to agree within a deployment.
-const secret = () => process.env.NEXTAUTH_SECRET ?? "";
+const secret = () => process.env.NEXTAUTH_SECRET;
 
 const payload = ({ title, tag, description }: SignableOgParams) =>
 	[title, tag ?? "", description ?? ""].join("\n");
 
-export const signOgParams = (params: SignableOgParams) =>
-	createHmac("sha256", secret())
+export const signOgParams = (params: SignableOgParams) => {
+	const key = secret();
+	if (!key) return "";
+	return createHmac("sha256", key)
 		.update(payload(params))
 		.digest("hex")
 		.slice(0, 32);
+};
 
 export const verifyOgSignature = (
 	params: SignableOgParams,
 	signature: string | null,
 ) => {
 	if (!signature) return false;
-	const expected = Buffer.from(signOgParams(params));
+	const expectedSignature = signOgParams(params);
+	if (!expectedSignature) return false;
+	const expected = Buffer.from(expectedSignature);
 	const provided = Buffer.from(signature);
 	return (
 		expected.length === provided.length && timingSafeEqual(expected, provided)

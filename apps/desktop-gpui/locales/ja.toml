@@ -207,6 +207,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推奨）"
 label = "最大キャプチャフレームレート"
 
+[settings.general.recording.marker_sound]
+description = "Studio録画中にマーカーを追加すると短い音を鳴らします。マイクやシステムオーディオに録音される場合があります。"
+label = "マーカー追加時に音を鳴らす"
+
 [settings.general.storage]
 choose_folder = "フォルダを選択"
 default_location = "デフォルト（Application Support）"
@@ -383,6 +387,8 @@ quarter = "1/4"
 
 [settings.shortcuts]
 blocked_while_recording = "録画が停止キーを使用している間はショートカットを変更できません。先に録画を停止してください。"
+cancelling_description = "ショートカットまたはCapのアイコンから開始したスクリーンショットと録画に適用されます。"
+cancelling_title = "キャンセル"
 needs_modifier_macos = "入力の邪魔にならないよう、⌘、⌃、⌥のいずれかを含めてください。"
 needs_modifier_other = "入力の邪魔にならないよう、Ctrl、Alt、Winのいずれかを含めてください。"
 record_shortcut = "ショートカットを記録"
@@ -410,7 +416,15 @@ title = "Studio録画の後"
 hint = "共有リンクは常にコピーされます"
 title = "Instant録画の後"
 
+[settings.shortcuts.on_cancel]
+hint = "Escまたはピッカーを閉じる"
+title = "キャンセルしたとき"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Capを表示"
+cancel_show_cap_hint = "レコーダーに戻る"
+cancel_stay_hidden = "非表示のまま"
+cancel_stay_hidden_hint = "Capが開いていた場合を除く"
 instant_copy_link = "リンクのコピーのみ"
 instant_copy_link_hint = "何も開きません"
 instant_open_link = "リンクを開く"
@@ -432,6 +446,7 @@ studio_show_cap = "Capを表示"
 studio_show_cap_hint = "レコーダーに戻る"
 
 [settings.shortcuts.label]
+add_marker = "マーカーを追加"
 cycle_mode = "録画モードを切り替え"
 fallback = "ショートカット"
 open_picker = "録画ピッカーを開く"
@@ -448,6 +463,7 @@ start_studio = "Studio録画を開始"
 stop = "録画を停止"
 
 [settings.shortcuts.effect]
+add_marker = "Studio録画のこの瞬間にマーカーを付けます"
 cycle_mode = "Studio、Instant、スクリーンショットの各モードを切り替えます"
 instant_copy = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーします"
 instant_copy_and_open = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーして開きます"
@@ -480,6 +496,7 @@ studio = "選択した画面またはウィンドウをStudioモードで録画�
 studio_open_editor = "選択した画面またはウィンドウをStudioモードで録画し、停止するとエディタを開きます"
 
 [settings.shortcuts.sentence]
+add_marker = "Studio録画のこの瞬間にマーカーを付けます。"
 cycle_mode = "Studio、Instant、スクリーンショットの各モードを切り替えます。"
 instant_copy = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーします。"
 instant_copy_and_open = "選択した画面またはウィンドウをInstantモードで録画し、停止すると共有リンクをコピーして開きます。"
@@ -1085,6 +1102,11 @@ segments = { other = "{count}セグメント" }
 segments_with_duration = { other = "{count}セグメント · {duration}" }
 title = "未完了の録画"
 
+[main.recovery.error]
+nothing_saved = "この録画が停止する前に保存されたビデオがないため、復元できるものはありません。ファイルは引き続き {path} にあります。"
+rebuild_failed = "Cap はこの録画を再構築できませんでした ({error})。何も削除されていません。元のファイルは {path} にあります。"
+storage = "この録画を復元するための空き容量が不足しています ({error})。空き容量を確保してから、もう一度「復元」を押してください。何も削除されていません。ファイルは {path} にあります。"
+
 [main.sign_in]
 message = "Instantモードは録画しながらアップロードするので、停止した瞬間に共有リンクが用意されます。"
 not_now = "今はしない"
@@ -1119,6 +1141,7 @@ window = "ウィンドウ"
 [controls]
 disk_full_resume = "再開するための空き容量が足りません。空きを確保してもう一度試すか、停止を押して保存してください。"
 low_storage = "空き容量が不足しています。録画を保存するため、Capはまもなく停止します。"
+paused_for_sleep = "Mac がスリープしたため、録画を一時停止しました。準備ができたら再開するか、「停止」を押して保存してください。"
 
 [controls.confirm]
 delete = "削除"
@@ -1142,6 +1165,9 @@ pausing = "休止中…"
 resuming = "再開中…"
 saving = "保存中…"
 starting = "開始中"
+
+[controls.marker]
+add = "マーカーを追加"
 
 [camera]
 waiting_title = "カメラへのアクセスを待っています"
@@ -1987,6 +2013,62 @@ edit_cursor = "カーソルを編集"
 help = "上書きはこのセグメントの間だけ適用されます。グループをオンにすると全体設定がコピーされます。"
 reset_crop = "切り抜きをリセット"
 
+[editor.panel.style_presets]
+apply = "適用"
+create = "保存"
+create_title = "スタイルプリセットを保存"
+custom = "カスタムスタイル"
+default_badge = "デフォルト"
+delete = "削除"
+delete_confirm = "「{name}」を削除しますか？このスタイルをすでに使っている項目はそのまま残ります。"
+delete_title = "スタイルプリセットを削除"
+empty = "保存済みのプリセットはまだありません"
+empty_help = "スタイルを保存すると、どのプロジェクトでも再利用できます。"
+font_missing = "{font}はこのコンピュータにインストールされていないため、代わりに{fallback}を使用します。"
+move_down = "下へ移動"
+move_up = "上へ移動"
+remove_default = "デフォルトを解除"
+rename = "名前を変更"
+rename_title = "スタイルプリセット名を変更"
+save = "スタイルをプリセットとして保存"
+save_failed = "プリセットを保存できませんでした。Capが設定ファイルに書き込めません。"
+set_default = "デフォルトに設定"
+tooltip = "スタイルプリセット"
+update = "現在のスタイルで更新"
+
+[editor.panel.style_presets.captions]
+default_name = "マイ字幕スタイル"
+use_for_new = "新しい字幕に使用"
+used_for_new = "新しい字幕はこのスタイルを使用"
+
+[editor.panel.style_presets.mask]
+applied_all = "すべてのマスクに適用しました（{number}）"
+apply_all = "すべてのマスクに適用（{number}）"
+default_name = "マイマスクスタイル"
+use_for_new = "新しいマスクに使用"
+used_for_new = "新しいマスクはこのスタイルを使用"
+
+[editor.panel.style_presets.shape]
+applied_all = "すべての図形に適用しました（{number}）"
+apply_all = "すべての図形に適用（{number}）"
+default_name = "マイ図形スタイル"
+use_for_new = "新しい図形に使用"
+used_for_new = "新しい図形はこのスタイルを使用"
+
+[editor.panel.style_presets.style]
+applied_all = "すべてのスタイルセグメントに適用しました（{number}）"
+apply_all = "すべてのスタイルセグメントに適用（{number}）"
+default_name = "マイスタイル"
+use_for_new = "新しいスタイルセグメントに使用"
+used_for_new = "新しいスタイルセグメントはこのスタイルを使用"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "すべてのテキストセグメントに適用しました（{number}）"
+apply_all = "すべてのテキストセグメントに適用（{number}）"
+default_name = "マイテキストスタイル"
+use_for_new = "新しいテキストに使用"
+used_for_new = "新しいテキストはこのスタイルを使用"
+
 [editor.panel.text_animation]
 bounce = "バウンス"
 fade = "フェード"
@@ -2243,11 +2325,13 @@ purple = "パープル"
 [editor.canvas]
 camera = "カメラ"
 camera_follows_zoom = "カメラのサイズはズームに合わせて変わります。ドラッグで移動できます"
+captions = "字幕"
 edit_zoom = "ズームを編集"
 image = "画像"
 mask = "マスク"
 screen = "画面"
 screen_locked = "ズームが有効な間は画面が固定されます"
+shape = "図形"
 text_item = "テキスト"
 
 [editor.clips]
@@ -2500,7 +2584,10 @@ language_label = "言語"
 model_downloaded = "{model}モデルをダウンロード済み"
 model_label = "モデル"
 position = "位置"
+refining_word_timings = "単語のタイミングを調整中…"
 regenerate = "字幕を再生成"
+reset_position = "位置をリセット"
+show_filler_words = "フィラーを表示"
 size_label = "サイズ"
 style = "スタイル"
 text_color = "テキストの色"
@@ -2655,6 +2742,43 @@ system_sans_serif = "システムSans-Serif"
 system_serif = "システムSerif"
 system_monospace = "システムMonospace"
 
+[editor.shape]
+title = "図形 {number}"
+stroke = "線"
+width = "太さ"
+fill = "塗り"
+fill_opacity = "塗りの不透明度"
+corner_radius = "角の丸み"
+arrowhead = "矢じり"
+number = "番号"
+look = "外観"
+shadow = "影"
+animation = "アニメーション"
+draw = "図形を描く"
+toolbar = "図形"
+draw_hint = "プレビュー上をドラッグして描きます。クリックすると配置します。"
+decrease = "減らす"
+increase = "増やす"
+
+[editor.shape.kinds]
+arrow = "矢印"
+line = "線"
+rectangle = "四角形"
+ellipse = "楕円"
+highlight = "ハイライト"
+badge = "ステップ"
+
+[editor.shape.heads]
+filled = "塗り"
+open = "線のみ"
+double = "両端"
+
+[editor.shape.animations]
+none = "なし"
+fade = "フェード"
+scale = "拡大"
+draw = "描画"
+
 [editor.timeline]
 add_shot = "ショットを追加"
 add_shot_with_look = "ショットを追加 · {look} · {seconds}秒"
@@ -2678,6 +2802,7 @@ keyboard = "入力中のキー操作を画面に表示します。"
 mask = "画面のプライベートな部分をぼかすか黒く塗りつぶします。"
 scene = "画面とカメラのレイアウトを切り替えます。"
 scene_unavailable = "シーンを使うにはカメラ付きで録画してください。"
+shape = "録画の上に矢印、枠、円、ハイライトを描きます。"
 style = "背景、カメラ、カーソルの設定を時間に合わせて変更します。"
 text_overlay = "キャンバスにカスタムのテキストやタイトルを重ねます。"
 three_d = "シーンを3Dの遠近感で傾けます。"
@@ -2691,6 +2816,7 @@ image = "画像トラックを削除します。"
 keyboard = "キーボードトラックを削除します。"
 mask = "マスクトラックを削除します。"
 scene = "シーントラックを削除します。"
+shape = "図形トラックを削除します。"
 style = "スタイルトラックを削除します。"
 text_track = "テキストトラックを削除します。"
 three_d = "3Dトラックを削除します。"
@@ -2724,10 +2850,64 @@ image = "画像"
 keyboard = "キーボード"
 mask = "マスク"
 scene = "シーン"
+shape = "図形"
 style = "スタイル"
 text_track = "テキスト"
 video = "動画"
 zoom = "ズーム"
+
+[editor.transcript]
+cleanup = "クリーンアップ"
+cleanup_tooltip = "フィラーを削除し、間を短くします"
+delete_matches = "すべて削除"
+delete_matches_tooltip = "一致した箇所をすべて動画からカットします"
+empty_description = "このコンピュータで録画を文字起こしすると、テキストを編集して動画を編集できます。"
+empty_title = "文字起こしはまだありません"
+hint = "単語をクリックするとその位置に移動します。単語を選択して削除キーを押すと、動画からカットされます。"
+next_match = "次の一致"
+no_audio = "この録画には文字起こしできる音声がありません。"
+previous_match = "前の一致"
+restore_blocked = "この部分はタイムラインでカットされています。取り消すか、クリップの端をドラッグして戻してください。"
+restore_hint = { other = "クリックして{count}語を復元" }
+restore_transition = "復元するには、このカットの隣のトランジションを削除してください。"
+search = "検索"
+search_count = "{current}/{total}"
+search_none = "一致なし"
+search_placeholder = "文字起こしを検索"
+seconds = "{value}秒"
+selection = { other = "{count}語を選択中、{seconds}秒" }
+selection_cut = { other = "カット済みの{count}語を選択中。削除キーを押すと復元します。" }
+skipped_hold = { other = "全画面テキストがフレームを保持しているため、{count}件のカットをスキップしました" }
+skipped_last_clip = "最後のクリップはカットできません。"
+skipped_transition = { other = "トランジションに重なるため、{count}件のカットをスキップしました" }
+title = "文字起こし"
+transcribe = "文字起こし"
+transcribing = "文字起こし中…"
+words = { other = "{count}語" }
+
+[editor.transcript.fillers]
+discourse = "つなぎ言葉"
+discourse_hint = "like, you know, so"
+false_start = "言い直し"
+false_start_hint = "we should, we need"
+hesitation = "言いよどみ"
+hesitation_hint = "um, uh, hmm"
+keep = "残す"
+listen = "聞く"
+none = "このカテゴリにフィラーはありません"
+remove = "削除"
+remove_all = { other = "{count}件を削除" }
+repetition = "繰り返し"
+repetition_hint = "the the, I I"
+title = "フィラー"
+
+[editor.transcript.pauses]
+apply = "短くする"
+keep = "短縮後"
+longer_than = "次より長い間"
+none = "その長さの間はありません"
+summary = { other = "{count}か所、{seconds}秒短縮" }
+title = "間"
 
 [editor.window]
 audio_filter = "音声"
@@ -2798,8 +2978,6 @@ split_hint = "再生ヘッドをこのクリップ内に移動してください
 volume = "音量"
 transition = "トランジション"
 transition_none = "なし"
-transition_crossfade = "クロスフェード"
-transition_fade = "フェード"
 transition_seconds = "{seconds}秒"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2831,11 +3009,12 @@ window_title_placeholder = "ウィンドウタイトル"
 windows_description = "ウィンドウボタン付きのタイトルバー"
 
 [editor.window.header]
-captions = "字幕"
 delete_recording = "録画を削除"
 export = "書き出し"
 open_bundle = "録画バンドルを開く"
 presets = "プリセット"
+transcript = "文字起こし"
+transcript_tooltip = "文字起こしで編集"
 
 [editor.window.image]
 changed = "置き換えを選んでいる間にこの画像が変更されました。選択してもう一度お試しください。"
@@ -2894,9 +3073,29 @@ save_failed = "{path}の録画タイトルを保存できませんでした：{e
 clear_all = "すべて消去"
 delete = "削除"
 
+[editor.window.transition]
+title = "トランジション"
+add = "トランジションを追加"
+duration = "長さ"
+seconds_unit = "秒"
+remove = "トランジションを削除"
+cross_fade = "クロスディゾルブ"
+fade_through_black = "黒にフェード"
+fade_through_white = "白にフェード"
+push_left = "左へプッシュ"
+push_right = "右へプッシュ"
+push_up = "上へプッシュ"
+push_down = "下へプッシュ"
+wipe_left = "左へワイプ"
+wipe_right = "右へワイプ"
+wipe_up = "上へワイプ"
+wipe_down = "下へワイプ"
+zoom = "ズーム"
+
 [editor.window.transport]
 done_splitting = "分割を終了"
 play_pause = "動画を再生/一時停止"
+speed = "プレビューの再生速度"
 split = "分割"
 split_tooltip = "セグメントをクリックして分割します。Escで終了します。"
 zoom_in = "ズームイン"
@@ -2907,6 +3106,21 @@ generate = "生成"
 generating = "生成中…"
 no_clicks = "ズームするクリックが見つかりません。レーン上をドラッグして追加してください。"
 prompt = "ズームを自動で追加"
+
+[editor.markers]
+add = "マーカーを追加"
+button = { other = "マーカー{count}件" }
+default_name = "マーカー{number}"
+delete = "マーカーを削除"
+done = "完了"
+edit = "マーカーを編集"
+empty = "マーカーはまだありません。Mキーで再生ヘッドの位置にマーカーを付けるか、録画中に追加してください。"
+hidden = { other = "{count}件のマーカーはカットした部分にあります。" }
+next = "次のマーカー"
+previous = "前のマーカー"
+split = "マーカー位置でクリップを分割"
+stack = { other = "{count}件のマーカーが近接しています。クリックで表示します。" }
+title = "マーカー"
 
 [ui]
 coming_soon = "近日公開"
@@ -2922,6 +3136,7 @@ mask = { other = "{count}個のマスクセグメントを選択中" }
 scene = { other = "{count}個のシーンセグメントを選択中" }
 segments = { other = "{count}個のセグメントを選択中" }
 select_all = "すべて選択"
+shape = { other = "{count}個の図形を選択中" }
 style = { other = "{count}個のスタイルセグメントを選択中" }
 text_segments = { other = "{count}個のテキストセグメントを選択中" }
 three_d = { other = "{count}個の3Dセグメントを選択中" }
@@ -2931,7 +3146,10 @@ zoom_some = { other = "{total}個中{count}個を選択中" }
 
 [dialog.quit]
 canceled = "終了をキャンセルしました：{error}。録画を完了または復元できるよう、Capは開いたままになります。"
+files_kept = "これまでに録画した内容はすべて録画のフォルダに残ります。"
+keep_open = "Cap を開いたままにする"
 pending = "録画の停止処理がまだ終わっていないため、終了をキャンセルしました。Capは開いたままになります。「停止」が使えるようになったら停止してから、もう一度終了してください。"
+quit_anyway = "それでも終了"
 still_open = "Capはまだ開いています"
 unconfirmed = "録画の停止を確認できなかったため、終了をキャンセルしました。Capは開いたままになります。「停止」を使ってから、もう一度終了してください。"
 

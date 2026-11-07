@@ -278,11 +278,12 @@ pub struct AppWindows {
     /// button, the tile toggled off). A recording start hands the foreground
     /// to the bar instead. Set even when the window was already hidden (the
     /// tray path): the Tauri effect does the same, which is why cancelling a
-    /// tray-opened picker reveals the main window.
+    /// tray-opened picker reveals the main window, unless
+    /// `keepMainHiddenOnCancel` is set.
     pub main_hidden_for_picker: bool,
-    /// Whether the main window was on screen when the picker hid it. Only the
-    /// copy/save screenshot finish reads it; the cancel reveal keeps the
-    /// Tauri behaviour above.
+    /// Whether the main window was on screen when the picker hid it. The
+    /// copy/save screenshot finish and a cancel under `keepMainHiddenOnCancel`
+    /// reveal the main window only when it was.
     pub main_visible_before_picker: bool,
     /// [`hide_main_window`] put the main window away and
     /// [`show_main_window_after_capture_pause`] has not brought it back since.
@@ -611,6 +612,8 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
+        let markers = session.read(cx).markers_available();
+        crate::hotkeys::set_recording_scope(markers, cx);
         if phase == Phase::Stopping {
             open_preparing_studio_editor(&session, cx);
         }
@@ -1993,8 +1996,12 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
                 .update(cx, |_, window, _| platform::window_is_visible(window))
                 .unwrap_or(true);
         let windows = cx.global_mut::<AppWindows>();
+        windows.main_visible_before_picker = picker_start_visibility(
+            windows.main_hidden_for_picker,
+            windows.main_visible_before_picker,
+            visible,
+        );
         windows.main_hidden_for_picker = true;
-        windows.main_visible_before_picker = visible;
         hide_main_window(cx);
     }
 }
@@ -2183,7 +2190,8 @@ fn keep_arranged_windows(cx: &mut App) {
 ///
 /// A "cancelled" dismissal in the Tauri vocabulary, which is the kind that
 /// reveals the main window again (`dismissalReveals`,
-/// `new-main/index.tsx:2047-2058`).
+/// `new-main/index.tsx:2047-2058`). With `keepMainHiddenOnCancel` it only
+/// comes back if it was on screen when the picker opened.
 pub fn dismiss_target_overlays(cx: &mut App) {
     restore_arranged_windows(cx);
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle
@@ -2229,12 +2237,38 @@ pub fn dismiss_target_overlays(cx: &mut App) {
         return;
     }
 
-    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+    let windows = cx.global_mut::<AppWindows>();
+    let hidden = std::mem::take(&mut windows.main_hidden_for_picker);
+    let was_visible = std::mem::take(&mut windows.main_visible_before_picker);
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    tracing::info!(hidden, idle, "picker dismissed");
-    if hidden && idle {
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_on_cancel;
+    tracing::info!(hidden, was_visible, idle, keep_hidden, "picker dismissed");
+    if reveal_main_after_picker_cancel(hidden, was_visible, idle, keep_hidden) {
         show_main_window(cx);
     }
+}
+
+/// A picker reopened over one that already hid the main window keeps the
+/// visibility saved when the first one opened.
+fn picker_start_visibility(
+    already_hidden_for_picker: bool,
+    saved: bool,
+    visible_now: bool,
+) -> bool {
+    if already_hidden_for_picker {
+        saved
+    } else {
+        visible_now
+    }
+}
+
+fn reveal_main_after_picker_cancel(
+    hidden_for_picker: bool,
+    was_visible: bool,
+    idle: bool,
+    keep_hidden: bool,
+) -> bool {
+    hidden_for_picker && idle && (was_visible || !keep_hidden)
 }
 
 /// Close the overlays and disarm the cursor probe, leaving the main window's
@@ -5522,6 +5556,7 @@ fn load_editor_project_candidate(
     previous: Option<Arc<cap_editor::EditorInstance>>,
     cx: &mut App,
 ) {
+    let ordinary_open = finalization.is_none() && previous.is_none();
     let preparing_output = finalization.as_ref().map(|_| editor_audio_output());
     let current_join =
         finalization
@@ -5609,6 +5644,30 @@ fn load_editor_project_candidate(
         }
         if handle.update(cx, |_, _, _| ()).is_err() {
             return;
+        }
+        if ordinary_open {
+            let active = cx.update(|cx| {
+                RecordingSession::global(cx)
+                    .read(cx)
+                    .active_project_dir()
+                    .map(Path::to_path_buf)
+            });
+            let recover_path = path.clone();
+            let recovered = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::library::recover_interrupted_for_editing(
+                        &recover_path,
+                        active.as_deref(),
+                    )
+                })
+                .await;
+            if let Err(message) = recovered {
+                handle
+                    .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                    .ok();
+                return;
+            }
         }
         let preflight_path = path.clone();
         let summary = cx
@@ -5743,6 +5802,7 @@ fn load_editor_project_candidate(
                 view.set_summary(summary, window, cx);
                 view.set_project(config, window, cx);
                 view.set_instance(instance.clone());
+                view.refine_caption_timings(window, cx);
             })
             .is_err()
         {
@@ -5882,6 +5942,7 @@ fn load_editor_project_candidate(
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
         crate::editor_bench::run(handle, cx).await;
+        crate::transcript::automation::run(handle, cx).await;
         drive_auto_export(handle, cx).await;
         crate::editor_hover_bench::run(handle, cx).await;
     })
@@ -6044,6 +6105,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
     let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    let transition = std::env::var("CAP_GPUI_AUTO_TRANSITION").ok();
     let generate_zoom =
         std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
     let pick_background =
@@ -6057,6 +6119,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && clip_menu.is_none()
         && camera3d.is_none()
         && add_track.is_none()
+        && transition.is_none()
         && !generate_zoom
         && !pick_background
         && !desktop_background
@@ -6146,6 +6209,18 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .ok();
     }
 
+    // `CAP_GPUI_AUTO_TRANSITION=<index>[:<kind>]`: open the popover for the
+    // transition into clip `<index>` (adding a cross dissolve first if the
+    // cut has none, and switching it to `<kind>` when given), the way a click
+    // on the transition does.
+    if let Some(spec) = transition {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_transition(&spec, window, cx)
+            })
+            .ok();
+    }
+
     // `CAP_GPUI_AUTO_ADD_TRACK=1` opens the add-track tray;
     // `CAP_GPUI_AUTO_ADD_TRACK=<text|mask|style|audio|...>` opens it and picks
     // that tile, then treats the player as hovered so its overlay draws.
@@ -6190,11 +6265,17 @@ async fn drive_auto_playback(
     let scrub_playing = std::env::var("CAP_GPUI_AUTO_SCRUB_PLAYING")
         .ok()
         .and_then(|value| value.parse::<u32>().ok());
+    // `CAP_GPUI_AUTO_FRAME_STATS=<seconds>`: redraw every frame for that long
+    // and log the frame intervals, alongside any playback below.
+    let frame_stats = std::env::var("CAP_GPUI_AUTO_FRAME_STATS")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok());
     if play_secs.is_none()
         && torture.is_none()
         && seek.is_none()
         && seek_time.is_none()
         && scrub_playing.is_none()
+        && frame_stats.is_none()
     {
         return;
     }
@@ -6301,6 +6382,14 @@ async fn drive_auto_playback(
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|_| !CLOSE_SCENARIO_DONE.swap(true, std::sync::atomic::Ordering::SeqCst));
+
+    if let Some(seconds) = frame_stats {
+        handle
+            .update(cx, |view, window, cx| {
+                view.measure_frame_times(seconds, window, cx)
+            })
+            .ok();
+    }
 
     if let Some(secs) = play_secs {
         cx.update(|cx| cx.activate(true));
@@ -8254,6 +8343,24 @@ mod tests {
         assert!(!reveal_main_after_editor_close(1, true, true));
         // Mid-recording the session observer owns the reveal, not this path.
         assert!(!reveal_main_after_editor_close(0, false, false));
+    }
+
+    #[test]
+    fn cancelling_a_picker_keeps_main_hidden_only_when_asked() {
+        assert!(reveal_main_after_picker_cancel(true, false, true, false));
+        assert!(reveal_main_after_picker_cancel(true, true, true, false));
+        assert!(!reveal_main_after_picker_cancel(true, false, true, true));
+        assert!(reveal_main_after_picker_cancel(true, true, true, true));
+        assert!(!reveal_main_after_picker_cancel(false, true, true, false));
+        assert!(!reveal_main_after_picker_cancel(true, true, false, false));
+    }
+
+    #[test]
+    fn reopening_a_picker_keeps_the_visibility_from_before_the_first() {
+        assert!(picker_start_visibility(false, false, true));
+        assert!(!picker_start_visibility(false, true, false));
+        assert!(picker_start_visibility(true, true, false));
+        assert!(!picker_start_visibility(true, false, true));
     }
 
     #[test]

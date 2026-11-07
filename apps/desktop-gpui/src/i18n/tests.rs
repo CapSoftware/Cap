@@ -295,6 +295,16 @@ fn english_matches_the_literals_it_replaced() {
             "Draw the MacBook notch on screen recordings".into(),
         ),
         (
+            tr::settings::general::recording::marker_sound::label(),
+            "Play a sound for markers".into(),
+        ),
+        (
+            tr::settings::general::recording::marker_sound::description(),
+            "Plays a short sound when you add a marker during a Studio recording. Your \
+                             microphone or system audio can pick it up."
+                .into(),
+        ),
+        (
             tr::settings::general::recording::max_fps::description(),
             "Maximum framerate for screen capture.".into(),
         ),

@@ -208,7 +208,9 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Changelog, cx: &mut App| {
         app_windows::open_settings(crate::settings_window::Page::Changelog, cx)
     });
-    cx.on_action(|_: &HelpDashboard, cx: &mut App| cx.open_url("https://cap.so/dashboard"));
+    cx.on_action(|_: &HelpDashboard, cx: &mut App| {
+        cx.open_url(&format!("{}/dashboard", crate::auth::server_url()));
+    });
     cx.on_action(|_: &HelpDocs, cx: &mut App| cx.open_url("https://cap.so/docs"));
     cx.on_action(|_: &HelpFaq, cx: &mut App| cx.open_url("https://cap.so/faq"));
     cx.on_action(|_: &HelpSelfHosting, cx: &mut App| cx.open_url("https://cap.so/self-hosting"));
@@ -790,12 +792,33 @@ fn apply_quit_action(action: QuitAction, cx: &mut App) {
                 message
             });
             tracing::warn!(%message);
-            cx.spawn(async move |_| {
-                platform::alert_dialog(tr::dialog::quit::still_open(), &message)
+            let detail = format!("{message}\n\n{}", tr::dialog::quit::files_kept());
+            cx.spawn(async move |cx| {
+                let quit_anyway = platform::confirm_dialog(
+                    tr::dialog::quit::still_open(),
+                    &detail,
+                    tr::dialog::quit::quit_anyway(),
+                    tr::dialog::quit::keep_open(),
+                    true,
+                );
+                if quit_anyway {
+                    cx.update(quit_with_unconfirmed_recording);
+                }
             })
             .detach();
         }
     }
+}
+
+/// The user chose to quit although the recording could not be confirmed
+/// stopped. Every fragment written so far is already on disk, so this is
+/// never worse than the force quit it replaces.
+fn quit_with_unconfirmed_recording(cx: &mut App) {
+    tracing::warn!("quitting with an unconfirmed recording stop; its files are kept for recovery");
+    let coordinator = cx.global_mut::<QuitCoordinator>();
+    coordinator.gate.pending = None;
+    coordinator.gate.exit_committed = true;
+    apply_quit_action(QuitAction::Exit, cx);
 }
 
 // -- The dock icon -----------------------------------------------------------
@@ -942,6 +965,41 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn dashboard_menu_uses_the_current_server(cx: &mut gpui::TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        store::set_test_tauri_store_path(Some(directory.path().join("store.json")));
+        cx.update(init);
+        let cases = [
+            (None, "https://cap.so/dashboard"),
+            (
+                Some("https://cap.example.com/"),
+                "https://cap.example.com/dashboard",
+            ),
+            (
+                Some("http://localhost:3000"),
+                "http://localhost:3000/dashboard",
+            ),
+            (Some(""), "https://cap.so/dashboard"),
+        ];
+        let mut opened = Vec::new();
+        for (server, _) in cases {
+            if let Some(server) = server {
+                assert!(store::set_store_setting(
+                    store::GENERAL_SETTINGS,
+                    "serverUrl",
+                    serde_json::Value::String(server.into()),
+                ));
+            }
+            cx.update(|cx| cx.dispatch_action(&HelpDashboard));
+            opened.push(cx.opened_url());
+        }
+        store::set_test_tauri_store_path(None);
+        for (actual, (_, expected)) in opened.iter().zip(cases) {
+            assert_eq!(actual.as_deref(), Some(expected));
+        }
+    }
 
     #[test]
     fn quit_waits_for_recording_ui_restoration() {

@@ -22,6 +22,7 @@ import {
 	readInitTiming,
 } from "@/lib/fragmented-mp4-duration";
 import { runPromise } from "@/lib/server";
+import { fetchStorageUrl } from "@/lib/storage-fetch";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 // The September backfill wrote this exact reason for uploads whose segments exist but whose manifest never arrived.
@@ -164,7 +165,7 @@ function rangeReader(bucket: RecordingBucket, key: string) {
 			.pipe(runPromise);
 		const signedUrl = await url;
 		if (!signedUrl) throw new Error("Segment URL could not be signed");
-		const response = await fetch(signedUrl, {
+		const response = await fetchStorageUrl(signedUrl, {
 			headers: { Range: `bytes=${start}-${end - 1}` },
 		});
 		if (response.status !== 206 && response.status !== 200)

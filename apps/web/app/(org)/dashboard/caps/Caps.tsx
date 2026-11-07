@@ -18,6 +18,7 @@ import {
 } from "@/components/VideoThumbnail";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { parsePageParam } from "@/lib/page-param";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
 import {
@@ -84,7 +85,7 @@ export const Caps = ({
 }) => {
 	const router = useRouter();
 	const params = useSearchParams();
-	const page = Number(params.get("page")) || 1;
+	const page = parsePageParam(params.get("page"));
 	const { user } = useDashboardContext();
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
