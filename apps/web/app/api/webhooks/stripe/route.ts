@@ -9,7 +9,12 @@ import {
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { isProSubscription, isSsoSubscription, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	isSsoSubscription,
+	isStandaloneScimSubscription,
+	stripe,
+} from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -476,6 +481,9 @@ export const POST = async (req: Request) => {
 					await syncSsoSubscription(subscription.id);
 					return NextResponse.json({ received: true });
 				}
+				if (isStandaloneScimSubscription(subscription)) {
+					return NextResponse.json({ received: true });
+				}
 			}
 			if (
 				event.type === "invoice.paid" ||
@@ -486,10 +494,14 @@ export const POST = async (req: Request) => {
 					typeof invoice.subscription === "string"
 						? invoice.subscription
 						: invoice.subscription?.id;
-				const ssoInvoice = isSsoSubscription({
+				const invoiceIdentity = {
 					metadata: invoice.subscription_details?.metadata,
 					items: { data: invoice.lines?.data ?? [] },
-				});
+				};
+				if (isStandaloneScimSubscription(invoiceIdentity)) {
+					return NextResponse.json({ received: true });
+				}
+				const ssoInvoice = isSsoSubscription(invoiceIdentity);
 				if (
 					ssoInvoice ||
 					(event.type === "invoice.payment_failed" &&
@@ -542,6 +554,9 @@ export const POST = async (req: Request) => {
 								subscriptionId,
 							});
 						}
+						return NextResponse.json({ received: true });
+					}
+					if (isStandaloneScimSubscription(checkoutSubscription)) {
 						return NextResponse.json({ received: true });
 					}
 				}

@@ -370,9 +370,18 @@ impl Drop for ActorHandle {
             });
         }
         #[cfg(not(target_os = "linux"))]
-        tokio::spawn(async move {
-            let _ = actor_ref.tell(Stop).await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = actor_ref.tell(Stop).await;
+                });
+            }
+            // The app drops a handle it kept after a failed stop on its UI
+            // thread, which has no Tokio runtime; `tokio::spawn` would panic.
+            Err(_) => {
+                let _ = actor_ref.tell(Stop).try_send();
+            }
+        }
     }
 }
 
