@@ -6266,10 +6266,15 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
+        let settings = crate::store::GeneralSettings::load();
         let amount = f64::from(
-            crate::store::GeneralSettings::load()
+            settings
                 .default_zoom_amount
                 .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
+        );
+        let timing = edits::AutoZoomTiming::from_seconds(
+            f64::from(settings.auto_zoom_hold_seconds()),
+            f64::from(settings.auto_zoom_merge_gap_seconds()),
         );
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
@@ -6285,7 +6290,9 @@ impl EditorWindow {
                     .timeline
                     .as_ref()
                     .map_or_else(Vec::new, |timeline| {
-                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                        edits::generate_zoom_segments_for_timeline_with_timing(
+                            &clicks, timeline, amount, timing,
+                        )
                     });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");

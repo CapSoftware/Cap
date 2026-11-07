@@ -188,6 +188,14 @@ label = "Zoom automático en los clics"
 description = "Nivel de zoom de los segmentos de zoom nuevos y generados automáticamente."
 label = "Nivel de zoom predeterminado"
 
+[settings.general.recording.auto_zoom_hold]
+description = "Cuánto tiempo permanecen acercados los segmentos de zoom automáticos después de cada clic."
+label = "Duración del zoom tras clic"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "Combina zooms de clics consecutivos separados por menos de este intervalo. Ajusta a 0s para no combinar huecos."
+label = "Intervalo para combinar clics cercanos"
+
 [settings.general.recording.capture_keyboard]
 description = "Registra las pulsaciones de teclas para poder añadir superposiciones de teclado en el editor."
 label = "Capturar pulsaciones de teclas"

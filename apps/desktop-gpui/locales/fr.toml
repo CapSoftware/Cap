@@ -188,6 +188,14 @@ label = "Zoom automatique sur les clics"
 description = "Niveau de zoom des segments de zoom créés manuellement ou automatiquement."
 label = "Niveau de zoom par défaut"
 
+[settings.general.recording.auto_zoom_hold]
+description = "Durée pendant laquelle les segments de zoom automatiques restent zoomés après chaque clic."
+label = "Maintien du zoom après un clic"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "Fusionner les zooms de clics consécutifs séparés par moins que cet écart. Régler sur 0s pour ne jamais fusionner les écarts."
+label = "Écart de fusion des clics proches"
+
 [settings.general.recording.capture_keyboard]
 description = "Enregistrer les frappes au clavier pour pouvoir ajouter des incrustations de touches dans l'éditeur."
 label = "Capturer les frappes au clavier"
