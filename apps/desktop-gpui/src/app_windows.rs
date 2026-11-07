@@ -2567,26 +2567,33 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    let retained_area = cfg!(any(target_os = "macos", windows))
-        && matches!(&target, ScreenCaptureTarget::Area { .. });
-    if retained_area {
-        let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
+    let area = matches!(&target, ScreenCaptureTarget::Area { .. });
+    let retained = if area && cfg!(any(target_os = "macos", windows)) {
+        area_overlay_for_recording(&target, cx).filter(|handle| {
             handle
                 .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
                 .unwrap_or(false)
-        });
-        let Some(handle) = handle else {
+        })
+    } else {
+        None
+    };
+    let retained_area = retained.is_some();
+    match retained {
+        Some(handle) => close_other_overlays(handle, cx),
+        // A remote or streamed Windows session cannot leave the outline out
+        // of the capture, so it records the area without one.
+        None if area && cfg!(target_os = "macos") => {
             dismiss_target_overlays(cx);
             RecordingSession::global(cx).update(cx, |session, cx| {
                 session.error = Some(tr::dialog::capture::area_unavailable().into());
                 cx.notify();
             });
             return;
-        };
-        close_other_overlays(handle, cx);
-    } else {
-        release_camera_park(cx);
-        close_target_overlays(cx);
+        }
+        None => {
+            release_camera_park(cx);
+            close_target_overlays(cx);
+        }
     }
 
     let preparing = main
