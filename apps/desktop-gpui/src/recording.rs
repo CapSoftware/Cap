@@ -2043,13 +2043,7 @@ fn persist_instant_meta(
             InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
         };
 
-        let pretty_name = completed
-            .project_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Cap Recording")
-            .to_string();
+        let pretty_name = project_pretty_name(&completed.project_path);
         let meta = match &completed.meta {
             InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
                 error: "instant recording stopped before completion".to_string(),
@@ -2183,12 +2177,7 @@ fn persist_in_progress_instant_meta(
                 recording_dir: project_path.to_path_buf(),
             }
         };
-        let pretty_name = project_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Cap Recording")
-            .to_string();
+        let pretty_name = project_pretty_name(project_path);
 
         let meta = cap_project::RecordingMeta {
             platform: Some(cap_project::Platform::default()),
@@ -2563,7 +2552,8 @@ async fn start_attempt_with_upload(
             let mut builder = defaults.apply_to_studio_builder(
                 studio_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
-                    .with_window_only(window_only),
+                    .with_window_only(window_only)
+                    .with_pretty_name(project_pretty_name(&project_dir)),
                 camera_lock.is_some(),
                 None,
             );
@@ -2888,6 +2878,15 @@ fn create_project_dir(
         .map_err(|e| anyhow!("unique filename: {e}"))?;
 
     Ok(base.join(filename))
+}
+
+fn project_pretty_name(project_path: &std::path::Path) -> String {
+    project_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Cap Recording")
+        .to_string()
 }
 
 /// Preserve GPUI's colon and slash replacement, then strip invalid characters
@@ -3268,6 +3267,27 @@ mod tests {
                 timestamp,
             ),
             "Notes {date} {time:100%} 2026-08-25"
+        );
+    }
+
+    #[test]
+    fn studio_and_instant_projects_are_named_by_the_project_name_template() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 11, 6, 15, 29, 14)
+            .single()
+            .unwrap();
+        let name = format_recording_project_name(
+            None,
+            "Untitled",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+        let project_path = std::path::Path::new("/recordings").join(project_bundle_filename(&name));
+
+        assert_eq!(
+            project_pretty_name(&project_path),
+            "Untitled (Window) 2026-11-06 03.29 PM"
         );
     }
 

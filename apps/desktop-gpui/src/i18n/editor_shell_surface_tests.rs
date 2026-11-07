@@ -8,6 +8,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.markers.",
         "editor.modal.",
         "editor.preparing.",
+        "editor.side_panel.",
         "editor.tabs.",
         "editor.timeline.",
         "editor.transcript.",
@@ -36,6 +37,7 @@ const FORMATTED: &[&str] = &[
     "editor.markers.stack",
     "editor.clips.append_error",
     "editor.clips.clip",
+    "editor.clips.count",
     "editor.clips.error.cannot_decode",
     "editor.clips.error.in_use",
     "editor.clips.error.missing_video",
@@ -117,7 +119,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::canvas::text_item(), "Text"),
         (tr::editor::clips::append_error_title(), "Recording Error"),
-        (tr::editor::clips::back(), "Back to editor"),
         (tr::editor::clips::cap_filter(), "Cap Recording"),
         (
             tr::editor::clips::empty_description(),
@@ -167,7 +168,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::clips::import_mp4(), "MP4 Video…"),
         (tr::editor::clips::importing(), "Importing…"),
         (tr::editor::clips::mp4_filter(), "MP4 Video"),
+        (tr::editor::clips::record(), "Record"),
         (tr::editor::clips::record_new(), "Record a new clip"),
+        (tr::editor::side_panel::style(), "Style"),
         (tr::editor::clips::title(), "Clips"),
         (
             tr::editor::export::advanced::bits_per_pixel(),
@@ -1149,11 +1152,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::transcript::title(), "Transcript"),
         (tr::editor::transcript::transcribe(), "Transcribe"),
         (tr::editor::transcript::transcribing(), "Transcribing…"),
-        (tr::editor::window::header::transcript(), "Transcript"),
-        (
-            tr::editor::window::header::transcript_tooltip(),
-            "Edit by transcript",
-        ),
         (
             tr::editor::window::image::changed(),
             "This image changed while choosing a replacement. Select it and try again.",
@@ -1372,6 +1370,8 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+    assert_eq!(tr::editor::clips::count(1), "1 clip");
+    assert_eq!(tr::editor::clips::count(3), "3 clips");
     assert_eq!(tr::editor::markers::button(1), "1 marker");
     assert_eq!(tr::editor::markers::button(12), "12 markers");
     assert_eq!(tr::editor::markers::default_name(3), "Marker 3");
