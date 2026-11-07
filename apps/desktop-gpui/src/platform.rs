@@ -2452,6 +2452,10 @@ mod mac {
         ns_window(window).is_some_and(|ns| ns.isVisible())
     }
 
+    pub fn window_is_minimized(window: &Window) -> bool {
+        ns_window(window).is_some_and(|ns| ns.isMiniaturized())
+    }
+
     /// Whether the window has a close button (`NSWindowStyleMaskClosable`):
     /// the windows ⌘W may close. gpui only sets it with a titlebar, so the
     /// main window, camera bubble, controls bar and target overlays never
@@ -3249,6 +3253,9 @@ mod stub {
     pub fn zoom_native(_native: &NativeWindow) {}
     pub fn toggle_fullscreen_native(_native: &NativeWindow) {}
     pub fn window_is_visible(_window: &Window) -> bool {
+        false
+    }
+    pub fn window_is_minimized(_window: &Window) -> bool {
         false
     }
     pub fn window_is_closable(_window: &Window) -> bool {

@@ -822,7 +822,8 @@ fn quit_with_unconfirmed_recording(cx: &mut App) {
 /// `sync_macos_dock_visibility` (`src-tauri/src/permissions.rs:212-249`),
 /// factored out so the rule can be tested without an NSApplication:
 ///
-/// - a visible *panel* window (camera bubble, recording bar, target-select
+/// - a minimised main window needs the Dock so the user can restore it;
+/// - otherwise a visible *panel* window (camera bubble, recording bar, target-select
 ///   overlay, teleprompter) while the user has asked for no dock icon leaves
 ///   the policy exactly as it is -- `None` here, which is the `return` there;
 /// - otherwise the icon shows unless the user asked for it hidden and no
@@ -831,7 +832,11 @@ pub fn dock_decision(
     hide_dock_icon: bool,
     has_visible_panel_window: bool,
     has_visible_dock_window: bool,
+    main_minimized: bool,
 ) -> Option<bool> {
+    if main_minimized {
+        return Some(true);
+    }
     if has_visible_panel_window && hide_dock_icon {
         return None;
     }
@@ -840,6 +845,18 @@ pub fn dock_decision(
 
 /// Bumped by every [`schedule_dock_sync`]; only the newest scheduled sync runs.
 static DOCK_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(all(debug_assertions, target_os = "macos"))]
+static DOCK_SYNC_COMPLETED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(all(debug_assertions, target_os = "macos"))]
+pub(crate) fn test_dock_sync_state() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        DOCK_SYNC_GENERATION.load(Ordering::Acquire),
+        DOCK_SYNC_COMPLETED.load(Ordering::Acquire),
+    )
+}
 
 /// `schedule_macos_dock_visibility_sync`: coalesce a burst of window changes
 /// into one policy change, 100ms later.
@@ -856,6 +873,8 @@ fn schedule_dock_sync_after(cx: &mut App, delay: std::time::Duration) {
             return;
         }
         cx.update(sync_dock_visibility);
+        #[cfg(all(debug_assertions, target_os = "macos"))]
+        DOCK_SYNC_COMPLETED.store(generation, Ordering::Release);
     })
     .detach();
 }
@@ -873,7 +892,15 @@ pub fn sync_dock_visibility(cx: &mut App) {
 
     let hide_dock_icon = store::GeneralSettings::load().hide_dock_icon;
     let (panel, dock) = visible_window_classes(cx);
-    let Some(show) = dock_decision(hide_dock_icon, panel, dock) else {
+    #[cfg(target_os = "macos")]
+    let main_minimized = {
+        let main = cx.global::<AppWindows>().main;
+        main.update(cx, |_, window, _| platform::window_is_minimized(window))
+            .unwrap_or(false)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let main_minimized = false;
+    let Some(show) = dock_decision(hide_dock_icon, panel, dock, main_minimized) else {
         return;
     };
 
@@ -902,7 +929,7 @@ pub fn sync_dock_visibility(cx: &mut App) {
         policy = platform::activation_policy(),
         "dock visibility synced"
     );
-    if show {
+    if show && !main_minimized {
         // An Accessory app has no menu bar. Coming back to Regular is not
         // enough on its own -- the app has to be the active application for
         // macOS to draw its menu bar, and the transition drops activation.
@@ -1487,15 +1514,26 @@ mod tests {
     #[test]
     fn dock_policy_matches_the_tauri_rule() {
         // The dock icon is never hidden while the setting is off.
-        assert_eq!(dock_decision(false, false, false), Some(true));
-        assert_eq!(dock_decision(false, true, false), Some(true));
-        assert_eq!(dock_decision(false, true, true), Some(true));
+        assert_eq!(dock_decision(false, false, false, false), Some(true));
+        assert_eq!(dock_decision(false, true, false, false), Some(true));
+        assert_eq!(dock_decision(false, true, true, false), Some(true));
 
         // With the setting on: a visible panel window freezes the policy...
-        assert_eq!(dock_decision(true, true, false), None);
-        assert_eq!(dock_decision(true, true, true), None);
+        assert_eq!(dock_decision(true, true, false, false), None);
+        assert_eq!(dock_decision(true, true, true, false), None);
         // ...and otherwise the icon follows the dock-activating windows.
-        assert_eq!(dock_decision(true, false, true), Some(true));
-        assert_eq!(dock_decision(true, false, false), Some(false));
+        assert_eq!(dock_decision(true, false, true, false), Some(true));
+        assert_eq!(dock_decision(true, false, false, false), Some(false));
+    }
+
+    #[test]
+    fn minimized_main_remains_available_in_dock() {
+        for hide_dock_icon in [false, true] {
+            for panel in [false, true] {
+                for dock in [false, true] {
+                    assert_eq!(dock_decision(hide_dock_icon, panel, dock, true), Some(true));
+                }
+            }
+        }
     }
 }

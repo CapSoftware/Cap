@@ -44,6 +44,9 @@ mod editor_timeline;
 mod editor_window;
 mod feeds;
 mod focus_border;
+mod foreign_window;
+#[cfg(debug_assertions)]
+mod glass_probe;
 mod hotkeys;
 mod i18n;
 mod import;
@@ -72,17 +75,16 @@ mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
 #[cfg(debug_assertions)]
-mod glass_probe;
-#[cfg(debug_assertions)]
 mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
 mod power;
 mod presets;
-mod style_presets;
 mod project_save;
 mod recording;
+#[cfg(debug_assertions)]
+mod recording_completion_tests;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod recording_window_tests;
 mod screenshot;
@@ -99,6 +101,7 @@ mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
 mod store;
+mod style_presets;
 mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
@@ -109,7 +112,6 @@ mod tray;
 mod ui;
 mod updates;
 mod upload;
-mod foreign_window;
 mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -292,8 +294,16 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    if std::env::var("CAP_GPUI_TEST_RECORDING_COMPLETION").as_deref() == Ok("1") {
+        recording_completion_tests::run();
+        return;
+    }
     #[cfg(all(debug_assertions, target_os = "macos"))]
-    if std::env::var("CAP_GPUI_TEST_RECORDING_WINDOW_START").as_deref() == Ok("1") {
+    if matches!(
+        std::env::var("CAP_GPUI_TEST_RECORDING_WINDOW_START").as_deref(),
+        Ok("1" | "dock")
+    ) {
         recording_window_tests::run();
         return;
     }
@@ -954,7 +964,9 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+                .with_filter(tracing_subscriber::EnvFilter::new(
+                    super::DEFAULT_LOG_FILTER,
+                )),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -963,9 +975,15 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(
+            !logged.contains("Failed to populate properties cache"),
+            "{logged}"
+        );
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(
+            logged.contains("other zbus warnings still show"),
+            "{logged}"
+        );
         assert!(logged.contains("recording started"), "{logged}");
     }
 

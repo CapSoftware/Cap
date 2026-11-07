@@ -22,13 +22,31 @@ cargo run
 
 The macOS recording-window regression checks Close, Minimise, picker-hidden
 starts, reopening, repeated starts, and native window styling using transparent
-off-screen panels and an isolated settings file. It does not capture the screen
-or open microphones or cameras. After building the debug app, run:
+off-screen panels and an isolated settings file. A second check uses the real
+GPUI main window and recording controls, runs the scheduled Dock update, and
+checks Dock availability with “Hide Dock icon” both enabled and disabled. It
+does not capture the screen or open microphones or cameras. After building the
+debug app, run:
 
 ```sh
 CAP_GPUI_REAL_APP_BIN="$PWD/target/debug/cap-gpui" \
-  cargo test --bin cap-gpui recording_start_window_flow -- --ignored --nocapture
+  cargo test --bin cap-gpui recording_start_ -- --ignored --nocapture
 ```
+
+The native recording-completion regression also runs on Windows and Linux:
+
+```sh
+CAP_GPUI_REAL_APP_BIN="$PWD/target/debug/cap-gpui" \
+  cargo test --bin cap-gpui native_recording_completion_flow -- --ignored --nocapture
+```
+
+On Windows, use the debug `cap-gpui.exe` path. Run Linux in an isolated Wayland
+session. The test checks the actual minimise, unmap, configure and new-buffer
+requests, not just retained visibility. It also checks Show Cap, picker-hidden
+starts, Close, and reopening during recording. On Windows it additionally checks
+that Open Link and Copy Link do not restore an app-minimised window. No video is
+recorded and no browser or clipboard action is sent. On macOS this completion
+test requires existing permissions and fails without requesting them.
 
 The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
 own revisions of the wgpu and font stacks. After that, an edit rebuilds only

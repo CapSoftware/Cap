@@ -689,7 +689,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         != crate::store::PostInstantBehaviour::ShowCap
                     && cx.global::<AppWindows>().main_hidden_by_app
                     && !main
-                        .update(cx, |_, window, _| platform::window_is_visible(window))
+                        .update(cx, |_, window, _| {
+                            platform::window_is_visible(window)
+                                && !platform::window_is_minimized(window)
+                        })
                         .unwrap_or(true);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
@@ -912,6 +915,8 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
         open_onboarding(cx);
         return;
     }
+    #[cfg(target_os = "linux")]
+    let was_hidden_by_app = cx.global::<AppWindows>().main_hidden_by_app;
     cx.global_mut::<AppWindows>().main_hidden_by_app = false;
     let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     if resume_inputs {
@@ -942,6 +947,17 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
             }
             #[cfg(target_os = "linux")]
             if window.retained_visibility().is_some() {
+                // Wayland still considers a minimised surface mapped. Unmapping
+                // resets that state; a show request alone is already satisfied.
+                if was_hidden_by_app && window.retained_visibility() == Some(true) {
+                    match window.set_retained_visibility(false) {
+                        Ok(receipt) => drop(receipt),
+                        Err(error) => {
+                            tracing::warn!(%error, "could not unmap the minimised main window");
+                            return None;
+                        }
+                    }
+                }
                 match window.set_retained_visibility(true) {
                     Ok(receipt) => observe_visibility(receipt, true, cx),
                     Err(error) => tracing::warn!(%error, "could not restore the main window"),
@@ -1048,7 +1064,7 @@ pub fn hide_main_window(cx: &mut App) {
     .detach();
 }
 
-fn put_main_window_away_for_recording(cx: &mut App) {
+pub(crate) fn put_main_window_away_for_recording(cx: &mut App) {
     #[cfg(target_os = "linux")]
     {
         if !clean_capture_active(cx)
