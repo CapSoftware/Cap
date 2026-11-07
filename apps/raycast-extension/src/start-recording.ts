@@ -1,25 +1,31 @@
 import {
-    Clipboard,
-    closeMainWindow,
-    getPreferenceValues,
-    open,
-    showHUD,
-} from "@raycast/api"
+	type StartRecordingPreferences,
+	buildStartRecordingDeepLink,
+} from "./deeplink";
 import {
-    StartRecordingPreferences,
-    buildStartRecordingDeepLink,
-} from "./deeplink"
+	Clipboard,
+	closeMainWindow,
+	getPreferenceValues,
+	open,
+	showHUD,
+} from "./raycast-bridge";
 
-// Raycast command entry point to start a Cap recording with configured user defaults.
 export default async function Command(): Promise<void> {
-    const prefs = getPreferenceValues<StartRecordingPreferences>()
-    const deepLinkUrl = buildStartRecordingDeepLink(prefs)
-
-    await closeMainWindow()
-    await open(deepLinkUrl)
-    await showHUD(
-        `Cap recording started (${prefs.defaultMode || "instant"} mode)`
-    )
+	const prefs = await getPreferenceValues<StartRecordingPreferences>();
+	try {
+		const deepLinkUrl = buildStartRecordingDeepLink(prefs);
+		await closeMainWindow();
+		await open(deepLinkUrl);
+		await showHUD(
+			`Cap recording started (${prefs.defaultMode || "instant"} mode)`,
+		);
+	} catch (error) {
+		const message =
+			error instanceof Error
+				? error.message
+				: "Failed to resolve target screen name";
+		await showHUD(message);
+	}
 }
 
-export { Clipboard }
+export { Clipboard };

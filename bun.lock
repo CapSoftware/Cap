@@ -91,6 +91,14 @@
         "@types/bun": "latest",
       },
     },
+    "apps/raycast-extension": {
+      "name": "@cap/raycast-extension",
+      "devDependencies": {
+        "@types/node": "^20.11.5",
+        "typescript": "^5.8.3",
+        "vitest": "^3.2.0",
+      },
+    },
     "apps/render-farm": {
       "name": "@cap/render-farm",
       "devDependencies": {
@@ -824,6 +832,8 @@
     "@cap/local-docker": ["@cap/local-docker@workspace:packages/local-docker"],
 
     "@cap/media-server": ["@cap/media-server@workspace:apps/media-server"],
+
+    "@cap/raycast-extension": ["@cap/raycast-extension@workspace:apps/raycast-extension"],
 
     "@cap/recorder-core": ["@cap/recorder-core@workspace:packages/recorder-core"],
 
