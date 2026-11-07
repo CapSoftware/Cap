@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Bound retained latency samples so long recording sessions do not grow Vec<u64> buffers without limit.
 const MAX_TIMING_SAMPLES: usize = 4_096;
 
 fn push_bounded_sample(samples: &RwLock<Vec<u64>>, value_ns: u64) {

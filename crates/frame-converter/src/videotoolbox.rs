@@ -95,7 +95,6 @@ struct SessionHandle(VTPixelTransferSessionRef);
 
 unsafe impl Send for SessionHandle {}
 
-// RAII wrapper for CVPixelBufferRef so early returns cannot leak CoreVideo surfaces.
 struct OwnedPixelBuffer(CVPixelBufferRef);
 
 unsafe impl Send for OwnedPixelBuffer {}
@@ -149,7 +148,6 @@ unsafe fn copy_strided_plane(region: PlaneCopyRegion) {
 
 pub struct VideoToolboxConverter {
     session: Mutex<SessionHandle>,
-    // Reuse the output CVPixelBufferRef across frames to avoid 30fps VM map/unmap churn.
     reusable_output_buffer: Mutex<Option<OwnedPixelBuffer>>,
     input_format: Pixel,
     input_cv_format: u32,

@@ -10,8 +10,6 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
-// Cap total in-flight input, output, and pooled converter frames to 64 MiB so high-resolution
-// webcam streams cannot accumulate multi-gigabyte backlogs when encoding slows down.
 const CONVERTER_POOL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const MIN_QUEUE_CAPACITY: usize = 1;
 
@@ -76,18 +74,26 @@ impl ConverterPoolConfig {
             conversion.output_width,
             conversion.output_height,
         );
-        let avg_frame_bytes = in_bytes.max(out_bytes);
-        let max_total_frames =
-            (CONVERTER_POOL_BYTE_BUDGET / avg_frame_bytes).max(MIN_QUEUE_CAPACITY * 3);
+        let input_budget = CONVERTER_POOL_BYTE_BUDGET / 2;
+        let max_input = (input_budget / in_bytes).max(MIN_QUEUE_CAPACITY);
+        let input_capacity = self.input_capacity.min(max_input).max(MIN_QUEUE_CAPACITY);
 
-        let max_input = (max_total_frames / 3).max(MIN_QUEUE_CAPACITY);
-        let max_output = (max_total_frames / 3).max(MIN_QUEUE_CAPACITY);
-        let max_pool = (max_total_frames - max_input - max_output).max(MIN_QUEUE_CAPACITY);
+        let remaining_budget =
+            CONVERTER_POOL_BYTE_BUDGET.saturating_sub(input_capacity.saturating_mul(in_bytes));
+        let max_out_slots = (remaining_budget / out_bytes).max(2);
+        let worker_count = self
+            .worker_count
+            .min((max_out_slots / 2).max(1))
+            .max(1);
+        let remaining_after_workers = max_out_slots.saturating_sub(worker_count);
+        let max_output = (remaining_after_workers / 2).max(MIN_QUEUE_CAPACITY);
+        let output_capacity = self.output_capacity.min(max_output).max(MIN_QUEUE_CAPACITY);
+        let max_pool = remaining_after_workers.saturating_sub(output_capacity);
 
         Self {
-            worker_count: self.worker_count,
-            input_capacity: self.input_capacity.min(max_input),
-            output_capacity: self.output_capacity.min(max_output),
+            worker_count,
+            input_capacity,
+            output_capacity,
             drop_strategy: self.drop_strategy,
             frame_pool_capacity: if self.frame_pool_capacity == 0 {
                 0
@@ -515,8 +521,11 @@ mod tests {
             frame_pool_capacity: 16,
         };
         let bounded = requested.bounded_for_conversion(&conversion);
-        assert_eq!(bounded.input_capacity, MIN_QUEUE_CAPACITY);
-        assert_eq!(bounded.output_capacity, MIN_QUEUE_CAPACITY);
-        assert_eq!(bounded.frame_pool_capacity, MIN_QUEUE_CAPACITY);
+        let in_bytes = estimate_frame_bytes(Pixel::BGRA, 3840, 2160);
+        let out_bytes = estimate_frame_bytes(Pixel::NV12, 3840, 2160);
+        let retained_bytes = bounded.input_capacity * in_bytes
+            + (bounded.output_capacity + bounded.frame_pool_capacity + bounded.worker_count)
+                * out_bytes;
+        assert!(retained_bytes <= CONVERTER_POOL_BYTE_BUDGET);
     }
 }

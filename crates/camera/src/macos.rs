@@ -5,7 +5,6 @@ use cidre::*;
 use objc2_av_foundation::*;
 
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
-    // Drain Objective-C autoreleased NSStrings created on pool-less polling threads.
     objc::ar_pool(|| {
         let devices = cap_camera_avfoundation::list_video_devices();
         devices
@@ -22,7 +21,6 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
 
 impl CameraInfo {
     pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
-        // Wrap format enumeration in an autorelease pool to reclaim temporary Objective-C descriptors.
         objc::ar_pool(|| {
             let device = find_device(self)?;
             let mut ret = vec![];
@@ -151,7 +149,6 @@ fn build_sample_delegate(
 ) -> arc::R<CallbackOutputDelegate> {
     let mut missing_image_bufs: u64 = 0;
     CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
-        // Drain Objective-C temporaries per frame callback on the dispatch queue.
         objc::ar_pool(|| {
             if data.sample_buf.image_buf().is_none() {
                 missing_image_bufs += 1;

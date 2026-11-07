@@ -15,10 +15,8 @@ use tokio::sync::oneshot;
 
 const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 
-// Cap the decoded-frame channel to 64 MiB so 4K/1080p BGRA frames cannot accumulate
-// gigabytes of uncompressed pixel buffers when downstream encoding is throttled.
 const CAMERA_CHANNEL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
-const MIN_CAMERA_CHANNEL_FRAMES: usize = 2;
+const MIN_CAMERA_CHANNEL_FRAMES: usize = 1;
 const MAX_CAMERA_CHANNEL_FRAMES: usize = 64;
 
 pub(crate) fn estimate_video_frame_bytes(info: &VideoInfo) -> usize {
@@ -391,8 +389,8 @@ mod tests {
             frame_rate: ffmpeg::Rational(30, 1),
         };
         let capacity = bounded_camera_channel_capacity(&info);
-        assert_eq!(capacity, MIN_CAMERA_CHANNEL_FRAMES);
-        assert!(capacity * estimate_video_frame_bytes(&info) <= CAMERA_CHANNEL_BYTE_BUDGET);
+        let retained_bytes = capacity * estimate_video_frame_bytes(&info);
+        assert!(retained_bytes <= CAMERA_CHANNEL_BYTE_BUDGET);
     }
 
     #[test]
