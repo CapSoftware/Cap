@@ -6,6 +6,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Bound retained latency samples so long recording sessions do not grow Vec<u64> buffers without limit.
+const MAX_TIMING_SAMPLES: usize = 4_096;
+
+fn push_bounded_sample(samples: &RwLock<Vec<u64>>, value_ns: u64) {
+    let mut guard = samples.write().unwrap();
+    if guard.len() >= MAX_TIMING_SAMPLES {
+        let drain_count = MAX_TIMING_SAMPLES / 4;
+        guard.drain(..drain_count);
+    }
+    guard.push(value_ns);
+}
+
 #[derive(Debug, Clone)]
 pub struct FrameTiming {
     pub receive_time: Instant,
@@ -82,22 +94,16 @@ impl PipelineMetrics {
 
     pub fn record_frame_converted(&self, duration: Duration) {
         self.frames_converted.fetch_add(1, Ordering::Relaxed);
-        self.conversion_times_ns
-            .write()
-            .unwrap()
-            .push(duration.as_nanos() as u64);
+        push_bounded_sample(&self.conversion_times_ns, duration.as_nanos() as u64);
     }
 
     pub fn record_frame_encoded(&self, encode_duration: Duration, pipeline_latency: Duration) {
         self.frames_encoded.fetch_add(1, Ordering::Relaxed);
-        self.encode_times_ns
-            .write()
-            .unwrap()
-            .push(encode_duration.as_nanos() as u64);
-        self.pipeline_latencies_ns
-            .write()
-            .unwrap()
-            .push(pipeline_latency.as_nanos() as u64);
+        push_bounded_sample(&self.encode_times_ns, encode_duration.as_nanos() as u64);
+        push_bounded_sample(
+            &self.pipeline_latencies_ns,
+            pipeline_latency.as_nanos() as u64,
+        );
     }
 
     pub fn record_dropped_input(&self) {
@@ -155,6 +161,44 @@ pub struct MetricsSnapshot {
     pub duration: Option<Duration>,
 }
 
+fn print_timing_section(title: &str, samples_ns: &[u64]) {
+    println!("\n--- {title} ---");
+    if let Some(avg) = average_duration(samples_ns) {
+        println!("  Average:  {avg:?}");
+    }
+    for (label, pct) in [("P50:     ", 50.0), ("P95:     ", 95.0), ("P99:     ", 99.0)] {
+        if let Some(val) = percentile_duration(samples_ns, pct) {
+            println!("  {label} {val:?}");
+        }
+    }
+    if let Some(max) = max_duration(samples_ns) {
+        println!("  Max:      {max:?}");
+    }
+}
+
+fn average_duration(samples_ns: &[u64]) -> Option<Duration> {
+    if samples_ns.is_empty() {
+        return None;
+    }
+    let sum: u64 = samples_ns.iter().sum();
+    Some(Duration::from_nanos(sum / samples_ns.len() as u64))
+}
+
+fn max_duration(samples_ns: &[u64]) -> Option<Duration> {
+    samples_ns.iter().max().map(|&ns| Duration::from_nanos(ns))
+}
+
+fn timing_json_object(samples_ns: &[u64]) -> serde_json::Value {
+    let to_ms = |d: Option<Duration>| d.map(|v| v.as_secs_f64() * 1000.0);
+    serde_json::json!({
+        "avg": to_ms(average_duration(samples_ns)),
+        "p50": to_ms(percentile_duration(samples_ns, 50.0)),
+        "p95": to_ms(percentile_duration(samples_ns, 95.0)),
+        "p99": to_ms(percentile_duration(samples_ns, 99.0)),
+        "max": to_ms(max_duration(samples_ns)),
+    })
+}
+
 impl MetricsSnapshot {
     pub fn total_frames_dropped(&self) -> u64 {
         self.frames_dropped_input + self.frames_dropped_output + self.frames_dropped_conversion
@@ -176,36 +220,15 @@ impl MetricsSnapshot {
     }
 
     pub fn avg_conversion_time(&self) -> Option<Duration> {
-        if self.conversion_times_ns.is_empty() {
-            None
-        } else {
-            let sum: u64 = self.conversion_times_ns.iter().sum();
-            Some(Duration::from_nanos(
-                sum / self.conversion_times_ns.len() as u64,
-            ))
-        }
+        average_duration(&self.conversion_times_ns)
     }
 
     pub fn avg_encode_time(&self) -> Option<Duration> {
-        if self.encode_times_ns.is_empty() {
-            None
-        } else {
-            let sum: u64 = self.encode_times_ns.iter().sum();
-            Some(Duration::from_nanos(
-                sum / self.encode_times_ns.len() as u64,
-            ))
-        }
+        average_duration(&self.encode_times_ns)
     }
 
     pub fn avg_pipeline_latency(&self) -> Option<Duration> {
-        if self.pipeline_latencies_ns.is_empty() {
-            None
-        } else {
-            let sum: u64 = self.pipeline_latencies_ns.iter().sum();
-            Some(Duration::from_nanos(
-                sum / self.pipeline_latencies_ns.len() as u64,
-            ))
-        }
+        average_duration(&self.pipeline_latencies_ns)
     }
 
     pub fn percentile_encode_time(&self, p: f64) -> Option<Duration> {
@@ -221,24 +244,29 @@ impl MetricsSnapshot {
     }
 
     pub fn max_encode_time(&self) -> Option<Duration> {
-        self.encode_times_ns
-            .iter()
-            .max()
-            .map(|&ns| Duration::from_nanos(ns))
+        max_duration(&self.encode_times_ns)
     }
 
     pub fn max_conversion_time(&self) -> Option<Duration> {
-        self.conversion_times_ns
-            .iter()
-            .max()
-            .map(|&ns| Duration::from_nanos(ns))
+        max_duration(&self.conversion_times_ns)
     }
 
     pub fn max_pipeline_latency(&self) -> Option<Duration> {
-        self.pipeline_latencies_ns
-            .iter()
-            .max()
-            .map(|&ns| Duration::from_nanos(ns))
+        max_duration(&self.pipeline_latencies_ns)
+    }
+
+    fn print_assessment(&self) {
+        println!("\n--- Performance Assessment ---");
+        let can_sustain_30fps = self.effective_fps() >= 29.5;
+        let low_drop_rate = self.drop_rate() < 1.0;
+        let acceptable_latency = self
+            .percentile_pipeline_latency(95.0)
+            .is_none_or(|l| l < Duration::from_millis(100));
+
+        let verdict = |ok: bool| if ok { "YES ✓" } else { "NO ✗" };
+        println!("  Can sustain 30 FPS:   {}", verdict(can_sustain_30fps));
+        println!("  Low drop rate (<1%):  {}", verdict(low_drop_rate));
+        println!("  Acceptable latency:   {}", verdict(acceptable_latency));
     }
 
     pub fn print_report(&self) {
@@ -261,85 +289,10 @@ impl MetricsSnapshot {
         println!("  Total Dropped:        {}", self.total_frames_dropped());
         println!("  Drop Rate:            {:.2}%", self.drop_rate());
 
-        println!("\n--- Conversion Timing ---");
-        if let Some(avg) = self.avg_conversion_time() {
-            println!("  Average:  {avg:?}");
-        }
-        if let Some(p50) = self.percentile_conversion_time(50.0) {
-            println!("  P50:      {p50:?}");
-        }
-        if let Some(p95) = self.percentile_conversion_time(95.0) {
-            println!("  P95:      {p95:?}");
-        }
-        if let Some(p99) = self.percentile_conversion_time(99.0) {
-            println!("  P99:      {p99:?}");
-        }
-        if let Some(max) = self.max_conversion_time() {
-            println!("  Max:      {max:?}");
-        }
-
-        println!("\n--- Encoding Timing ---");
-        if let Some(avg) = self.avg_encode_time() {
-            println!("  Average:  {avg:?}");
-        }
-        if let Some(p50) = self.percentile_encode_time(50.0) {
-            println!("  P50:      {p50:?}");
-        }
-        if let Some(p95) = self.percentile_encode_time(95.0) {
-            println!("  P95:      {p95:?}");
-        }
-        if let Some(p99) = self.percentile_encode_time(99.0) {
-            println!("  P99:      {p99:?}");
-        }
-        if let Some(max) = self.max_encode_time() {
-            println!("  Max:      {max:?}");
-        }
-
-        println!("\n--- Total Pipeline Latency ---");
-        if let Some(avg) = self.avg_pipeline_latency() {
-            println!("  Average:  {avg:?}");
-        }
-        if let Some(p50) = self.percentile_pipeline_latency(50.0) {
-            println!("  P50:      {p50:?}");
-        }
-        if let Some(p95) = self.percentile_pipeline_latency(95.0) {
-            println!("  P95:      {p95:?}");
-        }
-        if let Some(p99) = self.percentile_pipeline_latency(99.0) {
-            println!("  P99:      {p99:?}");
-        }
-        if let Some(max) = self.max_pipeline_latency() {
-            println!("  Max:      {max:?}");
-        }
-
-        println!("\n--- Performance Assessment ---");
-        let can_sustain_30fps = self.effective_fps() >= 29.5;
-        let low_drop_rate = self.drop_rate() < 1.0;
-        let acceptable_latency = self
-            .percentile_pipeline_latency(95.0)
-            .map(|l| l < Duration::from_millis(100))
-            .unwrap_or(true);
-
-        println!(
-            "  Can sustain 30 FPS:   {}",
-            if can_sustain_30fps {
-                "YES ✓"
-            } else {
-                "NO ✗"
-            }
-        );
-        println!(
-            "  Low drop rate (<1%):  {}",
-            if low_drop_rate { "YES ✓" } else { "NO ✗" }
-        );
-        println!(
-            "  Acceptable latency:   {}",
-            if acceptable_latency {
-                "YES ✓"
-            } else {
-                "NO ✗"
-            }
-        );
+        print_timing_section("Conversion Timing", &self.conversion_times_ns);
+        print_timing_section("Encoding Timing", &self.encode_times_ns);
+        print_timing_section("Total Pipeline Latency", &self.pipeline_latencies_ns);
+        self.print_assessment();
 
         println!("\n=== End Report ===\n");
     }
@@ -358,27 +311,9 @@ impl MetricsSnapshot {
                 "drop_rate_percent": self.drop_rate(),
                 "effective_fps": self.effective_fps(),
             },
-            "conversion_ms": {
-                "avg": self.avg_conversion_time().map(|d| d.as_secs_f64() * 1000.0),
-                "p50": self.percentile_conversion_time(50.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p95": self.percentile_conversion_time(95.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p99": self.percentile_conversion_time(99.0).map(|d| d.as_secs_f64() * 1000.0),
-                "max": self.max_conversion_time().map(|d| d.as_secs_f64() * 1000.0),
-            },
-            "encoding_ms": {
-                "avg": self.avg_encode_time().map(|d| d.as_secs_f64() * 1000.0),
-                "p50": self.percentile_encode_time(50.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p95": self.percentile_encode_time(95.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p99": self.percentile_encode_time(99.0).map(|d| d.as_secs_f64() * 1000.0),
-                "max": self.max_encode_time().map(|d| d.as_secs_f64() * 1000.0),
-            },
-            "pipeline_latency_ms": {
-                "avg": self.avg_pipeline_latency().map(|d| d.as_secs_f64() * 1000.0),
-                "p50": self.percentile_pipeline_latency(50.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p95": self.percentile_pipeline_latency(95.0).map(|d| d.as_secs_f64() * 1000.0),
-                "p99": self.percentile_pipeline_latency(99.0).map(|d| d.as_secs_f64() * 1000.0),
-                "max": self.max_pipeline_latency().map(|d| d.as_secs_f64() * 1000.0),
-            },
+            "conversion_ms": timing_json_object(&self.conversion_times_ns),
+            "encoding_ms": timing_json_object(&self.encode_times_ns),
+            "pipeline_latency_ms": timing_json_object(&self.pipeline_latencies_ns),
         })
         .to_string()
     }

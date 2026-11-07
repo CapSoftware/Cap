@@ -10,10 +10,53 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
+
+// Cap the decoded-frame channel to 64 MiB so 4K/1080p BGRA frames cannot accumulate
+// gigabytes of uncompressed pixel buffers when downstream encoding is throttled.
+const CAMERA_CHANNEL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
+const MIN_CAMERA_CHANNEL_FRAMES: usize = 8;
+const MAX_CAMERA_CHANNEL_FRAMES: usize = 64;
+
+// Estimate uncompressed byte footprint per decoded frame to size bounded channels by memory budget.
+pub(crate) fn estimate_video_frame_bytes(info: &VideoInfo) -> usize {
+    let pixels = (info.width as usize).saturating_mul(info.height as usize);
+    let bpp_num_den: (usize, usize) = match info.pixel_format {
+        ffmpeg::format::Pixel::NV12
+        | ffmpeg::format::Pixel::YUV420P
+        | ffmpeg::format::Pixel::YUVJ420P => (3, 2),
+        ffmpeg::format::Pixel::YUYV422
+        | ffmpeg::format::Pixel::UYVY422
+        | ffmpeg::format::Pixel::YUV422P => (2, 1),
+        ffmpeg::format::Pixel::RGB24 | ffmpeg::format::Pixel::BGR24 => (3, 1),
+        _ => (4, 1),
+    };
+    pixels
+        .saturating_mul(bpp_num_den.0)
+        .checked_div(bpp_num_den.1)
+        .unwrap_or(0)
+        .max(1)
+}
+
+// Compute bounded frame capacity from resolution and pixel format to prevent multi-GB queues.
+pub(crate) fn bounded_camera_channel_capacity(info: &VideoInfo) -> usize {
+    let frame_bytes = estimate_video_frame_bytes(info);
+    (CAMERA_CHANNEL_BYTE_BUDGET / frame_bytes)
+        .clamp(MIN_CAMERA_CHANNEL_FRAMES, MAX_CAMERA_CHANNEL_FRAMES)
+}
+
+#[derive(Clone, Copy)]
+struct ScalingSpec {
+    src_width: u32,
+    src_height: u32,
+    src_format: ffmpeg::format::Pixel,
+    dst_width: u32,
+    dst_height: u32,
+    dst_format: ffmpeg::format::Pixel,
+}
 
 struct CameraFrameScaler {
     context: ffmpeg::software::scaling::Context,
@@ -24,28 +67,21 @@ struct CameraFrameScaler {
 unsafe impl Send for CameraFrameScaler {}
 
 impl CameraFrameScaler {
-    fn new(
-        src_width: u32,
-        src_height: u32,
-        src_format: ffmpeg::format::Pixel,
-        dst_width: u32,
-        dst_height: u32,
-        dst_format: ffmpeg::format::Pixel,
-    ) -> anyhow::Result<Self> {
+    fn new(spec: ScalingSpec) -> anyhow::Result<Self> {
         let context = ffmpeg::software::scaling::Context::get(
-            src_format,
-            src_width,
-            src_height,
-            dst_format,
-            dst_width,
-            dst_height,
+            spec.src_format,
+            spec.src_width,
+            spec.src_height,
+            spec.dst_format,
+            spec.dst_width,
+            spec.dst_height,
             ffmpeg::software::scaling::Flags::BILINEAR,
         )?;
 
         Ok(Self {
             context,
-            source_width: src_width,
-            source_height: src_height,
+            source_width: spec.src_width,
+            source_height: spec.src_height,
         })
     }
 
@@ -58,6 +94,209 @@ impl CameraFrameScaler {
         self.context.run(input, &mut output)?;
         output.set_pts(input.pts());
         Ok(output)
+    }
+}
+
+struct CameraLoopRuntime {
+    original_info: VideoInfo,
+    video_tx: mpsc::Sender<FFmpegVideoFrame>,
+    stall_health_tx: crate::output_pipeline::PipelineHealthSender,
+    stopped: Arc<AtomicBool>,
+    scaled_frame_count: Arc<AtomicU64>,
+    scaler: Option<CameraFrameScaler>,
+    frame_count: u64,
+    sent_count: u64,
+    dropped_count: u64,
+    start: Instant,
+}
+
+impl CameraLoopRuntime {
+    fn ensure_scaler(&mut self, frame: &ffmpeg::frame::Video) -> bool {
+        let frame_width = frame.width();
+        let frame_height = frame.height();
+        let needs_new_scaler = self
+            .scaler
+            .as_ref()
+            .is_none_or(|s| !s.matches_source(frame_width, frame_height));
+
+        if !needs_new_scaler {
+            return true;
+        }
+
+        let spec = ScalingSpec {
+            src_width: frame_width,
+            src_height: frame_height,
+            src_format: frame.format(),
+            dst_width: self.original_info.width,
+            dst_height: self.original_info.height,
+            dst_format: self.original_info.pixel_format,
+        };
+
+        match CameraFrameScaler::new(spec) {
+            Ok(new_scaler) => {
+                tracing::info!(
+                    src_width = frame_width,
+                    src_height = frame_height,
+                    dst_width = self.original_info.width,
+                    dst_height = self.original_info.height,
+                    "Camera source: created scaler for dimension change"
+                );
+                self.scaler = Some(new_scaler);
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    src_width = frame_width,
+                    src_height = frame_height,
+                    error = %e,
+                    "Camera source: failed to create scaler, dropping frame"
+                );
+                self.dropped_count += 1;
+                false
+            }
+        }
+    }
+
+    fn normalize_frame_dimensions(&mut self, frame: &mut FFmpegVideoFrame) -> bool {
+        let width_matches = frame.inner.width() == self.original_info.width;
+        let height_matches = frame.inner.height() == self.original_info.height;
+
+        if width_matches && height_matches {
+            if self.scaler.take().is_some() {
+                let total_scaled = self.scaled_frame_count.load(Ordering::Relaxed);
+                tracing::info!(
+                    total_scaled,
+                    "Camera source: dimensions restored to original, removing scaler"
+                );
+            }
+            return true;
+        }
+
+        if !self.ensure_scaler(&frame.inner) {
+            return false;
+        }
+
+        let Some(scaler) = self.scaler.as_mut() else {
+            return true;
+        };
+
+        match scaler.scale(&frame.inner) {
+            Ok(scaled) => {
+                frame.inner = scaled;
+                self.scaled_frame_count.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(e) => {
+                if self.dropped_count.is_multiple_of(30) {
+                    tracing::warn!(error = %e, "Camera source: scale failed, dropping frame");
+                }
+                self.dropped_count += 1;
+                false
+            }
+        }
+    }
+
+    fn forward_frame(&mut self, mut frame: FFmpegVideoFrame) -> bool {
+        self.frame_count += 1;
+        if !self.normalize_frame_dimensions(&mut frame) {
+            return true;
+        }
+
+        let outcome = send_with_stall_budget_futures(
+            &mut self.video_tx,
+            frame,
+            "camera-video",
+            &self.stall_health_tx,
+        );
+        self.record_send_outcome(outcome)
+    }
+
+    fn record_send_outcome(&mut self, outcome: StallSendOutcome) -> bool {
+        match outcome {
+            StallSendOutcome::Sent => {
+                self.sent_count += 1;
+                if self.sent_count.is_multiple_of(300) {
+                    let total_scaled = self.scaled_frame_count.load(Ordering::Relaxed);
+                    tracing::debug!(
+                        sent_count = self.sent_count,
+                        dropped_count = self.dropped_count,
+                        total_scaled,
+                        elapsed = ?self.start.elapsed(),
+                        "Camera source stats"
+                    );
+                }
+                true
+            }
+            StallSendOutcome::StalledAndDropped { .. } => {
+                self.dropped_count += 1;
+                if self.dropped_count.is_multiple_of(30) {
+                    tracing::warn!(
+                        dropped_count = self.dropped_count,
+                        "Camera source: encoder can't keep up"
+                    );
+                }
+                true
+            }
+            StallSendOutcome::Disconnected => {
+                tracing::debug!(
+                    sent_count = self.sent_count,
+                    dropped_count = self.dropped_count,
+                    "Camera source: pipeline closed"
+                );
+                false
+            }
+        }
+    }
+
+    async fn run(mut self, rx: flume::Receiver<FFmpegVideoFrame>, stop_rx: oneshot::Receiver<()>) {
+        tracing::debug!(
+            original_width = self.original_info.width,
+            original_height = self.original_info.height,
+            "Camera source task started"
+        );
+        let mut stop_rx = stop_rx.fuse();
+
+        loop {
+            if self.stopped.load(Ordering::Relaxed) {
+                tracing::debug!("Camera source: stop flag set, exiting");
+                break;
+            }
+
+            let keep_running = tokio::select! {
+                biased;
+                _ = &mut stop_rx => {
+                    tracing::debug!("Camera source: received stop signal");
+                    false
+                }
+                result = rx.recv_async() => match result {
+                    Ok(frame) => self.forward_frame(frame),
+                    Err(e) => {
+                        tracing::debug!(
+                            frame_count = self.frame_count,
+                            elapsed = ?self.start.elapsed(),
+                            error = %e,
+                            "Camera feed disconnected (rx closed)"
+                        );
+                        false
+                    }
+                }
+            };
+
+            if !keep_running {
+                break;
+            }
+        }
+
+        drop(self.video_tx);
+        let total_scaled = self.scaled_frame_count.load(Ordering::Relaxed);
+        tracing::info!(
+            frame_count = self.frame_count,
+            sent_count = self.sent_count,
+            dropped_count = self.dropped_count,
+            total_scaled,
+            elapsed = ?self.start.elapsed(),
+            "Camera source finished"
+        );
     }
 }
 
@@ -82,14 +321,11 @@ impl VideoSource for Camera {
     where
         Self: Sized,
     {
-        let (tx, rx) = flume::bounded(256);
         let stall_health_tx = ctx.health_tx().clone();
         let full_res = feed_lock.hold_full_resolution();
-
         let original_video_info = *feed_lock.video_info();
-        let original_width = original_video_info.width;
-        let original_height = original_video_info.height;
-        let original_format = original_video_info.pixel_format;
+        let channel_capacity = bounded_camera_channel_capacity(&original_video_info);
+        let (tx, rx) = flume::bounded(channel_capacity);
 
         tokio::time::timeout(
             CAMERA_SENDER_ATTACH_TIMEOUT,
@@ -101,173 +337,20 @@ impl VideoSource for Camera {
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));
-        let stopped_clone = stopped.clone();
-        let scaled_frame_count = Arc::new(AtomicU64::new(0));
-        let scaled_count_clone = scaled_frame_count.clone();
+        let runtime = CameraLoopRuntime {
+            original_info: original_video_info,
+            video_tx,
+            stall_health_tx,
+            stopped: stopped.clone(),
+            scaled_frame_count: Arc::new(AtomicU64::new(0)),
+            scaler: None,
+            frame_count: 0,
+            sent_count: 0,
+            dropped_count: 0,
+            start: Instant::now(),
+        };
 
-        crate::output_pipeline::spawn_capture_task(async move {
-            tracing::debug!(
-                original_width,
-                original_height,
-                "Camera source task started"
-            );
-            let mut frame_count: u64 = 0;
-            let mut sent_count: u64 = 0;
-            let mut dropped_count: u64 = 0;
-            let start = std::time::Instant::now();
-            let mut video_tx = video_tx;
-            let mut stop_rx = stop_rx.fuse();
-            let mut scaler: Option<CameraFrameScaler> = None;
-
-            loop {
-                if stopped_clone.load(Ordering::Relaxed) {
-                    tracing::debug!("Camera source: stop flag set, exiting");
-                    break;
-                }
-
-                tokio::select! {
-                    biased;
-                    _ = &mut stop_rx => {
-                        tracing::debug!("Camera source: received stop signal");
-                        break;
-                    }
-                    result = rx.recv_async() => {
-                        match result {
-                            Ok(mut frame) => {
-                                frame_count += 1;
-
-                                let frame_width = frame.inner.width();
-                                let frame_height = frame.inner.height();
-
-                                if frame_width != original_width || frame_height != original_height {
-                                    let needs_new_scaler = scaler
-                                        .as_ref()
-                                        .is_none_or(|s| !s.matches_source(frame_width, frame_height));
-
-                                    if needs_new_scaler {
-                                        let frame_format = frame.inner.format();
-                                        match CameraFrameScaler::new(
-                                            frame_width,
-                                            frame_height,
-                                            frame_format,
-                                            original_width,
-                                            original_height,
-                                            original_format,
-                                        ) {
-                                            Ok(new_scaler) => {
-                                                tracing::info!(
-                                                    src_width = frame_width,
-                                                    src_height = frame_height,
-                                                    dst_width = original_width,
-                                                    dst_height = original_height,
-                                                    "Camera source: created scaler for dimension change"
-                                                );
-                                                scaler = Some(new_scaler);
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(
-                                                    src_width = frame_width,
-                                                    src_height = frame_height,
-                                                    error = %e,
-                                                    "Camera source: failed to create scaler, dropping frame"
-                                                );
-                                                dropped_count += 1;
-                                                continue;
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(s) = &mut scaler {
-                                        match s.scale(&frame.inner) {
-                                            Ok(scaled) => {
-                                                frame.inner = scaled;
-                                                scaled_count_clone.fetch_add(1, Ordering::Relaxed);
-                                            }
-                                            Err(e) => {
-                                                if dropped_count.is_multiple_of(30) {
-                                                    tracing::warn!(
-                                                        error = %e,
-                                                        "Camera source: scale failed, dropping frame"
-                                                    );
-                                                }
-                                                dropped_count += 1;
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                } else if scaler.is_some() {
-                                    let total_scaled = scaled_count_clone.load(Ordering::Relaxed);
-                                    tracing::info!(
-                                        total_scaled,
-                                        "Camera source: dimensions restored to original, removing scaler"
-                                    );
-                                    scaler = None;
-                                }
-
-                                match send_with_stall_budget_futures(
-                                    &mut video_tx,
-                                    frame,
-                                    "camera-video",
-                                    &stall_health_tx,
-                                ) {
-                                    StallSendOutcome::Sent => {
-                                        sent_count += 1;
-                                        if sent_count.is_multiple_of(300) {
-                                            let total_scaled = scaled_count_clone.load(Ordering::Relaxed);
-                                            tracing::debug!(
-                                                sent_count,
-                                                dropped_count,
-                                                total_scaled,
-                                                elapsed = ?start.elapsed(),
-                                                "Camera source stats"
-                                            );
-                                        }
-                                    }
-                                    StallSendOutcome::StalledAndDropped { .. } => {
-                                        dropped_count += 1;
-                                        if dropped_count.is_multiple_of(30) {
-                                            tracing::warn!(
-                                                dropped_count,
-                                                "Camera source: encoder can't keep up"
-                                            );
-                                        }
-                                    }
-                                    StallSendOutcome::Disconnected => {
-                                        tracing::debug!(
-                                            sent_count,
-                                            dropped_count,
-                                            "Camera source: pipeline closed"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::debug!(
-                                    frame_count,
-                                    elapsed = ?start.elapsed(),
-                                    error = %e,
-                                    "Camera feed disconnected (rx closed)"
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            drop(video_tx);
-
-            let total_scaled = scaled_count_clone.load(Ordering::Relaxed);
-            tracing::info!(
-                frame_count,
-                sent_count,
-                dropped_count,
-                total_scaled,
-                elapsed = ?start.elapsed(),
-                "Camera source finished"
-            );
-        });
+        crate::output_pipeline::spawn_capture_task(runtime.run(rx, stop_rx));
 
         Ok(Self {
             feed_lock,
@@ -292,5 +375,38 @@ impl VideoSource for Camera {
             Ok(())
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_media_info::Pixel;
+
+    #[test]
+    fn bounds_4k_bgra_camera_channel_within_memory_budget() {
+        let info = VideoInfo {
+            pixel_format: Pixel::BGRA,
+            width: 3840,
+            height: 2160,
+            time_base: ffmpeg::Rational(1, 30),
+            frame_rate: ffmpeg::Rational(30, 1),
+        };
+        let capacity = bounded_camera_channel_capacity(&info);
+        assert_eq!(capacity, MIN_CAMERA_CHANNEL_FRAMES);
+    }
+
+    #[test]
+    fn bounds_1080p_nv12_camera_channel_by_byte_budget() {
+        let info = VideoInfo {
+            pixel_format: Pixel::NV12,
+            width: 1920,
+            height: 1080,
+            time_base: ffmpeg::Rational(1, 30),
+            frame_rate: ffmpeg::Rational(30, 1),
+        };
+        let capacity = bounded_camera_channel_capacity(&info);
+        assert!(capacity >= MIN_CAMERA_CHANNEL_FRAMES);
+        assert!(capacity <= MAX_CAMERA_CHANNEL_FRAMES);
     }
 }

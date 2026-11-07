@@ -5,9 +5,7 @@ use cidre::*;
 use objc2_av_foundation::*;
 
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
-    // ar_pool: called from pool-less tokio threads on a polling cadence; the
-    // unique_id/localized_name accessors autorelease NSStrings that would
-    // otherwise accumulate for the process lifetime.
+    // Drain Objective-C autoreleased NSStrings created on pool-less polling threads.
     objc::ar_pool(|| {
         let devices = cap_camera_avfoundation::list_video_devices();
         devices
@@ -24,38 +22,45 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
 
 impl CameraInfo {
     pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
-        let device = find_device(self)?;
+        // Wrap format enumeration in an autorelease pool to reclaim temporary Objective-C descriptors.
+        objc::ar_pool(|| {
+            let device = find_device(self)?;
+            let mut ret = vec![];
 
-        let mut ret = vec![];
-
-        for format in device.formats().iter() {
-            let desc = format.format_desc();
-            let width = desc.dims().width as u32;
-            let height = desc.dims().height as u32;
-            let pixel_format = fourcc_display(desc.media_sub_type());
-
-            for fr_range in format.video_supported_frame_rate_ranges().iter() {
-                // SAFETY: trust me bro it crashes on intel mac otherwise
-                let fr_range = unsafe {
-                    &*(fr_range as *const av::capture::device::FrameRateRange)
-                        .cast::<AVFrameRateRange>()
-                };
-
-                let min = unsafe { fr_range.minFrameDuration() };
-
-                ret.push(Format {
-                    native: format.retained(),
-                    info: FormatInfo {
-                        width,
-                        height,
-                        frame_rate: min.timescale as f32 / min.value as f32,
-                    },
-                    pixel_format: Some(pixel_format.clone()),
-                })
+            for format in device.formats().iter() {
+                append_supported_formats(&mut ret, format);
             }
+
+            Some(ret)
+        })
+    }
+}
+
+fn append_supported_formats(ret: &mut Vec<Format>, format: &av::capture::device::Format) {
+    let desc = format.format_desc();
+    let width = desc.dims().width as u32;
+    let height = desc.dims().height as u32;
+    let pixel_format = fourcc_display(desc.media_sub_type());
+
+    for fr_range in format.video_supported_frame_rate_ranges().iter() {
+        // Cast through AVFrameRateRange to avoid Intel macOS selector dispatch crashes.
+        let fr_range = unsafe {
+            &*(fr_range as *const av::capture::device::FrameRateRange).cast::<AVFrameRateRange>()
+        };
+        let min = unsafe { fr_range.minFrameDuration() };
+        if min.value <= 0 {
+            continue;
         }
 
-        Some(ret)
+        ret.push(Format {
+            native: format.retained(),
+            info: FormatInfo {
+                width,
+                height,
+                frame_rate: min.timescale as f32 / min.value as f32,
+            },
+            pixel_format: Some(pixel_format.clone()),
+        });
     }
 }
 
@@ -94,17 +99,19 @@ fn avfoundation_session_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> 
 }
 
 fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
-    let devices = list_video_devices();
-    devices
-        .iter()
-        .find(
-            |d| match (ModelID::from_avfoundation(d).as_ref(), info.model_id()) {
-                (Some(a), Some(b)) => a == b,
-                (None, None) => d.unique_id().to_string() == info.device_id(),
-                _ => false,
-            },
-        )
-        .map(|v| v.retained())
+    objc::ar_pool(|| {
+        let devices = list_video_devices();
+        devices
+            .iter()
+            .find(
+                |d| match (ModelID::from_avfoundation(d).as_ref(), info.model_id()) {
+                    (Some(a), Some(b)) => a == b,
+                    (None, None) => d.unique_id().to_string() == info.device_id(),
+                    _ => false,
+                },
+            )
+            .map(|v| v.retained())
+    })
 }
 
 fn fourcc_display(fourcc: u32) -> String {
@@ -112,10 +119,7 @@ fn fourcc_display(fourcc: u32) -> String {
     cidre::four_cc_to_str(&mut bytes).to_string()
 }
 
-/// The min frame duration of the format's frame-rate range matching the
-/// selected rate. Formats are enumerated per frame-rate range, so without
-/// this the device free-runs at the format's default rate (often the
-/// fastest range, e.g. 60fps) while the pipeline assumes the selected one.
+// Match the selected frame rate's minimum frame duration so the sensor does not free-run at 60fps.
 fn min_frame_duration_for_rate(
     format: &av::capture::device::Format,
     frame_rate: f32,
@@ -123,7 +127,6 @@ fn min_frame_duration_for_rate(
     let mut best: Option<(f32, cm::Time)> = None;
 
     for fr_range in format.video_supported_frame_rate_ranges().iter() {
-        // SAFETY: trust me bro it crashes on intel mac otherwise
         let fr_range = unsafe {
             &*(fr_range as *const av::capture::device::FrameRateRange).cast::<AVFrameRateRange>()
         };
@@ -143,23 +146,13 @@ fn min_frame_duration_for_rate(
     best.and_then(|(rate_diff, duration)| (rate_diff < 1.0).then_some(duration))
 }
 
-pub(super) fn start_capturing_impl(
-    camera: &CameraInfo,
-    format: Format,
-    mode: CaptureMode,
+fn build_sample_delegate(
     mut callback: impl FnMut(CapturedFrame) + 'static,
-) -> Result<AVFoundationRecordingHandle, StartCapturingError> {
-    let mut device = find_device(camera)
-        .ok_or(StartCapturingError::DeviceNotFound)?
-        .retained();
-
-    let input =
-        av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
-
-    let queue = dispatch::Queue::new();
+) -> arc::R<CallbackOutputDelegate> {
     let mut missing_image_bufs: u64 = 0;
-    let delegate =
-        CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
+    CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
+        // Drain Objective-C temporaries per frame callback on the dispatch queue.
+        objc::ar_pool(|| {
             if data.sample_buf.image_buf().is_none() {
                 missing_image_bufs += 1;
                 if missing_image_bufs == 1 || missing_image_bufs.is_multiple_of(100) {
@@ -169,113 +162,141 @@ pub(super) fn start_capturing_impl(
                     );
                 }
                 return;
-            };
+            }
 
             callback(CapturedFrame {
                 native: NativeCapturedFrame(data.sample_buf.retained()),
                 timestamp: data.timestamp,
             });
-        })));
+        });
+    })))
+}
 
-    let mut output = av::capture::VideoDataOutput::new();
-    let mut session = av::capture::Session::new();
-    let mut added_input = false;
+fn configure_native_pixel_format(output: &mut av::CaptureVideoDataOutput, format: &Format) {
+    let pixel_format = format.native().format_desc().media_sub_type();
+    let is_available = output
+        .available_video_cv_pixel_formats()
+        .iter()
+        .any(|n| n.as_u32() == pixel_format);
 
-    session.configure(|s| {
-        if s.can_add_input(&input) {
-            s.add_input(&input);
-            added_input = true;
-        } else {
-            return;
-        }
-
-        s.add_output(&output);
-    });
-
-    if !added_input {
-        return Err(AVFoundationError::Message(
-            "Failed to add camera input to AVFoundation session".to_string(),
-        )
-        .into());
+    if !is_available {
+        tracing::warn!(
+            pixel_format = %fourcc_display(pixel_format),
+            "Native camera pixel format not offered by video output, using default conversion"
+        );
+        return;
     }
 
-    if mode == CaptureMode::Native {
-        let pixel_format = format.native().format_desc().media_sub_type();
-        let is_available = output
-            .available_video_cv_pixel_formats()
-            .iter()
-            .any(|n| n.as_u32() == pixel_format);
+    let video_settings = ns::Dictionary::with_keys_values(
+        &[cv::pixel_buffer_keys::pixel_format().as_ns()],
+        &[ns::Number::with_u32(pixel_format).as_id_ref()],
+    );
+    if let Err(err) = output.set_video_settings(Some(video_settings.as_ref())) {
+        tracing::warn!(
+            pixel_format = %fourcc_display(pixel_format),
+            "Failed to request native camera pixel format, using default conversion: {err}"
+        );
+    }
+}
 
-        if is_available {
-            let video_settings = ns::Dictionary::with_keys_values(
-                &[cv::pixel_buffer_keys::pixel_format().as_ns()],
-                &[ns::Number::with_u32(pixel_format).as_id_ref()],
-            );
-            if let Err(err) = output.set_video_settings(Some(video_settings.as_ref())) {
-                tracing::warn!(
-                    pixel_format = %fourcc_display(pixel_format),
-                    "Failed to request native camera pixel format, using default conversion: {err}"
-                );
-            }
-        } else {
-            tracing::warn!(
-                pixel_format = %fourcc_display(pixel_format),
-                "Native camera pixel format not offered by video output, using default conversion"
-            );
-        }
+struct SessionStartContext<'a> {
+    device: &'a mut arc::R<av::CaptureDevice>,
+    session: &'a mut arc::R<av::capture::Session>,
+    format: &'a Format,
+    mode: CaptureMode,
+}
+
+fn start_avfoundation_session(ctx: SessionStartContext<'_>) -> Result<(), StartCapturingError> {
+    let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
+
+    if ctx.mode == CaptureMode::Compatibility {
+        ctx.session.start_running();
+        return Ok(());
     }
 
-    output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
+    // Hold the device config lock across start_running so macOS does not reset the active format.
+    let mut lock = ctx
+        .device
+        .config_lock()
+        .map_err(AVFoundationError::Retained)?;
+    lock.set_active_format(ctx.format.native());
 
+    if let Some(duration) =
+        min_frame_duration_for_rate(ctx.format.native(), ctx.format.frame_rate())
     {
-        let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
-
-        match mode {
-            CaptureMode::Native => {
-                // The device config must stay locked while running starts,
-                // otherwise start_running can overwrite the active format on macOS
-                // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
-                let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
-
-                _lock.set_active_format(format.native());
-
-                // Setting the active format resets the frame durations to the
-                // format's defaults, which can be a faster rate than the
-                // selected one (the device would then deliver e.g. 60fps
-                // while the pipeline records it as 30fps, stretching the
-                // recording). Cap delivery at the selected rate; leave the
-                // max duration alone so low-light rate reduction still works.
-                if let Some(duration) =
-                    min_frame_duration_for_rate(format.native(), format.frame_rate())
-                {
-                    if let Err(err) = _lock.set_active_video_min_frame_duration(duration) {
-                        tracing::warn!(
-                            frame_rate = format.frame_rate(),
-                            "Failed to set camera min frame duration: {err}"
-                        );
-                    }
-                } else {
-                    tracing::warn!(
-                        frame_rate = format.frame_rate(),
-                        "No frame-rate range matches the selected camera rate, using device default"
-                    );
-                }
-
-                session.start_running();
-            }
-            CaptureMode::Compatibility => {
-                session.start_running();
-            }
+        if let Err(err) = lock.set_active_video_min_frame_duration(duration) {
+            tracing::warn!(
+                frame_rate = ctx.format.frame_rate(),
+                "Failed to set camera min frame duration: {err}"
+            );
         }
+    } else {
+        tracing::warn!(
+            frame_rate = ctx.format.frame_rate(),
+            "No frame-rate range matches the selected camera rate, using device default"
+        );
     }
 
-    Ok(AVFoundationRecordingHandle {
-        _delegate: delegate,
-        session,
-        output,
-        input,
-        _device: device,
-        is_torn_down: false,
+    ctx.session.start_running();
+    Ok(())
+}
+
+pub(super) fn start_capturing_impl(
+    camera: &CameraInfo,
+    format: Format,
+    mode: CaptureMode,
+    callback: impl FnMut(CapturedFrame) + 'static,
+) -> Result<AVFoundationRecordingHandle, StartCapturingError> {
+    objc::ar_pool(|| {
+        let mut device = find_device(camera)
+            .ok_or(StartCapturingError::DeviceNotFound)?
+            .retained();
+
+        let input =
+            av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
+        let queue = dispatch::Queue::new();
+        let delegate = build_sample_delegate(callback);
+
+        let mut output = av::capture::VideoDataOutput::new();
+        let mut session = av::capture::Session::new();
+        let mut added_input = false;
+
+        session.configure(|s| {
+            if s.can_add_input(&input) {
+                s.add_input(&input);
+                s.add_output(&output);
+                added_input = true;
+            }
+        });
+
+        if !added_input {
+            return Err(AVFoundationError::Message(
+                "Failed to add camera input to AVFoundation session".to_string(),
+            )
+            .into());
+        }
+
+        if mode == CaptureMode::Native {
+            configure_native_pixel_format(&mut output, &format);
+        }
+
+        output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
+
+        start_avfoundation_session(SessionStartContext {
+            device: &mut device,
+            session: &mut session,
+            format: &format,
+            mode,
+        })?;
+
+        Ok(AVFoundationRecordingHandle {
+            _delegate: delegate,
+            session,
+            output,
+            input,
+            _device: device,
+            is_torn_down: false,
+        })
     })
 }
 
@@ -300,16 +321,18 @@ impl AVFoundationRecordingHandle {
         }
 
         self.is_torn_down = true;
-        let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
+        objc::ar_pool(|| {
+            let _session_lifecycle_guard = avfoundation_session_lifecycle_guard();
 
-        self.session.stop_running();
-        self.output
-            .set_sample_buf_delegate::<CallbackOutputDelegate>(None, None);
-        let output = self.output.clone();
-        let input = self.input.clone();
-        self.session.configure(move |s| {
-            s.remove_output(&output);
-            s.remove_input(&input);
+            self.session.stop_running();
+            self.output
+                .set_sample_buf_delegate::<CallbackOutputDelegate>(None, None);
+            let output = self.output.clone();
+            let input = self.input.clone();
+            self.session.configure(move |s| {
+                s.remove_output(&output);
+                s.remove_input(&input);
+            });
         });
     }
 }
