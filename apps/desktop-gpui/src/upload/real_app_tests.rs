@@ -398,13 +398,65 @@ async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
     assert!(!log.contains("panicked at"), "the app panicked");
 }
 
+/// Main window when recording starts: Close hides the main window and
+/// Minimise sends it to the Dock, and the reshow at the end of the recording
+/// brings either back on screen. Read from the window state the auto-record
+/// harness logs.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
+    for (behaviour, minimized) in [("minimise", true), ("close", false)] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
+        // Show Cap rather than the editor, so the end of the recording
+        // reshows the main window.
+        sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the main window after the recording",
+            Duration::from_secs(120),
+            || {
+                sandbox
+                    .log(behaviour)
+                    .contains("auto-record main window after the recording")
+            },
+        )
+        .await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(behaviour));
+        let state = |when: &str| {
+            log.lines()
+                .find(|line| line.contains(&format!("auto-record main window {when}")))
+                .map(|line| {
+                    (
+                        line.contains("visible=true"),
+                        line.contains("minimized=true"),
+                    )
+                })
+                .unwrap_or_else(|| panic!("{behaviour}: no state {when}: {log}"))
+        };
+        assert_eq!(
+            state("while recording"),
+            (false, minimized),
+            "{behaviour}: {log}"
+        );
+        assert_eq!(
+            state("after the recording"),
+            (true, false),
+            "{behaviour}: {log}"
+        );
+    }
+}
+
 /// The After an Instant recording outcome decides whether the main window,
 /// hidden at start, comes back once the recording finishes: only Show Cap
 /// takes the reshow, so opening the link never leaves it on screen behind the
-/// browser. The reshow itself lands on onboarding here (the runner grants no
-/// Accessibility), so the check reads the decisions the app logs. Linux
-/// restores the window through its clean-capture lease instead, so the check
-/// is macOS only.
+/// browser. The check reads the decisions the app logs. Linux restores the
+/// window through its clean-capture lease instead, so the check is macOS only.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
