@@ -16,7 +16,7 @@ use image::RgbImage;
 use super::sleep;
 use crate::{
     app_windows,
-    main_window::{MainWindow, TargetType},
+    main_window::{MainWindow, Mode, TargetType},
     session::{Phase, RecordingSession},
     target_overlay::AreaRect,
 };
@@ -55,8 +55,13 @@ pub async fn run(
         "doNothing".into(),
     );
 
-    main.update(cx, |view, _, cx| view.arm_overlay(TargetType::Area, cx))
-        .ok();
+    // A fresh profile starts in Instant, which needs a signed-in user.
+    main.update(cx, |view, _, cx| {
+        view.set_mode(Mode::Studio, cx);
+        view.arm_overlay(TargetType::Area, cx);
+    })
+    .ok();
+    let recordings = recordings_dir().map(|directory| projects(&directory));
     sleep(cx, 1500).await;
     cx.update(|cx| app_windows::seed_area_selection(None, AREA, cx));
     sleep(cx, 800).await;
@@ -115,7 +120,7 @@ pub async fn run(
     let on_screen = changed_fraction(hidden.as_ref(), shown.as_ref(), &band, CHANGED);
     let left_behind = changed_fraction(hidden.as_ref(), after.as_ref(), &band, CHANGED);
 
-    let video = recorded_display(cx).await;
+    let video = recorded_display(recordings.unwrap_or_default(), cx).await;
     let frame = video
         .as_deref()
         .and_then(|video| frame_at(video, VIDEO_FRAME_SECS));
@@ -253,16 +258,26 @@ fn video_outline_fraction(screen: &RgbImage, frame: &RgbImage, scale: f32) -> Op
     (total > 0).then(|| changed as f64 / total as f64)
 }
 
-/// The finished recording's display track, once the stop has remuxed it.
-async fn recorded_display(cx: &mut AsyncApp) -> Option<PathBuf> {
-    let recordings = PathBuf::from(std::env::var_os("CAP_GPUI_RECORDINGS_DIR")?);
+fn recordings_dir() -> Option<PathBuf> {
+    std::env::var_os("CAP_GPUI_RECORDINGS_DIR").map(PathBuf::from)
+}
+
+fn projects(directory: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(directory)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default()
+}
+
+/// The display track of the recording this probe made (a project that was
+/// not there before it started), once the stop has remuxed it.
+async fn recorded_display(before: Vec<PathBuf>, cx: &mut AsyncApp) -> Option<PathBuf> {
+    let directory = recordings_dir()?;
     for _ in 0..120 {
-        let found = std::fs::read_dir(&recordings).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path().join("content/segments/segment-0/display.mp4"))
-                .find(|path| path.is_file())
-        });
+        let found = projects(&directory)
+            .into_iter()
+            .filter(|project| !before.contains(project))
+            .map(|project| project.join("content/segments/segment-0/display.mp4"))
+            .find(|path| path.is_file());
         if let Some(path) = found {
             sleep(cx, 1000).await;
             return Some(path);
@@ -339,16 +354,16 @@ fn clicks_pass_through(
     };
     native?;
     let scale = cx.update(|cx| {
-        cx.global::<app_windows::AppWindows>()
+        let overlay = cx
+            .global::<app_windows::AppWindows>()
             .overlays
             .first()
-            .and_then(|(_, overlay)| {
-                overlay
-                    .update(cx, |_, window, _| window.scale_factor())
-                    .ok()
-            })
-            .unwrap_or(1.)
+            .map(|(_, overlay)| *overlay)?;
+        overlay
+            .update(cx, |_, window, _| window.scale_factor())
+            .ok()
     });
+    let scale = scale.unwrap_or(1.);
     let point = POINT {
         x: ((AREA.x + AREA.width / 2.) * scale) as i32,
         y: ((AREA.y + AREA.height / 2.) * scale) as i32,

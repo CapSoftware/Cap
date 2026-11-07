@@ -8,6 +8,7 @@ on:
       - "apps/desktop-gpui/src/app_windows.rs"
       - "apps/desktop-gpui/src/camera_window.rs"
       - "apps/desktop-gpui/src/picker_probe.rs"
+      - "apps/desktop-gpui/src/picker_probe/**"
       - "apps/desktop-gpui/src/main_window.rs"
       - "apps/desktop-gpui/src/foreign_window.rs"
       - "apps/desktop-gpui/src/window_arrange.rs"
