@@ -6,12 +6,12 @@ import {
 	developerVideos,
 } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
+import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
 const MICRO_CREDITS_PER_MINUTE = 5_000;

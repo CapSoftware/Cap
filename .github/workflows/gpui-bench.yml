@@ -1,0 +1,254 @@
+name: GPUI frame benchmarks
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop-gpui/patches/**"
+      - "apps/desktop-gpui/gpui-benches/**"
+      - "scripts/prepare-gpui-dependency.sh"
+      - "scripts/gpui-bench-*"
+      - "scripts/gpui-scene-digest.py"
+      - ".github/workflows/gpui-bench.yml"
+  push:
+    branches:
+      - "gpui-perf/**"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Ref whose patch stack is the baseline (default: the merge base with main)"
+        default: ""
+      rounds:
+        description: "Interleaved rounds per side"
+        default: "5"
+
+concurrency:
+  group: gpui-bench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: GPUI benchmarks (${{ matrix.settings.name }})
+    # Benchmarks build GPUI twice and run for up to two hours, so pull requests
+    # from forks do not start them; maintainers can run them with workflow_dispatch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            slug: macos
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            slug: windows
+            runner: blacksmith-8vcpu-windows-2025
+          - name: Linux
+            slug: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../gpui-bench-target
+      CARGO_PROFILE_BENCH_DEBUG: "false"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers libssl-dev libasound2-dev \
+            libzstd-dev fonts-dejavu-core
+
+      - name: Allow long paths in Zed's git dependencies
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.longpaths true
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare head and base GPUI checkouts
+        shell: bash
+        env:
+          BASE_INPUT: ${{ inputs.base }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          ./scripts/prepare-gpui-dependency.sh
+          base="${BASE_INPUT:-}"
+          if [[ -z "$base" ]]; then
+            base="$(git merge-base HEAD "${PR_BASE:-origin/main}")"
+          fi
+          echo "Head $(git rev-parse --short HEAD), base patch stack from $(git rev-parse --short "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+          git worktree add --detach "$RUNNER_TEMP/base/cap" "$base"
+          (cd "$RUNNER_TEMP/base/cap" && ./scripts/prepare-gpui-dependency.sh)
+          echo "ZED_HEAD=$(cd ../zed-cap && pwd)" >> "$GITHUB_ENV"
+          echo "ZED_LOCK_HASH=$(python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' ../zed-cap/Cargo.lock)" >> "$GITHUB_ENV"
+          echo "ZED_BASE=$RUNNER_TEMP/base/zed-cap" >> "$GITHUB_ENV"
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/../gpui-bench-target
+          key: gpui-bench-v1-${{ runner.os }}-${{ env.ZED_LOCK_HASH }}-${{ github.run_id }}
+          restore-keys: |
+            gpui-bench-v1-${{ runner.os }}-${{ env.ZED_LOCK_HASH }}-
+            gpui-bench-v1-${{ runner.os }}-
+
+      # Both sides build from the same checkout path, swapped in turn. Paths
+      # end up in symbol hashes and panic locations, so building them from two
+      # paths gives two code layouts that differ by a few percent with
+      # identical sources. Cargo judges path dependencies by mtime, so the
+      # swapped-in sources are touched to force the rebuild.
+      - name: Build benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          build() {
+            find "$ZED_HEAD/crates" -type f -name '*.rs' -exec touch {} +
+            ./scripts/gpui-bench-build.sh "$ZED_HEAD" "$RUNNER_TEMP/bench/$1"
+          }
+          mv "$ZED_HEAD" "$ZED_HEAD.head"
+          mv "$ZED_BASE" "$ZED_HEAD"
+          build base
+          mv "$ZED_HEAD" "$ZED_BASE"
+          mv "$ZED_HEAD.head" "$ZED_HEAD"
+          build head
+          if cmp -s "$RUNNER_TEMP/bench/base/frame"* "$RUNNER_TEMP/bench/head/frame"*; then
+            echo "Base and head benchmark builds are identical." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Measure
+        shell: bash
+        env:
+          ROUNDS: ${{ inputs.rounds || '5' }}
+        run: |
+          python scripts/gpui-bench-compare.py \
+            --base "$RUNNER_TEMP/bench/base" \
+            --head "$RUNNER_TEMP/bench/head" \
+            --out "$RUNNER_TEMP/bench/runs" \
+            --rounds "$ROUNDS" \
+            --label "${{ matrix.settings.name }}" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      # Only macOS has a headless renderer that sees submitted frames; the
+      # step reports a skip elsewhere.
+      - name: Scene equivalence
+        shell: bash
+        run: |
+          python scripts/gpui-scene-digest.py \
+            --base "$RUNNER_TEMP/bench/base" \
+            --head "$RUNNER_TEMP/bench/head" \
+            --out "$RUNNER_TEMP/bench/digests" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gpui-bench-${{ matrix.settings.slug }}
+          path: |
+            ${{ runner.temp }}/bench/runs/*.md
+            ${{ runner.temp }}/bench/runs/*.json
+            ${{ runner.temp }}/bench/runs/*.log
+          if-no-files-found: ignore
+
+  test:
+    name: GPUI tests (${{ matrix.settings.name }})
+    # Same as the benchmarks: GPUI's test builds are long, so forks do not start them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            runner: blacksmith-6vcpu-macos-15
+          - name: Windows
+            runner: blacksmith-8vcpu-windows-2025
+          - name: Linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers libegl1 libegl-mesa0 \
+            libgl1-mesa-dri libssl-dev libasound2-dev libzstd-dev fonts-dejavu-core
+
+      - name: Allow long paths in Zed's git dependencies
+        if: ${{ runner.os == 'Windows' }}
+        run: git config --global core.longpaths true
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          ./scripts/prepare-gpui-dependency.sh
+          echo "ZED_LOCK_HASH=$(python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()[:16])' ../zed-cap/Cargo.lock)" >> "$GITHUB_ENV"
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/../zed-cap/target
+          key: gpui-test-v1-${{ runner.os }}-${{ env.ZED_LOCK_HASH }}-${{ github.run_id }}
+          restore-keys: |
+            gpui-test-v1-${{ runner.os }}-${{ env.ZED_LOCK_HASH }}-
+            gpui-test-v1-${{ runner.os }}-
+
+      - name: gpui tests
+        shell: bash
+        working-directory: ../zed-cap
+        run: cargo +1.95.0 test -p gpui --features test-support --lib --tests --no-fail-fast
+
+      - name: Platform crate tests
+        shell: bash
+        working-directory: ../zed-cap
+        env:
+          GPUI_REQUIRE_TEST_DEVICE: "1"
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib --no-fail-fast
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            cargo +1.95.0 test -p gpui_macos --lib --no-fail-fast
+          else
+            cargo +1.95.0 test -p gpui_windows --lib --no-fail-fast
+          fi
