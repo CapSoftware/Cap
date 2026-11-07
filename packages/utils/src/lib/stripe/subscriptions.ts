@@ -39,14 +39,21 @@ export function isSsoSubscription(subscription: SubscriptionIdentity) {
 	);
 }
 
+export function isScimPrice(priceId: string | null | undefined) {
+	return (
+		Boolean(priceId) &&
+		(priceId === STRIPE_SCIM_PRICE_ID ||
+			priceId === process.env.STRIPE_SCIM_PRICE_ID)
+	);
+}
+
 export function isStandaloneScimSubscription(
 	subscription: SubscriptionIdentity,
 ) {
 	const items = subscription.items?.data ?? [];
 	return (
 		subscription.metadata?.type === "scim" ||
-		(items.length > 0 &&
-			items.every((item) => item.price?.id === STRIPE_SCIM_PRICE_ID))
+		(items.length > 0 && items.every((item) => isScimPrice(item.price?.id)))
 	);
 }
 

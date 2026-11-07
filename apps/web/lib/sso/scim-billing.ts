@@ -1,10 +1,9 @@
 import { db } from "@cap/database";
 import { organizationSso, organizations, users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import {
+	isScimPrice,
 	isSsoSubscription,
 	STRIPE_AVAILABLE,
-	STRIPE_SCIM_PRICE_ID,
 	stripe,
 } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
@@ -16,11 +15,6 @@ export async function hasScimSubscription(
 	organizationId: Organisation.OrganisationId,
 ) {
 	if (!STRIPE_AVAILABLE()) return false;
-	const priceIds = new Set(
-		[STRIPE_SCIM_PRICE_ID, serverEnv().STRIPE_SCIM_PRICE_ID].filter(
-			(priceId): priceId is string => Boolean(priceId),
-		),
-	);
 	const [record] = await db()
 		.select({
 			ownerCustomerId: users.stripeCustomerId,
@@ -48,7 +42,7 @@ export async function hasScimSubscription(
 				ENTITLED_STATUSES.has(subscription.status) &&
 				subscription.metadata?.organizationId === organizationId &&
 				!isSsoSubscription(subscription) &&
-				subscription.items.data.some((item) => priceIds.has(item.price.id))
+				subscription.items.data.some((item) => isScimPrice(item.price.id))
 			) {
 				return true;
 			}
