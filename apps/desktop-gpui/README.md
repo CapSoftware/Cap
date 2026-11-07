@@ -721,6 +721,7 @@ drives a start/stop through the button code paths — the end-to-end check uses
 it because unprivileged synthetic clicks are dropped. Add
 `CAP_GPUI_AUTO_PAUSE=1` to pause for the middle third: two segments whose
 summed duration is ~⅔ of wall time is the proof the pause reached the engine.
+`CAP_GPUI_AUTO_DELETE=1` ends the recording with the bar's Delete instead.
 `CAP_GPUI_AUTO_CAMERA=1` selects the first camera at startup the way a click
 would, opening the preview bubble; combined with `CAP_GPUI_AUTO_RECORD` it
 verifies the camera track end to end.
