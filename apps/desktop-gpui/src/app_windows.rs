@@ -2308,6 +2308,9 @@ fn area_overlay_matches(
         && bounds.size() == candidate_bounds.size()
 }
 
+/// The picker overlay an area recording keeps on screen as its outline, when
+/// it can be kept out of the recording: macOS leaves it out by window number,
+/// Windows by display affinity, set here. Linux has neither and closes it.
 fn area_overlay_for_recording(
     target: &ScreenCaptureTarget,
     cx: &mut App,
@@ -2316,21 +2319,34 @@ fn area_overlay_for_recording(
         return None;
     };
     let handle = overlay_handle(Some(screen.clone()), cx)?;
-    handle
+    let (candidate, capture_excluded) = handle
         .update(cx, |view, window, cx| {
             let candidate = view.target(cx)?;
             #[cfg(target_os = "macos")]
             let capture_excluded = platform::window_is_visible(window)
                 && platform::window_number(window).is_some_and(|number| number > 0);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            let capture_excluded = platform::window_is_visible(window)
+                .then(|| platform::native_window(window))
+                .flatten();
+            #[cfg(not(any(target_os = "macos", windows)))]
             let capture_excluded = {
                 let _ = window;
                 false
             };
-            area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+            Some((candidate, capture_excluded))
         })
         .ok()
-        .flatten()
+        .flatten()?;
+    // Outside the update: the affinity change reaches the window server
+    // without a gpui borrow held. A remote or streamed session keeps windows
+    // in captures, and then the outline would be in the recording.
+    #[cfg(windows)]
+    let capture_excluded = capture_excluded.is_some_and(|native| {
+        platform::set_window_capture_hidden(&native, true);
+        platform::window_capture_hidden(&native)
+    });
+    area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
 }
 
 fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
@@ -2551,8 +2567,8 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    let retained_area =
-        cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
+    let retained_area = cfg!(any(target_os = "macos", windows))
+        && matches!(&target, ScreenCaptureTarget::Area { .. });
     if retained_area {
         let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
             handle
