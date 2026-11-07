@@ -1874,8 +1874,16 @@ mod mac {
         native.0.orderOut(None);
     }
 
-    /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
+    /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`, after
+    /// `deminiaturize:` for a window [`miniaturize_native`] sent to the Dock.
     pub fn show_native(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let miniaturized: bool = msg_send![&*native.0, isMiniaturized];
+            if miniaturized {
+                let _: () = msg_send![&*native.0, deminiaturize: std::ptr::null_mut::<AnyObject>()];
+            }
+        }
         native.0.makeKeyAndOrderFront(None);
         rerun_occlusion_handler_after_show(&native.0);
     }
@@ -2398,6 +2406,47 @@ mod mac {
             let _: () =
                 msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
         }
+    }
+
+    /// `miniaturize:` for the main window, which gpui creates without
+    /// `NSMiniaturizableWindowMask` (`titlebar: None`) and AppKit then refuses
+    /// to minimise. The bit is set only around the call, past the
+    /// [`lock_borderless_style`] guard, so the window keeps its buttonless
+    /// style. Same retained-handle discipline as [`hide_native`].
+    pub fn miniaturize_native(native: &NativeWindow) {
+        use objc2::msg_send;
+        const MINIATURIZABLE: usize = 1 << 2;
+        unsafe {
+            let mask: usize = msg_send![&*native.0, styleMask];
+            set_style_mask_unguarded(native, mask | MINIATURIZABLE);
+            let _: () = msg_send![&*native.0, miniaturize: std::ptr::null_mut::<AnyObject>()];
+            set_style_mask_unguarded(native, mask);
+        }
+    }
+
+    /// `setStyleMask:` through the inherited implementation when
+    /// [`lock_borderless_style`] has replaced it, so the guard cannot rewrite
+    /// the mask.
+    fn set_style_mask_unguarded(native: &NativeWindow, mask: usize) {
+        use objc2::{msg_send, runtime::AnyClass};
+        let own_class: *const AnyClass = unsafe { msg_send![&*native.0, class] };
+        match SET_STYLE_MASK_SUPER.get() {
+            Some(&(class, imp)) if class == own_class as usize && imp != 0 => {
+                let imp: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, usize) =
+                    unsafe { std::mem::transmute(imp) };
+                let this: *mut AnyObject = (&*native.0 as *const NSWindow).cast_mut().cast();
+                unsafe { imp(this, objc2::sel!(setStyleMask:), mask) };
+            }
+            _ => unsafe {
+                let _: () = msg_send![&*native.0, setStyleMask: mask];
+            },
+        }
+    }
+
+    /// `isMiniaturized`. A plain getter, so it is safe inside a gpui update.
+    pub fn window_is_minimized(window: &Window) -> bool {
+        use objc2::msg_send;
+        ns_window(window).is_some_and(|ns| unsafe { msg_send![&*ns, isMiniaturized] })
     }
 
     /// `performZoom:` -- muda's Window > Zoom.
@@ -3216,6 +3265,9 @@ mod stub {
     pub fn register_escape_hotkey() {}
     pub fn unregister_escape_hotkey() {}
     pub fn minimize_native(_native: &NativeWindow) {}
+    pub fn window_is_minimized(_window: &Window) -> bool {
+        false
+    }
     pub fn zoom_native(_native: &NativeWindow) {}
     pub fn toggle_fullscreen_native(_native: &NativeWindow) {}
     pub fn window_is_visible(_window: &Window) -> bool {
