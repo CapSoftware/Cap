@@ -2483,7 +2483,7 @@ pub fn write_caption_edit_to_source(
     let Some(track_segment) = timeline.caption_segments.get(index) else {
         return;
     };
-    let source_id = source_caption_id(&track_segment.id).to_string();
+    let track_id = track_segment.id.clone();
     let (track_start, track_end, track_text) = (
         track_segment.start,
         track_segment.end,
@@ -2500,21 +2500,44 @@ pub fn write_caption_edit_to_source(
     let Some(source) = captions
         .segments
         .iter_mut()
-        .find(|segment| segment.id == source_id)
+        .find(|segment| segment.id == source_caption_id(&track_id))
     else {
         return;
     };
 
     let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
-        map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
+    let to_source =
+        |time| map_edited_time_to_source(time, timeline, recording_durations, source_range);
+    let shown_before = derive_caption_track_segments(
+        std::slice::from_ref(&*source),
+        timeline,
+        recording_durations,
+    )
+    .into_iter()
+    .find(|segment| segment.id == track_id)
+    .and_then(|segment| Some((to_source(segment.start)?, to_source(segment.end)?)));
+    if let (Some(start), Some(end)) = (to_source(track_start), to_source(track_end))
+        && end > start
     {
         source.start = start as f32;
-    }
-    if let Some(end) =
-        map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
-    {
         source.end = end as f32;
+        if let Some((shown_start, shown_end)) = shown_before
+            && (start, end) != (shown_start, shown_end)
+            && shown_end > shown_start
+        {
+            let scale = (end - start) / (shown_end - shown_start);
+            let retime = |time: f32| {
+                (start + (f64::from(time).clamp(shown_start, shown_end) - shown_start) * scale)
+                    as f32
+            };
+            for word in &mut source.words {
+                word.start = retime(word.start);
+                word.end = retime(word.end).min(word.start + MAX_CAPTION_WORD_DURATION);
+            }
+            if let Some(last) = source.words.last() {
+                source.end = source.end.min(last.end);
+            }
+        }
     }
     source.text = track_text;
     source.words = sync_caption_words_with_text(
@@ -2838,6 +2861,179 @@ mod tests {
                     .all(|pair| pair[0].end <= pair[1].start)
             );
         }
+    }
+
+    fn captioned_project(
+        clip_start: f64,
+        timescale: f64,
+        source: CaptionSegment,
+    ) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": timescale, "start": clip_start, "end": 20.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![source],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn word_timings(words: &[CaptionWord]) -> Vec<(f64, f64)> {
+        words
+            .iter()
+            .map(|word| (f64::from(word.start), f64::from(word.end)))
+            .collect()
+    }
+
+    #[test]
+    fn caption_timing_edits_move_their_words() {
+        for ((start, end), words) in [
+            ((4.0, 5.0), [(4.0, 4.5), (4.5, 5.0)]),
+            ((1.0, 3.0), [(1.0, 2.0), (2.0, 3.0)]),
+            ((0.5, 2.0), [(0.5, 1.25), (1.25, 2.0)]),
+        ] {
+            let mut project = captioned_project(
+                0.0,
+                2.0,
+                caption(
+                    "caption",
+                    2.0,
+                    4.0,
+                    &[("hello", 2.0, 3.0), ("world", 3.0, 4.0)],
+                ),
+            );
+            let durations = [20.0];
+            cap_project::synchronize_captions(&mut project, &durations);
+            let track = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+            assert_eq!((track.start, track.end), (1.0, 2.0));
+            (track.start, track.end) = (start, end);
+
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            cap_project::synchronize_captions(&mut project, &durations);
+
+            let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+            assert_eq!((track.start, track.end), (start, end));
+            assert_eq!(word_timings(&track.words), words);
+            assert_eq!(track.text, "hello world");
+        }
+    }
+
+    #[test]
+    fn caption_timing_edits_stop_at_the_longest_shown_word() {
+        let mut project =
+            captioned_project(0.0, 1.0, caption("caption", 1.0, 2.0, &[("hi", 1.0, 2.0)]));
+        let durations = [20.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        project.timeline.as_mut().unwrap().caption_segments[0].end = 5.0;
+
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!((source.start, source.end), (1.0, 3.5));
+        assert_eq!(word_timings(&source.words), [(1.0, 3.5)]);
+        let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (1.0, 3.5));
+    }
+
+    #[test]
+    fn trimmed_caption_edits_retime_from_the_visible_span() {
+        let mut project = captioned_project(
+            1.5,
+            1.0,
+            caption(
+                "caption",
+                1.0,
+                3.0,
+                &[("hello", 1.0, 2.0), ("world", 2.0, 3.0)],
+            ),
+        );
+        let durations = [20.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (0.0, 1.5));
+        track.text = "Hello world".to_string();
+
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(source.text, "Hello world");
+        assert_eq!(word_timings(&source.words), [(1.0, 2.0), (2.0, 3.0)]);
+
+        project.timeline.as_mut().unwrap().caption_segments[0].end = 2.5;
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert!(track.start.abs() < 1e-5 && (track.end - 2.5).abs() < 1e-5);
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert!((f64::from(source.words[1].end) - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn trimmed_caption_moves_keep_the_requested_start() {
+        let mut project = captioned_project(
+            1.5,
+            1.0,
+            caption(
+                "caption",
+                1.0,
+                3.0,
+                &[("hello", 1.0, 2.0), ("world", 2.0, 3.0)],
+            ),
+        );
+        let durations = [20.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (0.0, 1.5));
+        (track.start, track.end) = (1.0, 2.5);
+
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (1.0, 2.5));
+        assert_eq!(word_timings(&track.words), [(1.0, 1.5), (1.5, 2.5)]);
+    }
+
+    #[test]
+    fn caption_moves_across_a_backward_cut_leave_the_caption_alone() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 8.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 3.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("caption", 6.0, 7.0, &[("hi", 6.0, 7.0)])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [20.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (1.0, 2.0));
+        (track.start, track.end) = (2.5, 3.5);
+
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!((source.start, source.end), (6.0, 7.0));
+        assert_eq!(word_timings(&source.words), [(6.0, 7.0)]);
+        let track = &project.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!((track.start, track.end), (1.0, 2.0));
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
