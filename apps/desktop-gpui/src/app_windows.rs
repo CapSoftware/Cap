@@ -1048,6 +1048,43 @@ pub fn hide_main_window(cx: &mut App) {
     .detach();
 }
 
+/// `MainWindowRecordingStartBehaviour::perform`: Close hides the main window,
+/// Minimise sends it to the Dock or taskbar. Linux keeps hiding it, which its
+/// clean-capture lease depends on.
+fn put_main_window_away_for_recording(cx: &mut App) {
+    #[cfg(any(target_os = "macos", windows))]
+    if crate::store::GeneralSettings::load().main_window_recording_start_behaviour
+        == crate::store::MainWindowStartBehaviour::Minimise
+    {
+        minimize_main_window(cx);
+        return;
+    }
+    hide_main_window(cx);
+}
+
+/// [`hide_main_window`]'s twin for Minimise. [`show_main_window`] restores
+/// the window from the Dock or taskbar.
+#[cfg(any(target_os = "macos", windows))]
+fn minimize_main_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().main_hidden_by_app = true;
+    let main = cx.global::<AppWindows>().main;
+    let native = main
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            #[cfg(target_os = "macos")]
+            platform::miniaturize_native(native);
+            #[cfg(windows)]
+            platform::minimize_native(native);
+            tracing::info!("main window minimised");
+        }
+        cx.update(crate::menus::schedule_dock_sync);
+    })
+    .detach();
+}
+
 fn hide_main_and_park_camera_preview(cx: &mut App) {
     hide_main_window(cx);
     park_idle_camera_preview(cx);
@@ -4173,7 +4210,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     // on macOS: the main window goes away at every recording start, whatever
     // else happened. Gating this on the bar having opened left the window in
     // the frame on any start that never got a bar.
-    hide_main_window(cx);
+    put_main_window_away_for_recording(cx);
 
     let config = StartConfig {
         excluded_windows: excluded,
