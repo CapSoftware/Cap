@@ -1,0 +1,103 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "cap-raycast",
+  "title": "Cap Screen Recorder",
+  "description": "Start and stop Cap recordings and open your Cap web dashboard directly from Raycast.",
+  "icon": "extension-icon.png",
+  "author": "capsoftware",
+  "categories": [
+    "Productivity",
+    "Media",
+    "Developer Tools"
+  ],
+  "license": "MIT",
+  "preferences": [
+    {
+      "name": "defaultMode",
+      "title": "Default Recording Mode",
+      "description": "Recording mode used when starting a recording from Raycast.",
+      "type": "dropdown",
+      "required": false,
+      "default": "instant",
+      "data": [
+        {
+          "title": "Instant Mode",
+          "value": "instant"
+        },
+        {
+          "title": "Studio Mode",
+          "value": "studio"
+        }
+      ]
+    },
+    {
+      "name": "defaultScreen",
+      "title": "Default Screen Name",
+      "description": "Display name of the target screen to capture.",
+      "type": "textfield",
+      "required": false,
+      "default": "Primary"
+    },
+    {
+      "name": "captureSystemAudio",
+      "title": "Capture System Audio",
+      "description": "Include system audio when starting a recording.",
+      "type": "checkbox",
+      "label": "Capture system audio by default",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "copyUrlOnStop",
+      "title": "Copy Video URL on Stop",
+      "description": "Copy the shareable Cap video URL to the clipboard when stopping a recording.",
+      "type": "checkbox",
+      "label": "Copy shareable URL automatically",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "dashboardUrl",
+      "title": "Cap Dashboard URL",
+      "description": "URL of your Cap web dashboard (supports Cap Cloud and self-hosted instances).",
+      "type": "textfield",
+      "required": false,
+      "default": "https://cap.so/dashboard"
+    }
+  ],
+  "commands": [
+    {
+      "name": "start-recording",
+      "title": "Start Recording",
+      "description": "Start a Cap recording using your configured default settings.",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop-recording",
+      "title": "Stop Recording",
+      "description": "Stop the active Cap recording and copy the video URL to your clipboard.",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-dashboard",
+      "title": "Open Web Dashboard",
+      "description": "Open the Cap web dashboard in your default browser.",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "20.8.10",
+    "typescript": "^5.4.5",
+    "vitest": "^2.1.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "test": "vitest run"
+  }
+}
