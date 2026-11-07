@@ -1,4 +1,0 @@
-interface:
-  display_name: "ux-walk"
-  short_description: "Record and review evidence-backed UI walkthroughs"
-  default_prompt: "Use $ux-walk to drive or review a walkthrough and produce findings with screenshots and observed timings."

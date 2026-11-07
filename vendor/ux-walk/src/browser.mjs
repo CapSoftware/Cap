@@ -458,7 +458,7 @@ input:focus{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.15)}input:
   };
   // Recorder shortcuts while the page has focus: Option+Shift+N / M / P (Ctrl+Option+N / M / P work too).
   // By e.code: Option+Shift+letter types a special character on a Mac. The app never sees these keys.
-  // Usually the recorder's system-wide hot keys (uxw-capture --hotkeys) take them first; this is the fallback.
+  // Usually the recorder's system-wide hot keys take them first; this is the fallback.
   window.__uxwToast = (msg) => { if (isTop) toast(String(msg || '')); };
   const HOT = { KeyN: 'n', KeyM: 'm marker', KeyP: 'p' };
   const isHot = (e) => !!HOT[e.code] && !e.metaKey && e.altKey && (e.shiftKey !== e.ctrlKey);

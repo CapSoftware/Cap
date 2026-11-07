@@ -22,7 +22,6 @@ on:
       - scripts/build-macos-packages*
       - scripts/bundle-ux-walk*
       - vendor/ux-walk/**
-      - scripts/sync-ux-walk.mjs
       - .github/workflows/ux-walk-*.yml
   push:
     branches: [main, feat/walkthrough-entry]
@@ -38,6 +37,8 @@ on:
       - scripts/fork-brand*
       - scripts/build-desktop-binaries*
       - scripts/build-macos-packages*
+      - scripts/bundle-ux-walk.mjs
+      - vendor/ux-walk/**
 
 permissions:
   contents: read
@@ -157,7 +158,7 @@ jobs:
       - name: Exercise the native walk processor
         run: |
           command -v ffmpeg >/dev/null || brew install ffmpeg
-          node --test apps/desktop-gpui/ux-walk/browser-evidence.test.mjs apps/desktop-gpui/ux-walk/native-walk.test.mjs apps/desktop-gpui/ux-walk/native-walk-projects.test.mjs apps/desktop-gpui/ux-walk/native-audio.test.mjs apps/desktop-gpui/ux-walk/walk-chrome-launcher.test.mjs apps/desktop-gpui/ux-walk/checkpoint-*.test.mjs apps/desktop-gpui/ux-walk/fragmented-audio.test.mjs apps/desktop-gpui/ux-walk/restore-checkpoint.test.mjs vendor/ux-walk/test/unit/transcript-only.test.mjs vendor/ux-walk/test/unit/transcript-words.test.mjs
+          node --test apps/desktop-gpui/ux-walk/browser-evidence.test.mjs apps/desktop-gpui/ux-walk/native-walk.test.mjs apps/desktop-gpui/ux-walk/native-walk-projects.test.mjs apps/desktop-gpui/ux-walk/native-audio.test.mjs apps/desktop-gpui/ux-walk/walk-chrome-launcher.test.mjs apps/desktop-gpui/ux-walk/checkpoint-*.test.mjs apps/desktop-gpui/ux-walk/fragmented-audio.test.mjs apps/desktop-gpui/ux-walk/restore-checkpoint.test.mjs vendor/ux-walk/test/unit/transcript-only.test.mjs vendor/ux-walk/test/unit/transcript-words.test.mjs vendor/ux-walk/test/unit/tracker-run.test.mjs
       - name: Exercise portable production projects
         run: node --test apps/cli/skill/cap-demo/lib/production.test.mjs
       - name: Exercise isolated window selection
@@ -282,12 +283,12 @@ jobs:
           task_target="$(rustc -vV | sed -n 's/host: //p')"
           node scripts/build-desktop-binaries.mjs "$task_target" --debug
           node scripts/bundle-gpui.mjs "$task_target" --debug --bundles app --config "$RUNNER_TEMP/ux-walk-preview/preview.json"
-      - name: Bundle the pinned UX Walk engine and native controls
+      - name: Bundle the walk engine and native controls
         if: (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preview))
         run: |
           npm ci --ignore-scripts --prefix vendor/ux-walk
           CAP_UX_BROWSER_SMOKE=1 node --test apps/desktop-gpui/ux-walk/native-browser.test.mjs
-          node --test vendor/ux-walk/test/unit/embedded-config.test.mjs vendor/ux-walk/test/unit/start-link.test.mjs vendor/ux-walk/test/unit/cap-editor-handoff.test.mjs
+          node --test vendor/ux-walk/test/unit/embedded-config.test.mjs vendor/ux-walk/test/unit/cap-editor-handoff.test.mjs
           node scripts/bundle-ux-walk.mjs "$PREVIEW_APP"
       - name: Verify and retain the preview
         if: (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.preview))

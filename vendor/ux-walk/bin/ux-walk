@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// ux-walk: record a narrated walkthrough of a web app, in chapters, and turn each chapter into a
-// timeline an agent can read (speech, page changes, clicks, writes, errors, screenshots).
+// The walk engine's CLI, bundled inside Worm: process, brief, edit and file the recordings Worm makes
+// (timelines an agent can read: speech, page changes, clicks, writes, errors, screenshots). Worm records;
+// the legacy standalone recorder (record, call, video, the menu bar app) was removed when Worm took over.
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,22 +11,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { loadConfig, CONFIG_DIR, CONFIG_FILE } = await import(path.join(ROOT, 'src/config.mjs'));
 
-const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline per chapter.
+const HELP = `ux-walk: the walk engine bundled with Worm. Worm records walks; this processes, briefs and files them.
 
-  ux-walk [topic words] [url]      record (url or /path; default url from config); chapters split while recording
-  ux-walk start [topic words] [url]
-                                   one entry for internal instructions (default); add --capture cap for
-                                   shareable video, or --attach-cap ID to log an existing CLI recording
-  ux-walk call [topic words] [url] [--app zoom|facetime|meet|slack|teams|arc|safari] [--conversation]
-                                   a walk on a call: the ux-walk Chrome window opens at the start page for
-                                   you to share in the call, recorded with every click, console message and
-                                   request; your mic and the call's sound go on separate tracks, transcribed
-                                   apart so you and they are named by track (default call app: the one using
-                                   the microphone). --conversation records the call app's own window instead
-  ux-walk video [topic words] [url] [--display N]
-                                   a walk filmed as a video (Loom-style): the ux-walk browser with its full log at
-                                   30 fps; the menu bar app's camera bubble is drawn over it (--bubble-window id);
-                                   --display N films the whole screen instead of the browser window
   ux-walk import <file|project.cap> [topic words] [--ask "..."] [--start <iso|epoch-ms>] [--no-brief] [--diatribe]
                                    a video made elsewhere (an iPhone screen recording with the mic on; .mp4 .mov
                                    .m4v) or a voice memo (.m4a .mp3 .wav .aac) becomes a recording: same folder,
@@ -39,10 +26,8 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
   ux-walk report <dir>           deterministic HTML report from saved findings, checkpoints and timings;
                                  a parent report.json combines existing interrupted/continuation sessions
   ux-walk cap doctor|targets      Cap Desktop readiness or exact target/device IDs (JSON)
-  ux-walk cap sessions            active/recent detached Cap recordings (JSON)
   ux-walk cap compatibility       check the installed Cap contract without recording or updating
   ux-walk cap update              update official Cap, then check compatibility; refuses live sessions
-  ux-walk cap reconcile <walk>    after Cap stops, copy/render attached media into the saved log
   ux-walk cap edit <project.cap>  open an editable copy in Cap; preserve the source project
   ux-walk brief <dir>              Claude writes brief.md + items.json: notes, asks, decisions, bugs (ids C1-01...),
                                    errors, questions for you (needs the claude CLI)
@@ -63,7 +48,7 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
   ux-walk glossary accept <session> <term...|--all> [--to <glossary>] [--json]   add them to the project's glossary
   ux-walk glossary reject <session> <term...> [--json]
   ux-walk projects [--json]        list projects (glossary, tracker + target, source folder, notes); --project <id>
-                                   on record/import/process puts a recording in one (config "project": the default)
+                                   on import/process puts a recording in one (config "project": the default)
   ux-walk projects show <id> | save <file|->
                                    print one project, or save one (validated JSON, see README)
   ux-walk trackers [--json]        the issue tracker plugins (beads, github, linear) and whether each is ready
@@ -74,44 +59,8 @@ const HELP = `ux-walk: record a narrated walkthrough in chapters; get a timeline
                                    ledger (default: a diatribe's actions, a walk's bugs and asks; linked ones skipped)
   ux-walk handoff <folder> [--json]
                                    the agent line and context for a recording (names its project's tracker)
-  ux-walk windows                  list windows that can be recorded
-  ux-walk setup                    pick the transcriber and store its key, check permissions, write a config file
-  ux-walk app                      open the menu bar app (built by install.sh)
-  ux-walk agent <folder>           open a Claude Code session (opus) in a new cmux workspace with the walk's prompt
-                                   (config "agent": "cmux" does this when every walk ends)
+  ux-walk setup                    pick the transcriber and store its key, write a config file
   ux-walk help
-
-While recording, type:
-${'  + <Name>   someone joined: a speaker from now on\n  n [name]   start the next chapter (the one just finished is processed in the background)\n  m <note>   drop a marker into the timeline\n  p          pause / resume\n  s          status\n  q          stop; then say what agents should do with the walk (copied as a /ux-walk prompt; skips after 15 s)'}
-From any app, the terminal too: Option+Shift+N next chapter, Option+Shift+M marker, Option+Shift+P
-pause/resume (Ctrl+Option+N / M / P also work); the browser shows each one as a toast.
-In the browser, hold Option+Shift: click to pin a note, drag to draw a box (drag the box to move it, a corner
-to resize it, while its note is open). Without Option+Shift every click and key goes to the app.
-
-Recording options:
-  --app <name>       record that app's window instead of the ux-walk browser (with --no-browser: no click log)
-  --no-browser       do not open Chrome (use with --app or --window-id); passive recording only
-  --window-id <id>   record exactly this existing window (ux-walk windows lists IDs)
-  --title <text>     with --app, require this window title substring; never fall back
-  --evidence-only    skip transcription, processing, questions, clipboard and agent launch
-  --capture screen   whole screen through ffmpeg instead of one window
-  --capture cap      Cap Studio whole-screen capture: --no-browser and --screen-id required
-  --attach-cap <id>  log an existing detached Cap session; never stop it or change its devices
-  --screen-id <id>   Cap display ID (not a display index); ux-walk cap targets lists IDs
-  --camera <id>      Cap camera device ID; kept as a separate editable track
-  --system-audio     Cap only: record all system sound (off by default)
-  --mic <name>       native: name substring/default mic; Cap: exact device name, off when unset
-  --no-mic           video only
-  --no-trace         skip the Playwright trace
-  --speakers A,B     who is talking, you first (otherwise you are asked)
-  --mic-people A,B   who is at this Mac's microphone, you first (the speakers screen; names voices by track)
-  --call-people C,D  who is on the call
-  --call-app <id>    the call's sound: auto, zoom, facetime, meet, slack, teams, arc, safari, system (all the Mac
-                     plays) or none (mic only)
-  --glossary a,b     add named glossaries (~/.config/ux-walk/glossaries/<name>.txt)
-  --brief            write a brief per chapter as it finishes (config "brief": true does the same)
-  --fps <n>          window capture frame rate (default 15)
-  --script <file>    drive the page from a module (demos, testing): default export ({ page, cmd, say, sleep })
 
 Process options:
   --speakers A,B     rename speakers   --retranscribe   fetch the transcript again
@@ -120,12 +69,11 @@ Process options:
 
 A <folder> is a full path, a recording's folder name, or a unique end of one ("romerosojan").
 
-Output: <outDir>/<date>-<topic>/NN-<chapter>/ with video.mp4, timeline.md, timeline-short.md,
-shots/, transcript.srt, trace.zip; index.md lists the chapters. Config: ${CONFIG_FILE}`;
+Config: ${CONFIG_FILE}`;
 
 function parse(argv) {
   const pos = [], flags = {};
-  const bool = new Set(['all', 'no-browser', 'no-mic', 'no-trace', 'short', 'stdout', 'retranscribe', 'reshoot', 'resection', 'quiet', 'help', 'h', 'brief', 'no-brief', 'stale', 'dry-run', 'add', 'ipc', 'conversation', 'evidence-only', 'system-audio', 'json', 'no-open', 'diatribe']);
+  const bool = new Set(['all', 'short', 'stdout', 'retranscribe', 'reshoot', 'resection', 'quiet', 'help', 'h', 'brief', 'no-brief', 'stale', 'dry-run', 'add', 'evidence-only', 'json', 'no-open', 'diatribe']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
@@ -140,22 +88,13 @@ function parse(argv) {
 }
 
 const { pos, flags } = parse(process.argv.slice(2));
-const commands = new Set(['start', 'record', 'import', 'call', 'video', 'process', 'timeline', 'brief', 'link', 'items', 'status', 'search', 'speakers', 'frame', 'glossary', 'windows', 'setup', 'app', 'agent', 'report', 'cap', 'help', 'projects', 'trackers', 'file', 'handoff']);
-const selected = commands.has(pos[0]) ? pos.shift() : 'record';
-const cmd = selected === 'start' ? 'record' : selected;
+const commands = new Set(['import', 'process', 'timeline', 'brief', 'link', 'items', 'status', 'search', 'speakers', 'frame', 'glossary', 'setup', 'report', 'cap', 'help', 'projects', 'trackers', 'file', 'handoff']);
+const cmd = commands.has(pos[0]) ? pos.shift() : null;
 
 if (flags.help || flags.h || cmd === 'help') { console.log(HELP); process.exit(0); }
+if (!cmd) { console.error(`${pos[0] ? `not a command: ${pos[0]}` : 'give a command'}; recording happens in Worm (ux-walk help lists the commands)`); process.exit(2); }
 
 const overrides = {};
-if (flags.capture) overrides.capture = flags.capture;
-if (flags['attach-cap']) { overrides.capture = 'cap'; overrides.attachCap = flags['attach-cap']; }
-if (flags['screen-id']) overrides.screenId = flags['screen-id'];
-if (flags.camera) overrides.camera = flags.camera;
-if (flags['system-audio']) overrides.systemAudio = true;
-if (flags.mic) overrides.mic = flags.mic;
-if (flags['no-mic']) overrides.noMic = true;
-if (flags['no-trace']) overrides.trace = false;
-if (flags.fps) overrides.fps = Number(flags.fps);
 if (flags.speakers) overrides.speakers = flags.speakers;
 if (flags.out) overrides.outDir = flags.out;
 if (flags.brief) overrides.brief = true;
@@ -163,12 +102,6 @@ if (flags['no-brief']) overrides.brief = false;
 // The recording's own switch: written to session.json when --brief or --no-brief is given.
 const briefFlag = flags.brief ? true : flags['no-brief'] ? false : undefined;
 if (flags['evidence-only']) Object.assign(overrides, { evidenceOnly: true, transcriber: 'none', brief: false, sections: false, agent: null, callAudio: false, noMic: true, askSpeakers: false, trace: false });
-// The speakers screen: who is at this Mac's mic and who is on the call; which call app to record (none = mic only).
-const people = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
-const sources = flags['mic-people'] || flags['call-people'] ? { mic: people(flags['mic-people']), call: people(flags['call-people']) } : null;
-if (sources) overrides.speakers = [...sources.mic, ...sources.call].join(',');
-if (flags['call-app'] === 'none') overrides.callAudio = false;
-else if (flags['call-app']) overrides.callApp = flags['call-app'];
 let cfg = loadConfig(overrides);
 
 // A path, or a recording's folder name (or a unique end of one) in outDir.
@@ -195,7 +128,7 @@ const chapterDirs = (p) => {
 const projects = await import(path.join(ROOT, 'src/projects.mjs'));
 const sessionOf = (d) => (fs.existsSync(path.join(d, 'session.json')) ? d : path.dirname(d));
 const cfgFor = (d) => projects.withProject(cfg, projects.sessionProject(sessionOf(d), cfg));
-if (['record', 'video', 'call', 'import'].includes(cmd)) {
+if (cmd === 'import') {
   try { cfg = projects.withProject(cfg, projects.projectFor(cfg, flags.project)); } catch (e) { console.error(e.message); process.exit(2); }
 } else if (cmd === 'process' && flags.project) {
   let p;
@@ -209,28 +142,11 @@ if (cmd === 'cap') {
   const [action, project] = pos;
   try {
     if (['doctor', 'targets'].includes(action)) console.log(JSON.stringify(await new CapClient().json([action]), null, 2));
-    else if (action === 'sessions') console.log(JSON.stringify(await new CapClient().json(['record', 'status']), null, 2));
     else if (['compatibility', 'update'].includes(action)) {
       const { checkCapCompatibility, updateCap } = await import(path.join(ROOT, 'src/cap-updates.mjs'));
       const result = await (action === 'update' ? updateCap() : checkCapCompatibility());
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exitCode = 1;
-    } else if (action === 'reconcile' && project) {
-      const dir = await dirArg(project);
-      const { reconcileCapSession } = await import(path.join(ROOT, 'src/cap-session.mjs'));
-      const result = await reconcileCapSession(dir);
-      if (!result.pending) {
-        const sessionFile = path.join(dir, 'session.json'), s = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
-        for (const row of s.chapters.filter((c) => c.status === 'waiting for media')) {
-          const span = result.spans.find((p) => p.file === `${row.dir}/video.mp4`);
-          row.status = span?.empty ? 'empty' : fs.existsSync(path.join(dir, row.dir, 'video.mp4')) ? (s.evidenceOnly ? 'evidence' : 'recorded') : 'waiting for media';
-        }
-        s.cap.pendingMedia = false;
-        if (s.coverage) s.coverage.video = 'Materialized from completed Cap media; source alignment remains approximate.';
-        fs.writeFileSync(sessionFile, JSON.stringify(s, null, 2) + '\n');
-        const { writeReport } = await import(path.join(ROOT, 'src/report.mjs')); result.report = writeReport(dir);
-      }
-      console.log(JSON.stringify(result, null, 2));
     }
     else if (action === 'edit' && project) {
       const file = prepareCapEdit(path.resolve(project));
@@ -241,76 +157,8 @@ if (cmd === 'cap') {
         if (r.status !== 0) throw new Error('Could not open Cap Desktop');
       }
       console.log(JSON.stringify({ project: file, source: path.resolve(project), opened: !flags['no-open'] }, null, 2));
-    } else throw new Error('usage: ux-walk cap doctor|targets|sessions|compatibility|update|reconcile <walk>|edit <project.cap> [--no-open]');
+    } else throw new Error('usage: ux-walk cap doctor|targets|compatibility|update|edit <project.cap> [--no-open]');
   } catch (e) { console.error(JSON.stringify({ ok: false, error: e.message })); process.exit(1); }
-} else if (cmd === 'record') {
-  if (flags['attach-cap'] && (flags.camera || flags.mic || flags['system-audio'])) { console.error('Attaching cannot change devices; omit --camera, --mic and --system-audio'); process.exit(2); }
-  if (flags['no-browser'] && !flags.app && !flags['window-id'] && !(cfg.capture === 'cap' && cfg.screenId)) { console.error('--no-browser needs --app <name>, --window-id <id>, or a Cap --screen-id'); process.exit(2); }
-  // --ipc: the menu bar app drives the walk; stdout is JSON lines only.
-  if (flags.ipc) (await import(path.join(ROOT, 'src/ipc.mjs'))).routeConsole();
-  const { record } = await import(path.join(ROOT, 'src/record.mjs'));
-  // Every word is the topic; a URL-looking word (http..., host.tld..., /path) is the start page.
-  const isUrl = (w) => /^(https?:\/\/|\/|localhost)|^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?(\/|$)/i.test(w);
-  const urlArg = pos.find(isUrl);
-  const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
-  try {
-    await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'walk', url: startUrl, app: flags.app, title: flags.title, windowId: flags['window-id'], noBrowser: !!flags['no-browser'], glossary: flags.glossary, script: flags.script, ipc: !!flags.ipc, sources, brief: briefFlag, bubbleWindow: flags['bubble-window'] });
-  } catch (e) {
-    if (!flags.ipc) throw e;
-    (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: e.message });
-    process.exit(1);
-  }
-} else if (cmd === 'video') {
-  // A product video: a walk (the ux-walk browser with its click, console and network log) at 30 fps, with the menu
-  // bar app's camera bubble drawn over the browser window; --display N films the whole screen instead.
-  if (flags.ipc) (await import(path.join(ROOT, 'src/ipc.mjs'))).routeConsole();
-  const { record } = await import(path.join(ROOT, 'src/record.mjs'));
-  const isUrl = (w) => /^(https?:\/\/|\/|localhost)|^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?(\/|$)/i.test(w);
-  const urlArg = pos.find(isUrl);
-  const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
-  try {
-    await record({ ...cfg, fps: flags.fps ? Number(flags.fps) : 30 }, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'video', url: startUrl, kind: 'video',
-      display: flags.display != null ? Number(flags.display) : undefined, bubbleWindow: flags['bubble-window'], glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag });
-  } catch (e) {
-    if (!flags.ipc) throw e;
-    (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: e.message });
-    process.exit(1);
-  }
-} else if (cmd === 'call') {
-  // A walk on a call: the ux-walk window you share, your mic and the call's own sound on separate tracks.
-  const { detectCalls } = await import(path.join(ROOT, 'src/capture.mjs'));
-  const calls = detectCalls();
-  const want = flags.app && String(flags.app).toLowerCase();
-  const c = want ? calls.find((x) => x.id === want) || { id: want, ...{ zoom: { window: 'zoom.us' }, facetime: { window: 'FaceTime' }, meet: { window: 'Google Chrome', title: 'Meet' }, slack: { window: 'Slack' }, teams: { window: 'Microsoft Teams' }, arc: { window: 'Arc' }, safari: { window: 'Safari' } }[want] }
-    : calls.find((x) => x.active);
-  const fail = (msg) => {
-    if (flags.ipc) (async () => { (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: msg }); process.exit(2); })();
-    else { console.error(msg); process.exit(2); }
-  };
-  if (!c?.window) fail(want ? `unknown call app "${want}" (zoom, facetime, meet, slack, teams, arc, safari)`
-    : `No call found: no call app is using the microphone${calls.length ? ` (running: ${calls.map((x) => x.name).join(', ')})` : ''}. Join the call first, or name the app: ux-walk call <topic> --app zoom|facetime|meet|slack|teams`);
-  else {
-    if (flags.ipc) (await import(path.join(ROOT, 'src/ipc.mjs'))).routeConsole();
-    console.log(`Recording the ${c.name || c.id} call.`);
-    const { record } = await import(path.join(ROOT, 'src/record.mjs'));
-    try {
-      // Default: the ux-walk Chrome window opens at the start page for you to share in the call, and is recorded with
-      // every click, console message and request; the mic and the call's sound go on their own tracks.
-      // --conversation records the call app's own window instead (a call with nothing to show).
-      if (flags.conversation) {
-        await record(cfg, { topic: pos.join(' ') || 'call', url: null, app: c.window, title: c.title || undefined, callApp: c.id, kind: 'call', noBrowser: true, glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag });
-      } else {
-        const isUrl = (w) => /^(https?:\/\/|\/|localhost)|^[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?(\/|$)/i.test(w);
-        const urlArg = pos.find(isUrl);
-        const startUrl = !urlArg ? cfg.url : urlArg.startsWith('/') ? new URL(urlArg, cfg.url).href : /^https?:/.test(urlArg) ? urlArg : `https://${urlArg}`;
-        await record(cfg, { topic: pos.filter((w) => w !== urlArg).join(' ') || 'call', url: startUrl, callApp: c.id, kind: 'call', glossary: flags.glossary, ipc: !!flags.ipc, sources, brief: briefFlag, bubbleWindow: flags['bubble-window'] });
-      }
-    } catch (e) {
-      if (!flags.ipc) throw e;
-      (await import(path.join(ROOT, 'src/ipc.mjs'))).emit({ ev: 'error', message: e.message });
-      process.exit(1);
-    }
-  }
 } else if (cmd === 'import') {
   // A video (or voice memo) made outside ux-walk becomes a one-chapter recording, processed and briefed.
   const [file, ...words] = pos;
@@ -327,14 +175,6 @@ if (cmd === 'cap') {
   console.log(cfg.evidenceOnly ? `Report: ${path.join(r.dir, 'report.html')}` : r.brief ? `Brief: ${r.brief}` : `No brief${r.summary?.transcriptError ? ' (no transcript)' : flags['no-brief'] ? ' (--no-brief)' : ''}; timeline: ${path.join(r.chapterDir, 'timeline-short.md')}`);
   console.log(`${copied ? 'Copied to the clipboard' : 'Paste into Claude Code'}: ${line}`);
   process.exit(r.summary?.transcriptError ? 3 : 0);
-} else if (cmd === 'agent') {
-  const dir = await dirArg(pos[0]);
-  const { handoffLine, openInCmux } = await import(path.join(ROOT, 'src/record.mjs'));
-  const s = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'));
-  const line = handoffLine(dir, pos.slice(1).join(' ') || s.ask, { kind: s.kind, project: projects.sessionProject(dir, cfg) });
-  const why = openInCmux(dir, line, cfgFor(dir), s.topic || path.basename(dir));
-  if (why) { console.error(`Could not open the agent in cmux: ${why}`); process.exit(1); }
-  console.log(`Opened a Claude Code session in cmux: ${line}`);
 } else if (cmd === 'process' && flags.stale) {
   // Chapters built by an older ux-walk or before a glossary change: rebuild their timelines (no new transcript).
   const { processChapter, staleChapters } = await import(path.join(ROOT, 'src/process.mjs'));
@@ -558,16 +398,6 @@ if (cmd === 'cap') {
     console.log(`named (${GLOSSARY_DIR}): ${g.named.join(', ') || 'none'}`);
     console.log('add per recording: ux-walk <topic> --glossary <name>[,<name>]');
   }
-} else if (cmd === 'windows') {
-  const r = spawnSync(path.join(ROOT, 'bin', 'uxw-capture'), ['--list'], { encoding: 'utf8' });
-  for (const l of r.stdout.split('\n').filter(Boolean)) {
-    const w = JSON.parse(l);
-    console.log(w.ev === 'error' ? w.message : `${String(w.windowId).padStart(6)}  ${w.app.padEnd(18)} ${w.w}x${w.h}  ${w.title}`);
-  }
-} else if (cmd === 'app') {
-  const app = path.join(process.env.UXW_APP_DIR || path.join(process.env.HOME, 'Applications'), 'ux-walk.app');
-  if (!fs.existsSync(app)) { console.error(`no ${app}; run ${path.join(ROOT, 'install.sh')}`); process.exit(1); }
-  spawnSync('open', [app], { stdio: 'inherit' });
 } else if (cmd === 'setup') {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -577,7 +407,7 @@ if (cmd === 'cap') {
   // The always-used glossary (config "glossary" names extra ones; it is often empty).
   const gl = (await import(path.join(ROOT, 'src/glossary.mjs'))).DEFAULT_GLOSSARY;
   if (!fs.existsSync(gl)) { fs.copyFileSync(path.join(ROOT, 'glossary.example.txt'), gl); console.log(`wrote ${gl} (names the transcript gets wrong)`); }
-  // Transcriber and its key (the menu bar app's Settings do the same).
+  // Transcriber and its key (Worm's Settings do the same).
   const { PROVIDERS } = await import(path.join(ROOT, 'src/transcribe.mjs'));
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ids = [...Object.keys(PROVIDERS), 'none'];
@@ -615,9 +445,4 @@ if (cmd === 'cap') {
     console.log(`Pick where items go: ux-walk trackers targets ${tpick}; then put it in a project (ux-walk projects save <file>).`);
   }
   rl.close();
-  const r = spawnSync(path.join(ROOT, 'bin', 'uxw-capture'), ['--list'], { encoding: 'utf8' });
-  console.log(r.status === 0 && r.stdout.trim()
-    ? 'Screen Recording: allowed.'
-    : 'Screen Recording: not allowed yet. System Settings > Privacy & Security > Screen & System Audio Recording: turn on your terminal app, then restart it.');
-  console.log('Microphone: macOS asks the first time you record; allow it for your terminal app.');
 }
