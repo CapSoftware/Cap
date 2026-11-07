@@ -334,9 +334,14 @@ impl DeepLinkAction {
                 // The name -> target resolution, verbatim from
                 // `deeplink_actions.rs:200-231`.
                 let capture_target: ScreenCaptureTarget = match capture_mode {
+                    CaptureMode::Screen(name) if name == "default" || name == "primary" => {
+                        ScreenCaptureTarget::Display {
+                            id: scap_targets::Display::primary().id(),
+                        }
+                    }
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
-                        .find(|(s, _)| name == "default" || name == "primary" || s.name == name)
+                        .find(|(s, _)| s.name == name)
                         .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                         .ok_or(format!("No screen with name \"{}\"", name))?,
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
