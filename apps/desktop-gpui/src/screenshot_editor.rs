@@ -1212,8 +1212,15 @@ impl ScreenshotEditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let prev_crop = self.project.background.crop.clone();
         if !change(&mut self.project) {
             return;
+        }
+        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
+            self.annotation_state.gesture = None;
+        }
+        if self.project.background.crop != prev_crop {
+            self.clear_crop_selection(cx);
         }
         // Padding, crop and aspect all move the content rect underneath the
         // masks; the clamp rides along in the same history entry.
@@ -1280,7 +1287,7 @@ impl ScreenshotEditorWindow {
     ) {
         self.project = config;
         self.bg_tab = BgTab::for_source(&self.project.background.source);
-        self.annotation_state.crop_selection = None;
+        self.clear_crop_selection(cx);
         if let Some(id) = &self.selected_annotation
             && !self
                 .project
@@ -2607,7 +2614,7 @@ impl ScreenshotEditorWindow {
 
     fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         self.tool = tool;
-        self.annotation_state.crop_selection = None;
+        self.clear_crop_selection(cx);
         if tool != Tool::Select {
             self.selected_annotation = None;
         }

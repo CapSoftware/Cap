@@ -545,7 +545,6 @@ pub fn normalized_rect(annotation: &Annotation) -> Rect {
     }
 }
 
-/// Normalize two frame-space points into a non-negative `Rect`.
 pub fn rect_from_points(a: (f64, f64), b: (f64, f64)) -> Rect {
     Rect {
         x: a.0.min(b.0),
@@ -555,8 +554,6 @@ pub fn rect_from_points(a: (f64, f64), b: (f64, f64)) -> Rect {
     }
 }
 
-/// Convert a frame-space selection rect inside `image_rect` into a source-image
-/// [`Crop`], accounting for any crop already active on the project.
 pub fn crop_from_selection_rect(
     selection: Rect,
     image_rect: Rect,
@@ -615,6 +612,45 @@ pub fn crop_from_selection_rect(
     Some(Crop {
         position: cap_project::XY::new(x, y),
         size: cap_project::XY::new(width, height),
+    })
+}
+
+pub fn selection_rect_from_crop(
+    crop: &Crop,
+    image_rect: Rect,
+    image_size: (u32, u32),
+    existing_crop: Option<&Crop>,
+) -> Option<Rect> {
+    if image_rect.width <= 0.
+        || image_rect.height <= 0.
+        || image_size.0 == 0
+        || image_size.1 == 0
+        || crop.size.x == 0
+        || crop.size.y == 0
+    {
+        return None;
+    }
+    let (src_x, src_y, src_w, src_h) = match existing_crop {
+        Some(existing) => (
+            f64::from(existing.position.x),
+            f64::from(existing.position.y),
+            f64::from(existing.size.x.max(1)),
+            f64::from(existing.size.y.max(1)),
+        ),
+        None => (0., 0., f64::from(image_size.0), f64::from(image_size.1)),
+    };
+    let left = f64::from(crop.position.x).clamp(src_x, src_x + src_w);
+    let top = f64::from(crop.position.y).clamp(src_y, src_y + src_h);
+    let right = f64::from(crop.position.x.saturating_add(crop.size.x)).clamp(src_x, src_x + src_w);
+    let bottom = f64::from(crop.position.y.saturating_add(crop.size.y)).clamp(src_y, src_y + src_h);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some(Rect {
+        x: image_rect.x + ((left - src_x) / src_w) * image_rect.width,
+        y: image_rect.y + ((top - src_y) / src_h) * image_rect.height,
+        width: ((right - left) / src_w) * image_rect.width,
+        height: ((bottom - top) / src_h) * image_rect.height,
     })
 }
 
@@ -1121,7 +1157,6 @@ enum Gesture {
     Move(Dragging),
     /// `dragState.action === "resize"`.
     Resize(Dragging),
-    /// Dragging on empty screenshot space in Select mode to define a crop rect.
     Crop {
         start: (f64, f64),
         current: (f64, f64),
@@ -1278,8 +1313,7 @@ pub struct AnnotationState {
     /// which is what maps a pointer into frame space.
     layer: BoundsCell,
     gesture: Option<Gesture>,
-    /// Pending crop selection in frame space created by dragging on empty image space.
-    pub(crate) crop_selection: Option<Rect>,
+    pub(crate) crop_selection: Option<Crop>,
     /// The annotation the pointer is over, for the text hover wash.
     hover: Option<String>,
     hover_cursor: Option<CursorStyle>,
@@ -1662,9 +1696,8 @@ impl ScreenshotEditorWindow {
         }
 
         // `e.target === e.currentTarget` (`:168-173`): a press on bare canvas
-        // drops the selection. Dragging on empty screenshot space starts an
-        // inline crop selection (`#3636`); pressing outside the image rect
-        // falls through to background pan.
+        // drops the selection. The `false` then lets the caller start the pan,
+        // which is `onBackgroundMouseDown` over there.
         if self.selected_annotation.take().is_some() {
             cx.notify();
         }
@@ -1806,9 +1839,14 @@ impl ScreenshotEditorWindow {
                     clamp_value(point.1, rect.y, rect.y + rect.height),
                 );
                 let selection = rect_from_points(start, clamped);
-                self.annotation_state.crop_selection =
-                    (selection.width >= MIN_SIZE && selection.height >= MIN_SIZE)
-                        .then_some(selection);
+                self.annotation_state.crop_selection = self.image_size.and_then(|image_size| {
+                    crop_from_selection_rect(
+                        selection,
+                        rect,
+                        image_size,
+                        self.project.background.crop.as_ref(),
+                    )
+                });
                 Gesture::Crop {
                     start,
                     current: clamped,
@@ -2053,14 +2091,19 @@ impl ScreenshotEditorWindow {
                 self.finish_drag(dragging, window, cx)
             }
             Gesture::Crop { start, current } => {
-                if edit_text {
+                self.annotation_state.crop_selection = if edit_text {
                     let selection = rect_from_points(start, current);
-                    self.annotation_state.crop_selection =
-                        (selection.width >= MIN_SIZE && selection.height >= MIN_SIZE)
-                            .then_some(selection);
+                    self.image_size.and_then(|image_size| {
+                        crop_from_selection_rect(
+                            selection,
+                            self.annotation_image_rect(),
+                            image_size,
+                            self.project.background.crop.as_ref(),
+                        )
+                    })
                 } else {
-                    self.annotation_state.crop_selection = None;
-                }
+                    None
+                };
                 cx.notify();
             }
         }
@@ -2081,14 +2124,10 @@ impl ScreenshotEditorWindow {
     }
 
     pub(crate) fn take_pending_crop_bounds(&mut self) -> Option<Crop> {
-        let selection = self.annotation_state.crop_selection.take()?;
-        let image_size = self.image_size?;
-        crop_from_selection_rect(
-            selection,
-            self.annotation_image_rect(),
-            image_size,
-            self.project.background.crop.as_ref(),
-        )
+        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
+            self.annotation_state.gesture = None;
+        }
+        self.annotation_state.crop_selection.take()
     }
 
     pub(crate) fn apply_crop_selection(
@@ -2599,7 +2638,19 @@ impl ScreenshotEditorWindow {
                 .iter()
                 .filter_map(|entry| entry.value.clone())
                 .collect(),
-            crop_selection: self.annotation_state.crop_selection,
+            crop_selection: self
+                .annotation_state
+                .crop_selection
+                .as_ref()
+                .zip(self.image_size)
+                .and_then(|(crop, image_size)| {
+                    selection_rect_from_crop(
+                        crop,
+                        rect,
+                        image_size,
+                        self.project.background.crop.as_ref(),
+                    )
+                }),
             image_rect: rect,
             selected: self.selected_annotation.clone(),
             editing: self
@@ -5002,6 +5053,19 @@ mod tests {
             )
             .is_none()
         );
+
+        let moved_image_rect = Rect {
+            x: 200.,
+            y: 120.,
+            width: 800.,
+            height: 400.,
+        };
+        let projected =
+            selection_rect_from_crop(&crop, moved_image_rect, (2000, 1000), None).expect("projected");
+        assert_eq!(projected.x, 200.);
+        assert_eq!(projected.y, 120.);
+        assert_eq!(projected.width, 400.);
+        assert_eq!(projected.height, 400.);
     }
 
     #[test]
