@@ -735,11 +735,39 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
         let _thumbnails = crate::recording::hold_studio_thumbnail_writes().ok_or_else(|| {
             "Timed out waiting for the recording's thumbnail to finish writing".to_string()
         })?;
-        std::fs::remove_dir_all(canonical_path)
+        remove_recording_directory(&canonical_path)
             .map_err(|error| format!("Failed to delete recording: {error}"))?;
     }
 
     Ok(())
+}
+
+/// Windows will not delete a file that another handle still has open. A
+/// decoder thread closes its file a moment after its last handle is dropped,
+/// and antivirus or the search indexer can briefly open a file, so a sharing
+/// violation is retried for a few seconds before it is reported.
+fn remove_recording_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        const ERROR_LOCK_VIOLATION: i32 = 33;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(path) {
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+                    ) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                result => return result,
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    std::fs::remove_dir_all(path)
 }
 
 /// `delete_recording_directory` against the real library.
