@@ -2323,10 +2323,50 @@ pub fn clip_trim_end(
 // Auto zoom
 // ---------------------------------------------------------------------------
 
+pub const DEFAULT_AUTO_ZOOM_HOLD_SECONDS: f64 = 2.5;
+pub const DEFAULT_AUTO_ZOOM_MERGE_GAP_SECONDS: f64 = 2.5;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoZoomTiming {
+    pub post_padding_ms: f64,
+    pub merge_gap_ms: f64,
+}
+
+impl Default for AutoZoomTiming {
+    fn default() -> Self {
+        Self {
+            post_padding_ms: DEFAULT_AUTO_ZOOM_HOLD_SECONDS * 1000.0,
+            merge_gap_ms: DEFAULT_AUTO_ZOOM_MERGE_GAP_SECONDS * 1000.0,
+        }
+    }
+}
+
+impl AutoZoomTiming {
+    pub fn from_seconds(hold_seconds: f64, merge_gap_seconds: f64) -> Self {
+        Self {
+            post_padding_ms: hold_seconds.max(0.1) * 1000.0,
+            merge_gap_ms: merge_gap_seconds.max(0.0) * 1000.0,
+        }
+    }
+}
 pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
     timeline: &TimelineConfiguration,
     zoom_amount: f64,
+) -> Vec<ZoomSegment> {
+    generate_zoom_segments_for_timeline_with_timing(
+        clicks_by_clip,
+        timeline,
+        zoom_amount,
+        AutoZoomTiming::default(),
+    )
+}
+
+pub fn generate_zoom_segments_for_timeline_with_timing(
+    clicks_by_clip: &[Vec<CursorClickEvent>],
+    timeline: &TimelineConfiguration,
+    zoom_amount: f64,
+    timing: AutoZoomTiming,
 ) -> Vec<ZoomSegment> {
     let ordered_clicks: Vec<_> = clicks_by_clip
         .iter()
@@ -2364,7 +2404,12 @@ pub fn generate_zoom_segments_for_timeline(
             mapped.push(click);
         }
     }
-    generate_zoom_segments_from_clicks(mapped, timeline.duration(), zoom_amount)
+    generate_zoom_segments_from_clicks_with_timing(
+        mapped,
+        timeline.duration(),
+        zoom_amount,
+        timing,
+    )
 }
 
 /// `generate_zoom_segments_from_clicks_impl`
@@ -2375,17 +2420,31 @@ pub fn generate_zoom_segments_for_timeline(
 /// clamped inside the recording. The Tauri signature also takes the cursor
 /// *moves* and ignores them; this one does not pretend to want them.
 pub fn generate_zoom_segments_from_clicks(
+    clicks: Vec<CursorClickEvent>,
+    max_duration: f64,
+    zoom_amount: f64,
+) -> Vec<ZoomSegment> {
+    generate_zoom_segments_from_clicks_with_timing(
+        clicks,
+        max_duration,
+        zoom_amount,
+        AutoZoomTiming::default(),
+    )
+}
+
+pub fn generate_zoom_segments_from_clicks_with_timing(
     mut clicks: Vec<CursorClickEvent>,
     max_duration: f64,
     zoom_amount: f64,
+    timing: AutoZoomTiming,
 ) -> Vec<ZoomSegment> {
     const MS_PER_SECOND: f64 = 1000.0;
     const START_MIN_MS: f64 = 1.0;
     const CLICK_PRE_PADDING_MS: f64 = 300.0;
-    const CLICK_POST_PADDING_MS: f64 = 2500.0;
     const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
     const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
-    const MERGE_GAP_MS: f64 = 2500.0;
+    let post_padding_ms = timing.post_padding_ms.max(0.0);
+    let merge_gap_ms = timing.merge_gap_ms.max(0.0);
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -2412,7 +2471,7 @@ pub fn generate_zoom_segments_from_clicks(
         }
 
         let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
-        let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
+        let end = (time_ms + post_padding_ms).min(end_limit_ms);
 
         if end > start {
             intervals.push((start, end));
@@ -2428,7 +2487,7 @@ pub fn generate_zoom_segments_from_clicks(
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for interval in intervals {
         if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_MS
+            && interval.0 <= last.1 + merge_gap_ms
         {
             last.1 = last.1.max(interval.1);
             continue;
@@ -3840,6 +3899,18 @@ mod tests {
         assert_eq!(segments[0].amount, 2.0);
         assert_eq!(segments[1].start, 9.7);
         assert_eq!(segments[1].end, 12.5);
+    }
+
+    #[test]
+    fn custom_auto_zoom_timing_respects_hold_duration_and_merge_gap() {
+        let segments = generate_zoom_segments_from_clicks_with_timing(
+            vec![click(1_000.), click(2_500.), click(4_200.)],
+            20.0,
+            2.0,
+            AutoZoomTiming::from_seconds(1.0, 0.2),
+        );
+        let bounds: Vec<_> = segments.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(bounds, vec![(0.7, 3.5), (3.9, 5.2)]);
     }
 
     #[test]

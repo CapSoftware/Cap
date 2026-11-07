@@ -190,6 +190,14 @@ label = "Auto zoom on clicks"
 description = "Zoom level for newly created and auto-generated zoom segments."
 label = "Default zoom amount"
 
+[settings.general.recording.auto_zoom_hold]
+description = "How long auto-generated zoom segments stay zoomed in after each click."
+label = "Zoom hold after click"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "Merge consecutive click zooms separated by less than this gap. Set to 0s to never merge gaps."
+label = "Merge nearby clicks gap"
+
 [settings.general.recording.capture_keyboard]
 description = "Record key presses so you can add keyboard overlays in the editor."
 label = "Capture keyboard presses"

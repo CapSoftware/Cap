@@ -188,6 +188,14 @@ label = "クリック時に自動ズーム"
 description = "新しく作成したズームセグメントと自動生成されたズームセグメントの倍率。"
 label = "デフォルトのズーム倍率"
 
+[settings.general.recording.auto_zoom_hold]
+description = "各クリック後に自動生成されたズームセグメントが維持される時間。"
+label = "クリック後のズーム維持時間"
+
+[settings.general.recording.auto_zoom_merge_gap]
+description = "この間隔より短い連続したクリックズームを結合します。0s に設定すると間隔を結合しません。"
+label = "近接クリックの結合間隔"
+
 [settings.general.recording.capture_keyboard]
 description = "キー入力を記録し、エディタでキーボードオーバーレイを追加できるようにします。"
 label = "キー入力を記録"
