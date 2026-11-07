@@ -20,6 +20,16 @@ cargo run
 `RUST_LOG=cap_gpui=debug cargo run` for logs — note the filter is `cap_gpui`
 (the binary), not `cap_desktop_gpui` (the package).
 
+The macOS recording-window regression checks Close, Minimise, picker-hidden
+starts, reopening, repeated starts, and native window styling using transparent
+off-screen panels and an isolated settings file. It does not capture the screen
+or open microphones or cameras. After building the debug app, run:
+
+```sh
+CAP_GPUI_REAL_APP_BIN="$PWD/target/debug/cap-gpui" \
+  cargo test --bin cap-gpui recording_start_window_flow -- --ignored --nocapture
+```
+
 The first build takes about 11 minutes and 6.4 GB of `target/`: gpui pulls its
 own revisions of the wgpu and font stacks. After that, an edit rebuilds only
 the app crate, at `opt-level = 0` and incrementally, in about 22s with plain

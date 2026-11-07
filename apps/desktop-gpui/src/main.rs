@@ -83,6 +83,8 @@ mod presets;
 mod style_presets;
 mod project_save;
 mod recording;
+#[cfg(all(debug_assertions, target_os = "macos"))]
+mod recording_window_tests;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -290,6 +292,12 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    if std::env::var("CAP_GPUI_TEST_RECORDING_WINDOW_START").as_deref() == Ok("1") {
+        recording_window_tests::run();
+        return;
+    }
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.

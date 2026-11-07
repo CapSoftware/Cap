@@ -1392,6 +1392,11 @@ mod mac {
     /// [`place_overlay_panel`] operates on.
     pub struct NativeWindow(Retained<NSWindow>);
 
+    #[cfg(debug_assertions)]
+    pub fn test_native_window(window: Retained<NSWindow>) -> NativeWindow {
+        NativeWindow(window)
+    }
+
     /// The retained `NSWindow` behind a gpui window, for AppKit calls that
     /// must run *outside* any gpui update (see [`place_overlay_panel`]).
     pub fn native_window(window: &Window) -> Option<NativeWindow> {
@@ -2389,14 +2394,39 @@ mod mac {
         escape_hotkey::unregister();
     }
 
-    /// `performMiniaturize:` -- the selector muda gives the Window menu's
-    /// Minimize item. Same retained-handle discipline as [`hide_native`]:
-    /// miniaturizing re-enters gpui's own window callbacks.
+    /// Same retained-handle discipline as [`hide_native`]: miniaturizing
+    /// re-enters gpui's own window callbacks.
     pub fn minimize_native(native: &NativeWindow) {
-        use objc2::msg_send;
+        use objc2::{ffi, msg_send};
+
         unsafe {
-            let _: () =
-                msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
+            let window = (&*native.0 as *const NSWindow).cast_mut().cast();
+            let key = (&raw const STYLE_MASK_LOCK_KEY).cast();
+            let locked = Retained::retain(ffi::objc_getAssociatedObject(window, key).cast_mut());
+            if let Some(locked) = locked {
+                // The main window has no minimize button, so performMiniaturize:
+                // cannot work. Enable only the required style bit for miniaturize:
+                // and restore the locked, buttonless style before AppKit paints.
+                let mask: usize = msg_send![&*native.0, styleMask];
+                ffi::objc_setAssociatedObject(
+                    window,
+                    key,
+                    std::ptr::null_mut(),
+                    ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+                );
+                let _: () = msg_send![&*native.0, setStyleMask: mask | (1usize << 2)];
+                native.0.miniaturize(None);
+                let _: () = msg_send![&*native.0, setStyleMask: mask];
+                ffi::objc_setAssociatedObject(
+                    window,
+                    key,
+                    (&*locked as *const AnyObject).cast_mut(),
+                    ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+                );
+            } else {
+                let _: () =
+                    msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
+            }
         }
     }
 

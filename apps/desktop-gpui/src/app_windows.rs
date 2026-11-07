@@ -1048,6 +1048,56 @@ pub fn hide_main_window(cx: &mut App) {
     .detach();
 }
 
+fn put_main_window_away_for_recording(cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    {
+        if !clean_capture_active(cx)
+            && crate::store::GeneralSettings::load().main_window_recording_start_behaviour
+                == crate::store::MainWindowStartBehaviour::Minimise
+        {
+            cx.global_mut::<AppWindows>().main_hidden_by_app = true;
+            cx.global::<AppWindows>()
+                .main
+                .update(cx, |_, window, _| window.minimize_window())
+                .ok();
+            crate::menus::schedule_dock_sync(cx);
+        } else {
+            hide_main_window(cx);
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        cx.global_mut::<AppWindows>().main_hidden_by_app = true;
+        let main = cx.global::<AppWindows>().main;
+        let native = main
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |cx| {
+            if let Some(native) = &native {
+                apply_main_window_recording_start_behaviour(native);
+            }
+            cx.update(crate::menus::schedule_dock_sync);
+        })
+        .detach();
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn apply_main_window_recording_start_behaviour(native: &platform::NativeWindow) {
+    match crate::store::GeneralSettings::load().main_window_recording_start_behaviour {
+        crate::store::MainWindowStartBehaviour::Close => {
+            platform::hide_native(native);
+            tracing::info!("main window hidden");
+        }
+        crate::store::MainWindowStartBehaviour::Minimise => {
+            platform::minimize_native(native);
+            tracing::info!("main window minimised");
+        }
+    }
+}
+
 fn hide_main_and_park_camera_preview(cx: &mut App) {
     hide_main_window(cx);
     park_idle_camera_preview(cx);
@@ -4168,12 +4218,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     session.update(cx, |session, cx| {
         session.set_controls_open(bar_open, cx);
     });
-    // `general_settings.main_window_recording_start_behaviour.perform(&window)`
-    // at `recording.rs:1766-1771`, whose default (`Close`) is `window.hide()`
-    // on macOS: the main window goes away at every recording start, whatever
-    // else happened. Gating this on the bar having opened left the window in
-    // the frame on any start that never got a bar.
-    hide_main_window(cx);
+    put_main_window_away_for_recording(cx);
 
     let config = StartConfig {
         excluded_windows: excluded,
