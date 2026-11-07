@@ -22,6 +22,12 @@ fn perf_freq() -> i64 {
     })
 }
 
+#[inline]
+fn duration_to_counter_ticks(duration: Duration, frequency: i64) -> i128 {
+    let freq = i128::from(frequency);
+    (duration.as_nanos() as i128 * freq + 500_000_000) / 1_000_000_000
+}
+
 impl PerformanceCounterTimestamp {
     pub fn new(value: i64) -> Self {
         Self(i128::from(value))
@@ -32,22 +38,7 @@ impl PerformanceCounterTimestamp {
     }
 
     pub fn duration_since(&self, other: Self) -> Duration {
-        let freq = perf_freq() as i128;
-        debug_assert!(freq > 0);
-
-        let diff = self.0 - other.0;
-
-        if diff <= 0 {
-            Duration::ZERO
-        } else {
-            let diff = diff as u128;
-            let freq = freq as u128;
-
-            let secs = diff / freq;
-            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
-
-            Duration::new(secs as u64, nanos as u32)
-        }
+        self.checked_duration_since(other).unwrap_or(Duration::ZERO)
     }
 
     pub fn checked_duration_since(&self, other: Self) -> Option<Duration> {
@@ -95,8 +86,7 @@ impl Add<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i128)
+        Self(self.0 + duration_to_counter_ticks(rhs, perf_freq()))
     }
 }
 
@@ -104,8 +94,7 @@ impl Sub<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn sub(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 - (rhs.as_secs_f64() * freq as f64) as i128)
+        Self(self.0 - duration_to_counter_ticks(rhs, perf_freq()))
     }
 }
 
@@ -163,6 +152,16 @@ mod tests {
         assert_eq!(
             (screen_or_audio + Duration::from_millis(10)).duration_since(native),
             Duration::from_millis(10)
+        );
+    }
+
+    #[test]
+    fn duration_to_counter_ticks_preserves_long_recording_precision() {
+        let freq = 24_000_000i64;
+        let one_hour = Duration::from_secs(3_600);
+        assert_eq!(
+            duration_to_counter_ticks(one_hour, freq),
+            i128::from(freq) * 3_600
         );
     }
 }
