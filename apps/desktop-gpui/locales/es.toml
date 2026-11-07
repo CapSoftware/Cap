@@ -2173,6 +2173,9 @@ mode = "Modo de zoom"
 positions_mixed = "Los segmentos hacen zoom en puntos distintos. Arrastra para moverlos todos al mismo."
 title = "Zoom {number}"
 
+[editor.side_panel]
+style = "Estilo"
+
 [editor.sidebar]
 desktop_import_failed = "No se pudo importar tu fondo de escritorio"
 importing_image = "Importando imagen…"
@@ -2336,9 +2339,9 @@ text_item = "Texto"
 [editor.clips]
 append_error = "No se pudo añadir el clip: {message}"
 append_error_title = "Error de grabación"
-back = "Volver al editor"
 cap_filter = "Grabación de Cap"
 clip = "Clip {number}"
+count = { one = "{count} clip", many = "{count} de clips", other = "{count} clips" }
 empty_description = "Graba o importa un clip y aparecerá aquí."
 empty_title = "Aún no hay clips"
 import = "Importar"
@@ -2349,6 +2352,7 @@ import_mp4 = "Vídeo MP4…"
 importing = "Importando…"
 mp4_filter = "Vídeo MP4"
 prepare_controls_failed = "No se pudieron preparar los controles de grabación: {error}"
+record = "Grabar"
 record_new = "Grabar un clip nuevo"
 save_before_recording_failed = "No se pudo guardar el proyecto actual antes de grabar: {error}"
 split = "Parte {number}"
@@ -3012,8 +3016,6 @@ delete_recording = "Eliminar grabación"
 export = "Exportar"
 open_bundle = "Abrir paquete de la grabación"
 presets = "Preajustes"
-transcript = "Transcripción"
-transcript_tooltip = "Editar con la transcripción"
 
 [editor.window.image]
 changed = "Esta imagen cambió mientras elegías un reemplazo. Selecciónala e inténtalo de nuevo."
