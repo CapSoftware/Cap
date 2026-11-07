@@ -1630,9 +1630,19 @@ impl OverlayWindow {
                             .flatten()
                     })
             });
-            let image =
-                crate::overlay_backdrop::capture(native, camera.into_iter().collect(), display, cx)
-                    .await;
+            let overlay = this.clone();
+            let image = crate::overlay_backdrop::capture(
+                native,
+                camera.into_iter().collect(),
+                display,
+                move |cx| {
+                    overlay
+                        .read_with(cx, |overlay, _| overlay.recording_area)
+                        .unwrap_or(false)
+                },
+                cx,
+            )
+            .await;
             this.update(cx, |this, cx| {
                 this.backdrop_capturing = false;
                 this.backdrop_at = Some(started);
