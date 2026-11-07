@@ -1,3 +1,5 @@
+#[path = "ux_walk_window/filing.rs"]
+mod filing;
 #[path = "ux_walk_window/items.rs"]
 mod items;
 
@@ -213,6 +215,7 @@ struct WalkWindow {
     notice: Option<String>,
     error: Option<String>,
     items: items::ItemsState,
+    filing: filing::FilingState,
 }
 
 impl WalkWindow {
@@ -301,6 +304,7 @@ impl WalkWindow {
             notice: None,
             error: None,
             items,
+            filing: Default::default(),
         }
     }
 
@@ -406,6 +410,7 @@ impl WalkWindow {
                     Ok((notes, editable)) => {
                         if editable {
                             this.ensure_items(requested.clone(), window, cx);
+                            this.load_filing(requested.clone(), window, cx);
                         }
                         Some(notes)
                     }
@@ -446,6 +451,7 @@ impl WalkWindow {
                     Ok((summary, journal, notes)) => {
                         if summary.items_editable() {
                             this.ensure_items(requested.clone(), window, cx);
+                            this.ensure_filing(requested.clone(), window, cx);
                         }
                         this.saved_notes = Some(notes);
                         this.summary = Some(summary);
@@ -647,6 +653,9 @@ impl WalkWindow {
                 if this.items.shows(&selected) {
                     this.load_items(selected.clone(), window, cx);
                 }
+                if this.filing.shows(&selected) {
+                    this.load_filing(selected.clone(), window, cx);
+                }
                 this.load_saved(selected, window, cx);
                 cx.notify();
                 window.refresh();
@@ -817,6 +826,9 @@ impl Render for WalkWindow {
                 )
             })
             .when_some(items_file.clone(), |this, file| {
+                this.child(self.render_project_bar(file, cx))
+            })
+            .when_some(items_file.clone(), |this, file| {
                 this.child(self.render_tabs(file, cx))
             })
             .when(!capture_active && !show_items, |this| {
@@ -928,6 +940,7 @@ impl Render for WalkWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .children(items_file.clone().and_then(|file| self.render_glossary(file, cx)))
                     .children(events.into_iter().map(|event| {
                         div()
                             .flex()
@@ -1172,5 +1185,6 @@ impl Render for WalkWindow {
                 )
             })
             .children(self.render_item_menu(cx))
+            .children(self.render_project_menu(cx))
     }
 }

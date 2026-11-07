@@ -92,6 +92,36 @@ impl Values {
     }
 }
 
+/// A ledger link on an item: the tracker's ref, and its web address when the tracker has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemRef {
+    pub reference: String,
+    pub url: Option<String>,
+}
+
+impl ItemRef {
+    /// What the item shows: the url when there is one, else the ref text.
+    pub fn link(&self) -> Option<&str> {
+        self.url
+            .as_deref()
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+    }
+}
+
+fn refs_of(item: &Value) -> Vec<ItemRef> {
+    item["refs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| {
+            Some(ItemRef {
+                reference: text(&reference["ref"])?,
+                url: text(&reference["url"]),
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
     Brief,
@@ -105,7 +135,7 @@ struct Generated {
     id: Option<String>,
     when: Option<String>,
     origin: Origin,
-    refs: Vec<String>,
+    refs: Vec<ItemRef>,
     original: Values,
 }
 
@@ -141,6 +171,16 @@ pub fn types_for(kind: Option<&str>) -> &'static [&'static str] {
     }
 }
 
+/// The engine's DEFAULT_TYPES (file.mjs): what filing picks when nothing is chosen. A diatribe's (and a
+/// recording's notes') action items; a walk's bugs and asks.
+pub fn default_file_types(kind: Option<&str>) -> &'static [&'static str] {
+    if kind == Some("diatribe") {
+        &["action"]
+    } else {
+        &["bug", "ask"]
+    }
+}
+
 fn default_type(kind: Option<&str>) -> &'static str {
     if kind == Some("diatribe") {
         "action"
@@ -167,7 +207,14 @@ pub struct Row {
     pub edited: bool,
     pub deleted: bool,
     pub unsaved: bool,
-    pub refs: Vec<String>,
+    pub refs: Vec<ItemRef>,
+}
+
+impl Row {
+    /// Filing can create an issue for it: not deleted and not already linked.
+    pub fn fileable(&self) -> bool {
+        !self.deleted && self.refs.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -231,6 +278,8 @@ pub struct ItemsEditor {
     updated_at: Option<String>,
     saved: Edits,
     edits: Edits,
+    user_refs: BTreeMap<String, Vec<ItemRef>>,
+    file_choice: BTreeSet<String>,
 }
 
 fn text(value: &Value) -> Option<String> {
@@ -293,12 +342,7 @@ impl ItemsEditor {
                             } else {
                                 Origin::Brief
                             },
-                            refs: item["refs"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|reference| text(&reference["ref"]))
-                                .collect(),
+                            refs: refs_of(item),
                             original: if item["original"].is_object() {
                                 values_of(&item["original"])
                             } else {
@@ -334,15 +378,90 @@ impl ItemsEditor {
                 })
             })
             .collect();
+        let user_refs = value["chapters"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|chapter| chapter["items"].as_array().into_iter().flatten())
+            .filter(|item| item["origin"].as_str() == Some("user"))
+            .filter_map(|item| Some((item["key"].as_str()?.to_string(), refs_of(item))))
+            .filter(|(_, refs)| !refs.is_empty())
+            .collect();
         let edits = Edits::parse(&value["edits"]);
-        Ok(Self {
+        let mut editor = Self {
             session: value["session"].as_str().unwrap_or_default().to_string(),
             topic: text(&value["topic"]),
             chapters,
             updated_at: text(&value["edits"]["updatedAt"]),
             saved: edits.clone(),
             edits,
-        })
+            user_refs,
+            file_choice: BTreeSet::new(),
+        };
+        editor.file_choice = editor.default_file_choice();
+        Ok(editor)
+    }
+
+    fn all_rows(&self) -> Vec<Row> {
+        self.chapters
+            .iter()
+            .flat_map(|chapter| self.rows(chapter.n))
+            .collect()
+    }
+
+    /// The items filing starts with: every fileable item of the chapter's DEFAULT_TYPES.
+    fn default_file_choice(&self) -> BTreeSet<String> {
+        self.chapters
+            .iter()
+            .flat_map(|chapter| {
+                let types = default_file_types(chapter.kind.as_deref());
+                self.rows(chapter.n)
+                    .into_iter()
+                    .filter(move |row| row.fileable() && types.contains(&row.values.kind.as_str()))
+                    .map(|row| row.key)
+            })
+            .collect()
+    }
+
+    /// After a reload (a save, a filing run, a reprocess) keep what the user chose; items that are new since
+    /// get the default choice.
+    pub fn adopt_file_choice(&mut self, previous: &ItemsEditor) {
+        if previous.session != self.session {
+            return;
+        }
+        let known: BTreeSet<String> = previous.all_rows().into_iter().map(|row| row.key).collect();
+        let defaults = self.default_file_choice();
+        self.file_choice = self
+            .all_rows()
+            .into_iter()
+            .filter(|row| {
+                if known.contains(&row.key) {
+                    previous.file_choice.contains(&row.key)
+                } else {
+                    defaults.contains(&row.key)
+                }
+            })
+            .map(|row| row.key)
+            .collect();
+    }
+
+    pub fn chosen_for_file(&self, key: &str) -> bool {
+        self.file_choice.contains(key) && self.row(key).is_some_and(|row| row.fileable())
+    }
+
+    pub fn toggle_file(&mut self, key: &str) {
+        if !self.file_choice.remove(key) && self.row(key).is_some_and(|row| row.fileable()) {
+            self.file_choice.insert(key.to_string());
+        }
+    }
+
+    /// The chosen, still fileable keys in the order the items are shown.
+    pub fn file_keys(&self) -> Vec<String> {
+        self.all_rows()
+            .into_iter()
+            .filter(|row| row.fileable() && self.file_choice.contains(&row.key))
+            .map(|row| row.key)
+            .collect()
     }
 
     pub fn dirty(&self) -> bool {
@@ -415,7 +534,11 @@ impl ItemsEditor {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                     unsaved: false,
-                    refs: Vec::new(),
+                    refs: self
+                        .user_refs
+                        .get(entry.get("key")?.as_str()?)
+                        .cloned()
+                        .unwrap_or_default(),
                 })
             });
         let mut rows: Vec<Row> = generated.chain(added).collect();
@@ -775,7 +898,13 @@ mod tests {
         );
         assert_eq!(rows[0].values.title, "Edited by user");
         assert!(rows[0].edited);
-        assert_eq!(rows[0].refs, vec!["bead-1"]);
+        assert_eq!(
+            rows[0].refs,
+            vec![ItemRef {
+                reference: "bead-1".into(),
+                url: None
+            }]
+        );
         assert!(!rows[1].edited);
         assert_eq!(rows[1].origin, Origin::Agent);
         assert_eq!(rows[1].values.owner.as_deref(), Some("Jo"));
@@ -939,6 +1068,92 @@ mod tests {
         assert!(out["added"].as_array().unwrap().is_empty());
         assert_eq!(editor.orphans().len(), 1);
         assert!(editor.dirty());
+    }
+
+    fn diatribe_items() -> ItemsEditor {
+        ItemsEditor::parse(
+            &json!({
+                "version": 1, "session": "/walks/talk", "kind": "diatribe",
+                "chapters": [{
+                    "n": 1, "name": "Talk", "kind": "diatribe", "brief": true,
+                    "items": [
+                        {"id": "C1-01", "key": "c1-act", "type": "action", "title": "Ship it", "origin": "brief", "refs": []},
+                        {"id": "C1-02", "key": "c1-dec", "type": "decision", "title": "Keep it", "origin": "brief", "refs": []},
+                        {"id": "C1-03", "key": "c1-gone", "type": "action", "title": "Dropped", "origin": "brief", "refs": []},
+                        {"id": "C1-04", "key": "c1-done", "type": "action", "title": "Filed", "origin": "brief",
+                         "refs": [{"ref": "acme/app#7", "url": "https://github.com/acme/app/issues/7", "tracker": "github"}]},
+                        {"id": null, "key": "u2", "type": "action", "title": "Mine, filed", "origin": "user",
+                         "refs": [{"ref": "wk-9", "tracker": "beads"}]}
+                    ],
+                    "decisions": [], "questions": []
+                }],
+                "edits": {"version": 1, "items": {"c1-gone": {"deleted": true}},
+                          "added": [{"key": "u2", "chapter": 1, "title": "Mine, filed", "type": "action"}]}
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn filing_starts_with_the_engine_default_types_and_skips_linked_and_deleted_items() {
+        assert_eq!(default_file_types(Some("diatribe")), ["action"]);
+        assert_eq!(default_file_types(None), ["bug", "ask"]);
+        assert_eq!(default_file_types(Some("walk")), ["bug", "ask"]);
+        let walk = base();
+        assert_eq!(walk.file_keys(), ["c1-b", "u1"], "c1-a is already linked");
+        assert!(!walk.chosen_for_file("c1-a"));
+        let mut talk = diatribe_items();
+        assert_eq!(talk.file_keys(), ["c1-act"]);
+        let done = talk.row("c1-done").unwrap();
+        assert!(!done.fileable());
+        assert_eq!(
+            done.refs[0].link(),
+            Some("https://github.com/acme/app/issues/7")
+        );
+        let mine = talk.row("u2").unwrap();
+        assert_eq!(mine.refs[0].reference, "wk-9");
+        assert_eq!(mine.refs[0].link(), None);
+        assert!(!mine.fileable());
+        talk.toggle_file("c1-gone");
+        talk.toggle_file("c1-done");
+        talk.toggle_file("u2");
+        assert_eq!(
+            talk.file_keys(),
+            ["c1-act"],
+            "deleted and linked items cannot be chosen"
+        );
+        talk.toggle_file("c1-dec");
+        talk.toggle_file("c1-act");
+        assert_eq!(talk.file_keys(), ["c1-dec"]);
+        talk.set_deleted("c1-dec", true);
+        assert!(talk.file_keys().is_empty(), "deleting an item unchooses it");
+        talk.set_deleted("c1-dec", false);
+        assert_eq!(talk.file_keys(), ["c1-dec"]);
+    }
+
+    #[test]
+    fn a_reload_keeps_the_choice_and_defaults_new_items() {
+        let mut before = base();
+        before.toggle_file("c1-b");
+        let mut after = fixture(
+            json!({
+                "version": 1, "items": {"c1-a": {"title": "Edited by user"}},
+                "added": [{"key": "u1", "chapter": 1, "title": "Mine", "type": "ask"},
+                          {"key": "u3", "chapter": 2, "title": "New", "type": "bug"}]
+            }),
+            None,
+        );
+        assert_eq!(after.file_keys(), ["c1-b", "u1", "u3"]);
+        after.adopt_file_choice(&before);
+        assert_eq!(after.file_keys(), ["u1", "u3"]);
+        let mut other = diatribe_items();
+        other.adopt_file_choice(&before);
+        assert_eq!(
+            other.file_keys(),
+            ["c1-act"],
+            "another recording's choice is ignored"
+        );
     }
 
     #[test]

@@ -188,7 +188,10 @@ impl WalkWindow {
         .detach();
     }
 
-    fn replace_items(&mut self, editor: ItemsEditor, cx: &mut Context<Self>) {
+    fn replace_items(&mut self, mut editor: ItemsEditor, cx: &mut Context<Self>) {
+        if let Some(previous) = self.items.editor.as_ref() {
+            editor.adopt_file_choice(previous);
+        }
         let before = self
             .items
             .editor
@@ -563,6 +566,7 @@ impl WalkWindow {
             .when_some(self.items.notice.clone(), |this, notice| {
                 this.child(muted(notice))
             })
+            .children(self.render_file_bar(editable, cx))
             .child(
                 div()
                     .id("walk-items")
@@ -778,7 +782,6 @@ impl WalkWindow {
                 .clone()
                 .map(|value| format!("owner: {value}")),
             row.values.due.clone().map(|value| format!("due: {value}")),
-            (!row.refs.is_empty()).then(|| format!("filed: {}", row.refs.join(", "))),
         ]
         .into_iter()
         .flatten()
@@ -796,6 +799,8 @@ impl WalkWindow {
         let toggle_key = key.clone();
         let delete_key = key.clone();
         let deleted = row.deleted;
+        let refs = row.refs.clone();
+        let file_box = self.render_file_box(&key, editable && row.fileable(), cx);
         div()
             .id(SharedString::from(format!("walk-item-{key}")))
             .flex()
@@ -811,6 +816,7 @@ impl WalkWindow {
                     .flex()
                     .items_center()
                     .gap(px(6.))
+                    .child(file_box)
                     .child(
                         div()
                             .flex_shrink_0()
@@ -889,6 +895,25 @@ impl WalkWindow {
                         .text_size(px(11.))
                         .text_color(theme.gray_10)
                         .child(meta.join(" · ")),
+                )
+            })
+            .when(!refs.is_empty(), |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .text_size(px(11.))
+                        .child(div().text_color(theme.gray_10).child("Filed:"))
+                        .children(refs.into_iter().enumerate().map(|(index, reference)| {
+                            let url = reference.link().map(str::to_string);
+                            super::filing::ref_link(
+                                &theme,
+                                format!("walk-item-ref-{key}-{index}"),
+                                reference.reference,
+                                url,
+                            )
+                        })),
                 )
             })
             .when_some(
