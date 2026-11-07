@@ -556,6 +556,9 @@ export const POST = async (req: Request) => {
 						}
 						return NextResponse.json({ received: true });
 					}
+					if (isStandaloneScimSubscription(checkoutSubscription)) {
+						return NextResponse.json({ received: true });
+					}
 				}
 			}
 			if (event.type === "checkout.session.completed") {
