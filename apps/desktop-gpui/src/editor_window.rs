@@ -2015,6 +2015,11 @@ impl EditorWindow {
         crate::theme::bind_window(window, cx);
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                if let Some(crop) = this.crop.as_mut()
+                    && crop.keys.release()
+                {
+                    cx.notify();
+                }
                 let minimap_canceled = this.minimap_drag.take().is_some();
                 let lane_reorder_canceled = this.lane_reorder.is_some();
                 if lane_reorder_canceled {
@@ -2890,6 +2895,7 @@ impl EditorWindow {
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.canvas_mouse_up(window, cx);
+        self.end_timeline_gesture(window, cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -2902,6 +2908,7 @@ impl EditorWindow {
         self.end_field_edit(cx);
         self.close_color_picker(cx);
         self.canvas_mouse_up(window, cx);
+        self.end_timeline_gesture(window, cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -5226,6 +5233,29 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// Ends a held timeline gesture before undo or redo moves the history
+    /// under it. A drag that moved commits as one entry, so the undo reverts
+    /// that drag; a press that never moved and a lane reorder are dropped.
+    /// Left live, either would apply its next move by a segment index or lane
+    /// from before the undo.
+    fn end_timeline_gesture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag.is_some_and(|drag| drag.moved) {
+            self.drag_mouse_up(window, cx);
+        } else if let Some(drag) = self.drag.take() {
+            self.drag_snap_targets = snap::SnapTargets::default();
+            self.drag_snap_time = None;
+            self.clip_draft = None;
+            if matches!(drag.kind, DragKind::TransitionDuration { .. }) {
+                self.transition_drag_base = None;
+            }
+            if drag.paused {
+                let config = self.project.clone();
+                self.history.resume(&config);
+            }
+        }
+        self.cancel_lane_reorder(cx);
+    }
+
     fn cancel_lane_reorder(&mut self, cx: &mut Context<Self>) {
         let Some(reorder) = self.lane_reorder.take() else {
             return;
@@ -6299,9 +6329,12 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => {
-                        edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT)
-                    }
+                    _ => edits::insert_zoom_segment(
+                        timeline,
+                        start,
+                        end,
+                        f64::from(crate::store::GeneralSettings::load().new_zoom_amount()),
+                    ),
                 };
                 true
             },
@@ -13548,6 +13581,190 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    mod timeline_history {
+        use super::*;
+
+        struct HistoryView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for HistoryView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(EditorWindow::on_ready_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| window.focus(&editor.focus, cx));
+                HistoryView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn zoom_segments(editor: &EditorWindow) -> Vec<(f64, f64)> {
+            editor
+                .project
+                .timeline
+                .as_ref()
+                .map(|timeline| {
+                    timeline
+                        .zoom_segments
+                        .iter()
+                        .map(|segment| (segment.start, segment.end))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        /// One recorded edit that leaves two zoom segments, the second at 6..7.
+        fn two_zooms(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                    "zoomSegments": [
+                        {"start": 1.0, "end": 2.0, "amount": 1.5, "mode": "auto"},
+                        {"start": 6.0, "end": 7.0, "amount": 1.5, "mode": "auto"}
+                    ]
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+            editor.rebuild_timeline();
+        }
+
+        /// The state `begin_segment_drag` leaves for a body drag on zoom `index`.
+        fn press_zoom(editor: &mut EditorWindow, index: usize, moved: bool) {
+            let (start, end) = zoom_segments(editor)[index];
+            editor.history.pause();
+            editor.drag = Some(Drag {
+                track: TrackKind::Zoom,
+                index,
+                kind: DragKind::Move {
+                    start,
+                    end,
+                    bounds: DragBounds {
+                        min: -10.,
+                        max: 10.,
+                    },
+                },
+                down_x: 100.,
+                origin_x: moved.then_some(100.),
+                moved,
+                threshold: 2.,
+                selects_on_click: true,
+                shift: false,
+                multi: false,
+                press_time: start,
+                paused: true,
+            });
+        }
+
+        #[gpui::test]
+        fn undo_during_a_segment_drag_reverts_that_drag(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, cx| {
+                two_zooms(editor);
+                press_zoom(editor, 1, true);
+                editor.edit_live(
+                    |timeline| edits::move_segment(timeline, TrackKind::Zoom, 1, 4.0, 5.0),
+                    cx,
+                );
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.drag.is_none());
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (6.0, 7.0)]);
+                assert!(editor.history.can_redo());
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(400., true, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (6.0, 7.0)]);
+                assert!(editor.history.can_redo());
+            });
+            cx.simulate_keystrokes("ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(zoom_segments(editor), [(1.0, 2.0), (4.0, 5.0)]);
+            });
+            cx.simulate_keystrokes("ctrl-z ctrl-z");
+            editor.read_with(cx, |editor, _| assert!(zoom_segments(editor).is_empty()));
+        }
+
+        #[gpui::test]
+        fn undo_during_a_press_drops_it_and_undoes_the_last_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                two_zooms(editor);
+                press_zoom(editor, 1, false);
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.drag.is_none());
+                assert!(zoom_segments(editor).is_empty());
+                assert!(editor.history.can_redo());
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                editor.drag_mouse_move(400., true, window, cx);
+                editor.drag_mouse_up(window, cx);
+            });
+            editor.read_with(cx, |editor, _| {
+                assert!(zoom_segments(editor).is_empty());
+                assert!(editor.history.can_redo());
+                assert!(editor.selection.is_none());
+            });
+        }
+
+        #[gpui::test]
+        fn undo_during_a_lane_reorder_cancels_it(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                two_zooms(editor);
+                editor.history.pause();
+                editor.lane_reorder = Some(LaneReorder {
+                    source: TrackRow {
+                        kind: TrackKind::Text,
+                        lane: 1,
+                    },
+                    target_index: 0,
+                    down_x: 0.,
+                    down_y: 0.,
+                    pointer_x: 0.,
+                    pointer_y: 0.,
+                    dragging: true,
+                    paused: true,
+                    autoscroll_pending: false,
+                });
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.lane_reorder.is_none());
+                assert!(zoom_segments(editor).is_empty());
+            });
+            editor.update(cx, |editor, _| {
+                editor.project.background.padding = 12.;
+                editor.history.record(&editor.project);
+                assert!(!editor.history.can_redo(), "history is no longer paused");
+            });
+        }
+    }
+
     /// A 0.6.1 log: the user deleted the clip under the playhead, the
     /// timeline shrank to before it, and every preview request past the new
     /// end found no segment. The playhead goes back to the end instead.
@@ -13557,6 +13774,49 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    /// An arrow held in the crop dialog keeps nudging every frame until its
+    /// key-up. A window that loses focus mid-hold (Cmd-Tab) never gets that
+    /// key-up, so deactivation has to release the keys itself.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn deactivating_the_window_releases_a_held_crop_nudge(cx: &mut gpui::TestAppContext) {
+        use crate::editor_crop::{CropBounds, CropState};
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update_in(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.crop = Some(CropState::new(
+                (1920, 1080),
+                (401., 226.),
+                CropBounds::new(100., 50., 100., 50.),
+            ));
+            editor.crop.as_mut().unwrap().keys.keys.insert("right");
+            editor.start_crop_ticker(window, cx);
+        });
+        let start = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let held = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        assert!(held > start, "the held arrow nudges while focused");
+
+        cx.deactivate_window();
+        let released = editor.read_with(cx, |editor, _| editor.crop.as_ref().unwrap().raw.x);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            let crop = editor.crop.as_ref().unwrap();
+            assert!(crop.keys.keys.is_empty());
+            assert_eq!(
+                crop.raw.x, released,
+                "no nudges after the window lost focus"
+            );
+        });
+        drop(project);
     }
 
     #[cfg(target_os = "linux")]
@@ -14720,6 +14980,27 @@ mod tests {
                     Some(DragKind::CreateZoom { .. })
                 ));
             });
+        }
+
+        #[gpui::test]
+        fn a_new_zoom_starts_at_the_default_zoom_amount_setting(cx: &mut gpui::TestAppContext) {
+            let settings = tempfile::tempdir().unwrap();
+            let store = settings.path().join("store");
+            std::fs::write(
+                &store,
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+            )
+            .unwrap();
+            crate::store::set_test_tauri_store_path(Some(store));
+            let (editor, cx) = fixture(cx);
+            let index = editor.update_in(cx, |editor, window, cx| {
+                editor.create_gap_segment(TrackKind::Zoom, 4., 6., window, cx)
+            });
+            let amount = editor.read_with(cx, |editor, _| {
+                editor.project.timeline.as_ref().unwrap().zoom_segments[index].amount
+            });
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(amount, 2.5);
         }
 
         #[gpui::test]

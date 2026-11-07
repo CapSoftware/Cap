@@ -36,6 +36,9 @@ const mocks = vi.hoisted(() => ({
 		) => Adapter
 	>(() => ({})),
 	isCap: undefined as string | undefined,
+	disposableSignup: vi.fn<(email: string) => Promise<boolean>>(
+		async () => false,
+	),
 }));
 
 const env = vi.hoisted(() => ({
@@ -77,6 +80,10 @@ vi.mock("@cap/database/auth/sso", () => ({
 
 vi.mock("../../../../packages/database/auth/drizzle-adapter", () => ({
 	DrizzleAdapter: mocks.adapter,
+}));
+
+vi.mock("../../../../packages/database/auth/disposable-signup", () => ({
+	isDisposableEmailSignup: mocks.disposableSignup,
 }));
 
 const WORKOS_ACCOUNT: Account = {
@@ -514,6 +521,51 @@ describe("authOptions", () => {
 			id: "user-1",
 			email: "someone@blocked.example",
 		});
+	});
+
+	it("sends new accounts on disposable addresses to the login page with DisposableEmail", async () => {
+		mocks.disposableSignup.mockImplementation(
+			async (email) => email === "new@throwaway.example",
+		);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.signIn({
+				user: { id: "new@throwaway.example", email: "New@Throwaway.example" },
+				account: {
+					provider: "email",
+					providerAccountId: "new@throwaway.example",
+					type: "email",
+				},
+				email: { verificationRequest: true },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "new@throwaway.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u2", email: "person@company.example" },
+				account: { provider: "google", providerAccountId: "g2", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+		mocks.disposableSignup.mockReset();
+		mocks.disposableSignup.mockResolvedValue(false);
+	});
+
+	it("does not run the disposable check for SSO sign-ins", async () => {
+		mocks.disposableSignup.mockClear();
+		mocks.validate.mockResolvedValueOnce(IDENTITY);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE as never,
+		});
+		expect(mocks.disposableSignup).not.toHaveBeenCalled();
 	});
 
 	it("does not block anyone when CAP_BLOCKED_SIGNUP_DOMAINS is unset", async () => {
