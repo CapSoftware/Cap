@@ -68,7 +68,7 @@ Automatic walk windows require Google Chrome. The walkthrough processor requires
 
 ## Build and preview
 
-Use the existing Cap GPUI setup and packaging pipeline. Install pinned engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Worm.app` after packaging. The bundle contains Node, the pinned engine and a fork-owned native lifecycle adapter in `Contents/Resources/ux-walk`. No separate UX Walk application is required.
+Use the existing Cap GPUI setup and packaging pipeline. Install the engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs /path/to/Worm.app` after packaging. The bundle contains Node, the walk engine and a fork-owned native lifecycle adapter in `Contents/Resources/ux-walk`. No separate UX Walk application is required.
 
 The bundler also compiles `apps/desktop-gpui/ux-walk/walk-chrome-launcher.c` into the engine's `bin`. Walk Chrome starts through it so that macOS treats Chrome as responsible for itself. Otherwise macOS holds the app responsible and may say it was prevented from modifying apps. If the launcher is missing or fails, the collector logs a line to stderr and starts Chrome normally. Recording does not need App Management.
 
@@ -78,7 +78,7 @@ The bundler signs nested code inside out (each bundled framework and library, th
 
 Checkpoint work and full transcription share an OS-held ownership guard; ordinary video/report processing has a separate guard and can overlap live transcription. Guard identity uses the resolved walk directory and filesystem identity, so aliases share ownership. PID files are advisory for current guards; known-live legacy owners still block a mixed-version attempt. Crash metadata is archived, unknown files are retained, and the OS guard is released only after owned metadata cleanup. The loopback-only socket accepts no application protocol; an unrelated port collision fails closed rather than starting a second writer.
 
-The public engine snapshot contains selected source files, license, contract tests and per-file hashes in `SOURCE.json`. Refresh it with `scripts/sync-ux-walk.mjs` from a reviewed canonical revision; do not edit the snapshot directly. The lifecycle adapter is maintained under `apps/desktop-gpui/ux-walk`.
+The walk engine in `vendor/ux-walk` is Worm-owned source under AGPL-3.0-only. It began as a copy of the now-retired [UX Walk](https://github.com/CantrellJax/ux-walk) and is edited here directly; [PROVENANCE.md](vendor/ux-walk/PROVENANCE.md) records where it came from. The lifecycle adapter is maintained under `apps/desktop-gpui/ux-walk`.
 
 The **ux-walk native checks** workflow checks the desktop and CLI, runs scoped tests and packages an isolated macOS 15+ preview. Preview artifacts include the app, source revision, engine provenance, licenses and checksum. The app uses the Worm name and icon. Previews have a separate bundle identifier and per-revision temporary data, logs, recordings and UX Walk config. They claim no recording file association or URL scheme and do not copy your official Cap profile.
 

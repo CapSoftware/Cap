@@ -1,7 +1,5 @@
 node_modules/
-bin/uxw-capture
 *.mp4
 *.m4a
 .DS_Store
 test/keys
-bin/uxw-capture.new

@@ -4,7 +4,7 @@
 //   assemblyai  AssemblyAI Universal: upload, submit, poll (about $0.28 an hour)
 //   descript    a private Descript project per chapter (src/descript.mjs)
 // Keys: env (ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY, DESCRIPT_API_TOKEN), else the login Keychain item named in
-// config, stored by `ux-walk setup` or the menu bar app's Settings.
+// config, stored by `ux-walk setup` or the app's Settings.
 import fs from 'node:fs';
 import path from 'node:path';
 import * as descript from './descript.mjs';

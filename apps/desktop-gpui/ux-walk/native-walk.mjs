@@ -1317,16 +1317,6 @@ const PROJECT_COMMANDS = {
 	targets: walkTrackerTargets,
 };
 
-// Request commands that may reach a tracker CLI; see the exit at the end of the main block.
-const EXITING_COMMANDS = new Set([
-	"file",
-	"handoff-ask",
-	"glossary-suggestions",
-	"glossary-accept",
-	"glossary-reject",
-	"assign-project",
-]);
-
 function isMainModule() {
 	try {
 		return (
@@ -1456,14 +1446,5 @@ if (isMainModule()) {
 	} catch (error) {
 		console.error(error.message);
 		process.exitCode = 1;
-	}
-	// Settings and the notes window wait for these to exit. The engine's trackers spawn bd and
-	// gh with a timeout, and on Node 22 a spawn that fails (the CLI is not installed) never
-	// clears that timer, so the process would linger for the whole timeout after answering.
-	if (PROJECT_COMMANDS[command] || EXITING_COMMANDS.has(command)) {
-		const flushed = (stream) =>
-			new Promise((resolve) => stream.write("", () => resolve()));
-		await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
-		process.exit();
 	}
 }

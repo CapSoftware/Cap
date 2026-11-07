@@ -8,7 +8,6 @@ import {
 	brandEngineText,
 	minimumMacos,
 } from "./fork-brand.mjs";
-import { verifyUxWalkSource } from "./sync-ux-walk.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = path.join(root, "vendor", "ux-walk");
@@ -197,7 +196,7 @@ export async function bundleUxWalk(app) {
 			`UX Walk can only be bundled into a ${brand.display_name} app`,
 		);
 	}
-	const { revision } = await verifyUxWalkSource(source);
+	const revision = run("git", ["-C", root, "rev-parse", "HEAD"]).trim();
 	await fs.access(
 		path.join(source, "node_modules/playwright-core/package.json"),
 	);
@@ -209,12 +208,11 @@ export async function bundleUxWalk(app) {
 		"bin",
 		"prompts",
 		"assets",
-		"skills",
 		"glossary.example.txt",
 		"package.json",
 		"package-lock.json",
 		"LICENSE",
-		"SOURCE.json",
+		"PROVENANCE.md",
 	]) {
 		await fs.cp(path.join(source, item), path.join(engine, item), {
 			recursive: true,
@@ -275,7 +273,7 @@ export async function bundleUxWalk(app) {
 	buildChromeLauncher(path.join(engine, "bin", "walk-chrome-launcher"));
 	await fs.writeFile(
 		path.join(resources, "engine-source.json"),
-		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${run("git", ["-C", root, "rev-parse", "HEAD"]).trim()}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,
+		`${JSON.stringify({ repository: "https://github.com/CantrellJax/ux-walk-cap", sourceURL: `${parent.UXWalkSourceURL ?? `https://github.com/CantrellJax/ux-walk-cap/tree/${revision}`}/vendor/ux-walk`, revision, node: nodeVersion }, null, 2)}\n`,
 	);
 	await brandBuiltApp(contents, parent);
 	await signApp(app, process.env.CAP_UX_SIGNING_IDENTITY || "-");

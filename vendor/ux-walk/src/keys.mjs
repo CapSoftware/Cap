@@ -1,5 +1,5 @@
 // API keys for plugins (transcribers, issue trackers): the environment variable first, else the login Keychain
-// item named in config (stored by `ux-walk setup` or the menu bar app's Settings). A provider here is any object
+// item named in config (stored by `ux-walk setup` or the app's Settings). A provider here is any object
 // with { name, env, keychainItem(cfg) }.
 import { execFileSync } from 'node:child_process';
 
@@ -12,7 +12,7 @@ export function keyFor(provider, cfg, { setup = 'ux-walk setup' } = {}) {
     const v = execFileSync('security', ['find-generic-password', '-a', user(), '-s', item, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     if (v) return v;
   } catch {}
-  throw new Error(`no ${provider.name} key: run "${setup}" or the menu bar app's Settings (Keychain item "${item}")${provider.env ? `, or set ${provider.env}` : ''}`);
+  throw new Error(`no ${provider.name} key: run "${setup}" or the app's Settings (Keychain item "${item}")${provider.env ? `, or set ${provider.env}` : ''}`);
 }
 
 // Presence only: without -w, security does not return the secret.

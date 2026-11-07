@@ -13,7 +13,7 @@
   <a href="https://github.com/CapSoftware/Cap">Built on Cap</a>
 </p>
 
-Worm combines [Cap](https://github.com/CapSoftware/Cap)'s screen recorder and editor with [UX Walk](vendor/ux-walk)'s chapters, notes, transcripts and agent-ready evidence. It is an independent open-source fork for product walkthroughs, bug reports and design reviews.
+Worm combines [Cap](https://github.com/CapSoftware/Cap)'s screen recorder and editor with its own [walk engine](vendor/ux-walk) (formerly UX Walk) for chapters, notes, transcripts and agent-ready evidence. It is an independent open-source fork for product walkthroughs, bug reports and design reviews.
 
 **Worm was previously named Cap UX.** It installs over that app and keeps your recordings and settings: the bundle identifier `com.cantrell.cap-ux`, app data directory and library, Keychain items, `~/.config/ux-walk`, `~/.config/cap-ux`, the sharing server and every existing link are unchanged. Only the file name changes, so quit the app, move Worm.app to Applications and delete the old app. Sign with the same identity to keep macOS permissions. The `cap` command keeps working beside `zworm`. Run `zworm agents install` to add the `zworm` skill; a skill installed under the old name keeps working.
 
@@ -41,7 +41,7 @@ git clone https://github.com/CantrellJax/ux-walk-cap.git
 cd ux-walk-cap
 ```
 
-Use Xcode 26 or newer with the Cap setup in [UPSTREAM-DEVELOPMENT.md](UPSTREAM-DEVELOPMENT.md) and `bun run gpui:build <target>`, install the engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs "apps/desktop-gpui/target/<target>/release/bundle/macos/Worm.app"` after packaging with a self-contained Node 22, such as the nodejs.org build. A `--debug` build lands in `apps/desktop-gpui/target/debug/bundle/macos` instead. The bundler refuses a Homebrew Node. It signs the bundled frameworks and Node, then the app with its entitlements, and verifies the seal last, so an unsigned packaging run needs no separate `codesign` step. Rerun it after changing anything inside the app, or macOS reports the app as damaged. The engine comes from the pinned source snapshot; a separate UX Walk installation is unnecessary.
+Use Xcode 26 or newer with the Cap setup in [UPSTREAM-DEVELOPMENT.md](UPSTREAM-DEVELOPMENT.md) and `bun run gpui:build <target>`, install the engine dependencies with `npm ci --ignore-scripts --prefix vendor/ux-walk`, then run `node scripts/bundle-ux-walk.mjs "apps/desktop-gpui/target/<target>/release/bundle/macos/Worm.app"` after packaging with a self-contained Node 22, such as the nodejs.org build. A `--debug` build lands in `apps/desktop-gpui/target/debug/bundle/macos` instead. The bundler refuses a Homebrew Node. It signs the bundled frameworks and Node, then the app with its entitlements, and verifies the seal last, so an unsigned packaging run needs no separate `codesign` step. Rerun it after changing anything inside the app, or macOS reports the app as damaged. The walk engine is part of this repository; a separate UX Walk installation is unnecessary.
 
 ## Contribute
 
