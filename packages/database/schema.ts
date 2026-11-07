@@ -297,6 +297,49 @@ export const organizationSso = mysqlTable(
 	}),
 );
 
+export const organizationDirectorySync = mysqlTable(
+	"organization_directory_sync",
+	{
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.primaryKey()
+			.$type<Organisation.OrganisationId>(),
+		requestedAt: datetime("requestedAt"),
+		syncedAt: datetime("syncedAt"),
+		leaseExpiresAt: datetime("leaseExpiresAt"),
+		lastError: varchar("lastError", { length: 255 }),
+		heldRemovals: int("heldRemovals").notNull().default(0),
+		removalsApprovedAt: datetime("removalsApprovedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+);
+
+export const directoryUsers = mysqlTable(
+	"directory_users",
+	{
+		id: varchar("id", { length: 64 }).notNull().primaryKey(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		directoryId: varchar("directoryId", { length: 64 }).notNull(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		email: varchar("email", { length: 255 }).notNull(),
+		active: boolean("active").notNull().default(true),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		organizationIdIndex: index("directory_users_organization_id_idx").on(
+			table.organizationId,
+		),
+		userIdOrganizationIdIndex: index("directory_users_user_org_idx").on(
+			table.userId,
+			table.organizationId,
+		),
+	}),
+);
+
 export type OrganisationMemberRole = "owner" | "admin" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",

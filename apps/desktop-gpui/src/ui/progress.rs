@@ -2,12 +2,6 @@
 //! `packages/ui-solid/src/ProgressCircle.tsx` (the "correct" one nothing uses),
 //! `ExportPage.tsx`'s local `ProgressRing` (which adds an indeterminate mode)
 //! and `ImportProgress.tsx`'s third inline SVG.
-//!
-//! gpui has no arc primitive and no `stroke-dashoffset`, so the ring is drawn
-//! as a track circle with the progressed arc composed from quadrant wedges:
-//! a rounded, clipped `div` per quadrant, each revealed up to its own share of
-//! the total. That is enough for a determinate ring at these sizes; the
-//! indeterminate mode spins one fixed 25 % wedge, which is what the SVG does.
 
 use gpui::{
     App, Hsla, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window, div,
@@ -83,11 +77,7 @@ impl RenderOnce for CircularProgress {
             text_size,
         } = self;
 
-        // The four quadrants, clockwise from twelve o'clock. Each is a
-        // quarter-square clipping a full-size ring, so the visible arc is the
-        // quadrant's own quarter of the circle.
         let fraction = progress.unwrap_or(0.25);
-        let half = px(f32::from(size) / 2.);
 
         div()
             .relative()
@@ -105,39 +95,47 @@ impl RenderOnce for CircularProgress {
                     .border(stroke)
                     .border_color(track),
             )
-            .children((0..4).map(|quadrant| {
-                let share = ((fraction * 4.) - quadrant as f32).clamp(0., 1.);
-                let (top, left) = match quadrant {
-                    0 => (px(0.), half),
-                    1 => (half, half),
-                    2 => (half, px(0.)),
-                    _ => (px(0.), px(0.)),
-                };
-                div()
-                    .absolute()
-                    .top(top)
-                    .left(left)
-                    .w(half)
-                    .h(half)
-                    .overflow_hidden()
-                    .when(share > 0., |this| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .top(px(-f32::from(top)))
-                                .left(px(-f32::from(left)))
-                                .size(size)
-                                .rounded_full()
-                                .border(stroke)
-                                .border_color(fill)
-                                // A partially-filled quadrant fades rather than
-                                // sweeping: gpui has no arc, and a wedge that
-                                // pops in whole reads worse than one that
-                                // arrives.
-                                .opacity(share),
-                        )
-                    })
-            }))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        if fraction <= 0. {
+                            return None;
+                        }
+                        let center = bounds.center();
+                        let radius = (f32::from(size) - f32::from(stroke)) / 2.;
+                        let at = |angle: f32| {
+                            gpui::point(
+                                center.x + px(radius * angle.sin()),
+                                center.y - px(radius * angle.cos()),
+                            )
+                        };
+                        let mut path = gpui::PathBuilder::stroke(stroke);
+                        path.move_to(at(0.));
+                        let segments = (fraction * 2.).ceil() as u32;
+                        for segment in 1..=segments {
+                            path.arc_to(
+                                gpui::point(px(radius), px(radius)),
+                                px(0.),
+                                false,
+                                true,
+                                at(fraction * std::f32::consts::TAU * segment as f32
+                                    / segments as f32),
+                            );
+                        }
+                        if fraction == 1. {
+                            path.close();
+                        }
+                        path.build().ok()
+                    },
+                    move |_, path, window, _| {
+                        if let Some(path) = path {
+                            window.paint_path(path, fill);
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .when_some(percentage_label, |this, label| {
                 this.child(
                     div()
@@ -170,20 +168,8 @@ mod tests {
             assert_eq!(ring.percentage_label().as_deref(), Some(expected));
         }
     }
-
-    #[test]
-    fn quadrant_shares_split_the_fraction_evenly() {
-        let share =
-            |fraction: f32, quadrant: usize| ((fraction * 4.) - quadrant as f32).clamp(0., 1.);
-        // Half way round: the first two quadrants are full, the last two empty.
-        assert_eq!(share(0.5, 0), 1.);
-        assert_eq!(share(0.5, 1), 1.);
-        assert_eq!(share(0.5, 2), 0.);
-        assert_eq!(share(0.5, 3), 0.);
-        // An eighth: the first quadrant is half filled.
-        assert_eq!(share(0.125, 0), 0.5);
-        assert_eq!(share(0.125, 1), 0.);
-        // Complete.
-        assert!((0..4).all(|quadrant| share(1., quadrant) == 1.));
-    }
 }
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod render_tests;
