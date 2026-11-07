@@ -39,6 +39,12 @@ export async function setVideoPassword(
 			throw new Error("Unauthorized");
 		}
 
+		// A blank password would silently replace a working one with an empty
+		// password; removing a password has its own action.
+		if (!password.trim()) {
+			return { success: false, error: "Enter a password" };
+		}
+
 		const hashed = await hashPassword(password);
 		await db()
 			.update(videos)
