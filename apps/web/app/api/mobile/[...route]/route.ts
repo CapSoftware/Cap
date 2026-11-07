@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { authOptions } from "@cap/database/auth/auth-options";
-import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
+import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
+import {
+	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
+	normalizeEmailAddress,
+} from "@cap/database/auth/domain-utils";
 import {
 	decrypt,
 	encrypt,
@@ -58,19 +63,19 @@ import {
 } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAccountDeletionRequest,
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { isCommentRateLimited } from "@/lib/comment-rate-limit";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -83,8 +88,16 @@ import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	restoreVideoToOriginalAsUser,
+	saveVideoEditsAsUser,
+	VideoEditError,
+} from "@/lib/video-edit-save";
+import {
+	areEditSpecsEquivalent,
+	createIdentityEditSpec,
+} from "@/lib/video-edits";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 export const dynamic = "force-dynamic";
 
@@ -150,8 +163,6 @@ const domainPattern =
 	/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 const toIsoString = (value: Date) => value.toISOString();
-
-const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 const getMobileEmailVerificationIdentifier = (email: string) =>
 	`mobile:${crypto.createHash("sha256").update(email).digest("hex")}`;
@@ -356,6 +367,13 @@ const getUploadTitle = (fileName: string) => {
 	return title.length > 0 ? title : "Mobile Upload";
 };
 
+// Web image imports leave a progress row behind, and the web never treats a
+// screenshot as uploading, so the app shouldn't either.
+const activeUploadJoin = and(
+	eq(Db.videos.id, Db.videoUploads.videoId),
+	eq(Db.videos.isScreenshot, false),
+);
+
 const toMobileCapSummary = (
 	row: CapRow,
 	viewCount: number,
@@ -399,7 +417,7 @@ const toMobileCapSummary = (
 						phase: row.uploadPhase ?? "uploading",
 						processingProgress: Number(row.processingProgress ?? 0),
 						processingMessage: row.processingMessage,
-						processingError: row.processingError,
+						processingError: row.processingError ? "Processing failed" : null,
 					}
 				: null,
 		ownedByCurrentUser: row.ownerId === currentUserId,
@@ -449,6 +467,12 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 			return yield* Effect.fail(new HttpApiError.BadRequest());
 		}
 
+		if (
+			isEmailBlockedFromSignup(email, serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS)
+		) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+
 		const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 		if (!allowedDomains) return;
 
@@ -462,6 +486,19 @@ const ensureEmailSignInAllowed = Effect.fn("Mobile.ensureEmailSignInAllowed")(
 		);
 
 		if (!existingUser && !isEmailAllowedForSignup(email, allowedDomains)) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+	},
+);
+
+// Runs after the per-email rate limit because it can make a DNS lookup.
+const ensureNotDisposableSignup = Effect.fn("Mobile.ensureNotDisposableSignup")(
+	function* (email: string) {
+		const disposable = yield* Effect.tryPromise({
+			try: () => isDisposableEmailSignup(email),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		if (disposable) {
 			return yield* Effect.fail(new HttpApiError.Forbidden());
 		}
 	},
@@ -514,13 +551,14 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmail(rawEmail);
+	const email = normalizeEmailAddress(rawEmail);
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
 	if (yield* Effect.promise(() => isEmailCodeSendLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const code = crypto.randomInt(100000, 1000000).toString();
 	const token = hashEmailCode(code);
@@ -565,7 +603,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmail(rawEmail);
+	const email = normalizeEmailAddress(rawEmail);
 	const code = rawCode.trim();
 
 	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
@@ -578,6 +616,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	if (yield* Effect.promise(() => isEmailCodeVerifyLimited(email, headers))) {
 		return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	}
+	yield* ensureNotDisposableSignup(email);
 
 	const database = yield* Database;
 	const token = hashEmailCode(code);
@@ -647,6 +686,15 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 				await tx
 					.delete(Db.authApiKeys)
 					.where(eq(Db.authApiKeys.userId, user.id));
+				await tx
+					.update(Db.agentApiKeys)
+					.set({ revokedAt: new Date() })
+					.where(
+						and(
+							eq(Db.agentApiKeys.userId, user.id),
+							isNull(Db.agentApiKeys.revokedAt),
+						),
+					);
 			}),
 		);
 
@@ -1633,7 +1681,7 @@ const getCapRows = Effect.fn("Mobile.getCapRows")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(
 				inArray(
 					Db.videos.id,
@@ -1765,7 +1813,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 				processingError: Db.videoUploads.processingError,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(and(eq(Db.videos.ownerId, user.id), inArray(Db.videos.id, ids))),
 	);
 
@@ -1780,7 +1828,7 @@ const getCapStatuses = Effect.fn("Mobile.getCapStatuses")(function* (
 							phase: row.phase ?? "uploading",
 							processingProgress: Number(row.processingProgress ?? 0),
 							processingMessage: row.processingMessage,
-							processingError: row.processingError,
+							processingError: row.processingError ? "Processing failed" : null,
 						}
 					: null,
 		})),
@@ -2103,6 +2151,123 @@ const assertMobileVideoOwner = Effect.fn("Mobile.assertVideoOwner")(function* (
 	}
 });
 
+const MOBILE_EDIT_BUSY_UPLOAD_PHASES = new Set([
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"complete",
+	"error",
+]);
+
+// Ownership is checked before viewing rules, so another person's private or password-protected video is a 404.
+const assertMobileVideoEditor = Effect.fn("Mobile.assertVideoEditor")(
+	function* (videoId: Video.VideoId) {
+		const user = yield* CurrentUser;
+		const database = yield* Database;
+		const [owned] = yield* database.use((db) =>
+			db
+				.select({ ownerId: Db.videos.ownerId })
+				.from(Db.videos)
+				.where(eq(Db.videos.id, videoId))
+				.limit(1),
+		);
+		if (!owned || owned.ownerId !== user.id) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		yield* assertMobileVideoOwner(videoId);
+	},
+);
+
+const getCapEdit = Effect.fn("Mobile.getCapEdit")(function* (
+	videoId: Video.VideoId,
+) {
+	yield* assertMobileVideoEditor(videoId);
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({
+				duration: Db.videos.duration,
+				source: Db.videos.source,
+				isScreenshot: Db.videos.isScreenshot,
+				metadata: Db.videos.metadata,
+				uploadPhase: Db.videoUploads.phase,
+			})
+			.from(Db.videos)
+			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	const [edit] = yield* database.use((db) =>
+		db
+			.select({ editSpec: Db.videoEdits.editSpec })
+			.from(Db.videoEdits)
+			.where(eq(Db.videoEdits.videoId, videoId))
+			.limit(1),
+	);
+
+	const duration = row.duration ?? 0;
+	const editable =
+		!row.isScreenshot &&
+		(row.source.type === "desktopMP4" || row.source.type === "webMP4") &&
+		duration > 0;
+	const isPro = yield* currentUserIsPro();
+	const busy =
+		Boolean(row.metadata?.editProcessing) ||
+		(row.uploadPhase !== null &&
+			MOBILE_EDIT_BUSY_UPLOAD_PHASES.has(row.uploadPhase));
+	const status = !editable
+		? ("not_editable" as const)
+		: !isPro
+			? ("pro_required" as const)
+			: busy
+				? ("busy" as const)
+				: ("available" as const);
+	const hasEdits = edit
+		? !areEditSpecsEquivalent(
+				edit.editSpec,
+				createIdentityEditSpec(edit.editSpec.sourceDuration),
+			)
+		: false;
+	return { status, duration, hasEdits };
+});
+
+const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
+	videoId: Video.VideoId,
+	run: (user: typeof Db.users.$inferSelect) => Promise<unknown>,
+) {
+	yield* assertMobileVideoEditor(videoId);
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [userRow] = yield* database.use((db) =>
+		db.select().from(Db.users).where(eq(Db.users.id, user.id)).limit(1),
+	);
+	if (!userRow) return yield* Effect.fail(new HttpApiError.Forbidden());
+	yield* Effect.tryPromise({
+		try: () => run(userRow),
+		catch: (error) => {
+			if (!(error instanceof VideoEditError)) {
+				return new HttpApiError.InternalServerError();
+			}
+			switch (error.code) {
+				case "rate_limited":
+					return new Mobile.MobileTooManyRequests();
+				case "not_found":
+					return new HttpApiError.NotFound();
+				case "busy":
+					return new HttpApiError.Conflict();
+				case "invalid":
+				case "not_editable":
+				case "unavailable":
+					return new HttpApiError.BadRequest();
+				default:
+					return new HttpApiError.Forbidden();
+			}
+		},
+	});
+	return { success: true as const };
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -2141,7 +2306,7 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 			.from(Db.videos)
 			.leftJoin(Db.comments, eq(Db.videos.id, Db.comments.videoId))
 			.leftJoin(Db.users, eq(Db.videos.ownerId, Db.users.id))
-			.leftJoin(Db.videoUploads, eq(Db.videos.id, Db.videoUploads.videoId))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.groupBy(
 				Db.videos.id,
@@ -2479,6 +2644,9 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 	type: "text" | "emoji";
 }) {
 	const user = yield* CurrentUser;
+	if (yield* Effect.promise(() => isCommentRateLimited(user.id))) {
+		return yield* Effect.fail(new HttpApiError.BadRequest());
+	}
 	let parentCommentId = requestedParentCommentId;
 	yield* assertCanCreateFeedback(videoId);
 	const { settings } = yield* getMobileVideoRules(videoId);
@@ -2572,7 +2740,7 @@ const readHeader = (
 	}
 };
 
-/** Mirrors /api/analytics/track for signed-in viewers watching in the app. */
+/** Mirrors the share page's view tracking for signed-in viewers watching in the app. */
 const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 	videoId: Video.VideoId,
 	sessionId: string,
@@ -2597,7 +2765,7 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 				activeUploadVideoId: Db.videoUploads.videoId,
 			})
 			.from(Db.videos)
-			.leftJoin(Db.videoUploads, eq(Db.videoUploads.videoId, Db.videos.id))
+			.leftJoin(Db.videoUploads, activeUploadJoin)
 			.where(eq(Db.videos.id, videoId))
 			.limit(1),
 	);
@@ -2631,6 +2799,12 @@ const trackMobileCapView = Effect.fn("Mobile.trackCapView")(function* (
 			},
 		])
 		.pipe(Effect.catchAll(() => Effect.void));
+
+	yield* Effect.forkDaemon(
+		Effect.tryPromise(() =>
+			createNotification({ type: "view", videoId, authorId: user.id }),
+		).pipe(Effect.catchAll(() => Effect.void)),
+	);
 
 	if (
 		video.createdAt >= MOBILE_FIRST_VIEW_EMAIL_CUTOFF &&
@@ -2885,110 +3059,25 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	);
 	if (limited) return yield* Effect.fail(new HttpApiError.BadRequest());
 
-	const download = yield* Effect.tryPromise({
-		try: () => downloadLoomVideo(loomUrl),
-		catch: () => new HttpApiError.InternalServerError(),
-	});
-	if (!download.success || !download.videoId || !download.downloadUrl) {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-	const loomVideoId = download.videoId;
-
-	const storage = yield* Storage;
-	const writable = yield* storage.getWritableAccessForUser(
-		user.id,
-		user.activeOrganizationId,
-	);
-	const videoId = Video.VideoId.make(nanoId());
-	const now = new Date();
-	const importState = yield* database.use((db) =>
-		db.transaction(async (tx) => {
-			const [existing] = await tx
-				.select({
-					importId: Db.importedVideos.id,
-					videoId: Db.videos.id,
-				})
-				.from(Db.importedVideos)
-				.leftJoin(
-					Db.videos,
-					and(
-						eq(Db.videos.id, Db.importedVideos.id),
-						eq(Db.videos.orgId, Db.importedVideos.orgId),
-					),
-				)
-				.where(
-					and(
-						eq(Db.importedVideos.orgId, user.activeOrganizationId),
-						eq(Db.importedVideos.source, "loom"),
-						eq(Db.importedVideos.sourceId, loomVideoId),
-					),
-				)
-				.limit(1);
-			if (existing?.videoId) return "conflict" as const;
-			if (existing) {
-				await tx
-					.delete(Db.importedVideos)
-					.where(
-						and(
-							eq(Db.importedVideos.orgId, user.activeOrganizationId),
-							eq(Db.importedVideos.source, "loom"),
-							eq(Db.importedVideos.sourceId, loomVideoId),
-						),
-					);
-			}
-
-			await tx.insert(Db.videos).values({
-				id: videoId,
-				name:
-					download.videoName?.slice(0, 255) ??
-					`Loom Import - ${now.toISOString().slice(0, 10)}`,
-				ownerId: user.id,
-				orgId: user.activeOrganizationId,
-				source: { type: "webMP4" },
-				bucket: Option.getOrNull(writable.bucketId),
-				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: await getNewVideoPublic(user.activeOrganizationId),
-				duration: download.durationSeconds,
-				width: download.width,
-				height: download.height,
-			});
-			await tx.insert(Db.videoUploads).values({
-				videoId,
-				phase: "uploading",
-				processingProgress: 0,
-				processingMessage: "Importing from Loom...",
-			});
-			await tx.insert(Db.importedVideos).values({
-				id: videoId,
-				orgId: user.activeOrganizationId,
-				source: "loom",
-				sourceId: loomVideoId,
-			});
-			return "ready" as const;
-		}),
-	);
-	if (importState === "conflict") {
-		return yield* Effect.fail(new HttpApiError.BadRequest());
-	}
-
-	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
-	yield* Effect.tryPromise({
+	const result = yield* Effect.tryPromise({
 		try: () =>
-			start(importLoomVideoWorkflow, [
-				{
-					videoId,
-					userId: user.id,
-					rawFileKey,
-					bucketId: Option.getOrNull(writable.bucketId),
-					loomVideoId,
-				},
-			]),
+			importLoomVideoForOwner({
+				loomUrl,
+				orgId: user.activeOrganizationId,
+				ownerId: user.id,
+			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
-	yield* Effect.sync(() => revalidatePath("/dashboard/caps"));
+	if (!result.success || !result.videoId) {
+		return yield* Effect.fail(
+			result.errorCode
+				? new HttpApiError.InternalServerError()
+				: new HttpApiError.BadRequest(),
+		);
+	}
 	return {
-		id: videoId,
-		shareUrl: `${getMobilePublicOrigin(request)}/s/${videoId}`,
+		id: result.videoId,
+		shareUrl: `${getMobilePublicOrigin(request)}/s/${result.videoId}`,
 	};
 });
 
@@ -3314,7 +3403,10 @@ const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
 	);
 	if (
 		!Mobile.isMobileRecordingDurationAllowed({
-			durationSeconds: input.durationSeconds,
+			durationSeconds: Mobile.mobileRecordingGateDurationSeconds({
+				durationSeconds: input.durationSeconds,
+				videoSegments,
+			}),
 			isPro: userIsPro(userRow),
 		})
 	) {
@@ -3637,6 +3729,32 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								.pipe(Effect.map(() => ({ success: true as const }))),
 						),
 					)
+					.handle("getCapEdit", ({ path, request }) =>
+						withMappedErrors(getCapEdit(path.id)).pipe(
+							withMobileVideoAccess(request, path.id),
+						),
+					)
+					.handle("saveCapEdit", ({ path, payload }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								saveVideoEditsAsUser(user, path.id, {
+									version: 1,
+									sourceDuration: payload.sourceDuration,
+									keepRanges: payload.keepRanges.map((range) => ({
+										start: range.start,
+										end: range.end,
+									})),
+								}),
+							),
+						),
+					)
+					.handle("restoreCapEdit", ({ path }) =>
+						withMappedErrors(
+							runMobileVideoEdit(path.id, (user) =>
+								restoreVideoToOriginalAsUser(user, path.id),
+							),
+						),
+					)
 					.handle("getPlayback", ({ path, request }) =>
 						withMappedErrors(
 							getPlayback(path.id, getMobilePublicOrigin(request)),
@@ -3778,7 +3896,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 												.where(
 													and(
 														eq(Db.notifications.type, "reply"),
-														sql`JSON_EXTRACT(${Db.notifications.data}, '$.comment.parentCommentId') = ${path.id}`,
+														sql`JSON_EXTRACT(${Db.notifications.data}, '$.parentCommentId') = ${path.id}`,
 													),
 												);
 										}

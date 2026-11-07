@@ -63,6 +63,10 @@ import { seekLength } from "../early-length";
 import { Badge } from "./badge";
 import { Button as PlayerButton } from "./button";
 import {
+	createHandledKeyTracker,
+	hasBrowserShortcutModifier,
+} from "./shortcut-modifiers";
+import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
@@ -398,6 +402,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 
 	const hideControlsTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 	const volumeIndicatorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+	const [handledKeys] = React.useState(createHandledKeyTracker);
 
 	const mediaPaused = useMediaSelector(selectPaused);
 	const isFullscreen = useMediaSelector(selectFullscreen);
@@ -518,10 +523,14 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				document.activeElement?.closest('[data-slot="media-player"]') !== null;
 
 			if (!isMediaFocused && !isPlayerFocused) return;
+			if (hasBrowserShortcutModifier(event)) return;
 
 			if (autoHide) onControlsShow();
 
-			switch (event.key.toLowerCase()) {
+			const key = event.key.toLowerCase();
+			handledKeys.down(key);
+
+			switch (key) {
 				case " ":
 				case "k":
 					event.preventDefault();
@@ -757,6 +766,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			isVideo,
 			onControlsShow,
 			autoHide,
+			handledKeys,
 		],
 	);
 
@@ -765,11 +775,12 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 			rootImplProps.onKeyUp?.(event);
 
 			const key = event.key.toLowerCase();
+			if (!handledKeys.up(key)) return;
 			if (key === "arrowup" || key === "arrowdown" || key === "m") {
 				onVolumeIndicatorTrigger();
 			}
 		},
-		[rootImplProps.onKeyUp, onVolumeIndicatorTrigger],
+		[rootImplProps.onKeyUp, onVolumeIndicatorTrigger, handledKeys],
 	);
 
 	React.useEffect(() => {

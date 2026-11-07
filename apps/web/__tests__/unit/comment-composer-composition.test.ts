@@ -108,7 +108,7 @@ function TimelineHarness() {
 		null,
 		createElement(
 			"button",
-			{ onClick: () => actions.openComposer(12) },
+			{ type: "button", onClick: () => actions.openComposer(12) },
 			"Open composer",
 		),
 		createElement(TimelineComposer, {
@@ -127,14 +127,13 @@ async function renderComposer(
 	const submit = vi.fn();
 	await act(async () => {
 		if (kind === "timeline") {
-			root.render(
-				createElement(TimelineProvider, {
-					duration: 60,
-					compact: false,
-					hasHover: true,
-					children: createElement(TimelineHarness),
-				}),
-			);
+			const props = {
+				duration: 60,
+				compact: false,
+				hasHover: true,
+				children: createElement(TimelineHarness),
+			};
+			root.render(createElement(TimelineProvider, props));
 			return;
 		}
 		if (kind === "toolbar") {
@@ -264,3 +263,46 @@ it("leaves Shift+Enter available for multiline replies", async () => {
 	expect(submit).not.toHaveBeenCalled();
 	expect(input.value).toBe("First line");
 });
+
+it.each(["success", "failure"])(
+	"keeps a new toolbar draft when an earlier reaction finishes with %s",
+	async (outcome) => {
+		const respond = vi.mocked(newComment).getMockImplementation();
+		if (!respond) throw new Error("Missing comment response");
+		const reactionSave = Promise.withResolvers<void>();
+		vi.mocked(newComment).mockImplementationOnce(async (data) => {
+			await reactionSave.promise;
+			return respond(data);
+		});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const success = vi.fn();
+		await act(async () => {
+			root.render(
+				createElement(Toolbar, { data: video, onCommentSuccess: success }),
+			);
+		});
+		const reaction = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="up"]',
+		);
+		if (!reaction) throw new Error("Missing reaction button");
+		await act(async () => reaction.click());
+		expect(newComment).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ content: "👍", type: "emoji" }),
+		);
+		const open = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent?.includes("Comment"),
+		);
+		if (!open) throw new Error("Missing comment button");
+		await act(async () => open.click());
+		const input = container.querySelector("input");
+		if (!input) throw new Error("Missing comment field");
+		await change(input, "A new draft after reacting");
+		await act(async () => {
+			if (outcome === "success") reactionSave.resolve();
+			else reactionSave.reject(new Error("Offline"));
+		});
+		expect(input.value).toBe("A new draft after reacting");
+		expect(container.querySelector("input")).toBe(input);
+		expect(success).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
+	},
+);

@@ -188,13 +188,7 @@ export const screenRecordingContent: SeoPageContent = {
 		},
 	],
 
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title:
-				"Cap screen recording demo showing HD capture, webcam overlay, and instant sharing",
-		},
-	},
+	video: {},
 
 	cta: {
 		title: "Start Screen Recording for Free with Cap",

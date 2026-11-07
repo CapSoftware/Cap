@@ -1,6 +1,7 @@
 import { buildEnv } from "@cap/env";
 import "@cap/ui/style";
 import type { PropsWithChildren } from "react";
+import { DubAnalytics } from "@/components/referrals/DubAnalytics";
 import { formatStarCount, getGitHubStars } from "@/utils/github";
 import { DeferredMessengerWidget } from "../Layout/DeferredMessengerWidget";
 import { Footer } from "./Footer";
@@ -16,6 +17,7 @@ export default async function Layout(props: PropsWithChildren) {
 			{props.children}
 			<Footer />
 			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <DeferredMessengerWidget />}
+			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <DubAnalytics />}
 		</>
 	);
 }

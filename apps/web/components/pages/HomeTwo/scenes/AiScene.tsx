@@ -425,7 +425,7 @@ const SharePage = ({
 						>
 							<div>
 								<div className="flex items-center gap-1.5">
-									<p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[rgba(17,17,17,0.5)]">
+									<p className="text-[12.5px] font-semibold text-[rgba(17,17,17,0.5)]">
 										Summary
 									</p>
 									<span className="flex items-center gap-1 rounded-full bg-[#EFE7FD] px-1.5 py-[2px] text-[9.5px] font-medium text-[#7B5FD0]">
@@ -438,7 +438,7 @@ const SharePage = ({
 								</p>
 							</div>
 							<div>
-								<p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[rgba(17,17,17,0.5)]">
+								<p className="text-[12.5px] font-semibold text-[rgba(17,17,17,0.5)]">
 									Chapters
 								</p>
 								<div className="mt-1.5 flex flex-col gap-0.5">
