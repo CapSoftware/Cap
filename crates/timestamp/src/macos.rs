@@ -143,7 +143,10 @@ mod tests {
         let denom = 3u128;
         let target_ns: u128 = 3_600_000_123_456;
         let step_ticks = nanos_to_ticks_with_ratio(target_ns, numer, denom);
-        let high_uptime = MachAbsoluteTimestamp::new(1u64 << 52);
+        let high_uptime = MachAbsoluteTimestamp::new((1u64 << 53) + 1);
+        assert_eq!(high_uptime + Duration::ZERO, high_uptime);
+        assert_eq!(high_uptime - Duration::ZERO, high_uptime);
+
         let later = MachAbsoluteTimestamp::new(high_uptime.0 + step_ticks);
         let elapsed_ns = ticks_to_nanos_with_ratio(later.0 - high_uptime.0, numer, denom);
         assert!((elapsed_ns as i128 - target_ns as i128).abs() <= 42);

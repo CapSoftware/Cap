@@ -165,5 +165,12 @@ mod tests {
             duration_to_counter_ticks(non_power_of_two, freq),
             expected as i128
         );
+
+        let high_base = PerformanceCounterTimestamp::new((1i64 << 53) + 1);
+        assert_eq!((high_base + Duration::ZERO).0, high_base.0);
+        assert_eq!((high_base - Duration::ZERO).0, high_base.0);
+        let roundtrip = (high_base + non_power_of_two).duration_since(high_base);
+        let err_ns = (roundtrip.as_nanos() as i128 - non_power_of_two.as_nanos() as i128).abs();
+        assert!(err_ns <= 1_000, "unexpected operator drift: {err_ns}ns");
     }
 }
