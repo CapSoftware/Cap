@@ -411,8 +411,9 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
         let sandbox = Sandbox::new(&mock.url, 0);
         sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
         // Show Cap rather than the editor, so the end of the recording
-        // reshows the main window.
+        // reshows the main window, and no startup screen to take its place.
         sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        sandbox.set_general("hasCompletedStartup", json!(true));
         let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
         wait_for_app(
             &sandbox,
@@ -455,8 +456,10 @@ async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
 /// The After an Instant recording outcome decides whether the main window,
 /// hidden at start, comes back once the recording finishes: only Show Cap
 /// takes the reshow, so opening the link never leaves it on screen behind the
-/// browser. The check reads the decisions the app logs. Linux restores the
-/// window through its clean-capture lease instead, so the check is macOS only.
+/// browser. The reshow itself lands on onboarding here (the runner grants no
+/// Accessibility), so the check reads the decisions the app logs. Linux
+/// restores the window through its clean-capture lease instead, so the check
+/// is macOS only.
 #[cfg(target_os = "macos")]
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]

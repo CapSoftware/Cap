@@ -137,9 +137,7 @@ jobs:
       # Blacksmith runs a logged-in GUI session, but ScreenCaptureKit is denied
       # until TCC grants the capturing binaries and the runner ancestry, the
       # display starts asleep, and there is no audio device (the start chime
-      # plays before capture begins), as in verify-recording.yml. Without
-      # Accessibility the app reopens onboarding where it would show the main
-      # window.
+      # plays before capture begins), as in verify-recording.yml.
       - name: Capture permissions, display and audio device
         run: |
           set -euo pipefail
@@ -168,7 +166,7 @@ jobs:
           now=$(date +%s)
           until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
           sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
-            for service in kTCCServiceScreenCapture kTCCServiceMicrophone kTCCServiceAccessibility; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
               row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
               sudo sqlite3 "$db" "$row"
               sqlite3 "$user_db" "$row"
