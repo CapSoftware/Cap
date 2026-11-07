@@ -18,10 +18,9 @@ const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 // Cap the decoded-frame channel to 64 MiB so 4K/1080p BGRA frames cannot accumulate
 // gigabytes of uncompressed pixel buffers when downstream encoding is throttled.
 const CAMERA_CHANNEL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
-const MIN_CAMERA_CHANNEL_FRAMES: usize = 8;
+const MIN_CAMERA_CHANNEL_FRAMES: usize = 2;
 const MAX_CAMERA_CHANNEL_FRAMES: usize = 64;
 
-// Estimate uncompressed byte footprint per decoded frame to size bounded channels by memory budget.
 pub(crate) fn estimate_video_frame_bytes(info: &VideoInfo) -> usize {
     let pixels = (info.width as usize).saturating_mul(info.height as usize);
     let bpp_num_den: (usize, usize) = match info.pixel_format {
@@ -41,7 +40,6 @@ pub(crate) fn estimate_video_frame_bytes(info: &VideoInfo) -> usize {
         .max(1)
 }
 
-// Compute bounded frame capacity from resolution and pixel format to prevent multi-GB queues.
 pub(crate) fn bounded_camera_channel_capacity(info: &VideoInfo) -> usize {
     let frame_bytes = estimate_video_frame_bytes(info);
     (CAMERA_CHANNEL_BYTE_BUDGET / frame_bytes)
@@ -100,7 +98,7 @@ impl CameraFrameScaler {
 struct CameraLoopRuntime {
     original_info: VideoInfo,
     video_tx: mpsc::Sender<FFmpegVideoFrame>,
-    stall_health_tx: crate::output_pipeline::PipelineHealthSender,
+    stall_health_tx: crate::output_pipeline::HealthSender,
     stopped: Arc<AtomicBool>,
     scaled_frame_count: Arc<AtomicU64>,
     scaler: Option<CameraFrameScaler>,
@@ -394,6 +392,7 @@ mod tests {
         };
         let capacity = bounded_camera_channel_capacity(&info);
         assert_eq!(capacity, MIN_CAMERA_CHANNEL_FRAMES);
+        assert!(capacity * estimate_video_frame_bytes(&info) <= CAMERA_CHANNEL_BYTE_BUDGET);
     }
 
     #[test]

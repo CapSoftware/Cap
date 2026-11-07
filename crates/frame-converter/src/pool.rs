@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 // Cap total in-flight input, output, and pooled converter frames to 64 MiB so high-resolution
 // webcam streams cannot accumulate multi-gigabyte backlogs when encoding slows down.
 const CONVERTER_POOL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
-const MIN_QUEUE_CAPACITY: usize = 4;
+const MIN_QUEUE_CAPACITY: usize = 1;
 
 pub(crate) fn estimate_frame_bytes(format: Pixel, width: u32, height: u32) -> usize {
     let pixels = (width as usize).saturating_mul(height as usize);
@@ -65,7 +65,6 @@ impl Default for ConverterPoolConfig {
 }
 
 impl ConverterPoolConfig {
-    // Bound queue and frame pool capacities by the per-frame byte footprint of the conversion.
     pub fn bounded_for_conversion(&self, conversion: &ConversionConfig) -> Self {
         let in_bytes = estimate_frame_bytes(
             conversion.input_format,
@@ -261,12 +260,16 @@ impl AsyncConverterPool {
         match input_tx.try_send(candidate) {
             Ok(()) => Ok(()),
             Err(flume::TrySendError::Full(rejected)) => {
-                // Evict the oldest queued input frame when configured for DropOldest.
                 if matches!(self.drop_strategy, DropStrategy::DropOldest) {
-                    let _ = self.input_rx.try_recv();
-                    let _ = input_tx.try_send(rejected);
+                    if self.input_rx.try_recv().is_ok() {
+                        self.record_input_drop();
+                    }
+                    if input_tx.try_send(rejected).is_err() {
+                        self.record_input_drop();
+                    }
+                } else {
+                    self.record_input_drop();
                 }
-                self.record_input_drop();
                 Ok(())
             }
             Err(flume::TrySendError::Disconnected(_)) => Err(ConvertError::PoolShutdown),
