@@ -297,8 +297,7 @@ async fn cmd_suite(
         "kill9-crash-test" | "kill9" => suites::run_kill9_crash_suite(&hardware, duration).await?,
         _ => {
             anyhow::bail!(
-                "Unknown suite: {}. Available: recording, encoding, playback, performance, sync, av-alignment, av-step, av-step-instant, drift, kill9-crash-test",
-                name
+                "Unknown suite: {name}. Available: recording, encoding, playback, performance, sync, av-alignment, av-step, av-step-instant, drift, kill9-crash-test"
             );
         }
     };

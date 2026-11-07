@@ -434,8 +434,7 @@ impl WindowsSegmentedCameraMuxer {
                             Ok(guard) => guard,
                             Err(poisoned) => {
                                 return Err(anyhow!(
-                                    "CameraSegmentSoftwareEncoder: failed to lock output mutex: {}",
-                                    poisoned
+                                    "CameraSegmentSoftwareEncoder: failed to lock output mutex: {poisoned}"
                                 ));
                             }
                         };
@@ -580,7 +579,7 @@ impl WindowsSegmentedCameraMuxer {
                                     );
                                     encoder_preferences.force_software_only();
                                 }
-                                Err(anyhow!("Camera hardware encoder error: {}", e))
+                                Err(anyhow!("Camera hardware encoder error: {e}"))
                             }
                         }
                     }

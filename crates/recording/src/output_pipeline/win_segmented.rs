@@ -428,8 +428,7 @@ impl WindowsSegmentedMuxer {
                             Ok(guard) => guard,
                             Err(poisoned) => {
                                 return Err(anyhow!(
-                                    "ScreenSoftwareEncoder: failed to lock output mutex: {}",
-                                    poisoned
+                                    "ScreenSoftwareEncoder: failed to lock output mutex: {poisoned}"
                                 ));
                             }
                         };
@@ -585,7 +584,7 @@ impl WindowsSegmentedMuxer {
                                     );
                                     encoder_preferences.force_software_only();
                                 }
-                                Err(anyhow!("Hardware encoder error: {}", e))
+                                Err(anyhow!("Hardware encoder error: {e}"))
                             }
                         }
                     }

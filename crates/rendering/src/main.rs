@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
         .context("Failed to load project configuration")?;
 
     let recording_meta = RecordingMeta::load_for_project(&args.project_path)
-        .map_err(|e| anyhow::anyhow!("Failed to load recording metadata: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to load recording metadata: {e}"))?;
     let studio_meta = recording_meta
         .studio_meta()
         .context("Project is not a studio recording")?
@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
 
     let recordings = Arc::new(
         ProjectRecordingsMeta::new(&recording_meta.project_path, &studio_meta)
-            .map_err(|e| anyhow::anyhow!("Failed to create project recordings meta: {}", e))?,
+            .map_err(|e| anyhow::anyhow!("Failed to create project recordings meta: {e}"))?,
     );
 
     let render_constants = Arc::new(
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
                 false,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create decoders for single segment: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create decoders for single segment: {e}"))?;
 
             vec![RenderSegment {
                 cursor: Arc::new(Default::default()),
@@ -132,9 +132,7 @@ async fn main() -> Result<()> {
                     false,
                 )
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to create decoders for segment {}: {}", i, e)
-                })?;
+                .map_err(|e| anyhow::anyhow!("Failed to create decoders for segment {i}: {e}"))?;
 
                 let cursor = Arc::new(s.cursor_events(&recording_meta));
                 let keyboard = Arc::new(s.keyboard_events(&recording_meta));

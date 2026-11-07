@@ -61,7 +61,7 @@ fn run_ffprobe(path: &Path) -> Result<FfprobeOutput> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("ffprobe failed: {}", stderr);
+        anyhow::bail!("ffprobe failed: {stderr}");
     }
 
     let json = String::from_utf8_lossy(&output.stdout);

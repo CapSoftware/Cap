@@ -1457,7 +1457,7 @@ async fn execute_recording(
         upload: None,
     };
     meta.save_for_project()
-        .map_err(|e| anyhow::anyhow!("Failed to save recording metadata: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to save recording metadata: {e:?}"))?;
 
     Ok(recording_dir)
 }
@@ -2125,10 +2125,7 @@ fn write_benchmark_to_file(benchmark_md: &str) -> anyhow::Result<()> {
     let benchmark_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("BENCHMARKS.md");
 
     if !benchmark_file.exists() {
-        bail!(
-            "BENCHMARKS.md not found at {:?}. Please ensure the file exists.",
-            benchmark_file
-        );
+        bail!("BENCHMARKS.md not found at {benchmark_file:?}. Please ensure the file exists.");
     }
 
     let content = fs::read_to_string(&benchmark_file)?;

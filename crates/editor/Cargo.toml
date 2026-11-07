@@ -52,8 +52,8 @@ futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
 tokio-util = { version = "0.7.15", features = ["rt"] }
-ringbuf = "0.4.8"
-lru = "0.12"
+ringbuf = "0.5.2"
+lru = "0.18"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
