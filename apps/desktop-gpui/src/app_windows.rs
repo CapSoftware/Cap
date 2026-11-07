@@ -628,12 +628,13 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor, finished_instant) =
+            let (finished_studio, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
                     (
                         session.finished_studio.take(),
                         session.take_preparing_studio_editor(),
                         std::mem::take(&mut session.finished_instant),
+                        std::mem::take(&mut session.deleted_recording),
                     )
                 });
             // The in-editor re-record target is consumed first, before
@@ -676,21 +677,30 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // until an overlay exists) reshows the main window as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
-                // the completion and Cap stays out of the way.
+                // the completion and Cap stays out of the way. A recording
+                // deleted from the bar reshows it only for "Reopen recording
+                // window", as the Tauri `delete_recording` did.
                 let settings = crate::store::GeneralSettings::load();
                 let behaviour = settings.post_studio_recording_behaviour;
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
                 // main window reopened mid-recording (even if minimized since)
                 // takes the reshow too, which resumes its inputs.
-                let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
-                    && finished_instant
+                let main_away = |cx: &mut App| {
+                    cfg!(not(target_os = "linux"))
+                        && cx.global::<AppWindows>().main_hidden_by_app
+                        && !main
+                            .update(cx, |_, window, _| platform::window_is_visible(window))
+                            .unwrap_or(true)
+                };
+                let keep_hidden_after_instant = finished_instant
                     && settings.post_instant_behaviour()
                         != crate::store::PostInstantBehaviour::ShowCap
-                    && cx.global::<AppWindows>().main_hidden_by_app
-                    && !main
-                        .update(cx, |_, window, _| platform::window_is_visible(window))
-                        .unwrap_or(true);
+                    && main_away(cx);
+                let keep_hidden_after_delete = deleted
+                    && settings.post_deletion_behaviour
+                        == crate::store::PostDeletionBehaviour::DoNothing
+                    && main_away(cx);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
@@ -701,6 +711,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                     }
                     (None, _) if keep_hidden_after_instant => {
                         tracing::info!("main window kept hidden after the Instant recording");
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (None, _) if keep_hidden_after_delete => {
+                        tracing::info!("main window kept hidden after the deleted recording");
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
@@ -1042,6 +1057,43 @@ pub fn hide_main_window(cx: &mut App) {
         if let Some(native) = &native {
             platform::hide_native(native);
             tracing::info!("main window hidden");
+        }
+        cx.update(crate::menus::schedule_dock_sync);
+    })
+    .detach();
+}
+
+/// `MainWindowRecordingStartBehaviour::perform`: Close hides the main window,
+/// Minimise sends it to the Dock or taskbar. Linux keeps hiding it, which its
+/// clean-capture lease depends on.
+fn put_main_window_away_for_recording(cx: &mut App) {
+    #[cfg(any(target_os = "macos", windows))]
+    if crate::store::GeneralSettings::load().main_window_recording_start_behaviour
+        == crate::store::MainWindowStartBehaviour::Minimise
+    {
+        minimize_main_window(cx);
+        return;
+    }
+    hide_main_window(cx);
+}
+
+/// [`hide_main_window`]'s twin for Minimise. [`show_main_window`] restores
+/// the window from the Dock or taskbar.
+#[cfg(any(target_os = "macos", windows))]
+fn minimize_main_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().main_hidden_by_app = true;
+    let main = cx.global::<AppWindows>().main;
+    let native = main
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            #[cfg(target_os = "macos")]
+            platform::miniaturize_native(native);
+            #[cfg(windows)]
+            platform::minimize_native(native);
+            tracing::info!("main window minimised");
         }
         cx.update(crate::menus::schedule_dock_sync);
     })
@@ -2308,6 +2360,9 @@ fn area_overlay_matches(
         && bounds.size() == candidate_bounds.size()
 }
 
+/// The picker overlay an area recording keeps on screen as its outline, when
+/// it can be kept out of the recording: macOS leaves it out by window number,
+/// Windows by display affinity, set here. Linux has neither and closes it.
 fn area_overlay_for_recording(
     target: &ScreenCaptureTarget,
     cx: &mut App,
@@ -2316,21 +2371,34 @@ fn area_overlay_for_recording(
         return None;
     };
     let handle = overlay_handle(Some(screen.clone()), cx)?;
-    handle
+    let (candidate, capture_excluded) = handle
         .update(cx, |view, window, cx| {
             let candidate = view.target(cx)?;
             #[cfg(target_os = "macos")]
             let capture_excluded = platform::window_is_visible(window)
                 && platform::window_number(window).is_some_and(|number| number > 0);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            let capture_excluded = platform::window_is_visible(window)
+                .then(|| platform::native_window(window))
+                .flatten();
+            #[cfg(not(any(target_os = "macos", windows)))]
             let capture_excluded = {
                 let _ = window;
                 false
             };
-            area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+            Some((candidate, capture_excluded))
         })
         .ok()
-        .flatten()
+        .flatten()?;
+    // Outside the update: the affinity change reaches the window server
+    // without a gpui borrow held. A remote or streamed session keeps windows
+    // in captures, and then the outline would be in the recording.
+    #[cfg(windows)]
+    let capture_excluded = capture_excluded.is_some_and(|native| {
+        platform::set_window_capture_hidden(&native, true);
+        platform::window_capture_hidden(&native)
+    });
+    area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
 }
 
 fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
@@ -2551,8 +2619,8 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    let retained_area =
-        cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
+    let retained_area = cfg!(any(target_os = "macos", windows))
+        && matches!(&target, ScreenCaptureTarget::Area { .. });
     if retained_area {
         let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
             handle
@@ -4173,7 +4241,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     // on macOS: the main window goes away at every recording start, whatever
     // else happened. Gating this on the bar having opened left the window in
     // the frame on any start that never got a bar.
-    hide_main_window(cx);
+    put_main_window_away_for_recording(cx);
 
     let config = StartConfig {
         excluded_windows: excluded,
