@@ -181,13 +181,11 @@ fn refresh_project_snapshot(
     project_rx: &mut watch::Receiver<ProjectConfiguration>,
     snapshot: &mut Arc<ProjectConfiguration>,
 ) -> Option<Arc<ProjectConfiguration>> {
-    let refreshed = {
-        let project = project_rx.borrow_and_update();
-        if !project.has_changed() {
-            return None;
-        }
-        Arc::new(project.clone())
-    };
+    if !project_rx.has_changed().unwrap_or(false) {
+        return None;
+    }
+    let project = project_rx.borrow_and_update();
+    let refreshed = Arc::new(project.clone());
     Some(std::mem::replace(snapshot, refreshed))
 }
 
@@ -2491,6 +2489,74 @@ mod tests {
         let refreshed = Arc::clone(&snapshot);
         assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot).is_none());
         assert!(Arc::ptr_eq(&snapshot, &refreshed));
+    }
+
+    #[test]
+    fn preview_project_snapshot_detects_zoom_split_and_area_adjustment() {
+        use cap_project::{ZoomMode, ZoomSegment};
+
+        let initial_zoom = ZoomSegment {
+            start: 1.0,
+            end: 5.0,
+            amount: 2.0,
+            mode: ZoomMode::Manual { x: 0.25, y: 0.25 },
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        };
+        let mut initial_config = ProjectConfiguration::default();
+        initial_config.timeline = Some(TimelineConfiguration {
+            zoom_segments: vec![initial_zoom],
+            ..Default::default()
+        });
+
+        let (project_tx, mut project_rx) = watch::channel(initial_config);
+        let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
+        let initial = Arc::clone(&snapshot);
+
+        // User splits zoom into two, then adjusts the new split zoom to a new area (x: 0.75, y: 0.75)
+        let split_head = ZoomSegment {
+            start: 1.0,
+            end: 3.0,
+            amount: 2.0,
+            mode: ZoomMode::Manual { x: 0.25, y: 0.25 },
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        };
+        let split_tail = ZoomSegment {
+            start: 3.0,
+            end: 5.0,
+            amount: 2.0,
+            mode: ZoomMode::Manual { x: 0.75, y: 0.75 },
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        };
+
+        project_tx.send_modify(|project| {
+            if let Some(timeline) = project.timeline.as_mut() {
+                timeline.zoom_segments = vec![split_head, split_tail];
+            }
+        });
+
+        let previous = refresh_project_snapshot(&mut project_rx, &mut snapshot).unwrap();
+        assert!(Arc::ptr_eq(&previous, &initial));
+        assert!(!Arc::ptr_eq(&snapshot, &initial));
+
+        let screen_size = XY::new(1920, 1080);
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &previous,
+            &snapshot,
+            screen_size
+        ));
+
+        let next_zooms = &snapshot.timeline.as_ref().unwrap().zoom_segments;
+        assert_eq!(next_zooms.len(), 2);
+        assert_eq!(next_zooms[1].mode, ZoomMode::Manual { x: 0.75, y: 0.75 });
     }
 
     #[test]
