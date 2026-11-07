@@ -7727,6 +7727,70 @@ mod tests {
         assert!(!source.exists());
     }
 
+    /// Opens a real project in the editor engine the way an editor window does
+    /// (instance, transport driver, a decoded frame), then deletes it the way
+    /// the editor's delete button does. Windows refuses to delete a file a
+    /// decoder still has open, so the delete must wait for the engine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn deleting_from_the_editor_releases_the_recordings_media() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("recordings");
+        std::fs::create_dir(&library).unwrap();
+        let bundle = library.join("delete.cap");
+        let spec = cap_verify::catalog::basic(cap_verify::report::Tier::Fast);
+        cap_verify::fixture::write_fixture(&spec, &bundle).unwrap();
+
+        let instance = match cap_editor::EditorInstance::new_with_audio_output(
+            bundle.clone(),
+            |_| {},
+            Box::new(|_, _| {}),
+            shared_wgpu_device().await,
+            Arc::new(cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}))),
+        )
+        .await
+        {
+            Ok(instance) => instance,
+            Err(error) if error.contains("No GPU adapter found") => {
+                eprintln!("skipping: the editor needs a GPU adapter ({error})");
+                return;
+            }
+            Err(error) => panic!("the editor failed to open the project: {error}"),
+        };
+        let (transport, driver, _engine_stopped) = editor_window::transport();
+        tokio::spawn(editor_window::run_transport(instance.clone(), driver));
+        let decoded = instance.segment_medias[0]
+            .decoders
+            .get_frames(0.5, true, true, cap_project::ClipOffsets::default())
+            .await;
+        assert!(decoded.is_some(), "the editor decoded no frame");
+
+        // The window's transport handle goes away a moment after deletion
+        // starts, as it does when the window is torn down, and only then does
+        // the driver let go of the engine and its open decoders.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            drop(transport);
+        });
+        let engine = Arc::downgrade(&instance);
+        let result = delete_after_editor_cleanup(
+            async {
+                release_editor_instance(instance).await;
+                Ok(())
+            },
+            async {
+                assert_eq!(
+                    engine.strong_count(),
+                    0,
+                    "deletion started while the editor engine still had the media open"
+                );
+                crate::library::delete_recording_directory_in(&[library.clone()], &bundle)
+            },
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(!bundle.exists());
+    }
+
     #[tokio::test]
     async fn failed_editor_cleanup_leaves_original_recording_bytes_untouched() {
         let fixture = DeleteFixture::new();
