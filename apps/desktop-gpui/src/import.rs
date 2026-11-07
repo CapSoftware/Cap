@@ -2168,6 +2168,43 @@ mod tests {
         assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline);
     }
 
+    /// A worker that panics never sends Complete or Failed, so its import has
+    /// to leave the list anyway or `imports_in_flight` stays true for good.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_panicking_import_worker_leaves_no_import_in_flight(cx: &mut gpui::TestAppContext) {
+        let _imports = IMPORT_TEST_LOCK.lock().unwrap();
+        let baseline = ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire);
+        let root = temp_dir("worker-panic");
+        let project_path = root.join("Imported Video.cap");
+        cx.update(|cx| {
+            spawn_import(cx, move |tx| {
+                let _ = tx.send(ImportProgress {
+                    kind: ImportKind::Video,
+                    project_path,
+                    pretty_name: "Imported Video".to_string(),
+                    stage: ImportStage::Converting,
+                    progress: 0.5,
+                    message: String::new(),
+                });
+                panic!("import worker panicked mid-conversion");
+            });
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire) != baseline {
+            assert!(std::time::Instant::now() < deadline, "worker never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(imports_snapshot(cx).is_empty());
+            assert!(!imports_in_flight(cx));
+        });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn extension_filters_are_case_insensitive_and_file_gated() {
         let dir = temp_dir("extensions");
