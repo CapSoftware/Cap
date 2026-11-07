@@ -436,14 +436,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     // `hasMicrophone` reads `audio` on a single-segment recording and `mic` on
     // a multi-segment one; `hasSystemAudio` is a multi-segment concept only
     // (`ED/context.ts:1776-1783`).
-    let (has_microphone, has_system_audio) = match studio.as_ref() {
-        StudioRecordingMeta::SingleSegment { segment } => (segment.audio.is_some(), false),
-        StudioRecordingMeta::MultipleSegments { inner } => {
-            inner.segments.first().map_or((false, false), |segment| {
-                (segment.mic.is_some(), segment.system_audio.is_some())
-            })
-        }
-    };
+    let (has_microphone, has_system_audio) = audio_sources(studio.as_ref());
 
     if segment_count == 0 {
         return Err(tr::editor::window::open::no_segments().to_string());
@@ -504,7 +497,13 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         });
     }
 
-    let timeline = TimelineModel::build(&config, has_camera, multiple_recording_segments);
+    let timeline = TimelineModel::build_with_audio(
+        &config,
+        has_camera,
+        multiple_recording_segments,
+        has_microphone,
+        has_system_audio,
+    );
     let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
@@ -558,6 +557,17 @@ fn load_recording_clicks(
             .iter()
             .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
             .collect(),
+    }
+}
+
+pub(crate) fn audio_sources(studio: &StudioRecordingMeta) -> (bool, bool) {
+    match studio {
+        StudioRecordingMeta::SingleSegment { segment } => (segment.audio.is_some(), false),
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            inner.segments.first().map_or((false, false), |segment| {
+                (segment.mic.is_some(), segment.system_audio.is_some())
+            })
+        }
     }
 }
 
@@ -1528,6 +1538,8 @@ pub struct EditorWindow {
     /// model can be rebuilt after every edit.
     has_camera: bool,
     multiple_clips: bool,
+    has_microphone: bool,
+    has_system_audio: bool,
     /// `ProjectSummary::recorded_cursor_family`, kept here because the cursor
     /// tab renders long before (and independently of) the load state's box.
     pub(crate) recorded_cursor_family: Option<CursorFamily>,
@@ -2248,6 +2260,8 @@ impl EditorWindow {
             recording_duration: 0.0,
             has_camera: false,
             multiple_clips: false,
+            has_microphone: false,
+            has_system_audio: false,
             recorded_cursor_family: None,
             save_task: None,
             imported_waveforms_stale: true,
@@ -2385,6 +2399,8 @@ impl EditorWindow {
         self.recording_duration = summary.recording_duration;
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
+        self.has_microphone = summary.has_microphone;
+        self.has_system_audio = summary.has_system_audio;
         self.recorded_cursor_family = summary.recorded_cursor_family;
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
@@ -2442,11 +2458,13 @@ impl EditorWindow {
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let imported = std::mem::take(&mut self.timeline.imported_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
-        self.timeline = TimelineModel::build_with_lanes(
+        self.timeline = TimelineModel::build_with_lanes_and_audio(
             &self.project,
             self.has_camera,
             self.multiple_clips,
             &self.tracks,
+            self.has_microphone,
+            self.has_system_audio,
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
@@ -3135,8 +3153,15 @@ impl EditorWindow {
         {
             self.has_camera = update.seed.has_camera;
             self.multiple_clips = update.seed.multiple_clips;
-            self.timeline =
-                TimelineModel::build(&update.seed.project, self.has_camera, self.multiple_clips);
+            self.has_microphone = update.seed.has_microphone;
+            self.has_system_audio = update.seed.has_system_audio;
+            self.timeline = TimelineModel::build_with_audio(
+                &update.seed.project,
+                self.has_camera,
+                self.multiple_clips,
+                self.has_microphone,
+                self.has_system_audio,
+            );
             self.name_input.update(cx, |input, cx| {
                 input.set_text(update.seed.pretty_name.clone(), cx)
             });
@@ -11969,7 +11994,7 @@ impl EditorWindow {
             // one lane, and zoom/3D/scene offer "Clear all" once they have
             // segments. The clip row has none.
             let delete_label = match kind {
-                TrackKind::Clip => None,
+                TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio => None,
                 TrackKind::Caption | TrackKind::Keyboard => {
                     Some(tr::editor::window::track::delete())
                 }
@@ -12376,7 +12401,9 @@ impl EditorWindow {
                                                 | TrackKind::Scene => {
                                                     this.clear_track_segments(kind, window, cx);
                                                 }
-                                                TrackKind::Clip => {}
+                                                TrackKind::Clip
+                                                | TrackKind::MicAudio
+                                                | TrackKind::SystemAudio => {}
                                             }
                                         }),
                                     )

@@ -156,6 +156,7 @@ impl PreparingAudioSources {
                 let improve = track == 0
                     && self.project.audio.improve
                     && !self.project.audio.mute
+                    && !self.project.audio.mic_muted
                     && self.project.audio.mic_volume_db > -30.0;
                 let covered = match loader.try_window(end.saturating_sub(1)..end)? {
                     AudioWindowRead::Ready(Some(window)) => {
@@ -257,6 +258,7 @@ impl PreparingAudioMixer {
         let mut pending = None;
         let improve = self.sources.project.audio.improve
             && !self.sources.project.audio.mute
+            && !self.sources.project.audio.mic_muted
             && self.sources.project.audio.mic_volume_db > -30.0;
         for (index, clip) in self.clips.iter().enumerate() {
             let start = self.position.max(clip.start);
@@ -401,7 +403,11 @@ impl PreparingAudioMixer {
                     };
                     Some(AudioRendererTrack {
                         data,
-                        gain: if audio.mute || gain < -30.0 {
+                        gain: if audio.mute
+                            || (track == 0 && audio.mic_muted)
+                            || (track != 0 && audio.system_muted)
+                            || gain < -30.0
+                        {
                             f32::NEG_INFINITY
                         } else {
                             gain

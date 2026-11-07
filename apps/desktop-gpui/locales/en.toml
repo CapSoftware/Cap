@@ -2808,6 +2808,8 @@ style = "Change background, camera and cursor settings over time."
 text_overlay = "Add custom text overlays and titles to the canvas."
 three_d = "Tilt the scene in 3D perspective."
 zoom = "Smooth zoom-ins that follow the action."
+mic = "Mic audio waveform, mirrored from the video clip"
+system_audio = "System audio waveform, mirrored from the video clip"
 
 [editor.timeline.remove]
 audio = "Remove the Audio track."
@@ -2822,6 +2824,8 @@ style = "Remove the Style track."
 text_track = "Remove the Text track."
 three_d = "Remove the 3D track."
 zoom = "Remove the Zoom track."
+mic = "Mic row is mirrored from the video clip"
+system_audio = "System row is mirrored from the video clip"
 
 [editor.timeline.scene]
 camera_only = "Camera Only"
@@ -2856,6 +2860,8 @@ style = "Style"
 text_track = "Text"
 video = { text = "Video", context = "Timeline gutter label of the recording's video track." }
 zoom = "Zoom"
+mic = "Mic"
+system_audio = "System"
 
 [editor.transcript]
 cleanup = "Clean up"

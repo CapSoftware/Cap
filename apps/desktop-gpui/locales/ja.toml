@@ -2806,6 +2806,8 @@ style = "背景、カメラ、カーソルの設定を時間に合わせて変�
 text_overlay = "キャンバスにカスタムのテキストやタイトルを重ねます。"
 three_d = "シーンを3Dの遠近感で傾けます。"
 zoom = "動きに合わせたなめらかなズームイン。"
+mic = "動画クリップからミラーリングされたマイク音声の波形"
+system_audio = "動画クリップからミラーリングされたシステム音声の波形"
 
 [editor.timeline.remove]
 audio = "音声トラックを削除します。"
@@ -2820,6 +2822,8 @@ style = "スタイルトラックを削除します。"
 text_track = "テキストトラックを削除します。"
 three_d = "3Dトラックを削除します。"
 zoom = "ズームトラックを削除します。"
+mic = "マイク行は動画クリップからミラーリングされています"
+system_audio = "システム音声行は動画クリップからミラーリングされています"
 
 [editor.timeline.scene]
 camera_only = "カメラのみ"
@@ -2854,6 +2858,8 @@ style = "スタイル"
 text_track = "テキスト"
 video = "動画"
 zoom = "ズーム"
+mic = "マイク"
+system_audio = "システム音声"
 
 [editor.transcript]
 cleanup = "クリーンアップ"

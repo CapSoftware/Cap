@@ -302,6 +302,9 @@ impl ExportAudioRenderer {
     }
 
     fn eligible_sources(project: &ProjectConfiguration, source_count: usize) -> bool {
+        if !project.audio.is_mic_active() && !project.audio.is_system_active() {
+            return false;
+        }
         if !(1..=MAX_PARALLEL_AUDIO_SOURCES).contains(&source_count)
             || project.clips.iter().any(|clip| {
                 [clip.offsets.mic, clip.offsets.system_audio]
@@ -487,6 +490,7 @@ impl ExportAudioSources {
             let improve = track.mic
                 && project.audio.improve
                 && !project.audio.mute
+                && !project.audio.mic_muted
                 && project.audio.mic_volume_db > -30.0
                 && (1..=2).contains(&track.source.channels());
             if improve {
@@ -562,7 +566,11 @@ impl ExportAudioSources {
                 };
                 AudioRendererTrack {
                     data: view,
-                    gain: if project.audio.mute || gain < -30.0 {
+                    gain: if project.audio.mute
+                        || (track.mic && project.audio.mic_muted)
+                        || (!track.mic && project.audio.system_muted)
+                        || gain < -30.0
+                    {
                         f32::NEG_INFINITY
                     } else {
                         gain
@@ -1502,7 +1510,19 @@ mod tests {
         short_cut.audio.improve = true;
         assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
         short_cut.audio.mute = true;
+        assert!(!ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.mute = false;
+        short_cut.audio.mic_muted = true;
         assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.mic_muted = false;
+        short_cut.audio.system_muted = true;
+        assert!(ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.system_muted = false;
+        short_cut.audio.mic_muted = true;
+        short_cut.audio.system_muted = true;
+        assert!(!ExportAudioRenderer::eligible_sources(&short_cut, 3));
+        short_cut.audio.mic_muted = false;
+        short_cut.audio.system_muted = false;
 
         let mut long_cut = project();
         long_cut.audio.improve = true;

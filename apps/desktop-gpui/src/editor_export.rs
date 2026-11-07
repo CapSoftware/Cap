@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use cap_export::audio::AudioExportSettings;
 use cap_export::estimates::{ExportEstimates, estimate_export, estimate_turbo_export};
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
@@ -14,7 +15,7 @@ use cap_export::preview::{
 };
 use cap_export::settings::ExportSettings;
 use cap_export::{ExporterBase, make_cursor_only_project};
-use cap_project::{BackgroundSource, RecordingMeta, XY};
+use cap_project::{AudioExportFormat, AudioSource, BackgroundSource, RecordingMeta, XY};
 use cap_utils::export_resources::{
     DiskBudget, ExportResources, estimated_working_bytes, is_resource_stop,
 };
@@ -102,6 +103,8 @@ impl ExportDestination {
 pub enum ExportFormatKind {
     Mp4,
     Gif,
+    Mp3,
+    Wav,
 }
 
 impl ExportFormatKind {
@@ -109,6 +112,8 @@ impl ExportFormatKind {
         match self {
             Self::Mp4 => "MP4",
             Self::Gif => "GIF",
+            Self::Mp3 => "MP3",
+            Self::Wav => "WAV",
         }
     }
 
@@ -116,14 +121,22 @@ impl ExportFormatKind {
         match self {
             Self::Mp4 => "Mp4",
             Self::Gif => "Gif",
+            Self::Mp3 => "Mp3",
+            Self::Wav => "Wav",
         }
     }
 
     fn from_slug(slug: &str) -> Self {
         match slug {
             "Gif" => Self::Gif,
+            "Mp3" => Self::Mp3,
+            "Wav" => Self::Wav,
             _ => Self::Mp4,
         }
+    }
+
+    fn is_audio_only(self) -> bool {
+        matches!(self, Self::Mp3 | Self::Wav)
     }
 }
 
@@ -195,6 +208,7 @@ pub struct PreviewStats {
 pub struct ExportUi {
     pub destination: ExportDestination,
     pub format: ExportFormatKind,
+    pub audio_source: AudioSource,
     pub resolution: ExportResolution,
     pub fps: u32,
     pub compression: ExportCompression,
@@ -267,6 +281,7 @@ impl ExportUi {
             export_to: "file".into(),
             resolution: "720p".into(),
             compression: "Maximum".into(),
+            audio_source: "both".into(),
             optimize_filesize: false,
             cursor_only: false,
             custom_bpp: None,
@@ -282,6 +297,11 @@ impl ExportUi {
         Self {
             destination: ExportDestination::from_slug(&prefs.export_to),
             format: ExportFormatKind::from_slug(&prefs.format),
+            audio_source: match prefs.audio_source.to_ascii_lowercase().as_str() {
+                "mic" => AudioSource::Mic,
+                "system" => AudioSource::System,
+                _ => AudioSource::Both,
+            },
             resolution: ExportResolution::from_slug(&prefs.resolution),
             fps: prefs.fps,
             compression: match prefs.compression.as_str() {
@@ -339,6 +359,12 @@ impl ExportUi {
             export_to: self.destination.slug().to_string(),
             resolution: self.resolution.label().to_string(),
             compression: format!("{:?}", self.compression),
+            audio_source: match self.audio_source {
+                AudioSource::Both => "both",
+                AudioSource::Mic => "mic",
+                AudioSource::System => "system",
+            }
+            .to_string(),
             optimize_filesize: self.optimize_filesize,
             cursor_only: self.cursor_only,
             custom_bpp: self.custom_bpp,
@@ -363,6 +389,15 @@ impl ExportUi {
                 fps: self.fps,
                 resolution_base,
                 cursor_only: true,
+            })
+        } else if self.format.is_audio_only() {
+            ExportSettings::Audio(AudioExportSettings {
+                source: self.audio_source,
+                audio_format: if self.format == ExportFormatKind::Mp3 {
+                    AudioExportFormat::Mp3
+                } else {
+                    AudioExportFormat::Wav
+                },
             })
         } else if self.format == ExportFormatKind::Gif {
             ExportSettings::Gif(GifExportSettings {
@@ -869,6 +904,7 @@ impl EditorWindow {
             .unwrap_or(0);
         let destination = ui.destination;
         let format = ui.format;
+        let audio_source = ui.audio_source;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
         let (width, height) = ui.resolution.size();
@@ -898,6 +934,10 @@ impl EditorWindow {
                     "mov"
                 } else if format == ExportFormatKind::Gif {
                     "gif"
+                } else if format == ExportFormatKind::Mp3 {
+                    "mp3"
+                } else if format == ExportFormatKind::Wav {
+                    "wav"
                 } else {
                     "mp4"
                 };
@@ -983,6 +1023,7 @@ impl EditorWindow {
                     project_path,
                     project,
                     format,
+                    audio_source,
                     cursor_only,
                     fps,
                     width,
@@ -1159,6 +1200,7 @@ impl EditorWindow {
             .map(estimated_working_bytes)
             .unwrap_or(0);
         let format = ui.format;
+        let audio_source = ui.audio_source;
         let cursor_only = ui.cursor_only;
         let fps = ui.fps;
         let (width, height) = ui.resolution.size();
@@ -1228,6 +1270,7 @@ impl EditorWindow {
                             export_path,
                             project,
                             format,
+                            audio_source,
                             cursor_only,
                             fps,
                             width,
@@ -1740,7 +1783,7 @@ impl EditorWindow {
         let theme = self.theme;
         let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
-        let link_disabled = transparent || ui.cursor_only;
+        let link_disabled = transparent || ui.cursor_only || ui.format.is_audio_only();
         let format_locked = transparent || ui.cursor_only;
         let resolutions = self.export_resolutions(ui);
         let fps_options = self.export_fps_options(ui);
@@ -1766,6 +1809,7 @@ impl EditorWindow {
                     .gap(px(20.))
                     .child(self.export_destination_field(ui, link_disabled, cx))
                     .child(self.export_format_field(ui, format_locked, cx))
+                    .child(self.export_audio_source_field(ui, format_locked, cx))
                     .child(self.export_resolution_field(ui, &resolutions, cx))
                     .child(self.export_fps_field(ui, fps_options, cx))
                     .when(
@@ -1915,12 +1959,16 @@ impl EditorWindow {
                 };
                 if let Some(ui) = this.export.as_mut() {
                     if dest == ExportDestination::Link
-                        && (has_transparent_background(&this.project) || ui.cursor_only)
+                        && (has_transparent_background(&this.project)
+                            || ui.cursor_only
+                            || ui.format.is_audio_only())
                     {
                         return;
                     }
                     ui.destination = dest;
-                    if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
+                    if dest == ExportDestination::Link
+                        && (ui.format == ExportFormatKind::Gif || ui.format.is_audio_only())
+                    {
                         ui.format = ExportFormatKind::Mp4;
                     }
                     ui.persist();
@@ -2067,7 +2115,12 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let options = [ExportFormatKind::Mp4, ExportFormatKind::Gif];
+        let options = [
+            ExportFormatKind::Mp4,
+            ExportFormatKind::Gif,
+            ExportFormatKind::Mp3,
+            ExportFormatKind::Wav,
+        ];
         self.export_section(tr::editor::export::section::format(), "icons/video.svg")
             .disabled(locked)
             .child(
@@ -2093,7 +2146,10 @@ impl EditorWindow {
                     };
                     if let Some(ui) = this.export.as_mut() {
                         ui.format = format;
-                        if format == ExportFormatKind::Gif {
+                        if format.is_audio_only() {
+                            ui.destination = ExportDestination::File;
+                            ui.cursor_only = false;
+                        } else if format == ExportFormatKind::Gif {
                             if ui.destination == ExportDestination::Link {
                                 ui.destination = ExportDestination::File;
                             }
@@ -2104,6 +2160,47 @@ impl EditorWindow {
                     }
                     this.normalize_loaded_export_fps();
                     if let Some(ui) = this.export.as_mut() {
+                        ui.persist();
+                    }
+                    this.refresh_export_preview(window, cx);
+                    cx.notify();
+                })),
+            )
+    }
+
+    fn export_audio_source_field(
+        &self,
+        ui: &ExportUi,
+        locked: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let options = [AudioSource::Both, AudioSource::Mic, AudioSource::System];
+        self.export_section("Audio", "icons/music.svg")
+            .disabled(locked)
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "export-audio-source",
+                    options
+                        .iter()
+                        .map(|source| {
+                            ui::SegmentOption::new(source.label(), ui.audio_source == *source)
+                                .disabled(locked)
+                        })
+                        .collect(),
+                )
+                .stretch()
+                .item_height(px(SEGMENT_HEIGHT))
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    if locked {
+                        return;
+                    }
+                    let Some(source) = options.get(*index).copied() else {
+                        return;
+                    };
+                    if let Some(ui) = this.export.as_mut() {
+                        ui.audio_source = source;
                         ui.persist();
                     }
                     this.refresh_export_preview(window, cx);
@@ -3072,6 +3169,7 @@ async fn run_export(
     project_path: PathBuf,
     project: cap_project::ProjectConfiguration,
     format: ExportFormatKind,
+    audio_source: AudioSource,
     cursor_only: bool,
     fps: u32,
     width: u32,
@@ -3088,7 +3186,9 @@ async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
-    let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
+    let mut builder = ExporterBase::builder(project_path)
+        .with_force_ffmpeg_decoder(force)
+        .with_audio_source(audio_source);
     if cursor_only {
         builder = builder.with_config(make_cursor_only_project(project));
     } else {
@@ -3101,8 +3201,13 @@ async fn run_export(
     enum PreparedBase {
         Mp4(cap_export::Mp4ExporterBase),
         Other(ExporterBase),
+        Audio(ExporterBase),
     }
-    let (base, total) = if !cursor_only && format != ExportFormatKind::Gif {
+    let (base, total) = if format.is_audio_only() {
+        let base = builder.build().await.map_err(|error| error.to_string())?;
+        let total = base.audio_progress_total();
+        (PreparedBase::Audio(base), total)
+    } else if !cursor_only && format != ExportFormatKind::Gif {
         let base = builder
             .build_for_mp4(cancel.clone())
             .await
@@ -3123,6 +3228,18 @@ async fn run_export(
 
     let resolution = XY::new(width, height);
     match base {
+        PreparedBase::Audio(base) => {
+            AudioExportSettings {
+                source: audio_source,
+                audio_format: if format == ExportFormatKind::Mp3 {
+                    AudioExportFormat::Mp3
+                } else {
+                    AudioExportFormat::Wav
+                },
+            }
+            .export(base, progress)
+            .await
+        }
         PreparedBase::Other(base) if cursor_only => {
             MovExportSettings {
                 fps,
@@ -3244,6 +3361,7 @@ mod tests {
             export_to: "clipboard".into(),
             resolution: "720p".into(),
             compression: "Maximum".into(),
+            audio_source: "both".into(),
             optimize_filesize: false,
             cursor_only: false,
             custom_bpp: None,

@@ -4332,7 +4332,9 @@ impl EditorWindow {
             }
             // A clip selection never reaches here -- `sidebarSelection()`
             // filters it out.
-            TrackKind::Clip => div().into_any_element(),
+            TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio => {
+                div().into_any_element()
+            }
         };
 
         div()

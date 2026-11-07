@@ -7,6 +7,8 @@ pub(crate) struct PreparingTimelineSeed {
     pub(crate) pretty_name: String,
     pub(crate) has_camera: bool,
     pub(crate) multiple_clips: bool,
+    pub(crate) has_microphone: bool,
+    pub(crate) has_system_audio: bool,
 }
 
 #[derive(Default)]

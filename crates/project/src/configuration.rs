@@ -656,6 +656,65 @@ impl VoiceIsolation {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioSource {
+    #[default]
+    Both,
+    Mic,
+    System,
+}
+
+impl AudioSource {
+    pub fn includes_mic(self) -> bool {
+        matches!(self, Self::Both | Self::Mic)
+    }
+
+    pub fn includes_system(self) -> bool {
+        matches!(self, Self::Both | Self::System)
+    }
+
+    pub fn includes(self, is_mic: bool) -> bool {
+        if is_mic {
+            self.includes_mic()
+        } else {
+            self.includes_system()
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Both",
+            Self::Mic => "Mic",
+            Self::System => "System",
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioExportFormat {
+    #[default]
+    Wav,
+    Mp3,
+}
+
+impl AudioExportFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 => "mp3",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wav => "WAV",
+            Self::Mp3 => "MP3",
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioConfiguration {
@@ -665,6 +724,18 @@ pub struct AudioConfiguration {
     pub mic_volume_db: f32,
     pub mic_stereo_mode: StereoMode,
     pub system_volume_db: f32,
+    pub mic_muted: bool,
+    pub system_muted: bool,
+}
+
+impl AudioConfiguration {
+    pub fn is_mic_active(&self) -> bool {
+        !self.mute && !self.mic_muted && self.mic_volume_db > -30.0
+    }
+
+    pub fn is_system_active(&self) -> bool {
+        !self.mute && !self.system_muted && self.system_volume_db > -30.0
+    }
 }
 
 impl Default for AudioConfiguration {
@@ -676,6 +747,8 @@ impl Default for AudioConfiguration {
             mic_volume_db: 0.0,
             mic_stereo_mode: StereoMode::default(),
             system_volume_db: 0.0,
+            mic_muted: false,
+            system_muted: false,
         }
     }
 }
@@ -3526,6 +3599,69 @@ mod tests {
             let restored: AudioConfiguration =
                 serde_json::from_slice(&serde_json::to_vec(&audio).unwrap()).unwrap();
             assert_eq!(audio, restored);
+        }
+    }
+
+    #[test]
+    fn audio_source_selects_mic_and_system() {
+        assert_eq!(AudioSource::default(), AudioSource::Both);
+        assert!(AudioSource::Both.includes_mic());
+        assert!(AudioSource::Both.includes_system());
+        assert!(AudioSource::Mic.includes_mic());
+        assert!(!AudioSource::Mic.includes_system());
+        assert!(!AudioSource::System.includes_mic());
+        assert!(AudioSource::System.includes_system());
+        assert!(AudioSource::Mic.includes(true));
+        assert!(!AudioSource::Mic.includes(false));
+        assert!(!AudioSource::System.includes(true));
+        assert!(AudioSource::System.includes(false));
+    }
+
+    #[test]
+    fn audio_per_source_mutes_default_off_and_round_trip() {
+        let legacy: AudioConfiguration =
+            serde_json::from_str(r#"{"mute":false,"micVolumeDb":0.0}"#).unwrap();
+        assert!(!legacy.mic_muted);
+        assert!(!legacy.system_muted);
+        assert!(legacy.is_mic_active());
+        assert!(legacy.is_system_active());
+        let muted = AudioConfiguration {
+            mic_muted: true,
+            ..legacy.clone()
+        };
+        assert!(!muted.is_mic_active());
+        assert!(muted.is_system_active());
+        let restored: AudioConfiguration =
+            serde_json::from_slice(&serde_json::to_vec(&muted).unwrap()).unwrap();
+        assert_eq!(muted, restored);
+        let system_muted = AudioConfiguration {
+            system_muted: true,
+            ..legacy.clone()
+        };
+        assert!(system_muted.is_mic_active());
+        assert!(!system_muted.is_system_active());
+        let global_mute = AudioConfiguration {
+            mute: true,
+            ..legacy.clone()
+        };
+        assert!(!global_mute.is_mic_active());
+        assert!(!global_mute.is_system_active());
+        let quiet = AudioConfiguration {
+            mic_volume_db: -30.0,
+            ..legacy.clone()
+        };
+        assert!(!quiet.is_mic_active());
+    }
+
+    #[test]
+    fn audio_export_format_extensions_round_trip() {
+        assert_eq!(AudioExportFormat::default(), AudioExportFormat::Wav);
+        assert_eq!(AudioExportFormat::Wav.extension(), "wav");
+        assert_eq!(AudioExportFormat::Mp3.extension(), "mp3");
+        for format in [AudioExportFormat::Wav, AudioExportFormat::Mp3] {
+            let restored: AudioExportFormat =
+                serde_json::from_slice(&serde_json::to_vec(&format).unwrap()).unwrap();
+            assert_eq!(format, restored);
         }
     }
 

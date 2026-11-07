@@ -494,10 +494,9 @@ impl Mp4ExportSettings {
         let audio_segments = get_audio_segments(&base.segments).await;
         let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
 
-        let has_recording_audio = audio_segments
-            .first()
-            .filter(|_| !base.project_config.audio.mute)
-            .is_some();
+        let has_recording_audio = audio_segments.first().is_some()
+            && (base.project_config.audio.is_mic_active()
+                || base.project_config.audio.is_system_active());
         let has_audio = has_recording_audio || !music.is_empty();
 
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;

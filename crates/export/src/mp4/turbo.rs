@@ -889,10 +889,9 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
 
     let audio_segments = get_audio_segments(&base.segments).await;
     let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
-    let has_recording_audio = audio_segments
-        .first()
-        .filter(|_| !base.project_config.audio.mute)
-        .is_some();
+    let has_recording_audio = audio_segments.first().is_some()
+        && (base.project_config.audio.is_mic_active()
+            || base.project_config.audio.is_system_active());
     let audio = (has_recording_audio || !music.is_empty()).then(|| {
         let source = match streaming_audio.take() {
             Some(audio) => ExportAudioSource::Streaming(audio),

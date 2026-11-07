@@ -152,9 +152,11 @@ struct SpeedAudioProcessorKey {
     segment_start_samples: usize,
     segment_end_samples: usize,
     mic_volume_bits: u32,
+    mic_muted: bool,
     improve_microphone: bool,
     isolation: VoiceIsolation,
     system_volume_bits: u32,
+    system_muted: bool,
     mic_stereo_mode: u8,
     mic_offset_bits: u32,
     system_offset_bits: u32,
@@ -730,6 +732,7 @@ impl AudioRenderer {
     ) -> usize {
         if samples == 0
             || project.audio.mute
+            || (project.audio.mic_muted && project.audio.system_muted)
             || source.segment.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
             || !source.segment.timescale.is_finite()
             || !(0.25..=8.0).contains(&source.segment.timescale)
@@ -758,9 +761,11 @@ impl AudioRenderer {
             segment_start_samples: self.playhead_to_samples(source.segment.start),
             segment_end_samples: self.playhead_to_samples(source.segment.end),
             mic_volume_bits: project.audio.mic_volume_db.to_bits(),
+            mic_muted: project.audio.mic_muted,
             improve_microphone: project.audio.improve,
             isolation: project.audio.isolation,
             system_volume_bits: project.audio.system_volume_db.to_bits(),
+            system_muted: project.audio.system_muted,
             mic_stereo_mode: project_stereo_mode_key(&project.audio.mic_stereo_mode),
             mic_offset_bits: offsets.mic.to_bits(),
             system_offset_bits: offsets.system_audio.to_bits(),
@@ -912,7 +917,10 @@ fn render_audio_data_chunk(
         .iter()
         .map(|track| AudioRendererTrack {
             data: track.data().as_ref(),
-            gain: if project.audio.mute {
+            gain: if project.audio.mute
+                || (track.is_microphone && project.audio.mic_muted)
+                || (!track.is_microphone && project.audio.system_muted)
+            {
                 f32::NEG_INFINITY
             } else {
                 let gain = track.gain(&project.audio);
@@ -927,7 +935,7 @@ fn render_audio_data_chunk(
         })
         .collect::<Vec<_>>();
 
-    if !project.audio.improve || project.audio.mute {
+    if !project.audio.improve || project.audio.mute || project.audio.mic_muted {
         return cap_audio::render_audio(&track_datas, cursor.samples, samples, out_offset, out);
     }
     let clip_key = cursor.clip_index as usize;
@@ -2022,7 +2030,7 @@ fn render_is_origin_independent(
 ) -> bool {
     if output_info.sample_rate != AudioData::SAMPLE_RATE
         || output_info.channels != usize::from(AudioRenderer::CHANNELS)
-        || (project.audio.improve && !project.audio.mute)
+        || (project.audio.improve && !project.audio.mute && !project.audio.mic_muted)
     {
         return false;
     }
@@ -4668,6 +4676,65 @@ mod tests {
         assert!((left_at_time(&stream, 0.5) - expected(4000)).abs() < 0.001);
     }
 
+    #[test]
+    fn per_source_mute_isolates_mic_or_system_in_playback_and_export() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let mic_path = dir.path().join("mic.wav");
+        let system_path = dir.path().join("system.wav");
+        write_step_wav(&mic_path, &[12000]);
+        write_step_wav(&system_path, &[4000]);
+        let mic = Arc::new(AudioData::from_file(&mic_path).unwrap());
+        let system = Arc::new(AudioData::from_file(&system_path).unwrap());
+        let segment_audio = crate::segments::audio_segment_from_decoded(
+            Some(mic),
+            Some(system),
+            crate::SegmentAudioTimingRepair::default(),
+        );
+        assert_eq!(segment_audio.tracks.len(), 2);
+        let project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![segment(0, 0.0, 1.0, 1.0)],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
+                shape_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            clips: vec![ClipConfiguration {
+                index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        for (mic_muted, system_muted, expected_value) in [
+            (false, false, 16000),
+            (true, false, 4000),
+            (false, true, 12000),
+            (true, true, 0),
+        ] {
+            let mut muted_project = project.clone();
+            muted_project.audio.mic_muted = mic_muted;
+            muted_project.audio.system_muted = system_muted;
+            let mut renderer = AudioRenderer::new(vec![segment_audio.clone()]);
+            let stream = render_export_audio(&mut renderer, &muted_project, 30, 30);
+            let expected = expected_value as f32 / 32768.0;
+            assert!(
+                (left_at_time(&stream, 0.5) - expected).abs() < 0.001,
+                "mic_muted={mic_muted} system_muted={system_muted}: got {}, want {expected}",
+                left_at_time(&stream, 0.5)
+            );
+        }
+    }
+
     // A timeline-positioned music clip only sounds inside its [start, end) window.
     #[test]
     fn timeline_music_respects_start_offset() {
@@ -5473,8 +5540,10 @@ mod tests {
             audio_project_key(&edited.project).unwrap()
         };
 
-        let audio: [(&str, FixtureEdit); 9] = [
+        let audio: [(&str, FixtureEdit); 11] = [
             ("audio", |f| f.project.audio.system_volume_db = -3.0),
+            ("mic muted", |f| f.project.audio.mic_muted = true),
+            ("system muted", |f| f.project.audio.system_muted = true),
             ("clip offsets", |f| {
                 f.project.clips[0].offsets.system_audio = 0.1
             }),

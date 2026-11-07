@@ -2806,6 +2806,8 @@ style = "Ändern Sie Hintergrund-, Kamera- und Cursoreinstellungen im Zeitverlau
 text_overlay = "Fügen Sie der Leinwand eigene Texteinblendungen und Titel hinzu."
 three_d = "Neigen Sie die Szene in 3D-Perspektive."
 zoom = "Sanfte Zooms, die dem Geschehen folgen."
+mic = "Mikrofon-Wellenform, vom Videoclip gespiegelt"
+system_audio = "Systemaudio-Wellenform, vom Videoclip gespiegelt"
 
 [editor.timeline.remove]
 audio = "Die Audiospur entfernen."
@@ -2820,6 +2822,8 @@ style = "Die Stilspur entfernen."
 text_track = "Die Textspur entfernen."
 three_d = "Die 3D-Spur entfernen."
 zoom = "Die Zoomspur entfernen."
+mic = "Mikrofonzeile wird vom Videoclip gespiegelt"
+system_audio = "Systemaudiozeile wird vom Videoclip gespiegelt"
 
 [editor.timeline.scene]
 camera_only = "Nur Kamera"
@@ -2854,6 +2858,8 @@ style = "Stil"
 text_track = "Text"
 video = "Video"
 zoom = "Zoom"
+mic = "Mikrofon"
+system_audio = "Systemaudio"
 
 [editor.transcript]
 cleanup = "Aufräumen"
