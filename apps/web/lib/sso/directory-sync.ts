@@ -583,7 +583,11 @@ export async function syncOrganizationDirectory(
 				syncedAt: startedAt,
 				leaseExpiresAt: null,
 				lastError: null,
-				heldRemovals: result.held,
+				heldRemovals: sql`CASE WHEN ${organizationDirectorySync.removalsApprovedAt} IS NOT NULL AND ${
+					state?.removalsApprovedAt
+						? sql`${organizationDirectorySync.removalsApprovedAt} <> ${sql.param(state.removalsApprovedAt, organizationDirectorySync.removalsApprovedAt)}`
+						: sql`TRUE`
+				} THEN ${organizationDirectorySync.heldRemovals} ELSE ${result.held} END`,
 				...(state?.removalsApprovedAt
 					? {
 							removalsApprovedAt: sql`CASE WHEN ${organizationDirectorySync.removalsApprovedAt} = ${sql.param(state.removalsApprovedAt, organizationDirectorySync.removalsApprovedAt)} THEN NULL ELSE ${organizationDirectorySync.removalsApprovedAt} END`,
