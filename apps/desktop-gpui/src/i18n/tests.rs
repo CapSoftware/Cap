@@ -274,6 +274,24 @@ fn english_matches_the_literals_it_replaced() {
             "Default zoom amount".into(),
         ),
         (
+            tr::settings::general::recording::auto_zoom_hold::description(),
+            "How long auto-generated zoom segments stay zoomed in after each click.".into(),
+        ),
+        (
+            tr::settings::general::recording::auto_zoom_hold::label(),
+            "Zoom hold after click".into(),
+        ),
+        (
+            tr::settings::general::recording::auto_zoom_merge_gap::description(),
+            "Merge consecutive click zooms separated by less than this gap. \
+             Set to 0s to never merge gaps."
+                .into(),
+        ),
+        (
+            tr::settings::general::recording::auto_zoom_merge_gap::label(),
+            "Merge nearby clicks gap".into(),
+        ),
+        (
             tr::settings::general::recording::capture_keyboard::description(),
             "Record key presses so you can add keyboard overlays in the editor.".into(),
         ),

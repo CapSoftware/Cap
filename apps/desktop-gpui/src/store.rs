@@ -981,6 +981,8 @@ pub struct GeneralSettings {
     pub custom_cursor_capture: bool,
     pub auto_zoom_on_clicks: bool,
     pub default_zoom_amount: Option<f32>,
+    pub auto_zoom_hold_duration: Option<f32>,
+    pub auto_zoom_merge_gap: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
     /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
@@ -1378,6 +1380,18 @@ impl GeneralSettings {
         self.default_zoom_amount.unwrap_or(1.5)
     }
 
+    pub fn auto_zoom_hold_seconds(&self) -> f32 {
+        self.auto_zoom_hold_duration
+            .unwrap_or(crate::editor_edits::DEFAULT_AUTO_ZOOM_HOLD_SECONDS as f32)
+            .clamp(0.5, 5.0)
+    }
+
+    pub fn auto_zoom_merge_gap_seconds(&self) -> f32 {
+        self.auto_zoom_merge_gap
+            .unwrap_or(crate::editor_edits::DEFAULT_AUTO_ZOOM_MERGE_GAP_SECONDS as f32)
+            .clamp(0.0, 5.0)
+    }
+
     pub fn load() -> Self {
         let store = cached_store(&tauri_store_path()).unwrap_or_default();
         let empty = Map::new();
@@ -1429,6 +1443,8 @@ impl GeneralSettings {
             custom_cursor_capture: bool_at(general, "custom_cursor_capture2", true),
             auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", false),
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
+            auto_zoom_hold_duration: opt_f32_at(general, "autoZoomHoldDuration"),
+            auto_zoom_merge_gap: opt_f32_at(general, "autoZoomMergeGap"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
             recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
@@ -3073,6 +3089,8 @@ mod tests {
     "recordingCountdown": 5,
     "custom_cursor_capture2": false,
     "defaultZoomAmount": 2.5,
+    "autoZoomHoldDuration": 1.2,
+    "autoZoomMergeGap": 0.4,
     "maxFps": 120,
     "serverUrl": "https://cap.example.com",
     "excludedWindows": [{ "bundleIdentifier": null, "ownerName": null, "windowTitle": "Cap" }]
@@ -3093,6 +3111,10 @@ mod tests {
         assert!(!settings.custom_cursor_capture);
         assert_eq!(settings.default_zoom_amount, Some(2.5));
         assert_eq!(settings.new_zoom_amount(), 2.5);
+        assert_eq!(settings.auto_zoom_hold_duration, Some(1.2));
+        assert_eq!(settings.auto_zoom_hold_seconds(), 1.2);
+        assert_eq!(settings.auto_zoom_merge_gap, Some(0.4));
+        assert_eq!(settings.auto_zoom_merge_gap_seconds(), 0.4);
         assert_eq!(settings.max_fps, 120);
         assert_eq!(settings.server_url, "https://cap.example.com");
         assert_eq!(settings.excluded_windows.len(), 1);
