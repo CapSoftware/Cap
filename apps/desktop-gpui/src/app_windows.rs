@@ -628,12 +628,13 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor, finished_instant) =
+            let (finished_studio, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
                     (
                         session.finished_studio.take(),
                         session.take_preparing_studio_editor(),
                         std::mem::take(&mut session.finished_instant),
+                        std::mem::take(&mut session.deleted_recording),
                     )
                 });
             // The in-editor re-record target is consumed first, before
@@ -676,21 +677,30 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // until an overlay exists) reshows the main window as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
-                // the completion and Cap stays out of the way.
+                // the completion and Cap stays out of the way. A recording
+                // deleted from the bar reshows it only for "Reopen recording
+                // window", as the Tauri `delete_recording` did.
                 let settings = crate::store::GeneralSettings::load();
                 let behaviour = settings.post_studio_recording_behaviour;
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
                 // main window reopened mid-recording (even if minimized since)
                 // takes the reshow too, which resumes its inputs.
-                let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
-                    && finished_instant
+                let main_away = |cx: &mut App| {
+                    cfg!(not(target_os = "linux"))
+                        && cx.global::<AppWindows>().main_hidden_by_app
+                        && !main
+                            .update(cx, |_, window, _| platform::window_is_visible(window))
+                            .unwrap_or(true)
+                };
+                let keep_hidden_after_instant = finished_instant
                     && settings.post_instant_behaviour()
                         != crate::store::PostInstantBehaviour::ShowCap
-                    && cx.global::<AppWindows>().main_hidden_by_app
-                    && !main
-                        .update(cx, |_, window, _| platform::window_is_visible(window))
-                        .unwrap_or(true);
+                    && main_away(cx);
+                let keep_hidden_after_delete = deleted
+                    && settings.post_deletion_behaviour
+                        == crate::store::PostDeletionBehaviour::DoNothing
+                    && main_away(cx);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
@@ -701,6 +711,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                     }
                     (None, _) if keep_hidden_after_instant => {
                         tracing::info!("main window kept hidden after the Instant recording");
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (None, _) if keep_hidden_after_delete => {
+                        tracing::info!("main window kept hidden after the deleted recording");
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
