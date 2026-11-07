@@ -159,26 +159,29 @@ mod tests {
         decoded
     }
 
-    #[test]
-    fn colour_and_straight_alpha_are_encoded_as_bt709_limited_range() {
-        ffmpeg::init().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("red.mov");
+    fn encode_solid_frames(path: &std::path::Path, pixel: [u8; 4]) {
         let info = VideoInfo::from_raw(RawVideoFormat::Rgba, WIDTH, HEIGHT, 30);
-        let mut mov = MOVFile::init(path.clone(), |output| {
+        let mut mov = MOVFile::init(path.to_path_buf(), |output| {
             ProResEncoder::builder(info).build(output)
         })
         .unwrap();
-
         let mut source = frame::Video::new(format::Pixel::RGBA, WIDTH, HEIGHT);
-        for pixel in source.data_mut(0).chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[220, 40, 40, 128]);
+        for target in source.data_mut(0).chunks_exact_mut(4) {
+            target.copy_from_slice(&pixel);
         }
         for index in 0..8 {
             mov.queue_video_frame(&mut source, Duration::from_secs_f64(index as f64 / 30.0))
                 .unwrap();
         }
         mov.finish().unwrap();
+    }
+
+    #[test]
+    fn colour_and_straight_alpha_are_encoded_as_bt709_limited_range() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("red.mov");
+        encode_solid_frames(&path, [220, 40, 40, 128]);
 
         let decoded = decoded_first_frame(&path);
         assert_eq!(decoded.format(), format::Pixel::YUVA444P12LE);
@@ -196,6 +199,26 @@ mod tests {
         assert!((cb - 109.9).abs() <= 1.5, "Cb {cb}");
         assert!((cr - 207.1).abs() <= 1.5, "Cr {cr}");
         assert!((alpha - 128.0).abs() <= 1.5, "alpha {alpha}");
+    }
+
+    #[test]
+    fn opaque_alpha_is_exactly_opaque_at_12_bits() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opaque.mov");
+        encode_solid_frames(&path, [220, 40, 40, 255]);
+
+        let decoded = decoded_first_frame(&path);
+        assert_eq!(decoded.format(), format::Pixel::YUVA444P12LE);
+        let rows = decoded
+            .data(3)
+            .chunks_exact(decoded.stride(3))
+            .take(HEIGHT as usize);
+        for row in rows {
+            for sample in row[..WIDTH as usize * 2].chunks_exact(2) {
+                assert_eq!(u16::from_le_bytes([sample[0], sample[1]]), 4095);
+            }
+        }
     }
 
     #[test]
