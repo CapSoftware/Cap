@@ -689,7 +689,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                         != crate::store::PostInstantBehaviour::ShowCap
                     && cx.global::<AppWindows>().main_hidden_by_app
                     && !main
-                        .update(cx, |_, window, _| platform::window_is_visible(window))
+                        .update(cx, |_, window, _| {
+                            // Windows counts a minimised window as visible.
+                            platform::window_is_visible(window)
+                                && !platform::window_is_minimized(window)
+                        })
                         .unwrap_or(true);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
