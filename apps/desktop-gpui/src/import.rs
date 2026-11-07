@@ -49,7 +49,6 @@ pub(crate) static IMPORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 /// the drain recognises it and skips the error dialog.
 const IMPORT_CANCELLED: &str = "Import cancelled";
 
-/// What the drain reports for an import whose worker ended without saying how.
 const IMPORT_STOPPED: &str = "The import stopped unexpectedly";
 
 fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
