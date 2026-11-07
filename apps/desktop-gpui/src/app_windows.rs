@@ -6101,7 +6101,9 @@ fn load_editor_waveforms(
 /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
 /// optionally scrolls its body, `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`
 /// makes a 3D shot, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects
-/// timeline segments so their panel opens.
+/// timeline segments so their panel opens. In debug builds
+/// `CAP_GPUI_AUTO_PANEL=style|transcript|clips` switches the side panel's tab
+/// first, the way a click on its switcher does.
 ///
 /// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
 /// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
@@ -6110,6 +6112,9 @@ fn load_editor_waveforms(
 /// but moves nothing when it lands on the scroll body, so a tab taller than
 /// 470px cannot be photographed below the fold without this.
 async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    let panel = std::env::var("CAP_GPUI_AUTO_PANEL")
+        .ok()
+        .filter(|_| cfg!(debug_assertions));
     let tab = std::env::var("CAP_GPUI_AUTO_SIDEBAR").ok();
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
     let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
@@ -6124,7 +6129,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     let desktop_background =
         std::env::var("CAP_GPUI_AUTO_DESKTOP_BACKGROUND").is_ok_and(|value| value == "1");
-    if tab.is_none()
+    if panel.is_none()
+        && tab.is_none()
         && select.is_none()
         && canvas.is_none()
         && crop.is_none()
@@ -6146,6 +6152,24 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         handle
             .update(cx, |view, window, cx| {
                 view.import_desktop_background(window, cx)
+            })
+            .ok();
+    }
+
+    if let Some(name) = panel {
+        let started = std::time::Instant::now();
+        while !handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(true)
+            && started.elapsed() < std::time::Duration::from_secs(20)
+        {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+        }
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_select_panel(&name, window, cx)
             })
             .ok();
     }
