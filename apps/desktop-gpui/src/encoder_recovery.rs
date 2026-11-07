@@ -5,10 +5,10 @@
 //! recording, after NVENC failed its self-test on an old NVIDIA card), nothing
 //! can fall back, and every recording after it picks the same encoder and
 //! dies again. The session marker names the hardware encoders that are live;
-//! when the previous session died in a native crash with one live, or in a
-//! module that belongs to one, that encoder is skipped until the next app
-//! version, and recording falls through to the next encoder in the order and,
-//! at worst, libx264.
+//! when the previous session died in a native crash inside an encoder's own
+//! module, or inside the GPU driver a live encoder runs on, that encoder is
+//! skipped until the next app version, and recording falls through to the
+//! next encoder in the order and, at worst, libx264.
 
 use serde_json::{Value, json};
 
@@ -35,13 +35,7 @@ pub fn configure(previous: Option<&UncleanEnd>) {
         .get(DISABLED_BY_CRASH)
         .cloned();
     let stored = raw.as_ref().and_then(Disabled::from_value);
-    let own_module = std::env::current_exe().ok().and_then(|path| {
-        path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-    });
-    let crashed = previous
-        .map(|previous| blamed_encoders(previous, own_module.as_deref()))
-        .unwrap_or_default();
+    let crashed = previous.map(blamed_encoders).unwrap_or_default();
     let next = next_disabled(stored.as_ref(), &crashed, current);
 
     let next_value = next.as_ref().map(Disabled::to_value);
@@ -56,10 +50,10 @@ pub fn configure(previous: Option<&UncleanEnd>) {
         }
     }
 
+    let module = previous
+        .and_then(|previous| previous.native_crash.as_ref())
+        .and_then(|crash| crash.module.as_deref());
     if !crashed.is_empty() {
-        let module = previous
-            .and_then(|previous| previous.native_crash.as_ref())
-            .and_then(|crash| crash.module.as_deref());
         tracing::error!(
             encoders = ?crashed,
             module = ?module,
@@ -71,7 +65,8 @@ pub fn configure(previous: Option<&UncleanEnd>) {
     {
         tracing::warn!(
             encoders = ?previous.hardware_encoders,
-            "the previous Cap session crashed in Cap's own code with a hardware video encoder live; keeping the encoder"
+            module = ?module,
+            "the previous Cap session crashed outside the live hardware video encoders and their GPU drivers; keeping them"
         );
     }
     match (&next, &stored) {
@@ -116,47 +111,81 @@ impl Disabled {
     }
 }
 
-/// The FFmpeg encoder a faulting module belongs to, when the module alone
-/// says so.
-fn encoder_owning_module(module: &str) -> Option<&'static str> {
-    // First match wins: Intel's Media Foundation encoder (`mfx_mft_*`) before
-    // its Quick Sync runtime (`mfx*`, `libmfx*`).
-    const OWNERS: &[(&str, &str)] = &[
-        ("mfx_mft", "h264_mf"),
-        ("nvencmft", "h264_mf"),
-        ("libmfx", "h264_qsv"),
-        ("libvpl", "h264_qsv"),
-        ("mfx", "h264_qsv"),
-        ("nvencodeapi", "h264_nvenc"),
-        ("amfrt", "h264_amf"),
+/// What a faulting module says about the hardware encoders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fault {
+    /// The encoder's own module.
+    Encoder(&'static str),
+    /// A GPU vendor's driver or media runtime, shared with rendering and
+    /// capture: only the live encoders running on that vendor are blamed.
+    /// `h264_mf` is on every list because Media Foundation loads whichever
+    /// vendor's encoder transform is installed.
+    Driver(&'static [&'static str]),
+    /// Windows, Cap or anything else: not an encoder's doing.
+    Elsewhere,
+}
+
+fn classify_module(module: &str) -> Fault {
+    const INTEL: &[&str] = &["h264_qsv", "h264_mf"];
+    const NVIDIA: &[&str] = &["h264_nvenc", "h264_mf"];
+    const AMD: &[&str] = &["h264_amf", "h264_mf"];
+    // First match wins, so each encoder transform comes before its vendor's
+    // runtime (`mfx_mft*` before `mfx*`).
+    const MODULES: &[(&str, Fault)] = &[
+        // Media Foundation encoder transforms (Intel, NVIDIA, AMD).
+        ("mfx_mft", Fault::Encoder("h264_mf")),
+        ("nvencmft", Fault::Encoder("h264_mf")),
+        ("amdh264enc", Fault::Encoder("h264_mf")),
+        ("nvencodeapi", Fault::Encoder("h264_nvenc")),
+        ("amfrt", Fault::Encoder("h264_amf")),
+        // Intel: D3D drivers, shader compiler, Quick Sync runtimes.
+        ("igd", Fault::Driver(INTEL)),
+        ("igxe", Fault::Driver(INTEL)),
+        ("igc", Fault::Driver(INTEL)),
+        ("intel_gfx_api", Fault::Driver(INTEL)),
+        ("libmfx", Fault::Driver(INTEL)),
+        ("libvpl", Fault::Driver(INTEL)),
+        ("mfx", Fault::Driver(INTEL)),
+        // NVIDIA: CUDA and the D3D drivers.
+        ("nvcuda", Fault::Driver(NVIDIA)),
+        ("nvwgf2um", Fault::Driver(NVIDIA)),
+        ("nvd3dum", Fault::Driver(NVIDIA)),
+        ("nvldumd", Fault::Driver(NVIDIA)),
+        ("nvlddmkm", Fault::Driver(NVIDIA)),
+        // AMD: the D3D drivers.
+        ("atiumd", Fault::Driver(AMD)),
+        ("atidxx", Fault::Driver(AMD)),
+        ("amdxx", Fault::Driver(AMD)),
     ];
     let module = module.to_ascii_lowercase();
-    OWNERS
+    MODULES
         .iter()
         .find(|(prefix, _)| module.starts_with(prefix))
-        .map(|(_, encoder)| *encoder)
+        .map_or(Fault::Elsewhere, |(_, fault)| *fault)
 }
 
 /// The encoders a previous session's death is blamed on. Only a native crash
-/// counts (a kill or a force quit leaves none). A module that belongs to an
-/// encoder names it; a fault in Cap's own executable blames nothing; a fault
-/// anywhere else (a GPU driver such as `igd*` or `atiumd*`, a system library,
-/// or code in no module) blames every hardware encoder that was live.
-fn blamed_encoders(previous: &UncleanEnd, own_module: Option<&str>) -> Vec<String> {
-    let Some(crash) = &previous.native_crash else {
+/// in a known module counts: an encoder's own module names it, and a GPU
+/// driver blames the live encoders running on that vendor. A kill, a fault in
+/// Windows (`ntdll`, `KERNELBASE`, `ucrtbase`), in Cap, in an unknown module
+/// or in no module blames nothing, since those crash for many other reasons.
+fn blamed_encoders(previous: &UncleanEnd) -> Vec<String> {
+    let Some(module) = previous
+        .native_crash
+        .as_ref()
+        .and_then(|crash| crash.module.as_deref())
+    else {
         return Vec::new();
     };
-    match crash.module.as_deref() {
-        Some(module) => {
-            if let Some(encoder) = encoder_owning_module(module) {
-                vec![encoder.to_owned()]
-            } else if own_module.is_some_and(|own| own.eq_ignore_ascii_case(module)) {
-                Vec::new()
-            } else {
-                previous.hardware_encoders.clone()
-            }
-        }
-        None => previous.hardware_encoders.clone(),
+    match classify_module(module) {
+        Fault::Encoder(encoder) => vec![encoder.to_owned()],
+        Fault::Driver(encoders) => previous
+            .hardware_encoders
+            .iter()
+            .filter(|live| encoders.contains(&live.as_str()))
+            .cloned()
+            .collect(),
+        Fault::Elsewhere => Vec::new(),
     }
 }
 
@@ -180,7 +209,7 @@ fn next_disabled(stored: Option<&Disabled>, crashed: &[String], current: &str) -
 
 #[cfg(test)]
 mod tests {
-    use super::{Disabled, blamed_encoders, encoder_owning_module, next_disabled};
+    use super::{Disabled, Fault, blamed_encoders, classify_module, next_disabled};
     use crate::crash_capture::{NativeCrash, UncleanEnd};
 
     fn crash(module: Option<&str>, live: &[&str]) -> UncleanEnd {
@@ -194,56 +223,84 @@ mod tests {
     }
 
     #[test]
-    fn encoder_modules_name_their_encoder() {
+    fn modules_are_classified_by_encoder_and_vendor() {
+        let encoder = |name| Fault::Encoder(name);
+        assert_eq!(classify_module("mfx_mft_h264ve_64.dll"), encoder("h264_mf"));
+        assert_eq!(classify_module("nvEncMFTH264x.dll"), encoder("h264_mf"));
+        assert_eq!(classify_module("nvEncodeAPI64.dll"), encoder("h264_nvenc"));
+        assert_eq!(classify_module("amfrt64.dll"), encoder("h264_amf"));
         assert_eq!(
-            encoder_owning_module("mfx_mft_h264ve_64.dll"),
-            Some("h264_mf")
+            classify_module("igd10iumd64.dll"),
+            Fault::Driver(&["h264_qsv", "h264_mf"])
         );
-        assert_eq!(encoder_owning_module("nvEncMFTH264x.dll"), Some("h264_mf"));
-        assert_eq!(encoder_owning_module("libmfxhw64.dll"), Some("h264_qsv"));
-        assert_eq!(encoder_owning_module("libmfx64-gen.dll"), Some("h264_qsv"));
-        assert_eq!(encoder_owning_module("libvpl.dll"), Some("h264_qsv"));
         assert_eq!(
-            encoder_owning_module("nvEncodeAPI64.dll"),
-            Some("h264_nvenc")
+            classify_module("libmfxhw64.dll"),
+            Fault::Driver(&["h264_qsv", "h264_mf"])
         );
-        assert_eq!(encoder_owning_module("amfrt64.dll"), Some("h264_amf"));
-        assert_eq!(encoder_owning_module("igd10iumd64.dll"), None);
-        assert_eq!(encoder_owning_module("mfplat.dll"), None);
-        assert_eq!(encoder_owning_module("Cap.exe"), None);
+        assert_eq!(
+            classify_module("nvwgf2umx.dll"),
+            Fault::Driver(&["h264_nvenc", "h264_mf"])
+        );
+        assert_eq!(
+            classify_module("atiumd64.dll"),
+            Fault::Driver(&["h264_amf", "h264_mf"])
+        );
+        for elsewhere in [
+            "ntdll.dll",
+            "KERNELBASE.dll",
+            "ucrtbase.dll",
+            "mfplat.dll",
+            "d3d11.dll",
+            "Cap.exe",
+        ] {
+            assert_eq!(classify_module(elsewhere), Fault::Elsewhere, "{elsewhere}");
+        }
     }
 
     #[test]
-    fn only_a_native_crash_blames_an_encoder() {
-        let own = Some("Cap.exe");
+    fn only_a_crash_in_an_encoder_or_its_driver_blames_it() {
         // The reported crash: Intel's encoder faulted with h264_mf live.
         assert_eq!(
-            blamed_encoders(&crash(Some("mfx_mft_h264ve_64.dll"), &["h264_mf"]), own),
+            blamed_encoders(&crash(Some("mfx_mft_h264ve_64.dll"), &["h264_mf"])),
             ["h264_mf"]
         );
-        // The module names the encoder even if the marker missed it.
+        // The encoder's own module names it even if the marker missed it.
         assert_eq!(
-            blamed_encoders(&crash(Some("mfx_mft_h264ve_64.dll"), &[]), own),
+            blamed_encoders(&crash(Some("mfx_mft_h264ve_64.dll"), &[])),
             ["h264_mf"]
         );
-        // A GPU driver or system library blames whatever was live.
+        // A vendor driver blames only that vendor's live encoders.
         assert_eq!(
-            blamed_encoders(&crash(Some("igd10iumd64.dll"), &["h264_qsv"]), own),
-            ["h264_qsv"]
+            blamed_encoders(&crash(Some("nvwgf2umx.dll"), &["h264_nvenc"])),
+            ["h264_nvenc"]
         );
         assert_eq!(
-            blamed_encoders(&crash(None, &["h264_nvenc", "h264_mf"]), own),
-            ["h264_nvenc", "h264_mf"]
+            blamed_encoders(&crash(Some("nvwgf2umx.dll"), &["h264_qsv"])),
+            Vec::<String>::new()
         );
-        assert!(blamed_encoders(&crash(Some("igd10iumd64.dll"), &[]), own).is_empty());
-        // Cap's own code faulting is not the encoder's doing.
-        assert!(blamed_encoders(&crash(Some("cap.EXE"), &["h264_mf"]), own).is_empty());
+        assert_eq!(
+            blamed_encoders(&crash(Some("igd10iumd64.dll"), &["h264_nvenc", "h264_mf"])),
+            ["h264_mf"]
+        );
+        assert!(blamed_encoders(&crash(Some("igd10iumd64.dll"), &[])).is_empty());
+        // Windows, Cap, unknown modules and no module blame nothing.
+        for module in [
+            Some("ntdll.dll"),
+            Some("ucrtbase.dll"),
+            Some("Cap.exe"),
+            None,
+        ] {
+            assert!(
+                blamed_encoders(&crash(module, &["h264_nvenc"])).is_empty(),
+                "{module:?}"
+            );
+        }
         // A kill or force quit with an encoder live leaves no crash record.
         let killed = UncleanEnd {
             hardware_encoders: vec!["h264_mf".into()],
             ..Default::default()
         };
-        assert!(blamed_encoders(&killed, own).is_empty());
+        assert!(blamed_encoders(&killed).is_empty());
     }
 
     #[test]
@@ -299,6 +356,7 @@ mod process_tests {
     const LOGS: &str = "CAP_ENCODER_RECOVERY_LOGS";
     const TRACE_FILE: &str = "trace.log";
     const RECORD_TEST: &str = "encoder_recovery::process_tests::next_launch_after_an_encoder_crash_records_with_the_next_encoder";
+    const NTDLL_CRASH: &str = "native crash: unhandled exception 0xc0000005 at 0x00007ffdc1a2f0e1 in ntdll.dll+0x0002f0e1\r\n";
     /// The line the reported crash left in the crash record.
     const INTEL_MFT_CRASH: &str = "native crash: unhandled exception 0xc0000005 at 0x00007ffda598ccd0 in mfx_mft_h264ve_64.dll+0x0013ccd0\r\n";
 
@@ -458,6 +516,41 @@ mod process_tests {
             next.stdout
         );
 
+        // A crash in Windows itself with Media Foundation live is not blamed on it.
+        let system = tempfile::tempdir().unwrap();
+        std::fs::write(
+            system.path().join("cap-gpui.session"),
+            format!(
+                "pid=1 started=2026-11-01T14:53:29.189Z version={} hwenc=h264_mf\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            system.path().join(crate::crash_capture::CRASH_FILE),
+            NTDLL_CRASH,
+        )
+        .unwrap();
+        let after_system = launch(RECORD_TEST, "record", system.path());
+        report("after a crash in ntdll", &after_system);
+        assert!(
+            after_system.success,
+            "{}\n{}",
+            after_system.stdout, after_system.trace
+        );
+        assert!(
+            after_system
+                .trace
+                .contains("crashed outside the live hardware video encoders"),
+            "{}",
+            after_system.trace
+        );
+        assert!(
+            tried_media_foundation(&after_system.trace),
+            "{}",
+            after_system.trace
+        );
+
         // A clean launch after it keeps Media Foundation off in this version.
         let after = launch(RECORD_TEST, "record", crashed.path());
         report("the launch after that", &after);
@@ -502,7 +595,8 @@ mod process_tests {
         report("after a fault in Cap's own code", &next);
         assert!(next.success, "{}\n{}", next.stdout, next.trace);
         assert!(
-            next.trace.contains("crashed in Cap's own code"),
+            next.trace
+                .contains("crashed outside the live hardware video encoders"),
             "{}",
             next.trace
         );
