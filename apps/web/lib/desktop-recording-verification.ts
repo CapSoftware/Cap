@@ -5,6 +5,7 @@ import {
 } from "@cap/web-backend/src/Storage/recording-object-identity";
 import type { Video } from "@cap/web-domain";
 import { z } from "zod";
+import { integer } from "@/utils/zod";
 
 const positiveNumber = z.number().finite().positive();
 const positiveSize = positiveNumber.int().max(Number.MAX_SAFE_INTEGER);
@@ -71,12 +72,12 @@ export type RecordingSourceProof = z.infer<typeof recordingSourceProofSchema>;
 export const recordingOutputSha256Schema = sha256;
 
 const segmentSchema = z.union([
-	z.number().int().positive(),
-	z.object({ index: z.number().int().positive(), duration: positiveNumber }),
+	integer().positive(),
+	z.object({ index: integer().positive(), duration: positiveNumber }),
 ]);
 
 const completedManifestSchema = z.object({
-	version: z.number().int().positive(),
+	version: integer().positive(),
 	video_init_uploaded: z.literal(true),
 	audio_init_uploaded: z.boolean(),
 	video_segments: z.array(segmentSchema).min(1),
@@ -152,8 +153,8 @@ export function isCompletedRecordingManifest(
 export const recordingOutputSchema = z.object({
 	fileSize: positiveSize,
 	duration: positiveNumber,
-	width: positiveNumber.int(),
-	height: positiveNumber.int(),
+	width: integer().positive(),
+	height: integer().positive(),
 	videoCodec: z.string().min(1),
 	audioCodec: z.string().min(1).nullable(),
 });
