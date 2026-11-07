@@ -556,6 +556,10 @@ pub fn window_is_visible(window: &Window) -> bool {
     native_handle(window).is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd as HWND) != 0 })
 }
 
+pub fn window_is_minimized(window: &Window) -> bool {
+    native_handle(window).is_some_and(|hwnd| unsafe { IsIconic(hwnd as HWND) != 0 })
+}
+
 pub fn show_window_without_focus(window: &Window) {
     let Some(native) = native_window(window) else {
         return;
