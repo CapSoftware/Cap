@@ -796,8 +796,6 @@ impl EditorWindow {
         let insertion = self.clips.drop_index.take();
         cx.notify();
         let Some(drag) = drag else { return };
-        // A press that never became a drag is a click: select the clip on the
-        // timeline and put the playhead on its first frame.
         if !drag.active {
             self.select_clip_from_panel(drag.index, cx);
             return;
@@ -1095,9 +1093,6 @@ impl EditorWindow {
                     .rounded(px(8.))
                     .border_1()
                     .p(px(8.))
-                    // Idle cards sit quietly on the panel; hover lifts the
-                    // ring, and the clip selected on the timeline wears the
-                    // accent, so a click visibly lands.
                     .map(|card| {
                         if selected {
                             card.border_color(accent.opacity(0.7))

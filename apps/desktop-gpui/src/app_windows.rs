@@ -6145,7 +6145,6 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     }
 
     if let Some(name) = panel {
-        // The tabs only switch once the project is up.
         let started = std::time::Instant::now();
         while !handle
             .update(cx, |view, _, _| view.project_ready())

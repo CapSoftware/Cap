@@ -121,7 +121,6 @@ pub(crate) fn clamp_panel_width(width: f32, viewport_width: f32) -> f32 {
     width.clamp(SIDEBAR_WIDTH, max)
 }
 
-/// The width a grip drag lands on: the panel grows as the pointer moves left.
 pub(crate) fn dragged_panel_width(start_width: f32, start_x: f32, x: f32) -> f32 {
     start_width + (start_x - x)
 }
@@ -352,6 +351,7 @@ impl EditorWindow {
                 div().flex_1().min_w_0().child(
                     ui::SegmentedControl::editor(&theme, "editor-panel-tabs", options)
                         .stretch()
+                        .tab_stops()
                         .on_select(cx.listener(|this, index: &usize, window, cx| {
                             if let Some(tab) = ui::option_at(&PanelTab::ALL, *index) {
                                 this.set_panel_tab(tab, window, cx);

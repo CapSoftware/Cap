@@ -285,8 +285,6 @@ impl ParagraphPainter {
         let stamp_editor = self.editor.clone();
         let layouts = self.layouts.clone();
         let paint_layout = layout.clone();
-        // The paragraph the playhead is in shows it in the gutter: its stamp
-        // takes the accent, the rest of the column stays as it was.
         let playing = self.active_paragraph == Some(index);
         div()
             .id(("transcript-paragraph", index))
@@ -2096,8 +2094,6 @@ impl EditorWindow {
             }
             _ => SharedString::default(),
         };
-        // No rule above it: a line of help under the text, not a status bar.
-        // It wraps rather than truncating at the panel's standard width.
         div()
             .flex_none()
             .min_h(px(30.))
