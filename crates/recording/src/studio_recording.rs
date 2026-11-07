@@ -4521,6 +4521,7 @@ mod tests {
             segments: Vec::new(),
             completion_tx,
             display_notch: None,
+            pretty_name: None,
             markers: crate::markers::RecordingMarkers::new(None),
         });
         let handle = ActorHandle {
