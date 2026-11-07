@@ -91,15 +91,12 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-/// The `(1)`-suffix uniquing loop from `start_video_import` (`import.rs:1370-1376`).
-fn unique_project_path(recordings_dir: &Path, sanitized_name: &str) -> PathBuf {
-    let mut project_path = recordings_dir.join(format!("{sanitized_name}.cap"));
-    let mut counter = 1;
-    while project_path.exists() {
-        project_path = recordings_dir.join(format!("{sanitized_name} ({counter}).cap"));
-        counter += 1;
-    }
-    project_path
+/// The `(1)`-suffix uniquing from `start_video_import` (`import.rs:1370-1376`),
+/// through the helper the image import uses so a long source name is cut to
+/// fit a folder name instead of failing the import.
+fn unique_project_path(recordings_dir: &Path, sanitized_name: &str) -> Result<PathBuf, String> {
+    cap_utils::ensure_unique_filename(&format!("{sanitized_name}.cap"), recordings_dir)
+        .map(|name| recordings_dir.join(name))
 }
 
 fn check_project_exists(project_path: &Path) -> bool {
@@ -483,7 +480,20 @@ impl ProgressSink<'_> {
 fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     let recordings_dir = crate::recording::recordings_dir();
     let project_name = generate_project_name(source_path, "Imported Video");
-    let project_path = unique_project_path(&recordings_dir, &sanitize_filename(&project_name));
+    let sanitized_name = sanitize_filename(&project_name);
+    let project_path = match unique_project_path(&recordings_dir, &sanitized_name) {
+        Ok(path) => path,
+        Err(error) => {
+            ProgressSink {
+                tx,
+                kind: ImportKind::Video,
+                project_path: &recordings_dir.join(format!("{sanitized_name}.cap")),
+                pretty_name: &project_name,
+            }
+            .send(ImportStage::Failed, 0.0, &error);
+            return;
+        }
+    };
     let sink = ProgressSink {
         tx,
         kind: ImportKind::Video,
@@ -2217,16 +2227,37 @@ mod tests {
     fn unique_project_path_suffixes_like_the_tauri_import() {
         let dir = temp_dir("unique");
 
-        let first = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let first = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(first.ends_with("Video 2026-01-01 at 10.00.00.cap"));
         std::fs::create_dir_all(&first).unwrap();
 
-        let second = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let second = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(second.ends_with("Video 2026-01-01 at 10.00.00 (1).cap"));
         std::fs::create_dir_all(&second).unwrap();
 
-        let third = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
+        let third = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00").unwrap();
         assert!(third.ends_with("Video 2026-01-01 at 10.00.00 (2).cap"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unique_project_path_fits_a_long_source_name_in_a_folder_name() {
+        let dir = temp_dir("long-name");
+        let name = format!("{} 2026-01-01 at 10.00.00", "a".repeat(236));
+
+        let first = unique_project_path(&dir, &name).unwrap();
+        std::fs::create_dir_all(&first).unwrap();
+        let second = unique_project_path(&dir, &name).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        for path in [&first, &second] {
+            let folder = path.file_name().unwrap().to_str().unwrap();
+            assert!(folder.len() <= 255, "{} bytes", folder.len());
+            assert!(folder.starts_with("aaaa"), "{folder}");
+        }
+        assert!(first.to_str().unwrap().ends_with(".cap"));
+        assert!(second.to_str().unwrap().ends_with(" (1).cap"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
