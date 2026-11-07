@@ -1,5 +1,5 @@
 use crate::{ConversionConfig, ConvertError, FrameConverter, VideoFramePool, create_converter};
-use ffmpeg::frame;
+use ffmpeg::{format::Pixel, frame};
 use std::{
     sync::{
         Arc,
@@ -9,6 +9,26 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{debug, info, warn};
+
+// Cap total in-flight input, output, and pooled converter frames to 64 MiB so high-resolution
+// webcam streams cannot accumulate multi-gigabyte backlogs when encoding slows down.
+const CONVERTER_POOL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
+const MIN_QUEUE_CAPACITY: usize = 4;
+
+pub(crate) fn estimate_frame_bytes(format: Pixel, width: u32, height: u32) -> usize {
+    let pixels = (width as usize).saturating_mul(height as usize);
+    let (num, den) = match format {
+        Pixel::NV12 | Pixel::YUV420P | Pixel::YUVJ420P => (3, 2),
+        Pixel::YUYV422 | Pixel::UYVY422 | Pixel::YUV422P => (2, 1),
+        Pixel::RGB24 | Pixel::BGR24 => (3, 1),
+        _ => (4, 1),
+    };
+    pixels
+        .saturating_mul(num)
+        .checked_div(den)
+        .unwrap_or(0)
+        .max(1)
+}
 
 pub struct ConvertedFrame {
     pub frame: frame::Video,
@@ -23,6 +43,7 @@ pub struct InputFrame {
     pub submit_time: Instant,
 }
 
+#[derive(Clone, Debug)]
 pub struct ConverterPoolConfig {
     pub worker_count: usize,
     pub input_capacity: usize,
@@ -43,6 +64,41 @@ impl Default for ConverterPoolConfig {
     }
 }
 
+impl ConverterPoolConfig {
+    // Bound queue and frame pool capacities by the per-frame byte footprint of the conversion.
+    pub fn bounded_for_conversion(&self, conversion: &ConversionConfig) -> Self {
+        let in_bytes = estimate_frame_bytes(
+            conversion.input_format,
+            conversion.input_width,
+            conversion.input_height,
+        );
+        let out_bytes = estimate_frame_bytes(
+            conversion.output_format,
+            conversion.output_width,
+            conversion.output_height,
+        );
+        let avg_frame_bytes = in_bytes.max(out_bytes);
+        let max_total_frames =
+            (CONVERTER_POOL_BYTE_BUDGET / avg_frame_bytes).max(MIN_QUEUE_CAPACITY * 3);
+
+        let max_input = (max_total_frames / 3).max(MIN_QUEUE_CAPACITY);
+        let max_output = (max_total_frames / 3).max(MIN_QUEUE_CAPACITY);
+        let max_pool = (max_total_frames - max_input - max_output).max(MIN_QUEUE_CAPACITY);
+
+        Self {
+            worker_count: self.worker_count,
+            input_capacity: self.input_capacity.min(max_input),
+            output_capacity: self.output_capacity.min(max_output),
+            drop_strategy: self.drop_strategy,
+            frame_pool_capacity: if self.frame_pool_capacity == 0 {
+                0
+            } else {
+                self.frame_pool_capacity.min(max_pool)
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum DropStrategy {
     DropOldest,
@@ -58,38 +114,38 @@ pub struct ConverterPoolStats {
 
 pub struct AsyncConverterPool {
     input_tx: Option<flume::Sender<InputFrame>>,
+    input_rx: flume::Receiver<InputFrame>,
     output_rx: flume::Receiver<ConvertedFrame>,
     workers: Vec<JoinHandle<()>>,
     shutdown: Arc<AtomicBool>,
     stats: Arc<PoolStats>,
+    drop_strategy: DropStrategy,
     frame_pool: Option<Arc<VideoFramePool>>,
 }
 
+#[derive(Default)]
 struct PoolStats {
     frames_received: AtomicU64,
     frames_converted: AtomicU64,
     frames_dropped: AtomicU64,
 }
 
-impl Default for PoolStats {
-    fn default() -> Self {
-        Self {
-            frames_received: AtomicU64::new(0),
-            frames_converted: AtomicU64::new(0),
-            frames_dropped: AtomicU64::new(0),
-        }
-    }
+struct PoolBuildSpec<F> {
+    factory: F,
+    converter_name: String,
+    config: ConverterPoolConfig,
+    frame_pool: Option<Arc<VideoFramePool>>,
 }
 
 impl AsyncConverterPool {
     pub fn new(converter: Arc<dyn FrameConverter>, config: ConverterPoolConfig) -> Self {
         let converter_name = converter.name().to_string();
-        Self::new_with_factory(
-            move |_| Ok(Arc::clone(&converter)),
-            &converter_name,
+        Self::new_with_spec(PoolBuildSpec {
+            factory: move |_| Ok(Arc::clone(&converter)),
+            converter_name,
             config,
-            None,
-        )
+            frame_pool: None,
+        })
         .expect("Factory using pre-created converter should not fail")
     }
 
@@ -97,12 +153,13 @@ impl AsyncConverterPool {
         conversion_config: ConversionConfig,
         pool_config: ConverterPoolConfig,
     ) -> Result<Self, ConvertError> {
+        let bounded_config = pool_config.bounded_for_conversion(&conversion_config);
         let first_converter = create_converter(conversion_config.clone())?;
         let converter_name = first_converter.name().to_string();
 
-        let frame_pool = if pool_config.frame_pool_capacity > 0 {
+        let frame_pool = if bounded_config.frame_pool_capacity > 0 {
             Some(VideoFramePool::new(
-                pool_config.frame_pool_capacity,
+                bounded_config.frame_pool_capacity,
                 conversion_config.output_format,
                 conversion_config.output_width,
                 conversion_config.output_height,
@@ -111,91 +168,82 @@ impl AsyncConverterPool {
             None
         };
 
-        Self::new_with_factory(
-            move |worker_id| {
+        Self::new_with_spec(PoolBuildSpec {
+            factory: move |worker_id| {
                 if worker_id == 0 {
                     Ok(Arc::clone(&first_converter))
                 } else {
                     create_converter(conversion_config.clone())
                 }
             },
-            &converter_name,
-            pool_config,
+            converter_name,
+            config: bounded_config,
             frame_pool,
-        )
+        })
     }
 
-    fn new_with_factory<F>(
-        factory: F,
-        converter_name: &str,
-        config: ConverterPoolConfig,
-        frame_pool: Option<Arc<VideoFramePool>>,
-    ) -> Result<Self, ConvertError>
+    fn new_with_spec<F>(spec: PoolBuildSpec<F>) -> Result<Self, ConvertError>
     where
         F: Fn(usize) -> Result<Arc<dyn FrameConverter>, ConvertError> + Send + Sync + 'static,
     {
-        let (input_tx, input_rx) = flume::bounded(config.input_capacity);
-        let (output_tx, output_rx) = flume::bounded(config.output_capacity);
+        let (input_tx, input_rx) = flume::bounded(spec.config.input_capacity);
+        let (output_tx, output_rx) = flume::bounded(spec.config.output_capacity);
         let shutdown = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(PoolStats::default());
 
-        let mut workers = Vec::with_capacity(config.worker_count);
-        let factory = Arc::new(factory);
+        let mut workers = Vec::with_capacity(spec.config.worker_count);
+        let factory = Arc::new(spec.factory);
 
-        for worker_id in 0..config.worker_count {
+        for worker_id in 0..spec.config.worker_count {
             let factory = Arc::clone(&factory);
-            let input_rx = input_rx.clone();
-            let output_tx = output_tx.clone();
-            let shutdown = Arc::clone(&shutdown);
-            let stats = Arc::clone(&stats);
-            let drop_strategy = config.drop_strategy;
-            let frame_pool = frame_pool.clone();
+            let worker_ctx = WorkerContext {
+                worker_id,
+                input_rx: input_rx.clone(),
+                output_tx: output_tx.clone(),
+                shutdown: Arc::clone(&shutdown),
+                stats: Arc::clone(&stats),
+                drop_strategy: spec.config.drop_strategy,
+                frame_pool: spec.frame_pool.clone(),
+            };
 
             let handle = thread::Builder::new()
                 .name(format!("converter-worker-{worker_id}"))
-                .spawn(move || {
-                    let converter = match factory(worker_id) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            warn!("Worker {} failed to create converter: {}", worker_id, e);
-                            return;
-                        }
-                    };
-                    worker_loop(WorkerContext {
-                        worker_id,
-                        converter,
-                        input_rx,
-                        output_tx,
-                        shutdown,
-                        stats,
-                        drop_strategy,
-                        frame_pool,
-                    });
+                .spawn(move || match factory(worker_id) {
+                    Ok(converter) => worker_loop(worker_ctx, converter),
+                    Err(e) => warn!("Worker {worker_id} failed to create converter: {e}"),
                 })
                 .expect("Failed to spawn converter worker thread");
 
             workers.push(handle);
         }
 
+        let pooling_suffix = if spec.frame_pool.is_some() {
+            " with frame pooling"
+        } else {
+            ""
+        };
         info!(
             "AsyncConverterPool started with {} workers using {} converter{}",
-            config.worker_count,
-            converter_name,
-            if frame_pool.is_some() {
-                " with frame pooling"
-            } else {
-                ""
-            }
+            spec.config.worker_count, spec.converter_name, pooling_suffix
         );
 
         Ok(Self {
             input_tx: Some(input_tx),
+            input_rx,
             output_rx,
             workers,
             shutdown,
             stats,
-            frame_pool: frame_pool.clone(),
+            drop_strategy: spec.config.drop_strategy,
+            frame_pool: spec.frame_pool,
         })
+    }
+
+    fn record_input_drop(&self) {
+        let dropped = self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped.is_multiple_of(30) {
+            warn!("Converter pool input full, dropped {dropped} frames so far");
+        }
     }
 
     pub fn submit(&self, frame: frame::Video, sequence: u64) -> Result<(), ConvertError> {
@@ -204,23 +252,21 @@ impl AsyncConverterPool {
         };
 
         self.stats.frames_received.fetch_add(1, Ordering::Relaxed);
-        let submit_time = Instant::now();
-
-        match input_tx.try_send(InputFrame {
+        let candidate = InputFrame {
             frame,
             sequence,
-            submit_time,
-        }) {
+            submit_time: Instant::now(),
+        };
+
+        match input_tx.try_send(candidate) {
             Ok(()) => Ok(()),
-            Err(flume::TrySendError::Full(_)) => {
-                self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                let dropped = self.stats.frames_dropped.load(Ordering::Relaxed);
-                if dropped.is_multiple_of(30) {
-                    warn!(
-                        "Converter pool input full, dropped {} frames so far",
-                        dropped
-                    );
+            Err(flume::TrySendError::Full(rejected)) => {
+                // Evict the oldest queued input frame when configured for DropOldest.
+                if matches!(self.drop_strategy, DropStrategy::DropOldest) {
+                    let _ = self.input_rx.try_recv();
+                    let _ = input_tx.try_send(rejected);
                 }
+                self.record_input_drop();
                 Ok(())
             }
             Err(flume::TrySendError::Disconnected(_)) => Err(ConvertError::PoolShutdown),
@@ -264,6 +310,13 @@ impl AsyncConverterPool {
         self.frame_pool.as_ref()
     }
 
+    fn pending_frame_count(&self) -> u64 {
+        let stats = self.stats();
+        stats
+            .frames_received
+            .saturating_sub(stats.frames_converted + stats.frames_dropped)
+    }
+
     pub fn drain_with_timeout(
         &mut self,
         mut frame_handler: impl FnMut(ConvertedFrame),
@@ -271,21 +324,17 @@ impl AsyncConverterPool {
     ) -> usize {
         self.input_tx.take();
 
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = Instant::now() + timeout;
         let mut drained = 0;
 
-        while std::time::Instant::now() < deadline {
+        while Instant::now() < deadline {
             match self.output_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(frame) => {
                     frame_handler(frame);
                     drained += 1;
                 }
                 Err(flume::RecvTimeoutError::Timeout) => {
-                    let stats = self.stats();
-                    let pending = stats
-                        .frames_received
-                        .saturating_sub(stats.frames_converted + stats.frames_dropped);
-                    if pending == 0 {
+                    if self.pending_frame_count() == 0 {
                         break;
                     }
                 }
@@ -330,7 +379,6 @@ impl AsyncConverterPool {
 
 struct WorkerContext {
     worker_id: usize,
-    converter: Arc<dyn FrameConverter>,
     input_rx: flume::Receiver<InputFrame>,
     output_tx: flume::Sender<ConvertedFrame>,
     shutdown: Arc<AtomicBool>,
@@ -339,98 +387,133 @@ struct WorkerContext {
     frame_pool: Option<Arc<VideoFramePool>>,
 }
 
-fn worker_loop(ctx: WorkerContext) {
-    debug!(
-        "Converter worker {} started{}",
-        ctx.worker_id,
-        if ctx.frame_pool.is_some() {
-            " with frame pooling"
-        } else {
-            ""
+impl WorkerContext {
+    fn convert_input(
+        &self,
+        converter: &dyn FrameConverter,
+        input_frame: frame::Video,
+    ) -> Result<frame::Video, ConvertError> {
+        let Some(ref pool) = self.frame_pool else {
+            return converter.convert(input_frame);
+        };
+
+        let mut output = pool.get();
+        match converter.convert_into(input_frame, &mut output) {
+            Ok(()) => Ok(output),
+            Err(e) => {
+                pool.put(output);
+                Err(e)
+            }
         }
-    );
-    let mut local_converted = 0u64;
-    let mut local_errors = 0u64;
+    }
+
+    fn recycle_frame(&self, frame: frame::Video) {
+        if let Some(ref pool) = self.frame_pool {
+            pool.put(frame);
+        }
+    }
+
+    fn deliver_converted(&self, converted_frame: ConvertedFrame) -> bool {
+        match self.output_tx.try_send(converted_frame) {
+            Ok(()) => true,
+            Err(flume::TrySendError::Full(dropped_frame)) => {
+                match self.drop_strategy {
+                    DropStrategy::DropOldest | DropStrategy::DropNewest => {
+                        self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                self.recycle_frame(dropped_frame.frame);
+                true
+            }
+            Err(flume::TrySendError::Disconnected(dropped_frame)) => {
+                self.recycle_frame(dropped_frame.frame);
+                false
+            }
+        }
+    }
+
+    fn process_one(
+        &self,
+        converter: &dyn FrameConverter,
+        input: InputFrame,
+        counters: &mut (u64, u64),
+    ) -> bool {
+        let convert_start = Instant::now();
+        match self.convert_input(converter, input.frame) {
+            Ok(converted) => {
+                counters.0 += 1;
+                self.stats.frames_converted.fetch_add(1, Ordering::Relaxed);
+                self.deliver_converted(ConvertedFrame {
+                    frame: converted,
+                    sequence: input.sequence,
+                    submit_time: input.submit_time,
+                    conversion_duration: convert_start.elapsed(),
+                })
+            }
+            Err(e) => {
+                counters.1 += 1;
+                if counters.1 % 10 == 1 {
+                    warn!(
+                        "Worker {}: conversion error (#{} total): {}",
+                        self.worker_id, counters.1, e
+                    );
+                }
+                true
+            }
+        }
+    }
+}
+
+fn worker_loop(ctx: WorkerContext, converter: Arc<dyn FrameConverter>) {
+    let pooling_label = if ctx.frame_pool.is_some() {
+        " with frame pooling"
+    } else {
+        ""
+    };
+    debug!("Converter worker {} started{}", ctx.worker_id, pooling_label);
+    let mut counters = (0u64, 0u64);
 
     while !ctx.shutdown.load(Ordering::Relaxed) {
         match ctx.input_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(input) => {
-                let sequence = input.sequence;
-                let submit_time = input.submit_time;
-                let convert_start = Instant::now();
-
-                let result = if let Some(ref pool) = ctx.frame_pool {
-                    let mut output = pool.get();
-                    match ctx.converter.convert_into(input.frame, &mut output) {
-                        Ok(()) => Ok(output),
-                        Err(e) => {
-                            pool.put(output);
-                            Err(e)
-                        }
-                    }
-                } else {
-                    ctx.converter.convert(input.frame)
-                };
-
-                match result {
-                    Ok(converted) => {
-                        let conversion_duration = convert_start.elapsed();
-                        local_converted += 1;
-                        ctx.stats.frames_converted.fetch_add(1, Ordering::Relaxed);
-
-                        match ctx.output_tx.try_send(ConvertedFrame {
-                            frame: converted,
-                            sequence,
-                            submit_time,
-                            conversion_duration,
-                        }) {
-                            Ok(()) => {}
-                            Err(flume::TrySendError::Full(dropped_frame)) => {
-                                match ctx.drop_strategy {
-                                    DropStrategy::DropOldest | DropStrategy::DropNewest => {
-                                        ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                                if let Some(ref pool) = ctx.frame_pool {
-                                    pool.put(dropped_frame.frame);
-                                }
-                            }
-                            Err(flume::TrySendError::Disconnected(dropped_frame)) => {
-                                if let Some(ref pool) = ctx.frame_pool {
-                                    pool.put(dropped_frame.frame);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        local_errors += 1;
-                        if local_errors % 10 == 1 {
-                            warn!(
-                                "Worker {}: conversion error (#{} total): {}",
-                                ctx.worker_id, local_errors, e
-                            );
-                        }
-                    }
+                if !ctx.process_one(converter.as_ref(), input, &mut counters) {
+                    break;
                 }
             }
-            Err(flume::RecvTimeoutError::Timeout) => {
-                continue;
-            }
-            Err(flume::RecvTimeoutError::Disconnected) => {
-                break;
-            }
+            Err(flume::RecvTimeoutError::Timeout) => continue,
+            Err(flume::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     debug!(
         "Converter worker {} finished: {} converted, {} errors",
-        ctx.worker_id, local_converted, local_errors
+        ctx.worker_id, counters.0, counters.1
     );
 }
 
 impl Drop for AsyncConverterPool {
     fn drop(&mut self) {
         self.do_shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_high_res_converter_pool_queues_within_memory_budget() {
+        let conversion = ConversionConfig::new(Pixel::BGRA, 3840, 2160, Pixel::NV12, 3840, 2160);
+        let requested = ConverterPoolConfig {
+            worker_count: 4,
+            input_capacity: 120,
+            output_capacity: 90,
+            drop_strategy: DropStrategy::DropOldest,
+            frame_pool_capacity: 16,
+        };
+        let bounded = requested.bounded_for_conversion(&conversion);
+        assert_eq!(bounded.input_capacity, MIN_QUEUE_CAPACITY);
+        assert_eq!(bounded.output_capacity, MIN_QUEUE_CAPACITY);
+        assert_eq!(bounded.frame_pool_capacity, MIN_QUEUE_CAPACITY);
     }
 }
