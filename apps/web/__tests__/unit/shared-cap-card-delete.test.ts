@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	mutate: vi.fn(),
+	mutateAsync: vi.fn(),
 	videoDelete: vi.fn(),
 	mutationOptions: undefined as
 		| { mutationFn: (id: string) => unknown }
@@ -28,7 +28,7 @@ vi.mock("@/lib/EffectRuntime", () => ({
 	useRpcClient: () => ({ VideoDelete: mocks.videoDelete }),
 	useEffectMutation: (options: { mutationFn: (id: string) => unknown }) => {
 		mocks.mutationOptions = options;
-		return { mutate: mocks.mutate, isPending: false };
+		return { mutateAsync: mocks.mutateAsync, isPending: false };
 	},
 }));
 vi.mock("@/app/(org)/dashboard/caps/components/CapCard/CapCard", () => ({
@@ -63,7 +63,7 @@ describe("SharedCapCard delete", () => {
 		container = document.createElement("div");
 		document.body.append(container);
 		root = createRoot(container);
-		mocks.mutate.mockReset();
+		mocks.mutateAsync.mockReset();
 		mocks.videoDelete.mockReset();
 		mocks.capCardProps = undefined;
 		mocks.mutationOptions = undefined;
@@ -88,12 +88,17 @@ describe("SharedCapCard delete", () => {
 		});
 
 	it("gives the owner a Delete Cap that deletes the video", () => {
+		const request = new Promise<void>(() => {});
+		mocks.mutateAsync.mockReturnValue(request);
 		render("owner-1");
 
-		const onDelete = mocks.capCardProps?.onDelete;
+		const onDelete = mocks.capCardProps?.onDelete as
+			| (() => Promise<void>)
+			| undefined;
 		expect(onDelete).toBeTypeOf("function");
-		onDelete?.();
-		expect(mocks.mutate).toHaveBeenCalledWith("video-1");
+		// CapCard keeps its confirm dialog pending until this settles.
+		expect(onDelete?.()).toBe(request);
+		expect(mocks.mutateAsync).toHaveBeenCalledWith("video-1");
 
 		mocks.mutationOptions?.mutationFn("video-1");
 		expect(mocks.videoDelete).toHaveBeenCalledWith("video-1");

@@ -83,7 +83,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	const isOwner = userId === cap.ownerId;
 	const router = useRouter();
 	const rpc = useRpcClient();
-	const { mutate: deleteCap } = useEffectMutation({
+	const deleteCap = useEffectMutation({
 		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
@@ -109,7 +109,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				isSelected={isSelected}
 				anyCapSelected={anyCapSelected}
 				onSelectToggle={onSelectToggle}
-				onDelete={isOwner ? () => deleteCap(cap.id) : undefined}
+				onDelete={isOwner ? () => deleteCap.mutateAsync(cap.id) : undefined}
 			>
 				<div className="mb-2 space-y-1">
 					{cap.ownerName && (
