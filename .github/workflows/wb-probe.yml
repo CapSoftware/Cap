@@ -1,0 +1,185 @@
+name: wb probe (throwaway)
+
+on:
+  push:
+    branches: ["wb-probe/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    if: ${{ !contains(github.ref, 'win-') }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 75
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TARGET: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+      - run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Build
+        run: |
+          set -euo pipefail
+          for frameworks in \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug/Frameworks" \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/Frameworks"; do
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          done
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui --no-run --message-format=json \
+            | python3 -c 'import json, sys
+          for line in sys.stdin:
+              m = json.loads(line)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "cap-gpui" and m["profile"]["test"]:
+                  print(m["executable"])' > "$RUNNER_TEMP/test-binary"
+          echo "$GITHUB_WORKSPACE/apps/desktop-gpui/target/$TARGET/debug/cap-gpui" > "$RUNNER_TEMP/app-binary"
+      - name: Permissions, display and audio
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          cat "$RUNNER_TEMP/test-binary" "$RUNNER_TEMP/app-binary" > "$RUNNER_TEMP/capture-binaries"
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+      - name: Post-deletion behaviour (3899)
+        continue-on-error: true
+        run: |
+          export CAP_GPUI_REAL_APP_BIN="$(cat "$RUNNER_TEMP/app-binary")"
+          export CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app"
+          "$(cat "$RUNNER_TEMP/test-binary")" real_app_post_deletion_behaviour --ignored --test-threads=1 --nocapture
+      - name: Recording start behaviour (3900)
+        continue-on-error: true
+        run: |
+          export CAP_GPUI_REAL_APP_BIN="$(cat "$RUNNER_TEMP/app-binary")"
+          export CAP_GPUI_REAL_APP_ARTIFACTS="$RUNNER_TEMP/real-app"
+          "$(cat "$RUNNER_TEMP/test-binary")" real_app_recording_start_behaviour --ignored --test-threads=1 --nocapture
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-real-app
+          path: ${{ runner.temp }}/real-app
+          retention-days: 7
+
+  windows:
+    if: ${{ !contains(github.ref, 'mac-') }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+      - shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Build
+        shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-pc-windows-msvc --bin cap-gpui
+      - name: Area recording outline (3709)
+        continue-on-error: true
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          notepad.exe &
+          sleep 2
+          CAP_PICKER_PROBE_AREA_RECORDING=1 PICKER_SMOKE_POLLS=480 \
+            scripts/picker-smoke/run.sh \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/cap-gpui.exe" \
+            "$RUNNER_TEMP/wb/area-recording"
+      - name: Main window settings (3899, 3900)
+        continue-on-error: true
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          app="$GITHUB_WORKSPACE/apps/desktop-gpui/target/x86_64-pc-windows-msvc/debug/cap-gpui.exe"
+          run_case() {
+            name=$1; settings=$2; marker=$3; shift 3
+            out="$RUNNER_TEMP/wb/$name"
+            mkdir -p "$out/profile/recordings" "$out/profile/logs"
+            printf '{"general_settings":{"hasCompletedOnboarding":true,"hasCompletedStartup":true,"enableNotifications":false,"enableTelemetry":false,"recordingCountdown":0,%s},"recording_start_safety":{"confirmBeforeRecordingWithoutMicrophone":false}}' "$settings" > "$out/profile/store"
+            env CAP_GPUI_APP_DATA_DIR="$out/profile" CAP_GPUI_RECORDINGS_DIR="$out/profile/recordings" \
+              CAP_GPUI_LOG_DIR="$out/profile/logs" CAP_GPUI_AUTO_NO_MIC=1 RUST_LOG=cap_gpui=info "$@" \
+              "$app" > "$out/app.log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 240); do
+              sed 's/\x1b\[[0-9;]*m//g' "$out/app.log" | grep -q "$marker" && break
+              sleep 0.5
+            done
+            sleep 3
+            kill "$pid" 2>/dev/null || true
+            echo "== $name"
+            sed 's/\x1b\[[0-9;]*m//g' "$out/app.log" | grep -E "auto-record|main window|showing the main window|minimised|recording finished|error" | tail -n 25
+          }
+          run_case delete-do-nothing '"postDeletionBehaviour":"doNothing"' "auto-record main window after the recording" \
+            CAP_GPUI_AUTO_RECORD=studio:3 CAP_GPUI_AUTO_DELETE=1
+          run_case delete-reopen '"postDeletionBehaviour":"reopenRecordingWindow"' "auto-record main window after the recording" \
+            CAP_GPUI_AUTO_RECORD=studio:3 CAP_GPUI_AUTO_DELETE=1
+          run_case start-minimise '"mainWindowRecordingStartBehaviour":"minimise","postStudioRecordingBehaviour":"showOverlay"' "auto-record main window after the recording" \
+            CAP_GPUI_AUTO_RECORD=studio:3
+          run_case start-close '"mainWindowRecordingStartBehaviour":"close","postStudioRecordingBehaviour":"showOverlay"' "auto-record main window after the recording" \
+            CAP_GPUI_AUTO_RECORD=studio:3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-probe
+          path: ${{ runner.temp }}/wb
+          retention-days: 7
