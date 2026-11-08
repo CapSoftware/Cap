@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
     io::Write,
     ops::{Add, Div, Mul, Sub, SubAssign},
@@ -3054,13 +3054,30 @@ impl ProjectConfiguration {
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let saved = self.overlay_order();
         let mut ordered = Vec::with_capacity(available.len());
+        if available.len() <= 24 && saved.len() <= 24 {
+            for track in available {
+                if !saved.contains(track) && !ordered.contains(track) {
+                    ordered.push(*track);
+                }
+            }
+            for track in saved {
+                if available.contains(track) && !ordered.contains(track) {
+                    ordered.push(*track);
+                }
+            }
+            return ordered;
+        }
+
+        let saved_tracks: HashSet<_> = saved.iter().copied().collect();
+        let available_tracks: HashSet<_> = available.iter().copied().collect();
+        let mut included = HashSet::with_capacity(available_tracks.len());
         for track in available {
-            if !saved.contains(track) && !ordered.contains(track) {
+            if !saved_tracks.contains(track) && included.insert(*track) {
                 ordered.push(*track);
             }
         }
         for track in saved {
-            if available.contains(track) && !ordered.contains(track) {
+            if available_tracks.contains(track) && included.insert(*track) {
                 ordered.push(*track);
             }
         }
@@ -3116,6 +3133,48 @@ impl ProjectConfiguration {
             );
         }
         self.resolved_overlay_order(&available)
+    }
+
+    pub fn visible_shape_order(&self, time: f64) -> Vec<usize> {
+        let Some(timeline) = &self.timeline else {
+            return Vec::new();
+        };
+        let segments = &timeline.shape_segments;
+        if segments.is_empty() || !time.is_finite() {
+            return Vec::new();
+        }
+
+        let shape_tracks: Vec<_> = self
+            .overlay_tracks()
+            .into_iter()
+            .rev()
+            .filter(|track| track.kind == OverlayTrackKind::Shape)
+            .map(|track| track.track)
+            .collect();
+
+        if let [track] = shape_tracks.as_slice() {
+            return segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.track == *track && segment.is_active_at(time))
+                .map(|(index, _)| index)
+                .collect();
+        }
+
+        let track_positions: HashMap<_, _> = shape_tracks
+            .iter()
+            .enumerate()
+            .map(|(position, track)| (*track, position))
+            .collect();
+        let mut grouped = vec![Vec::new(); shape_tracks.len()];
+        for (index, segment) in segments.iter().enumerate() {
+            if segment.is_active_at(time)
+                && let Some(&position) = track_positions.get(&segment.track)
+            {
+                grouped[position].push(index);
+            }
+        }
+        grouped.into_iter().flatten().collect()
     }
 
     fn style_override_at<T>(
