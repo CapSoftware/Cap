@@ -2974,6 +2974,7 @@ async fn confirm_export_resources(
         if !accepted {
             match result {
                 Err(error) if !ui.close_requested && !cancel.load(Ordering::Acquire) => {
+                    tracing::error!(error, "export stopped before it started");
                     ui.phase = ExportPhase::Failed;
                     ui.error = Some(error);
                 }
