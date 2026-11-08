@@ -1,8 +1,3 @@
-//! `CAP_GPUI_FAIL` switches on the recording crates' `cap_fail` failure
-//! points, which only debug builds compile in, so their error paths can be
-//! reached without patching code. It takes a comma-separated list of full
-//! names, such as `cap-recording::ScreenCaptureSource::init`.
-
 use std::collections::BTreeMap;
 
 const ENV: &str = "CAP_GPUI_FAIL";
