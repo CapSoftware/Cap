@@ -125,6 +125,8 @@ async function main() {
 			console.log("Copied ffmpeg dylibs to target/debug");
 		} else console.log("Using cached macOS native deps setup");
 
+		await linkDesktopFrameworks(frameworkTargetDir);
+
 		const onnxRuntimePath = await setupMacOSOnnxRuntime();
 		cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${path.relative(
 			__root,
@@ -733,6 +735,20 @@ async function fileExists(path) {
 		.access(path)
 		.then(() => true)
 		.catch(() => false);
+}
+
+// The desktop app loads ffmpeg from @executable_path/../Frameworks: the app in
+// target/debug reads target/Frameworks, and its tests in target/debug/deps
+// read target/debug/Frameworks.
+async function linkDesktopFrameworks(framework) {
+	const desktopTarget = path.join(__root, "apps", "desktop-gpui", "target");
+	for (const dir of [desktopTarget, path.join(desktopTarget, "debug")]) {
+		const link = path.join(dir, "Frameworks", "Spacedrive.framework");
+		await fs.mkdir(path.dirname(link), { recursive: true });
+		await fs.rm(link, { recursive: true, force: true });
+		await fs.symlink(framework, link);
+	}
+	console.log("Linked Spacedrive.framework into apps/desktop-gpui/target");
 }
 
 async function writeLinuxBundleConfig(sonameLibs) {
