@@ -76,18 +76,16 @@ impl ConverterPoolConfig {
         );
         let input_budget = CONVERTER_POOL_BYTE_BUDGET / 2;
         let max_input = (input_budget / in_bytes).max(MIN_QUEUE_CAPACITY);
-        let input_capacity = self.input_capacity.min(max_input).max(MIN_QUEUE_CAPACITY);
+        let input_capacity = self.input_capacity.clamp(MIN_QUEUE_CAPACITY, max_input);
 
         let remaining_budget =
             CONVERTER_POOL_BYTE_BUDGET.saturating_sub(input_capacity.saturating_mul(in_bytes));
         let max_out_slots = (remaining_budget / out_bytes).max(2);
-        let worker_count = self
-            .worker_count
-            .min((max_out_slots / 2).max(1))
-            .max(1);
+        let max_workers = (max_out_slots / 2).max(1);
+        let worker_count = self.worker_count.clamp(1, max_workers);
         let remaining_after_workers = max_out_slots.saturating_sub(worker_count);
         let max_output = (remaining_after_workers / 2).max(MIN_QUEUE_CAPACITY);
-        let output_capacity = self.output_capacity.min(max_output).max(MIN_QUEUE_CAPACITY);
+        let output_capacity = self.output_capacity.clamp(MIN_QUEUE_CAPACITY, max_output);
         let max_pool = remaining_after_workers.saturating_sub(output_capacity);
 
         Self {
