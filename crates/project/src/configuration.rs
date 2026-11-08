@@ -3134,6 +3134,10 @@ impl ProjectConfiguration {
         self.resolved_overlay_order(&available)
     }
 
+    fn scan_shape_order_directly(shape_tracks: usize, segments: usize) -> bool {
+        shape_tracks <= 16 || shape_tracks.saturating_mul(segments) <= 32_768
+    }
+
     pub fn visible_shape_order(&self, time: f64) -> Vec<usize> {
         let Some(timeline) = &self.timeline else {
             return Vec::new();
@@ -3151,7 +3155,7 @@ impl ProjectConfiguration {
         if shape_count == 0 {
             return Vec::new();
         }
-        if shape_count <= 16 && segments.len().saturating_mul(shape_count) <= 8_192 {
+        if Self::scan_shape_order_directly(shape_count, segments.len()) {
             let mut order = Vec::new();
             for track in tracks
                 .into_iter()
@@ -5934,6 +5938,94 @@ mod overlay_frame_order_tests {
 
         project.timeline = None;
         assert!(project.visible_shape_order(1.).is_empty());
+    }
+
+    fn assert_visible_shape_order_matches_reference(tracks: &[u32], shape_count: usize) {
+        let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        timeline.shape_segments = (0..shape_count)
+            .map(|index| {
+                let mut shape = crate::ShapeSegment::default();
+                shape.track = tracks[index % tracks.len()];
+                shape.start = if index % 11 == 0 { 1.5 } else { 0. };
+                shape.end = if index % 17 == 0 { -1. } else { 4. };
+                shape.enabled = index % 9 != 0;
+                shape
+            })
+            .collect();
+
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+        let mut custom_order: Vec<_> = tracks
+            .iter()
+            .rev()
+            .copied()
+            .map(|track| OverlayTrack {
+                kind: OverlayTrackKind::Shape,
+                track,
+            })
+            .collect();
+        custom_order.push(custom_order[0]);
+        custom_order.insert(
+            1,
+            OverlayTrack {
+                kind: OverlayTrackKind::Shape,
+                track: 999_999,
+            },
+        );
+        for order in [vec![], custom_order] {
+            project.set_overlay_order(order);
+            for time in [
+                f64::NEG_INFINITY,
+                -1.,
+                0.,
+                1.5,
+                3.999,
+                4.,
+                f64::INFINITY,
+                f64::NAN,
+            ] {
+                assert_eq!(
+                    project.visible_shape_order(time),
+                    original_visible_shape_order(&project, time),
+                    "tracks={} shapes={shape_count} time={time}",
+                    tracks.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shape_order_dispatch_preserves_low_track_count_scans() {
+        assert!(ProjectConfiguration::scan_shape_order_directly(1, 8_193));
+        assert!(ProjectConfiguration::scan_shape_order_directly(8, 8_256));
+        assert!(ProjectConfiguration::scan_shape_order_directly(16, 9_600));
+        assert!(ProjectConfiguration::scan_shape_order_directly(17, 68));
+        assert!(ProjectConfiguration::scan_shape_order_directly(17, 1_927));
+        assert!(!ProjectConfiguration::scan_shape_order_directly(17, 1_928));
+        assert!(!ProjectConfiguration::scan_shape_order_directly(64, 2_048));
+
+        assert_visible_shape_order_matches_reference(&[92], 8_193);
+        assert_visible_shape_order_matches_reference(
+            &[0, 7, 92, 4_096, 10_000, 11_000, 12_000, 13_000],
+            8_256,
+        );
+        let sixteen_tracks: Vec<u32> = (0..16).map(|index| index * 131 + 7).collect();
+        assert_visible_shape_order_matches_reference(&sixteen_tracks, 9_600);
+    }
+
+    #[test]
+    fn grouping_matches_reference_with_sparse_tracks_and_custom_stacking() {
+        let seventeen_tracks: Vec<u32> = (0..17).map(|index| index * 113 + 7).collect();
+        assert_visible_shape_order_matches_reference(&seventeen_tracks, 68);
+        assert_visible_shape_order_matches_reference(&seventeen_tracks, 2_048);
+        let sixty_four_tracks: Vec<u32> = (0..64).map(|index| index * 113 + 7).collect();
+        assert_visible_shape_order_matches_reference(&sixty_four_tracks, 2_048);
     }
 
     #[test]
