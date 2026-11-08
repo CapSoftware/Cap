@@ -115,5 +115,15 @@ describe("Cap desktop upload health-check API route", () => {
 			}),
 		);
 		expect(getRes.status).toBe(200);
+
+		mocks.putObject.mockClear();
+		mocks.rateLimited = true;
+		const limitedGetRes = await GET(
+			new Request("http://localhost/api/upload/health-check", {
+				method: "GET",
+			}),
+		);
+		expect(limitedGetRes.status).toBe(429);
+		expect(mocks.putObject).not.toHaveBeenCalled();
 	});
 });

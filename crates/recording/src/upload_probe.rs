@@ -120,7 +120,7 @@ pub fn evaluate_startup_health(
     http_ok: bool,
     sample: Option<SpeedProbeSample>,
 ) -> StartupHealthCheckStatus {
-    if !http_ok {
+    let Some(sample) = sample.filter(|_| http_ok) else {
         return StartupHealthCheckStatus {
             upload_ok: false,
             speed_mbps: 0.0,
@@ -129,11 +129,9 @@ pub fn evaluate_startup_health(
                 "Upload health check failed, please contact support".to_string(),
             contact_support_required: true,
         };
-    }
+    };
 
-    let mbps = sample
-        .map(|s| s.throughput_mbps())
-        .unwrap_or(HIGH_SPEED_THRESHOLD_MBPS);
+    let mbps = sample.throughput_mbps();
     let tier = AdaptiveUploadTier::from_mbps(mbps);
     let upload_ok = tier != AdaptiveUploadTier::Offline;
 
@@ -222,6 +220,12 @@ mod tests {
         assert!(!healthy.contact_support_required);
         assert_eq!(healthy.tier, AdaptiveUploadTier::High);
         assert_eq!(latest_upload_speed_mbps(), Some(16.0));
+
+        let unmeasured = record_startup_health(true, None);
+        assert!(!unmeasured.upload_ok);
+        assert!(unmeasured.contact_support_required);
+        assert_eq!(unmeasured.tier, AdaptiveUploadTier::Offline);
+        assert_eq!(latest_upload_speed_mbps(), None);
 
         let failed = record_startup_health(false, None);
         assert!(!failed.upload_ok);

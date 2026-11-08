@@ -71,6 +71,28 @@ const verifyUserStorage = (
 			.pipe(Effect.catchAll(() => Effect.void));
 	});
 
+const checkProbeRateLimit = (
+	userId: CurrentUser["Type"]["id"],
+	request: HttpServerRequest.HttpServerRequest,
+) =>
+	Effect.tryPromise(() =>
+		isRateLimited(HEALTH_CHECK_RULE_ID, {
+			key: userId,
+			headers: new Headers(request.headers as Record<string, string>),
+		}),
+	).pipe(Effect.orElseSucceed(() => false));
+
+const rateLimitedResponse = () =>
+	jsonResponse(
+		{
+			ok: false,
+			status: "degraded",
+			bytesReceived: 0,
+			message: "Rate limit exceeded for upload health probe.",
+		},
+		429,
+	);
+
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
@@ -79,22 +101,8 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
 						const request = yield* HttpServerRequest.HttpServerRequest;
-						const limited = yield* Effect.tryPromise(() =>
-							isRateLimited(HEALTH_CHECK_RULE_ID, {
-								key: user.id,
-								headers: new Headers(request.headers as Record<string, string>),
-							}),
-						).pipe(Effect.orElseSucceed(() => false));
-						if (limited) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: 0,
-									message: "Rate limit exceeded for upload health probe.",
-								},
-								429,
-							);
+						if (yield* checkProbeRateLimit(user.id, request)) {
+							return rateLimitedResponse();
 						}
 
 						const declared = Number(request.headers["content-length"] ?? "0");
@@ -175,6 +183,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("getUploadHealth", () =>
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
+						const request = yield* HttpServerRequest.HttpServerRequest;
+						if (yield* checkProbeRateLimit(user.id, request)) {
+							return rateLimitedResponse();
+						}
 						const storageOk = yield* verifyUserStorage(
 							user.id,
 							user.activeOrganizationId,
