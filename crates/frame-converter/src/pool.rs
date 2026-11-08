@@ -11,7 +11,6 @@ use std::{
 use tracing::{debug, info, warn};
 
 const CONVERTER_POOL_BYTE_BUDGET: usize = 64 * 1024 * 1024;
-const MIN_QUEUE_CAPACITY: usize = 1;
 
 pub(crate) fn estimate_frame_bytes(format: Pixel, width: u32, height: u32) -> usize {
     let pixels = (width as usize).saturating_mul(height as usize);
@@ -74,30 +73,33 @@ impl ConverterPoolConfig {
             conversion.output_width,
             conversion.output_height,
         );
-        let input_budget = CONVERTER_POOL_BYTE_BUDGET / 2;
-        let max_input = (input_budget / in_bytes).max(MIN_QUEUE_CAPACITY);
-        let input_capacity = self.input_capacity.clamp(MIN_QUEUE_CAPACITY, max_input);
+        let worker_frame_bytes = in_bytes.saturating_add(out_bytes);
+        let hard_max_workers = CONVERTER_POOL_BYTE_BUDGET / worker_frame_bytes;
+        let min_workers = usize::from(hard_max_workers > 0);
+        let max_workers = (CONVERTER_POOL_BYTE_BUDGET / 2 / worker_frame_bytes).max(min_workers);
+        let worker_count = self.worker_count.clamp(min_workers, max_workers);
 
-        let remaining_budget =
-            CONVERTER_POOL_BYTE_BUDGET.saturating_sub(input_capacity.saturating_mul(in_bytes));
-        let max_out_slots = (remaining_budget / out_bytes).max(2);
-        let max_workers = (max_out_slots / 2).max(1);
-        let worker_count = self.worker_count.clamp(1, max_workers);
-        let remaining_after_workers = max_out_slots.saturating_sub(worker_count);
-        let max_output = (remaining_after_workers / 2).max(MIN_QUEUE_CAPACITY);
-        let output_capacity = self.output_capacity.clamp(MIN_QUEUE_CAPACITY, max_output);
-        let max_pool = remaining_after_workers.saturating_sub(output_capacity);
+        let remaining_after_workers = CONVERTER_POOL_BYTE_BUDGET
+            .saturating_sub(worker_count.saturating_mul(worker_frame_bytes));
+        let input_headroom = remaining_after_workers.saturating_sub(out_bytes);
+        let min_input = usize::from(input_headroom >= in_bytes);
+        let max_input = (input_headroom / 2 / in_bytes).max(min_input);
+        let input_capacity = self.input_capacity.clamp(min_input, max_input);
+
+        let remaining_for_output = remaining_after_workers
+            .saturating_sub(input_capacity.saturating_mul(in_bytes));
+        let max_out_slots = remaining_for_output / out_bytes;
+        let min_output = usize::from(max_out_slots > 0);
+        let max_output = (max_out_slots / 2).max(min_output);
+        let output_capacity = self.output_capacity.clamp(min_output, max_output);
+        let max_pool = max_out_slots.saturating_sub(output_capacity);
 
         Self {
             worker_count,
             input_capacity,
             output_capacity,
             drop_strategy: self.drop_strategy,
-            frame_pool_capacity: if self.frame_pool_capacity == 0 {
-                0
-            } else {
-                self.frame_pool_capacity.min(max_pool)
-            },
+            frame_pool_capacity: self.frame_pool_capacity.min(max_pool),
         }
     }
 }
@@ -521,7 +523,7 @@ mod tests {
         let bounded = requested.bounded_for_conversion(&conversion);
         let in_bytes = estimate_frame_bytes(Pixel::BGRA, 3840, 2160);
         let out_bytes = estimate_frame_bytes(Pixel::NV12, 3840, 2160);
-        let retained_bytes = bounded.input_capacity * in_bytes
+        let retained_bytes = (bounded.input_capacity + bounded.worker_count) * in_bytes
             + (bounded.output_capacity + bounded.frame_pool_capacity + bounded.worker_count)
                 * out_bytes;
         assert!(retained_bytes <= CONVERTER_POOL_BYTE_BUDGET);
