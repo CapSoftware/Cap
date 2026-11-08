@@ -4,6 +4,7 @@ import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	beginStorageUpload,
 	multipartUploadConcurrencyFromEnv,
 	uploadFileToStorage,
 } from "../../lib/media-video";
@@ -494,5 +495,134 @@ describe("uploadFileToStorage", () => {
 		expect(requests.some((request) => request.url.endsWith("/abort"))).toBe(
 			true,
 		);
+	});
+});
+
+describe("beginStorageUpload", () => {
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	const multipartTarget = {
+		type: "multipart" as const,
+		videoId: "video",
+		key: "owner/video/result.mp4",
+		uploadId: "upload",
+		partSize,
+		signPartUrl: "https://cap.test/sign-part",
+		completeUrl: "https://cap.test/complete",
+		abortUrl: "https://cap.test/abort",
+	};
+
+	async function waitUntil(condition: () => boolean) {
+		for (let tries = 0; tries < 100 && !condition(); tries++)
+			await Bun.sleep(5);
+	}
+
+	function recordMultipart(holdParts?: Promise<void>) {
+		const calls: string[] = [];
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign-part")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				calls.push(`sign-${partNumber}`);
+				return Response.json({
+					url: `https://storage.test/part/${partNumber}`,
+				});
+			}
+			if (init?.method === "PUT") {
+				calls.push(`put-${url.split("/").at(-1)}`);
+				if (holdParts)
+					await Promise.race([
+						holdParts,
+						new Promise((_, reject) =>
+							init.signal?.addEventListener("abort", () =>
+								reject(new DOMException("Aborted", "AbortError")),
+							),
+						),
+					]);
+				return new Response(null, { headers: { ETag: `"etag-${url}"` } });
+			}
+			if (url.endsWith("/complete")) {
+				calls.push("complete");
+				return Response.json({ objectIdentity: '"done"' });
+			}
+			if (url.endsWith("/abort")) {
+				calls.push("abort");
+				return Response.json({ success: true });
+			}
+			throw new Error(`Unexpected request ${url}`);
+		}) as typeof fetch;
+		return calls;
+	}
+
+	const puts = (calls: string[]) =>
+		calls.filter((call) => call.startsWith("put"));
+
+	test("uploads multipart parts before finish and completes only when finished", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 2 + 1);
+		const calls = recordMultipart();
+		try {
+			const pending = beginStorageUpload(
+				uploadFile.path,
+				multipartTarget,
+				"video/mp4",
+			);
+			await waitUntil(() => puts(calls).length === 3);
+			expect(puts(calls)).toHaveLength(3);
+			expect(calls).not.toContain("complete");
+			expect(await pending.finish()).toEqual({ objectIdentity: '"done"' });
+			expect(calls.at(-1)).toBe("complete");
+			expect(calls).not.toContain("abort");
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("cancel stops in-flight parts without completing and leaves the abort to the caller", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 2 + 1);
+		let release = () => {};
+		const calls = recordMultipart(
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+		);
+		try {
+			const pending = beginStorageUpload(
+				uploadFile.path,
+				multipartTarget,
+				"video/mp4",
+			);
+			await waitUntil(() => puts(calls).length > 0);
+			expect(puts(calls).length).toBeGreaterThan(0);
+			await pending.cancel();
+			expect(calls).not.toContain("complete");
+			expect(calls).not.toContain("abort");
+		} finally {
+			release();
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("sends nothing for a single PUT target until finish", async () => {
+		const uploadFile = await createTempUploadFile(16);
+		const calls: string[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			calls.push(String(init?.method));
+			return new Response(null, { headers: { ETag: '"put"' } });
+		}) as typeof fetch;
+		try {
+			const pending = beginStorageUpload(
+				uploadFile.path,
+				{ type: "put", url: "https://storage.test/result.mp4" },
+				"video/mp4",
+			);
+			await Bun.sleep(20);
+			expect(calls).toHaveLength(0);
+			await pending.finish();
+			expect(calls).toEqual(["PUT"]);
+		} finally {
+			await uploadFile.cleanup();
+		}
 	});
 });

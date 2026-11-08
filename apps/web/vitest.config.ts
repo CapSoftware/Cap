@@ -23,11 +23,23 @@ export default defineConfig({
 			optimizer: {
 				ssr: {
 					enabled: true,
-					include: ["next/link", "next/image", "react-remove-scroll"],
+					include: [
+						"next/link",
+						"next/image",
+						"react-remove-scroll",
+						"react-hook-form",
+						"@virtual-grid/react",
+					],
 				},
 				web: {
 					enabled: true,
-					include: ["next/link", "next/image", "react-remove-scroll"],
+					include: [
+						"next/link",
+						"next/image",
+						"react-remove-scroll",
+						"react-hook-form",
+						"@virtual-grid/react",
+					],
 					esbuildOptions: {
 						banner: {
 							js: `import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`,

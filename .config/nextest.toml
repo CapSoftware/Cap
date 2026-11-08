@@ -48,6 +48,19 @@ filter = '(binary_id(cap-verify::crash) and test(=crash_safety)) or (binary_id(c
 threads-required = "num-test-threads"
 priority = 100
 
+# Playback and seek ask for each frame with a deadline (2 s, 10 s for a
+# seek's first frame). On the blacksmith macOS VMs, Apple's video decoding
+# stalls once every core is busy: a standalone AVAssetReader read went from
+# 0.4 ms to 55-77 ms a frame with all 6 cores loaded, and stayed under 1 ms
+# with half of them loaded (a real Mac and the hosted macos-15 VM are
+# unaffected). Shared with the export and chaos tests, frames then missed
+# their deadline ("decoders returned no frame"), so on macOS these run alone,
+# after the wall-clock tests.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = '(binary_id(cap-verify::playback) and not test(=realtime_loop)) or binary_id(cap-verify::seek)'
+threads-required = "num-test-threads"
+priority = 90
 
 # The FULL-tier seek storms (3000 seeks per decoder) are the slowest tests:
 # on the macos-15 runner one storm fixture takes 240 to 570 s per decoder,

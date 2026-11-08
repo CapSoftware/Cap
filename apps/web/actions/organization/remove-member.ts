@@ -2,16 +2,11 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import {
-	organizationInvites,
-	organizationMembers,
-	spaceMembers,
-	spaces,
-	users,
-} from "@cap/database/schema";
+import { organizationMembers, users } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { deleteOrganizationMembership } from "@/lib/organization-member-removal";
 import {
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
@@ -30,82 +25,49 @@ export async function removeOrganizationMember(
 		organizationId,
 	);
 
-	const [member] = await db()
-		.select({
-			id: organizationMembers.id,
-			userId: organizationMembers.userId,
-			role: organizationMembers.role,
-			email: users.email,
-		})
-		.from(organizationMembers)
-		.innerJoin(users, eq(organizationMembers.userId, users.id))
-		.where(
-			and(
-				eq(organizationMembers.id, memberId),
-				eq(organizationMembers.organizationId, organizationId),
-			),
-		)
-		.limit(1);
-
-	if (!member) {
-		throw new Error("Member not found");
-	}
-
-	const targetRole = getEffectiveOrganizationRole({
-		userId: member.userId,
-		ownerId: actor.ownerId,
-		memberRole: member.role,
-	});
-
-	if (
-		!canRemoveOrganizationMember({
-			actorRole: actor.role,
-			actorUserId: user.id,
-			targetUserId: member.userId,
-			ownerId: actor.ownerId,
-			targetRole,
-		})
-	) {
-		throw new Error("You do not have permission to remove this member");
-	}
-
 	await db().transaction(async (tx) => {
-		const organizationSpaces = await tx
-			.select({ id: spaces.id })
-			.from(spaces)
-			.where(eq(spaces.organizationId, organizationId));
-		const spaceIds = organizationSpaces.map((space) => space.id);
-
-		if (spaceIds.length > 0) {
-			await tx
-				.delete(spaceMembers)
-				.where(
-					and(
-						eq(spaceMembers.userId, member.userId),
-						inArray(spaceMembers.spaceId, spaceIds),
-					),
-				);
-		}
-
-		await tx
-			.delete(organizationInvites)
-			.where(
-				and(
-					eq(organizationInvites.organizationId, organizationId),
-					eq(organizationInvites.invitedEmail, member.email.toLowerCase()),
-				),
-			);
-
-		const [result] = await tx
-			.delete(organizationMembers)
+		const [member] = await tx
+			.select({
+				id: organizationMembers.id,
+				userId: organizationMembers.userId,
+				role: organizationMembers.role,
+				hasProSeat: organizationMembers.hasProSeat,
+				email: users.email,
+			})
+			.from(organizationMembers)
+			.innerJoin(users, eq(organizationMembers.userId, users.id))
 			.where(
 				and(
 					eq(organizationMembers.id, memberId),
 					eq(organizationMembers.organizationId, organizationId),
 				),
-			);
+			)
+			.limit(1)
+			.for("update");
 
-		if (result.affectedRows === 0) throw new Error("Member not found");
+		if (!member) {
+			throw new Error("Member not found");
+		}
+
+		const targetRole = getEffectiveOrganizationRole({
+			userId: member.userId,
+			ownerId: actor.ownerId,
+			memberRole: member.role,
+		});
+
+		if (
+			!canRemoveOrganizationMember({
+				actorRole: actor.role,
+				actorUserId: user.id,
+				targetUserId: member.userId,
+				ownerId: actor.ownerId,
+				targetRole,
+			})
+		) {
+			throw new Error("You do not have permission to remove this member");
+		}
+
+		await deleteOrganizationMembership(tx, organizationId, member);
 	});
 
 	revalidatePath("/dashboard/settings/organization");

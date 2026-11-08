@@ -13,16 +13,24 @@ export class MediaProcessingBudgetError extends Error {
 const key = (parts: string[]) =>
 	createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 
+export const recordingBudgetKey = (videoId: string, generation: string) =>
+	key(["recording", videoId, generation]);
+
+// A recording's transfer budget covers every automatic attempt, so the attempt limit (not the
+// budget) decides when processing stops. Media workers read sources in-region, so retries cost time, not egress.
+export const RECORDING_PROCESSING_ATTEMPTS = 5;
+
 export function getMediaProcessingReservation(sourceBytes: number) {
 	if (
 		!Number.isSafeInteger(sourceBytes) ||
 		sourceBytes <= 0 ||
-		sourceBytes > Number.MAX_SAFE_INTEGER / 12
+		sourceBytes > Number.MAX_SAFE_INTEGER / 20
 	)
 		throw new Error("Invalid processing source size");
+	const attemptBytes = sourceBytes * 3 + 16 * MiB;
 	return {
-		attemptBytes: sourceBytes * 3 + 16 * MiB,
-		recordingBytes: sourceBytes * 9 + 80 * MiB,
+		attemptBytes,
+		recordingBytes: attemptBytes * RECORDING_PROCESSING_ATTEMPTS,
 	};
 }
 
@@ -43,7 +51,7 @@ export async function reserveMediaProcessingBudget(input: {
 		input.generation,
 		input.attemptId,
 	]);
-	const recordingKey = key(["recording", input.videoId, input.generation]);
+	const recordingKey = recordingBudgetKey(input.videoId, input.generation);
 	const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60_000);
 	return db().transaction(async (tx) => {
 		const limits = [

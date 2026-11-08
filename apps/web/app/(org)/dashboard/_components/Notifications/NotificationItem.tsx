@@ -3,11 +3,11 @@ import type { ImageUpload } from "@cap/web-domain";
 import { faComment, faEye, faReply } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import moment from "moment";
 import Link from "next/link";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import { AnimalAvatar } from "@/components/AnimalAvatar";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { formatFromNow } from "@/lib/date-format";
 
 type NotificationItemProps = {
 	notification: APINotification;
@@ -93,7 +93,7 @@ export const NotificationItem = ({
 					</p>
 				)}
 				<p className="text-xs text-gray-10">
-					{moment(notification.createdAt).fromNow()}
+					{formatFromNow(new Date(notification.createdAt))}
 				</p>
 			</div>
 

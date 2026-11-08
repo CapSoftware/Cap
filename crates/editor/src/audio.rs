@@ -271,6 +271,8 @@ impl AudioRenderer {
             // it, so timeline-positioned music is aligned to the same grid.
             let frame_start = self.elapsed_samples;
             let (written, mut buf) = self.render_timeline_frame_raw(samples, project, timeline)?;
+            let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
+            crate::join_fade::apply_join_fades(&mut buf, frame_start, &joins);
 
             if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
@@ -320,6 +322,7 @@ impl AudioRenderer {
             self.cursor.samples += written;
             return Ok((written != 0).then_some(written));
         };
+        let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
         while written < samples {
             sources.check_cancelled()?;
             let (mapping, span) = if !timeline.transitions.is_empty()
@@ -417,6 +420,11 @@ impl AudioRenderer {
                         );
                     }
                 }
+                crate::join_fade::apply_join_fades(
+                    output,
+                    self.elapsed_samples + span_offset,
+                    &joins,
+                );
                 emit(written + span_offset, output)?;
                 span_offset += count;
             }
@@ -1266,15 +1274,14 @@ fn mix_transition_audio_at(
     {
         let progress = (progress + (sample_offset + sample_index) as f64 * progress_per_sample)
             .clamp(0.0, 1.0);
-        let (outgoing_gain, incoming_gain) = match kind {
-            ClipTransitionType::CrossFade => {
-                let angle = progress * std::f64::consts::FRAC_PI_2;
-                (angle.cos() as f32, angle.sin() as f32)
-            }
-            ClipTransitionType::FadeThroughBlack => (
+        let (outgoing_gain, incoming_gain) = if kind.dips() {
+            (
                 (1.0 - progress * 2.0).max(0.0) as f32,
                 (progress * 2.0 - 1.0).max(0.0) as f32,
-            ),
+            )
+        } else {
+            let angle = progress * std::f64::consts::FRAC_PI_2;
+            (angle.cos() as f32, angle.sin() as f32)
         };
         output_frame[0] = (outgoing_frame[0] * outgoing_gain + incoming_frame[0] * incoming_gain)
             .clamp(-1.0, 1.0);
@@ -1834,7 +1841,14 @@ mod memory_pressure {
 
     /// Installs one process-wide memory pressure source. It lives for the
     /// rest of the process, so it is never released.
+    ///
+    /// Not installed in unit tests: a real pressure event on the host would
+    /// release the caches of every test running in the process at once.
+    /// Tests drive `on_memory_pressure` directly instead.
     pub(super) fn watch() {
+        if cfg!(test) {
+            return;
+        }
         static WATCH: std::sync::Once = std::sync::Once::new();
         WATCH.call_once(|| unsafe {
             let source = dispatch_source_create(
@@ -1937,6 +1951,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         hotkeys: _,
         timeline,
         overlay_order: _,
+        overlay_order_with_shapes: _,
         captions: _,
         keyboard: _,
         clips,
@@ -1947,6 +1962,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         color_correction: _,
         text_size_version: _,
         text_anim_version: _,
+        markers: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
         let TimelineConfiguration {
@@ -1961,6 +1977,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
             audio_segments,
             style_segments: _,
             image_segments: _,
+            shape_segments: _,
             camera3d_segments: _,
         } = timeline;
         let segments = segments
@@ -2185,10 +2202,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
                         output_info,
                         duration_secs,
                         start_playhead_secs,
-                        estimated_output_samples,
+                        cache.filter(|_| plan.as_ref().is_some_and(|plan| plan.shift == 0)),
                     );
                     match cache {
-                        Some(cache) => fresh.retain_in_cache(cache, plan),
+                        Some(cache) => fresh.publish_in_cache(cache, plan),
                         None => fresh,
                     }
                 }
@@ -2315,6 +2332,41 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             PrerenderedAudioBufferMode::Streaming(source) => source.fill(buffer),
         }
     }
+
+    pub(crate) fn read_frame(&self) -> usize {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => {
+                buffer.read_position / buffer.channels
+            }
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.read_position / buffer.channels,
+        }
+    }
+
+    pub(crate) fn sample_rate(&self) -> u32 {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => buffer.sample_rate,
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.sample_rate,
+        }
+    }
+}
+
+impl<T: FromSampleBytes + cpal::FromSample<f32>> crate::preview_stretch::StretchSource
+    for PrerenderedAudioBuffer<T>
+{
+    fn read_frame(&self) -> usize {
+        PrerenderedAudioBuffer::read_frame(self)
+    }
+
+    fn read(&mut self, out: &mut [f32]) {
+        match &mut self.mode {
+            PrerenderedAudioBufferMode::Progressive(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+            PrerenderedAudioBufferMode::Streaming(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+        }
+    }
 }
 
 impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
@@ -2332,10 +2384,15 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         output_info: AudioInfo,
         duration_secs: f64,
         start_playhead_secs: f64,
-        estimated_output_samples: usize,
+        cache: Option<&PlaybackAudioCache>,
     ) -> Self {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
+        let estimated_output_samples = progressive_buffer_samples(
+            duration_secs,
+            output_info.sample_rate,
+            output_info.channels,
+        );
         // The producer renders f32 at the device rate/channel count; the
         // callback converts to the device sample format on the fly.
         let render_info = AudioInfo::new_raw(
@@ -2376,6 +2433,14 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         ));
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        // A fast worker may finish before publication, so give it its retention owner first.
+        if let Some(cache) = cache {
+            let retained = timeline.retain(CacheRelease {
+                cache: Arc::downgrade(&cache.entry),
+                idle_release: cache.idle_release,
+            });
+            debug_assert!(retained);
+        }
 
         if !spawn_progressive_render(
             timeline.clone(),
@@ -2388,7 +2453,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             ready_at_index,
             ready_tx,
         ) {
-            lock(&timeline.retain_slot).exited = true;
+            let mut slot = lock(&timeline.retain_slot);
+            slot.exited = true;
+            slot.release = None;
+            timeline.retained.store(false, Ordering::Release);
         }
 
         Self {
@@ -2485,18 +2553,14 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         })
     }
 
-    fn retain_in_cache(self, cache: &PlaybackAudioCache, plan: Option<CachePlan>) -> Self {
+    fn publish_in_cache(self, cache: &PlaybackAudioCache, plan: Option<CachePlan>) -> Self {
         let Some(plan) = plan else {
             let previous = lock(&cache.entry).take();
             self.render.timeline.retire(previous);
             return self;
         };
         let mut entry = lock(&cache.entry);
-        let previous = if plan.shift == 0
-            && self.render.timeline.retain(CacheRelease {
-                cache: Arc::downgrade(&cache.entry),
-                idle_release: cache.idle_release,
-            }) {
+        let previous = if plan.shift == 0 && self.render.timeline.retained.load(Ordering::Acquire) {
             entry.replace(CachedProgressiveRender {
                 key: plan.key,
                 render: self.render.clone(),
@@ -2576,6 +2640,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     }
 
     pub fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, <T as cpal::Sample>::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let timeline = &self.render.timeline;
         let samples = &timeline.samples;
         let available = samples.len().saturating_sub(self.read_position);
@@ -2598,18 +2666,16 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                         idx < wrap_end
                     };
                 *slot = if rendered {
-                    <T as cpal::Sample>::from_sample(f32::from_bits(
-                        samples[idx].load(Ordering::Relaxed),
-                    ))
+                    convert(f32::from_bits(samples[idx].load(Ordering::Relaxed)))
                 } else {
-                    T::EQUILIBRIUM
+                    silence
                 };
             }
             self.read_position += to_copy;
         }
 
         if to_copy < buffer.len() {
-            buffer[to_copy..].fill(T::EQUILIBRIUM);
+            buffer[to_copy..].fill(silence);
         }
     }
 }
@@ -2841,18 +2907,22 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
     }
 
     fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, T::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let generation = self.timeline.published_generation.load(Ordering::Acquire);
         let start = self.timeline.published_start.load(Ordering::Acquire);
         let end = self.timeline.published_end.load(Ordering::Acquire);
         for (offset, sample) in buffer.iter_mut().enumerate() {
             let position = self.read_position + offset;
             *sample = if generation == self.generation && position >= start && position < end {
-                T::from_sample(f32::from_bits(
+                convert(f32::from_bits(
                     self.timeline.samples[position % self.timeline.samples.len()]
                         .load(Ordering::Relaxed),
                 ))
             } else {
-                T::EQUILIBRIUM
+                silence
             };
         }
         self.read_position = self.read_position.saturating_add(buffer.len());
@@ -3485,6 +3555,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3621,6 +3692,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -3909,6 +3981,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4025,6 +4098,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4256,6 +4330,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4298,6 +4373,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4441,6 +4517,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4721,6 +4798,89 @@ mod tests {
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
     }
 
+    #[test]
+    fn parallel_music_load_matches_serial_mix_and_preserves_failed_cache_entries() {
+        ffmpeg::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut segments = Vec::new();
+        for (index, values) in [
+            [2_000, -4_000, 6_000],
+            [-3_000, 5_000, -7_000],
+            [1_000, 8_000, -2_000],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let path = format!("music-{index}.wav");
+            write_step_wav(&dir.path().join(&path), values);
+            let mut segment = music_track_segment(&path, 0.0, 1.5, 0.125, 0.25);
+            segment.trim_start = 0.5;
+            segments.push(segment);
+        }
+        let project = music_project(segments.clone());
+        let mut reference = MusicTracks::new();
+        for segment in &segments {
+            reference.extend(crate::load_music_tracks_uncached(
+                &music_project(vec![segment.clone()]),
+                dir.path(),
+            ));
+        }
+        let mut cache = MusicTracks::new();
+        let actual = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        assert_eq!(actual.len(), 3);
+        let repeated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &repeated[path]));
+        }
+        let render = |tracks| {
+            let mut renderer = AudioRenderer::new(vec![]).with_music(tracks);
+            render_export_audio(&mut renderer, &project, 30, 45)
+                .into_iter()
+                .map(f32::to_bits)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(actual.clone()), render(reference));
+        for retained in [1, 2] {
+            let mut partial = actual
+                .iter()
+                .take(retained)
+                .map(|(path, data)| (path.clone(), Arc::clone(data)))
+                .collect::<MusicTracks>();
+            let retained_entries = partial.clone();
+            let loaded = crate::load_music_tracks(&project, dir.path(), &mut partial);
+            assert_eq!(render(loaded), render(actual.clone()));
+            for (path, data) in &retained_entries {
+                assert!(Arc::ptr_eq(data, &partial[path]));
+            }
+        }
+        let corrupt_path = "corrupt.wav";
+        std::fs::write(dir.path().join(corrupt_path), b"invalid audio").unwrap();
+        let mut corrupt_segments = segments.clone();
+        corrupt_segments.push(music_track_segment(corrupt_path, 0.0, 1.5, 0.0, 0.0));
+        let mut corrupt_cache = MusicTracks::new();
+        let surviving = crate::load_music_tracks(
+            &music_project(corrupt_segments),
+            dir.path(),
+            &mut corrupt_cache,
+        );
+        assert_eq!(surviving.len(), 3);
+        assert!(!corrupt_cache.contains_key(corrupt_path));
+        assert_eq!(render(surviving), render(actual.clone()));
+        for segment in &mut segments {
+            std::fs::remove_file(dir.path().join(&segment.path)).unwrap();
+            segment.trim_start = 0.0;
+        }
+        let failed = crate::load_music_tracks(&music_project(segments), dir.path(), &mut cache);
+        assert!(failed.is_empty());
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &cache[path]));
+        }
+        let restored = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        for (path, data) in &actual {
+            assert!(Arc::ptr_eq(data, &restored[path]));
+        }
+    }
+
     static CACHE_RELEASE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
     struct ProgressiveFixture {
@@ -4762,6 +4922,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -5363,6 +5524,60 @@ mod tests {
     }
 
     #[test]
+    fn a_render_completed_before_cache_publication_is_reused() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let cache = PlaybackAudioCache::default();
+        let plan = ProgressiveAudioBuffer::<f32>::cache_plan(
+            fixture.segments.clone(),
+            &fixture.music,
+            &fixture.project,
+            output_info,
+            fixture.duration(),
+            0.0,
+            progressive_buffer_samples(
+                fixture.duration(),
+                output_info.sample_rate,
+                output_info.channels,
+            ),
+        )
+        .unwrap();
+        assert_eq!(plan.shift, 0);
+        let fresh = ProgressiveAudioBuffer::<f32>::new(
+            fixture.segments.clone(),
+            fixture.music.clone(),
+            &fixture.project,
+            output_info,
+            fixture.duration(),
+            0.0,
+            Some(&cache),
+        );
+        fresh.wait_until_fully_rendered();
+        let timeline = fresh.render.timeline.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !lock(&timeline.retain_slot).exited {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(lock(&cache.entry).is_none());
+        let fresh = fresh.publish_in_cache(&cache, Some(plan));
+        assert!(
+            lock(&cache.entry)
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, &timeline))
+        );
+        drop(fresh);
+        let mut replay = fixture.cached(&cache, output_info, 0.0);
+        assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&replay)));
+        assert_bit_identical(
+            &read_everything(&mut replay),
+            &fixture.reference(output_info, 0.0),
+            "render completed before publication",
+        );
+    }
+
+    #[test]
     fn a_replay_resumes_a_parked_render() {
         let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         let fixture = ProgressiveFixture::new();
@@ -5370,9 +5585,15 @@ mod tests {
         for _ in 0..20 {
             let cache = PlaybackAudioCache::default();
             let mut first = fixture.cached(&cache, output_info, 0.0);
+            let timeline = progressive_timeline(&first);
+            assert!(timeline.retained.load(Ordering::Acquire));
+            assert!(
+                lock(&cache.entry)
+                    .as_ref()
+                    .is_some_and(|cached| Arc::ptr_eq(&cached.render.timeline, &timeline))
+            );
             first.set_playhead(0.0);
             assert!(first.wait_until_ready(std::time::Duration::from_secs(30)));
-            let timeline = progressive_timeline(&first);
             drop(first);
             let mut replay = fixture.cached(&cache, output_info, 0.0);
             assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&replay)));

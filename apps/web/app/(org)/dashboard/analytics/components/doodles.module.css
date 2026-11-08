@@ -1,0 +1,236 @@
+.ink {
+	fill: none;
+	stroke: var(--gray-12);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.soft {
+	fill: none;
+	stroke: var(--gray-9);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.accent {
+	fill: none;
+	stroke: var(--doodle-accent, #4785ff);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.accentFill {
+	fill: var(--doodle-accent, #4785ff);
+}
+
+.inkFill {
+	fill: var(--gray-12);
+}
+
+.paperFill {
+	fill: var(--gray-1);
+}
+
+.draw {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation-name: draw;
+	animation-duration: var(--t, 0.7s);
+	animation-timing-function: ease;
+	animation-delay: var(--d, 0s);
+	animation-fill-mode: forwards;
+}
+
+.appear {
+	opacity: 0;
+	animation-name: fade-in;
+	animation-duration: 0.35s;
+	animation-timing-function: ease;
+	animation-delay: var(--d, 0s);
+	animation-fill-mode: forwards;
+}
+
+.pop {
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation-name: pop;
+	animation-duration: 0.5s;
+	animation-timing-function: ease;
+	animation-delay: var(--d, 0s);
+	animation-fill-mode: forwards;
+}
+
+.march {
+	stroke-dasharray: 2 5;
+	animation: march 1.1s linear infinite;
+}
+
+.float {
+	animation: float 3.2s ease-in-out 1.2s infinite;
+}
+
+.scribble {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: scribble 2.4s ease-in-out infinite;
+}
+
+[data-doodle-hover] .blink {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: blink 0.45s ease;
+}
+
+[data-doodle-hover] .wiggle {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: wiggle 0.6s ease;
+}
+
+[data-doodle-hover] .bounce {
+	transform-box: fill-box;
+	transform-origin: center bottom;
+	animation: bounce 0.6s ease;
+}
+
+[data-doodle-hover] .typing {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation-name: typing;
+	animation-duration: 0.9s;
+	animation-timing-function: ease;
+	animation-delay: var(--d, 0s);
+}
+
+@keyframes draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes fade-in {
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes pop {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.15);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes march {
+	to {
+		stroke-dashoffset: -7;
+	}
+}
+
+@keyframes float {
+	0%,
+	100% {
+		transform: translate(0, 0) rotate(0);
+	}
+	50% {
+		transform: translate(3px, -4px) rotate(-2deg);
+	}
+}
+
+@keyframes scribble {
+	0% {
+		stroke-dashoffset: 1;
+		opacity: 1;
+	}
+	55% {
+		stroke-dashoffset: 0;
+		opacity: 1;
+	}
+	80% {
+		stroke-dashoffset: 0;
+		opacity: 0;
+	}
+	100% {
+		stroke-dashoffset: 1;
+		opacity: 0;
+	}
+}
+
+@keyframes blink {
+	0%,
+	100% {
+		transform: scaleY(1);
+	}
+	45% {
+		transform: scaleY(0.1);
+	}
+}
+
+@keyframes wiggle {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	25% {
+		transform: rotate(-10deg);
+	}
+	60% {
+		transform: rotate(8deg);
+	}
+}
+
+@keyframes bounce {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	40% {
+		transform: translateY(-3px);
+	}
+}
+
+@keyframes typing {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	40% {
+		transform: translateY(-2.5px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.boil {
+		filter: none;
+	}
+
+	.draw,
+	.appear,
+	.pop {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+
+	.march,
+	.float,
+	.scribble,
+	[data-doodle-hover] .blink,
+	[data-doodle-hover] .wiggle,
+	[data-doodle-hover] .bounce,
+	[data-doodle-hover] .typing {
+		animation: none;
+	}
+
+	.scribble {
+		stroke-dashoffset: 0;
+	}
+}

@@ -519,6 +519,7 @@ unsafe impl Sync for RetainedImageBuf {}
 pub struct YuvToRgbaConverter {
     pipelines: Arc<YuvConverterPipelines>,
     matrix: YuvMatrix,
+    cpu_rgba_scratch: Vec<u8>,
     y_texture: wgpu::Texture,
     y_view: wgpu::TextureView,
     uv_texture: wgpu::Texture,
@@ -588,6 +589,7 @@ impl YuvToRgbaConverter {
 
         Self {
             matrix: YuvMatrix::default(),
+            cpu_rgba_scratch: Vec::new(),
             pipelines,
             y_texture,
             y_view,
@@ -1773,7 +1775,9 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+        let byte_len = (width * height * 4) as usize;
+        let matrix = self.matrix;
+        let mut rgba_data = self.take_cpu_rgba_scratch(byte_len);
 
         cpu_yuv::nv12_to_rgba_simd(
             y_data,
@@ -1782,8 +1786,8 @@ impl YuvToRgbaConverter {
             height,
             y_stride,
             uv_stride,
-            &mut rgba_data,
-            self.matrix,
+            &mut rgba_data[..byte_len],
+            matrix,
         );
 
         queue.write_texture(
@@ -1793,7 +1797,7 @@ impl YuvToRgbaConverter {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba_data,
+            &rgba_data[..byte_len],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -1806,6 +1810,7 @@ impl YuvToRgbaConverter {
             },
         );
 
+        self.cpu_rgba_scratch = rgba_data;
         Ok(self.current_output_view())
     }
 
@@ -1827,7 +1832,9 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+        let byte_len = (width * height * 4) as usize;
+        let matrix = self.matrix;
+        let mut rgba_data = self.take_cpu_rgba_scratch(byte_len);
 
         cpu_yuv::yuv420p_to_rgba_simd(
             y_data,
@@ -1837,8 +1844,8 @@ impl YuvToRgbaConverter {
             height,
             y_stride,
             uv_stride,
-            &mut rgba_data,
-            self.matrix,
+            &mut rgba_data[..byte_len],
+            matrix,
         );
 
         queue.write_texture(
@@ -1848,7 +1855,7 @@ impl YuvToRgbaConverter {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba_data,
+            &rgba_data[..byte_len],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -1861,7 +1868,18 @@ impl YuvToRgbaConverter {
             },
         );
 
+        self.cpu_rgba_scratch = rgba_data;
         Ok(self.current_output_view())
+    }
+
+    fn take_cpu_rgba_scratch(&mut self, byte_len: usize) -> Vec<u8> {
+        let mut rgba = std::mem::take(&mut self.cpu_rgba_scratch);
+        // Kernels write every output byte, including alpha, so a reused
+        // buffer is cleared only when a larger frame grows it.
+        if rgba.len() < byte_len {
+            rgba.resize(byte_len, 0);
+        }
+        rgba
     }
 
     pub fn output_texture(&self) -> Option<&wgpu::Texture> {

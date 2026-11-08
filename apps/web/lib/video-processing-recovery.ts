@@ -249,6 +249,7 @@ async function recoverLoomCandidate({
 			loomVideoId,
 			reuseExistingRawUpload:
 				phase !== "uploading" && existingRawFileKey !== null,
+			importPriority: receipt?.importPriority,
 		});
 		return "started";
 	} catch (error) {

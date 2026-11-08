@@ -5,12 +5,13 @@ use gpui::{ForegroundExecutor, Window, WindowAppearance};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowRect, HWND_NOTOPMOST,
-    HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow,
-    SetWindowDisplayAffinity, SetWindowPos, ShowWindowAsync, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    WM_CLOSE, WM_NCACTIVATE,
+    DefWindowProcW, GWL_EXSTYLE, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowLongPtrW,
+    GetWindowRect, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
+    LWA_ALPHA, PostMessageW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync,
+    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_CLOSE, WM_NCACTIVATE, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -151,6 +152,13 @@ pub fn set_window_alpha(_native: &NativeWindow, _alpha: f64) -> f64 {
     1.
 }
 
+/// Whether the window is already left out of screen captures.
+pub fn window_capture_hidden(native: &NativeWindow) -> bool {
+    let mut current = WDA_NONE;
+    let read = unsafe { GetWindowDisplayAffinity(native.hwnd(), &mut current) != 0 };
+    read && current == WDA_EXCLUDEFROMCAPTURE
+}
+
 pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     let streamed = hidden
         .then(capture_exclusion::streamed_display_reason)
@@ -175,8 +183,38 @@ pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     }
 }
 
-pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
-    false
+/// Let the mouse fall through to whatever is under the window. Windows hit
+/// tests past a window only when it is both layered and transparent; full
+/// opacity keeps a layered window drawn exactly as before. Restyling sends
+/// the window messages, so call it with no gpui borrow held.
+pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
+    let hwnd = native.hwnd();
+    let bits = (WS_EX_LAYERED | WS_EX_TRANSPARENT) as isize;
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let wanted = if click_through {
+            style | bits
+        } else {
+            style & !bits
+        };
+        if wanted != style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+            if click_through {
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+            }
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        (style & bits == bits) == click_through
+    }
 }
 
 pub fn restore_borderless_style(_native: &NativeWindow) {}
@@ -464,6 +502,22 @@ pub fn order_front_native(native: &NativeWindow) {
     }
 }
 
+/// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
+/// after an overlay's own activation and loses to it.
+pub fn raise_panel_native(native: &NativeWindow, _level: isize) {
+    unsafe {
+        SetWindowPos(
+            native.hwnd(),
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
 fn overlap_is_visible(first: Rect, second: Rect) -> bool {
     const MIN_VISIBLE: f64 = 80.;
     if !first.is_valid() || !second.is_valid() {
@@ -533,6 +587,10 @@ pub fn window_is_visible(window: &Window) -> bool {
     native_handle(window).is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd as HWND) != 0 })
 }
 
+pub fn window_is_minimized(window: &Window) -> bool {
+    native_handle(window).is_some_and(|hwnd| unsafe { IsIconic(hwnd as HWND) != 0 })
+}
+
 pub fn show_window_without_focus(window: &Window) {
     let Some(native) = native_window(window) else {
         return;
@@ -558,14 +616,17 @@ pub fn window_number(window: &Window) -> Option<isize> {
 pub fn open_image_panel(extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new();
     if !extensions.is_empty() {
-        dialog = dialog.add_filter("Images", extensions);
+        dialog = dialog.add_filter(crate::i18n::tr::dialog::file::images_filter(), extensions);
     }
     dialog.pick_file()
 }
 
 pub fn open_audio_panel() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .add_filter("Audio", &["mp3", "wav", "m4a", "ogg", "flac", "aac"])
+        .add_filter(
+            crate::i18n::tr::dialog::file::audio_filter(),
+            &["mp3", "wav", "m4a", "ogg", "flac", "aac"],
+        )
         .pick_file()
 }
 
@@ -629,7 +690,7 @@ pub fn set_dock_icon(_png: &[u8]) {}
 pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
     if !extensions.is_empty() {
-        dialog = dialog.add_filter("Export", extensions);
+        dialog = dialog.add_filter(crate::i18n::tr::dialog::file::export_filter(), extensions);
     }
     dialog.save_file()
 }
@@ -642,9 +703,9 @@ pub fn copy_file_to_clipboard(path: &Path, _cx: &gpui::App) -> Result<(), String
         .to_str()
         .ok_or("The clipboard file path is not valid Unicode")?;
     ClipboardContext::new()
-        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .map_err(crate::i18n::tr::dialog::clipboard::unavailable_error)?
         .set_files(vec![path.to_owned()])
-        .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
+        .map_err(crate::i18n::tr::dialog::clipboard::copy_file)
 }
 
 pub struct ClipboardImage(clipboard_rs::RustImageData);
@@ -662,9 +723,9 @@ pub fn write_clipboard_image(image: ClipboardImage, _cx: &gpui::App) -> Result<(
     use clipboard_rs::{Clipboard, ClipboardContext};
 
     ClipboardContext::new()
-        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .map_err(crate::i18n::tr::dialog::clipboard::unavailable_error)?
         .set_image(image.0)
-        .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
+        .map_err(crate::i18n::tr::dialog::clipboard::copy_image)
 }
 
 pub fn desktop_picture_path() -> Option<PathBuf> {

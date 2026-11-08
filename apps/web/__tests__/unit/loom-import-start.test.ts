@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	importerJobState: vi.fn(),
 	where: vi.fn(),
 	set: vi.fn(),
 	queue: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("workflow/api", () => ({ start: mocks.start, getRun: mocks.getRun }));
 vi.mock("workflow/runtime", () => ({ getWorld: mocks.getWorld }));
 vi.mock("@/lib/loom-media-dispatch", () => ({
 	isLoomMediaJobFailed: mocks.mediaJobFailed,
+	getLoomImporterJobState: mocks.importerJobState,
 }));
 vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: vi.fn(),
@@ -83,6 +85,73 @@ describe("Loom workflow startup receipts", () => {
 		);
 	});
 
+	it("treats a run that was never created as inactive", async () => {
+		const { WorkflowRunNotFoundError } = await import(
+			"workflow/internal/errors"
+		);
+		mocks.getRun.mockReturnValue({
+			status: Promise.reject(new WorkflowRunNotFoundError("run-1")),
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("inactive");
+		mocks.getRun.mockReturnValue({
+			status: Promise.reject(new Error("network")),
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("unconfirmed");
+	});
+
+	it.each([
+		["running", "active"],
+		["finished", "inactive"],
+		["missing", "inactive"],
+		["unknown", "unconfirmed"],
+	] as const)(
+		"asks the importer about its own jobs: %s",
+		async (importerState, expected) => {
+			mocks.getRun.mockReturnValue({ status: Promise.resolve("failed") });
+			mocks.importerJobState.mockResolvedValue(importerState);
+			mocks.mediaJobFailed.mockResolvedValue(false);
+			expect(
+				await getLoomImportRunState({
+					runId: "run-1",
+					dispatch: "accepted",
+					mediaDispatch: {
+						attemptId: "run-1:0",
+						videoId: "video-1",
+						jobId: "importer-1",
+						state: "accepted",
+						worker: "importer",
+					},
+				}),
+			).toBe(expected);
+			expect(mocks.importerJobState).toHaveBeenCalledWith({
+				jobId: "importer-1",
+				videoId: "video-1",
+			});
+		},
+	);
+
+	it("does not trust a missing importer job for media server dispatches", async () => {
+		mocks.getRun.mockReturnValue({ status: Promise.resolve("failed") });
+		mocks.importerJobState.mockResolvedValue("missing");
+		mocks.mediaJobFailed.mockResolvedValue(false);
+		expect(
+			await getLoomImportRunState({
+				runId: "run-1",
+				dispatch: "accepted",
+				mediaDispatch: {
+					attemptId: "run-1:0",
+					videoId: "video-1",
+					jobId: "worker-1",
+					state: "accepted",
+				},
+			}),
+		).toBe("unconfirmed");
+	});
+
 	it.each([false, true])(
 		"requires a matching failed worker before releasing an accepted dispatch: %s",
 		async (failed) => {
@@ -117,6 +186,18 @@ describe("Loom workflow startup receipts", () => {
 		expect(mocks.where.mock.invocationCallOrder[0]).toBeLessThan(
 			mocks.queue.mock.invocationCallOrder[0] ?? 0,
 		);
+	});
+
+	it("keeps an operator import's bulk lane on its startup receipt", async () => {
+		await startLoomImportWorkflow({ ...payload, importPriority: "bulk" });
+		expect(
+			mocks.set.mock.calls.map(([value]) =>
+				JSON.parse(value.metadata.values.at(-1)),
+			),
+		).toEqual([
+			{ runId: "run-1", dispatch: "pending", importPriority: "bulk" },
+			{ runId: "run-1", dispatch: "accepted", importPriority: "bulk" },
+		]);
 	});
 
 	it("does not overwrite a newer import startup receipt", async () => {
@@ -227,6 +308,45 @@ describe("Loom workflow startup receipts", () => {
 			);
 		},
 	);
+
+	it("cancels a run that never left pending and treats it as inactive", async () => {
+		const run = {
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 2 * 60 * 60 * 1000)),
+			cancel: vi.fn(async () => {
+				run.status = Promise.resolve("cancelled");
+			}),
+		};
+		mocks.getRun.mockReturnValue(run);
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("inactive");
+		expect(run.cancel).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a recently queued run pending", async () => {
+		const cancel = vi.fn();
+		mocks.getRun.mockReturnValue({
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 10 * 60 * 1000)),
+			cancel,
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("pending");
+		expect(cancel).not.toHaveBeenCalled();
+	});
+
+	it("keeps an old pending run pending when it cannot be cancelled", async () => {
+		mocks.getRun.mockReturnValue({
+			status: Promise.resolve("pending"),
+			createdAt: Promise.resolve(new Date(Date.now() - 2 * 60 * 60 * 1000)),
+			cancel: vi.fn().mockRejectedValue(new Error("Unavailable")),
+		});
+		expect(
+			await getLoomImportRunState({ runId: "run-1", dispatch: "uncertain" }),
+		).toBe("pending");
+	});
 
 	it("holds startup while the run cannot be queried", async () => {
 		mocks.getRun.mockReturnValue({

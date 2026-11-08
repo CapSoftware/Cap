@@ -132,9 +132,6 @@ export const Toolbar = ({
 					});
 				} catch (error) {
 					console.error("Error posting comment:", error);
-				} finally {
-					setCommentBoxOpen(false);
-					setComment("");
 				}
 			},
 		});
@@ -267,7 +264,7 @@ export const Toolbar = ({
 								className="flex-grow px-3 h-full outline-none"
 								maxLength={255}
 								onKeyDown={(e) => {
-									if (e.key === "Enter") {
+									if (e.key === "Enter" && !e.nativeEvent.isComposing) {
 										e.preventDefault();
 										handleCommentSubmit();
 									}

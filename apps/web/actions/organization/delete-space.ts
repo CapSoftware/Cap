@@ -76,7 +76,7 @@ export async function deleteSpace(
 				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
 				const listedObjects = yield* bucket.listObjects({
-					prefix: `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`,
+					prefix: `organizations/${spaceData.organizationId}/spaces/${spaceId}/`,
 				});
 
 				if (listedObjects.Contents) {

@@ -254,13 +254,7 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		},
 	],
 
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title:
-				"Cap screen recorder demo showing 4K capture, webcam overlay, and instant sharing",
-		},
-	},
+	video: {},
 
 	cta: {
 		title: "Start Using the Best Screen Recorder for Free",

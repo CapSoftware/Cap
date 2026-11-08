@@ -142,31 +142,38 @@ fn box_downscale<const CHANNELS: usize>(
         let band_rows = band.len() / stride;
         let full = BlockDivisor::new((band_rows * factor) as u32);
         let last = BlockDivisor::new((band_rows * (width - (reduced_width - 1) * factor)) as u32);
-        for (index, (pixel, block)) in output
-            .chunks_exact_mut(4)
-            .zip(columns.chunks(factor * CHANNELS))
-            .enumerate()
-        {
-            let divisor = if index + 1 == reduced_width {
-                &last
-            } else {
-                &full
-            };
-            let mut sums = [0u32; CHANNELS];
-            for source in block.chunks_exact(CHANNELS) {
-                for (sum, &value) in sums.iter_mut().zip(source) {
-                    *sum += u32::from(value);
-                }
-            }
+        // Only the final column averages a short block, so it takes its own
+        // divisor; splitting it out keeps that branch out of the pixel loop.
+        let (body, tail) = output.split_at_mut((reduced_width - 1) * 4);
+        for (index, pixel) in body.chunks_exact_mut(4).enumerate() {
+            let block = &columns[index * factor * CHANNELS..(index + 1) * factor * CHANNELS];
+            let sums = block_sums::<CHANNELS>(block);
             for (channel, sum) in pixel.iter_mut().zip(sums) {
-                *channel = divisor.rounded(sum);
+                *channel = full.rounded(sum);
             }
             if CHANNELS == 3 {
                 pixel[3] = u8::MAX;
             }
         }
+        let sums = block_sums::<CHANNELS>(&columns[(reduced_width - 1) * factor * CHANNELS..]);
+        for (channel, sum) in tail.iter_mut().zip(sums) {
+            *channel = last.rounded(sum);
+        }
+        if CHANNELS == 3 {
+            tail[3] = u8::MAX;
+        }
     }
     reduced
+}
+
+fn block_sums<const CHANNELS: usize>(block: &[u16]) -> [u32; CHANNELS] {
+    let mut sums = [0u32; CHANNELS];
+    for source in block.chunks_exact(CHANNELS) {
+        for (sum, &value) in sums.iter_mut().zip(source) {
+            *sum += u32::from(value);
+        }
+    }
+    sums
 }
 
 /// `(sum + count / 2) / count` by a reciprocal multiply. Exact while

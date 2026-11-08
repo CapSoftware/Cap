@@ -61,7 +61,6 @@ test("web development alias forwards both exclusion filters and extra arguments"
 	]);
 	assert.deepEqual(result.args, [
 		"--filter=!@cap/desktop",
-		"--filter=!@cap/mobile",
 		"--port",
 		"4321",
 		"an argument with spaces",

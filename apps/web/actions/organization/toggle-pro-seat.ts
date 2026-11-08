@@ -2,11 +2,8 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import {
-	organizationMembers,
-	organizations,
-	users,
-} from "@cap/database/schema";
+import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
+import { organizationMembers, users } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -122,53 +119,7 @@ export async function toggleProSeat(
 				.set({ hasProSeat: false })
 				.where(eq(organizationMembers.id, memberId));
 
-			const otherProSeats = await tx
-				.select({ id: organizationMembers.id })
-				.from(organizationMembers)
-				.where(
-					and(
-						eq(organizationMembers.userId, member.userId),
-						eq(organizationMembers.hasProSeat, true),
-					),
-				)
-				.limit(1);
-
-			if (otherProSeats.length === 0) {
-				await tx
-					.update(users)
-					.set({ thirdPartyStripeSubscriptionId: null })
-					.where(eq(users.id, member.userId));
-			} else {
-				const [remainingOrg] = await tx
-					.select({ stripeSubscriptionId: users.stripeSubscriptionId })
-					.from(organizationMembers)
-					.innerJoin(
-						organizations,
-						eq(organizationMembers.organizationId, organizations.id),
-					)
-					.innerJoin(users, eq(organizations.ownerId, users.id))
-					.where(
-						and(
-							eq(organizationMembers.userId, member.userId),
-							eq(organizationMembers.hasProSeat, true),
-						),
-					)
-					.limit(1);
-
-				if (remainingOrg?.stripeSubscriptionId) {
-					await tx
-						.update(users)
-						.set({
-							thirdPartyStripeSubscriptionId: remainingOrg.stripeSubscriptionId,
-						})
-						.where(eq(users.id, member.userId));
-				} else {
-					await tx
-						.update(users)
-						.set({ thirdPartyStripeSubscriptionId: null })
-						.where(eq(users.id, member.userId));
-				}
-			}
+			await releaseProSeatSubscription(tx, member.userId);
 		}
 	});
 

@@ -1,5 +1,7 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { buildEnv, NODE_ENV } from "@cap/env";
 
@@ -114,3 +116,83 @@ export const publicOnlyLookup: LookupFunction = (
 		callback(null, address, family);
 	});
 };
+
+const restrictedCustomStorageHostSuffixes = [
+	"trycloudflare.com",
+	"lhr.life",
+	"localhost.run",
+	"serveo.net",
+	"serveousercontent.com",
+	"ngrok.io",
+	"ngrok.app",
+	"ngrok-free.app",
+	"ngrok-free.dev",
+	"ngrok.dev",
+	"loca.lt",
+	"localtunnel.me",
+	"pinggy.link",
+	"pinggy.online",
+	"a.pinggy.io",
+	"bore.pub",
+	"tunnelmole.net",
+	"devtunnels.ms",
+	"telebit.io",
+	"localxpose.io",
+	"loclx.io",
+	"ply.gg",
+	"playit.gg",
+	"serveo.io",
+	"zrok.io",
+	"share.zrok.io",
+	"packetriot.net",
+	"webhook.site",
+	"requestbin.net",
+	"pipedream.net",
+	"oast.fun",
+	"oast.pro",
+	"oast.live",
+	"oast.site",
+	"oast.online",
+	"oast.me",
+	"interact.sh",
+	"burpcollaborator.net",
+	"oastify.com",
+];
+
+export function isRestrictedCustomStorageHost(endpoint: string) {
+	let url: URL;
+	try {
+		url = new URL(endpoint.trim());
+	} catch {
+		return false;
+	}
+	const hostname = url.hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
+	if (isIP(hostname)) return true;
+	return restrictedCustomStorageHostSuffixes.some(
+		(suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+	);
+}
+
+export const isDisallowedCustomStorageEndpoint = (endpoint: string) =>
+	Boolean(endpoint.trim()) &&
+	shouldBlockPrivateS3Endpoints() &&
+	isRestrictedCustomStorageHost(endpoint);
+
+export const blockedS3EndpointMessage =
+	"Invalid endpoint. Please provide a public S3-compatible endpoint URL.";
+
+export const isDisallowedS3Endpoint = async (endpoint: string) =>
+	Boolean(endpoint) &&
+	shouldBlockPrivateS3Endpoints() &&
+	(await isBlockedS3Endpoint(endpoint));
+
+export const publicOnlyS3Agents = () =>
+	shouldBlockPrivateS3Endpoints()
+		? {
+				httpAgent: new HttpAgent({ lookup: publicOnlyLookup }),
+				httpsAgent: new HttpsAgent({ lookup: publicOnlyLookup }),
+			}
+		: undefined;

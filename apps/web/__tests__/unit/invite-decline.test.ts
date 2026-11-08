@@ -154,7 +154,7 @@ describe("POST /api/invite/decline", () => {
 				organizationId: "org-1",
 			},
 		]);
-		mockDb.limit.mockResolvedValueOnce([]);
+		mockDb.limit.mockReturnValueOnce(mockDb);
 
 		const response = await POST(makeRequest({ inviteId: "invite-1" }));
 

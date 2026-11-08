@@ -1,5 +1,26 @@
 import type { LoomCsvImportRow } from "@/actions/loom";
 
+export const MAX_LOOM_CSV_IMPORT_ROWS = 3000;
+
+function detectLoomCsvDelimiter(input: string) {
+	let commas = 0;
+	let semicolons = 0;
+	let hasContent = false;
+	let inQuotes = false;
+	for (const char of input) {
+		if (char === "\u0022") inQuotes = !inQuotes;
+		else if (inQuotes) hasContent ||= char.trim().length > 0;
+		else if (char === "\n" || char === "\r") {
+			if (hasContent) break;
+			commas = 0;
+			semicolons = 0;
+		} else if (char === ",") commas += 1;
+		else if (char === ";") semicolons += 1;
+		else hasContent ||= char.trim().length > 0;
+	}
+	return semicolons > commas ? ";" : ",";
+}
+
 export function parseLoomCsvRecords(text: string) {
 	const records: string[][] = [];
 	let field = "";
@@ -7,6 +28,7 @@ export function parseLoomCsvRecords(text: string) {
 	let inQuotes = false;
 	const input = text.replace(/^\uFEFF/, "");
 	const quote = "\u0022";
+	const delimiter = detectLoomCsvDelimiter(input);
 
 	for (let index = 0; index < input.length; index += 1) {
 		const char = input.charAt(index);
@@ -22,7 +44,7 @@ export function parseLoomCsvRecords(text: string) {
 			continue;
 		}
 
-		if (char === "," && !inQuotes) {
+		if (char === delimiter && !inQuotes) {
 			row.push(field.trim());
 			field = "";
 			continue;
@@ -48,6 +70,35 @@ export function parseLoomCsvRecords(text: string) {
 	}
 
 	return records;
+}
+
+export const LOOM_CSV_RESULTS_HEADERS = [
+	"row",
+	"loom_video_url",
+	"user_email",
+	"space_name",
+	"status",
+	"error",
+];
+
+const GUARDED_FORMULA_PREFIX = /^'*[=+\-@\t\r]/;
+const FORMULA_GUARD = /^'(?='*[=+\-@\t\r])/;
+
+export function formatLoomCsvCell(value: string) {
+	const literal = GUARDED_FORMULA_PREFIX.test(value) ? `'${value}` : value;
+	if (/[",\n\r]/.test(literal)) {
+		return `"${literal.replace(/"/g, '""')}"`;
+	}
+	return literal;
+}
+
+export function isLoomCsvResultsFile(headers: string[]) {
+	const normalized = new Set(headers.map((header) => header.toLowerCase()));
+	return LOOM_CSV_RESULTS_HEADERS.every((header) => normalized.has(header));
+}
+
+export function readLoomCsvCell(value: string) {
+	return value.replace(FORMULA_GUARD, "");
 }
 
 export function parseConciergeLoomCsv(text: string): LoomCsvImportRow[] {

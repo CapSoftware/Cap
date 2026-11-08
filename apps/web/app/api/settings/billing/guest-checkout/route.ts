@@ -1,13 +1,18 @@
+import { DUB_CLICK_ID_COOKIE } from "@cap/database/referrals";
 import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
+import { customCheckoutEnabled } from "@/lib/checkout/enabled";
+import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import { guestReferralParams } from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
-	const { priceId, quantity, platform } = await request.json();
+	const { priceId, quantity, platform, hosted } = await request.json();
 	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 
 	console.log("Received guest checkout request:", { priceId, quantity });
@@ -30,6 +35,30 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "Invalid quantity" }, { status: 400 });
 	}
 
+	const plan = planForPriceId(priceId, environment);
+	if (
+		checkoutPlatform === "web" &&
+		plan &&
+		hosted !== true &&
+		customCheckoutEnabled()
+	) {
+		return Response.json(
+			{ url: checkoutPath({ plan, seats: safeQuantity }) },
+			{ status: 200 },
+		);
+	}
+
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT, {
+			headers: request.headers,
+		})
+	) {
+		return Response.json(
+			{ error: "Too many checkout attempts" },
+			{ status: 429 },
+		);
+	}
+
 	try {
 		console.log("Creating guest checkout session");
 		const redirects = getCheckoutRedirectUrls(
@@ -42,6 +71,7 @@ export async function POST(request: NextRequest) {
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
+			...guestReferralParams(request.cookies.get(DUB_CLICK_ID_COOKIE)?.value),
 			metadata: {
 				platform: checkoutPlatform,
 				guestCheckout: "true",

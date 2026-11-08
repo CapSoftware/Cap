@@ -57,6 +57,7 @@ const originals = new Map(
 		"setTimeout",
 		"clearTimeout",
 		"fetch",
+		"Date",
 	].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
 );
 
@@ -76,6 +77,64 @@ beforeEach(() => {
 		Object.defineProperty(globalThis, key, { configurable: true, value });
 	}
 });
+
+test.each(["recording", "paused"] as const)(
+	"uploads the duration at stop when %s",
+	async (phase) => {
+		let now = 0;
+		const durations: number[] = [];
+		const NativeDate = Date;
+		Object.defineProperty(globalThis, "Date", {
+			configurable: true,
+			value: class extends NativeDate {
+				static now() {
+					return now;
+				}
+			},
+		});
+		Object.defineProperty(globalThis, "fetch", {
+			configurable: true,
+			value: async (input: string, init?: RequestInit) => {
+				if (input.endsWith("/videos/create")) {
+					now = 5000;
+					return Response.json({
+						videoId: "test-video",
+						shareUrl: "https://cap.so/s/test-video",
+						embedUrl: "https://cap.so/embed/test-video",
+					});
+				}
+				if (input.endsWith("/initiate"))
+					return Response.json({ uploadId: "test-upload" });
+				if (input.endsWith("/presign-part"))
+					return Response.json({ presignedUrl: "https://upload.invalid/part" });
+				if (input === "https://upload.invalid/part")
+					return new Response(null, { headers: { ETag: "test-etag" } });
+				if (input.endsWith("/complete")) {
+					const body = JSON.parse(String(init?.body));
+					durations.push(body.durationInSecs);
+					return Response.json({ success: true });
+				}
+				throw new Error(`Unexpected request: ${input}`);
+			},
+		});
+		const recorder = new CapRecorder({
+			publicKey: "test-only",
+			mode: "camera",
+			microphone: { enabled: false },
+		});
+		try {
+			await recorder.start();
+			now = 1500;
+			if (phase === "paused") recorder.pause();
+			now = 2000;
+			await recorder.stop();
+			expect(recorder.durationMs).toBe(phase === "paused" ? 1500 : 2000);
+			expect(durations).toEqual([phase === "paused" ? 1.5 : 2]);
+		} finally {
+			recorder.destroy();
+		}
+	},
+);
 
 afterEach(() => {
 	for (const [key, descriptor] of originals) {

@@ -27,18 +27,20 @@ const LOOM_API_ROOT = "https://www.loom.com";
 export function extractLoomVideoId(url: string): string | null {
 	try {
 		const parsed = new URL(url);
-		if (!parsed.hostname.includes("loom.com")) {
+		if (
+			parsed.protocol !== "https:" ||
+			(parsed.hostname !== "loom.com" &&
+				!parsed.hostname.endsWith(".loom.com")) ||
+			parsed.username ||
+			parsed.password
+		) {
 			return null;
 		}
 
 		const pathParts = parsed.pathname.split("/").filter(Boolean);
 		const id = pathParts[pathParts.length - 1] ?? null;
 
-		if (!id || id.length < 10) {
-			return null;
-		}
-
-		return id.split("?")[0] ?? null;
+		return id && /^[A-Za-z0-9_-]{10,64}$/.test(id) ? id : null;
 	} catch {
 		return null;
 	}

@@ -11,7 +11,8 @@ import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { Account, NextAuthOptions } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmailConfig } from "next-auth/providers/email";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type AuthUser = {
 	id: string;
@@ -34,6 +35,10 @@ const mocks = vi.hoisted(() => ({
 			options: { getSsoIdentity: () => ValidatedSsoIdentity | null },
 		) => Adapter
 	>(() => ({})),
+	isCap: undefined as string | undefined,
+	disposableSignup: vi.fn<(email: string) => Promise<boolean>>(
+		async () => false,
+	),
 }));
 
 const env = vi.hoisted(() => ({
@@ -57,6 +62,11 @@ const env = vi.hoisted(() => ({
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => env,
+	buildEnv: {
+		get NEXT_PUBLIC_IS_CAP() {
+			return mocks.isCap;
+		},
+	},
 }));
 
 vi.mock("@cap/database", () => ({
@@ -70,6 +80,10 @@ vi.mock("@cap/database/auth/sso", () => ({
 
 vi.mock("../../../../packages/database/auth/drizzle-adapter", () => ({
 	DrizzleAdapter: mocks.adapter,
+}));
+
+vi.mock("../../../../packages/database/auth/disposable-signup", () => ({
+	isDisposableEmailSignup: mocks.disposableSignup,
 }));
 
 const WORKOS_ACCOUNT: Account = {
@@ -122,6 +136,7 @@ function providerIds(options: NextAuthOptions) {
 
 describe("authOptions", () => {
 	beforeEach(() => {
+		mocks.isCap = undefined;
 		env.APPLE_CLIENT_ID = "so.cap.auth";
 		env.APPLE_CLIENT_SECRET = "apple-secret";
 		env.WORKOS_CLIENT_ID = "workos-client";
@@ -159,6 +174,36 @@ describe("authOptions", () => {
 			},
 		}));
 	});
+
+	afterEach(() => vi.unstubAllEnvs());
+
+	it.each([undefined, "", "false", "true"])(
+		"only logs undelivered codes for self-hosts (NEXT_PUBLIC_IS_CAP: %j)",
+		async (isCap) => {
+			mocks.isCap = isCap;
+			vi.stubEnv("NODE_ENV", "production");
+			const log = vi.spyOn(console, "log").mockImplementation(() => {});
+			const provider = authOptions().providers.find(
+				(provider) => provider.id === "email",
+			) as EmailConfig;
+			const options = provider.options as EmailConfig;
+			const result = options.sendVerificationRequest({
+				identifier: "person@example.com",
+				token: "123456",
+				url: "http://localhost/verify",
+				expires: new Date(),
+				provider,
+				theme: {},
+			});
+			if (isCap === "true") {
+				await expect(result).rejects.toThrow("RESEND_API_KEY");
+				expect(log).not.toHaveBeenCalled();
+			} else {
+				await result;
+				expect(log).toHaveBeenCalledWith("🔢 Code: 123456");
+			}
+		},
+	);
 
 	it("enables Apple when both OAuth credentials are configured", () => {
 		const options = authOptions();
@@ -476,6 +521,51 @@ describe("authOptions", () => {
 			id: "user-1",
 			email: "someone@blocked.example",
 		});
+	});
+
+	it("sends new accounts on disposable addresses to the login page with DisposableEmail", async () => {
+		mocks.disposableSignup.mockImplementation(
+			async (email) => email === "new@throwaway.example",
+		);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.signIn({
+				user: { id: "new@throwaway.example", email: "New@Throwaway.example" },
+				account: {
+					provider: "email",
+					providerAccountId: "new@throwaway.example",
+					type: "email",
+				},
+				email: { verificationRequest: true },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "new@throwaway.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u2", email: "person@company.example" },
+				account: { provider: "google", providerAccountId: "g2", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+		mocks.disposableSignup.mockReset();
+		mocks.disposableSignup.mockResolvedValue(false);
+	});
+
+	it("does not run the disposable check for SSO sign-ins", async () => {
+		mocks.disposableSignup.mockClear();
+		mocks.validate.mockResolvedValueOnce(IDENTITY);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE as never,
+		});
+		expect(mocks.disposableSignup).not.toHaveBeenCalled();
 	});
 
 	it("does not block anyone when CAP_BLOCKED_SIGNUP_DOMAINS is unset", async () => {

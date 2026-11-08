@@ -94,6 +94,9 @@ vi.mock("@/lib/media-comments", () => ({
 }));
 vi.mock("@/lib/Notification", () => ({ createNotification: mocks.notify }));
 vi.mock("@/lib/server", () => ({ runPromiseExit: Effect.runPromiseExit }));
+vi.mock("@/lib/video-feedback-rules", () => ({
+	isVideoFeedbackDisabled: async () => false,
+}));
 
 import { newComment } from "@/actions/videos/new-comment";
 import { newMediaComment } from "@/actions/videos/new-media-comment";

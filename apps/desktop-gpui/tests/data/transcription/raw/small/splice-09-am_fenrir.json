@@ -1,0 +1,15 @@
+[
+	[
+		{ "text": "So,", "start": 0.0, "end": 0.49 },
+		{ "text": "the...", "start": 0.49, "end": 2.0 },
+		{ "text": "the", "start": 2.0, "end": 2.26 },
+		{ "text": "main", "start": 2.26, "end": 2.6 },
+		{ "text": "reason", "start": 2.6, "end": 3.11 },
+		{ "text": "we", "start": 3.11, "end": 3.28 },
+		{ "text": "built", "start": 3.28, "end": 3.52 },
+		{ "text": "this", "start": 3.78, "end": 3.93 },
+		{ "text": "was", "start": 4.18, "end": 4.31 },
+		{ "text": "um,", "start": 4.31, "end": 4.65 },
+		{ "text": "speed.", "start": 4.76, "end": 5.38 }
+	]
+]

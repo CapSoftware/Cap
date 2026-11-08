@@ -27,6 +27,11 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
+import {
+	getPendingLoomProcessing,
+	startDeferredLoomProcessing,
+} from "@/lib/loom-deferred-processing";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
@@ -221,17 +226,30 @@ async function EmbedContent({
 	startTime: number | null;
 	minimal: boolean;
 }) {
-	const user = await getCurrentUser();
-	const sharedSpaces = await db()
-		.select({
-			id: spaces.id,
-			name: spaces.name,
-			settings: spaces.settings,
-			hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.where(eq(spaceVideos.videoId, video.id));
+	const [user, sharedSpaces, [videoOwner]] = await Promise.all([
+		getCurrentUser(),
+		db()
+			.select({
+				id: spaces.id,
+				name: spaces.name,
+				settings: spaces.settings,
+				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.where(eq(spaceVideos.videoId, video.id)),
+		db()
+			.select({
+				email: users.email,
+				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+				name: users.name,
+				image: users.image,
+			})
+			.from(users)
+			.where(eq(users.id, video.ownerId))
+			.limit(1),
+	]);
 
 	const rules = resolveEffectiveVideoRules({
 		videoSettings: video.settings,
@@ -241,18 +259,8 @@ async function EmbedContent({
 
 	let aiGenerationEnabled = false;
 	let ownerIsProUser = false;
-	const videoOwnerQuery = await db()
-		.select({
-			email: users.email,
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-		})
-		.from(users)
-		.where(eq(users.id, video.ownerId))
-		.limit(1);
 
-	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
-		const videoOwner = videoOwnerQuery[0];
+	if (videoOwner) {
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 		ownerIsProUser = userIsPro(videoOwner);
 	}
@@ -270,6 +278,25 @@ async function EmbedContent({
 	}
 
 	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const deferredLoomRawFileKey = video.hasActiveUpload
+		? null
+		: getPendingLoomProcessing(currentMetadata, video.ownerId, video.id);
+	if (deferredLoomRawFileKey) {
+		const rawFileKey = deferredLoomRawFileKey;
+		after(() =>
+			startDeferredLoomProcessing({
+				videoId: video.id,
+				ownerId: video.ownerId,
+				bucketId: video.bucket,
+				rawFileKey,
+			}).catch((error) => {
+				console.error(
+					`[EmbedVideoPage] Error starting deferred processing for ${video.id}:`,
+					error,
+				);
+			}),
+		);
+	}
 	let initialAiData = null;
 
 	if (
@@ -331,67 +358,58 @@ async function EmbedContent({
 		);
 	}
 
-	const commentsQuery = await db()
-		.select({
-			id: comments.id,
-			content: comments.content,
-			timestamp: comments.timestamp,
-			type: comments.type,
-			authorId: comments.authorId,
-			videoId: comments.videoId,
-			createdAt: comments.createdAt,
-			updatedAt: comments.updatedAt,
-			parentCommentId: comments.parentCommentId,
-			mediaKey: comments.mediaKey,
-			mediaDuration: comments.mediaDuration,
-			mediaMeta: comments.mediaMeta,
-			authorName: users.name,
-		})
-		.from(comments)
-		.leftJoin(users, eq(comments.authorId, users.id))
-		.where(eq(comments.videoId, video.id));
+	const [commentsQuery, ownerImageUrl, branding] = await Promise.all([
+		db()
+			.select({
+				id: comments.id,
+				content: comments.content,
+				timestamp: comments.timestamp,
+				type: comments.type,
+				authorId: comments.authorId,
+				videoId: comments.videoId,
+				createdAt: comments.createdAt,
+				updatedAt: comments.updatedAt,
+				parentCommentId: comments.parentCommentId,
+				mediaKey: comments.mediaKey,
+				mediaDuration: comments.mediaDuration,
+				mediaMeta: comments.mediaMeta,
+				authorName: users.name,
+			})
+			.from(comments)
+			.leftJoin(users, eq(comments.authorId, users.id))
+			.where(eq(comments.videoId, video.id)),
+		Effect.gen(function* () {
+			const imageUploads = yield* ImageUploads;
+			return yield* Option.fromNullable(videoOwner?.image).pipe(
+				Option.map(imageUploads.resolveImageUrl),
+				Effect.transposeOption,
+				Effect.map(Option.getOrNull),
+			);
+		}).pipe(EffectRuntime.runPromise),
+		Effect.gen(function* () {
+			const brandingInput = {
+				owner: { isPro: ownerIsProUser },
+				orgSettings: video.orgSettings,
+				organizationName: video.organizationName,
+			};
+			const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+				? video.organizationIconUrl
+				: video.shareableLinkIconUrl;
 
-	const videoOwner = await db()
-		.select({
-			name: users.name,
-			image: users.image,
-		})
-		.from(users)
-		.where(eq(users.id, video.ownerId))
-		.limit(1);
+			if (!ownerIsProUser || !icon || minimal) {
+				return getSharePageBranding(brandingInput);
+			}
 
-	const ownerImageUrl = await Effect.gen(function* () {
-		const imageUploads = yield* ImageUploads;
-		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
-			Option.map(imageUploads.resolveImageUrl),
-			Effect.transposeOption,
-			Effect.map(Option.getOrNull),
-		);
-	}).pipe(EffectRuntime.runPromise);
+			const imageUploads = yield* ImageUploads;
+			const imageUrl = yield* imageUploads.resolveImageUrl(icon);
 
-	const branding = await Effect.gen(function* () {
-		const brandingInput = {
-			owner: { isPro: ownerIsProUser },
-			orgSettings: video.orgSettings,
-			organizationName: video.organizationName,
-		};
-		const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
-			? video.organizationIconUrl
-			: video.shareableLinkIconUrl;
-
-		if (!ownerIsProUser || !icon || minimal) {
-			return getSharePageBranding(brandingInput);
-		}
-
-		const imageUploads = yield* ImageUploads;
-		const imageUrl = yield* imageUploads.resolveImageUrl(icon);
-
-		return getSharePageBranding({
-			...brandingInput,
-			organizationIconUrl: imageUrl,
-			shareableLinkIconUrl: imageUrl,
-		});
-	}).pipe(EffectRuntime.runPromise);
+			return getSharePageBranding({
+				...brandingInput,
+				organizationIconUrl: imageUrl,
+				shareableLinkIconUrl: imageUrl,
+			});
+		}).pipe(EffectRuntime.runPromise),
+	]);
 
 	return (
 		<EmbedVideo
@@ -402,7 +420,7 @@ async function EmbedContent({
 			chapters={
 				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
 			}
-			ownerName={videoOwner[0]?.name || null}
+			ownerName={videoOwner?.name || null}
 			ownerImageUrl={ownerImageUrl}
 			autoplay={autoplay}
 			startTime={startTime}
