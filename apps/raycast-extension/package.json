@@ -97,14 +97,19 @@
 			"mode": "no-view"
 		}
 	],
+	"dependencies": {
+		"@raycast/api": "^1.83.1"
+	},
 	"devDependencies": {
 		"@types/node": "^20.11.5",
 		"typescript": "^5.8.3",
 		"vitest": "^3.2.0"
 	},
 	"scripts": {
-		"build": "tsc -p tsconfig.json",
-		"dev": "tsc -p tsconfig.json --watch",
+		"build": "ray build -e dist",
+		"dev": "ray develop",
+		"lint": "ray lint",
+		"fix-lint": "ray lint --fix",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run"
 	}
