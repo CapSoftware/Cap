@@ -49,6 +49,8 @@ pub(crate) static IMPORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 /// the drain recognises it and skips the error dialog.
 const IMPORT_CANCELLED: &str = "Import cancelled";
 
+const IMPORT_STOPPED: &str = "The import stopped unexpectedly";
+
 fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -383,20 +385,38 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
     }
 
     cx.spawn(async move |cx| {
+        // Every worker path ends each import it reported with Complete or
+        // Failed. One that panics drops the sender first, and its entry would
+        // otherwise keep `imports_in_flight` true for the rest of the session.
+        let mut unfinished: Vec<ImportProgress> = Vec::new();
         while let Ok(update) = rx.recv_async().await {
-            let failed = update.stage == ImportStage::Failed;
-            let cancelled = failed && update.message == IMPORT_CANCELLED;
-            let kind = update.kind;
-            let message = update.message.clone();
-            cx.update(|cx| apply_progress(update, cx));
-            if failed && !cancelled {
-                // Outside the update: the modal spins AppKit's own run loop
-                // and may not hold a gpui borrow (the `confirm_dialog` rule).
-                show_import_error(kind, &message);
+            unfinished.retain(|entry| entry.project_path != update.project_path);
+            if !matches!(update.stage, ImportStage::Complete | ImportStage::Failed) {
+                unfinished.push(update.clone());
             }
+            drain_progress(update, cx);
+        }
+        for mut update in unfinished {
+            update.stage = ImportStage::Failed;
+            update.progress = 0.0;
+            update.message = IMPORT_STOPPED.to_string();
+            drain_progress(update, cx);
         }
     })
     .detach();
+}
+
+fn drain_progress(update: ImportProgress, cx: &mut gpui::AsyncApp) {
+    let failed = update.stage == ImportStage::Failed;
+    let cancelled = failed && update.message == IMPORT_CANCELLED;
+    let kind = update.kind;
+    let message = update.message.clone();
+    cx.update(|cx| apply_progress(update, cx));
+    if failed && !cancelled {
+        // Outside the update: the modal spins AppKit's own run loop
+        // and may not hold a gpui borrow (the `confirm_dialog` rule).
+        show_import_error(kind, &message);
+    }
 }
 
 /// `NSOpenPanel` through the platform helper on macOS (the generic file panel
@@ -436,6 +456,10 @@ fn show_import_error(kind: ImportKind, message: &str) {
         ImportKind::Image => "image",
     };
     tracing::error!("failed to import {media}: {message}");
+    // A blocking native dialog would hang a headless test run.
+    if cfg!(test) {
+        return;
+    }
     show_error_dialog(match kind {
         ImportKind::Video => tr::import::video_failed(message),
         ImportKind::Image => tr::import::image_failed(message),
@@ -2166,6 +2190,43 @@ mod tests {
         release.send(()).unwrap();
         worker.join().unwrap();
         assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline);
+    }
+
+    /// A worker that panics never sends Complete or Failed, so its import has
+    /// to leave the list anyway or `imports_in_flight` stays true for good.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_panicking_import_worker_leaves_no_import_in_flight(cx: &mut gpui::TestAppContext) {
+        let _imports = IMPORT_TEST_LOCK.lock().unwrap();
+        let baseline = ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire);
+        let root = temp_dir("worker-panic");
+        let project_path = root.join("Imported Video.cap");
+        cx.update(|cx| {
+            spawn_import(cx, move |tx| {
+                let _ = tx.send(ImportProgress {
+                    kind: ImportKind::Video,
+                    project_path,
+                    pretty_name: "Imported Video".to_string(),
+                    stage: ImportStage::Converting,
+                    progress: 0.5,
+                    message: String::new(),
+                });
+                panic!("import worker panicked mid-conversion");
+            });
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire) != baseline {
+            assert!(std::time::Instant::now() < deadline, "worker never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert!(imports_snapshot(cx).is_empty());
+            assert!(!imports_in_flight(cx));
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
