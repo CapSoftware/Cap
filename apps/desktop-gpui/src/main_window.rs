@@ -2134,6 +2134,7 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+        let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
             || mode == Mode::Screenshot;
@@ -2267,6 +2268,24 @@ impl MainWindow {
                 tracing::error!("auto-record could not start");
                 return;
             }
+            // Delete does nothing until the capture is running, so its
+            // seconds count from there.
+            if delete {
+                let mut waited = 0;
+                while !cx
+                    .update(|_, cx| matches!(session.read(cx).phase, Phase::Recording { .. }))
+                    .unwrap_or(false)
+                {
+                    if waited == 300 {
+                        tracing::error!("auto-record never reached Recording to delete");
+                        return;
+                    }
+                    waited += 1;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |cx: &gpui::AsyncApp| {
@@ -2283,9 +2302,40 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
-            tracing::info!("auto-record stop requested");
+            // Where the start put the main window, and where the end of the
+            // recording leaves it (`mainWindowRecordingStartBehaviour`).
+            let log_main_window = |when: &str, cx: &mut gpui::AsyncWindowContext| {
+                if let Ok((visible, minimized)) = cx.update(|window, _| {
+                    (
+                        crate::platform::window_is_visible(window),
+                        crate::platform::window_is_minimized(window),
+                    )
+                }) {
+                    tracing::info!(visible, minimized, "auto-record main window {when}");
+                }
+            };
+            log_main_window("while recording", cx);
             let app: &gpui::AsyncApp = cx;
-            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            if delete {
+                tracing::info!("auto-record delete requested");
+                app.update(|cx| session.update(cx, |session, cx| session.delete(cx)));
+            } else {
+                tracing::info!("auto-record stop requested");
+                app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            }
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let app: &gpui::AsyncApp = cx;
+                if app.update(|cx| session.read(cx).phase == Phase::Idle) {
+                    break;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            log_main_window("after the recording", cx);
         })
         .detach();
     }

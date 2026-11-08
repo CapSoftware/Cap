@@ -114,6 +114,7 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
 	isProSubscription: () => true,
 	isSsoSubscription: () => false,
+	isStandaloneScimSubscription: () => false,
 }));
 
 const completed = (

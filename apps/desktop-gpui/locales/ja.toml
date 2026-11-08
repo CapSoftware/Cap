@@ -2173,6 +2173,9 @@ mode = "ズームモード"
 positions_mixed = "セグメントごとにズーム位置が異なります。ドラッグするとすべて同じ位置に移動します。"
 title = "ズーム{number}"
 
+[editor.side_panel]
+style = "スタイル"
+
 [editor.sidebar]
 desktop_import_failed = "デスクトップの壁紙を読み込めませんでした"
 importing_image = "画像を読み込み中…"
@@ -2336,9 +2339,9 @@ text_item = "テキスト"
 [editor.clips]
 append_error = "クリップを追加できませんでした：{message}"
 append_error_title = "録画エラー"
-back = "エディタに戻る"
 cap_filter = "Cap録画"
 clip = "クリップ{number}"
+count = { other = "{count}個のクリップ" }
 empty_description = "クリップを録画するか読み込むと、ここに表示されます。"
 empty_title = "クリップはまだありません"
 import = "読み込む"
@@ -2349,6 +2352,7 @@ import_mp4 = "MP4動画…"
 importing = "読み込み中…"
 mp4_filter = "MP4動画"
 prepare_controls_failed = "録画コントロールを準備できませんでした：{error}"
+record = "録画"
 record_new = "新しいクリップを録画"
 save_before_recording_failed = "録画前に現在のプロジェクトを保存できませんでした：{error}"
 split = "分割{number}"
@@ -3012,8 +3016,6 @@ delete_recording = "録画を削除"
 export = "書き出し"
 open_bundle = "録画バンドルを開く"
 presets = "プリセット"
-transcript = "文字起こし"
-transcript_tooltip = "文字起こしで編集"
 
 [editor.window.image]
 changed = "置き換えを選んでいる間にこの画像が変更されました。選択してもう一度お試しください。"

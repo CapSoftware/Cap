@@ -35,6 +35,9 @@ export const STRIPE_SAML_SSO_PRICE_ID = "price_1UBJpTFJxA1XpeSsQmAOhibr";
 export const STRIPE_SAML_SSO_LEGACY_PRICE_ID = "price_1UBJQuFJxA1XpeSsnxL2KhP7";
 export const STRIPE_SAML_SSO_PRODUCT_ID = "prod_VBgo5t1scWLUPy";
 
+export const STRIPE_SCIM_PRICE_ID = "price_1UYt30FJxA1XpeSs0obc6kT0";
+export const SCIM_PRICE_PER_MONTH = 200;
+
 export const userIsPro = (
 	user?: {
 		stripeSubscriptionStatus?: string | null;
