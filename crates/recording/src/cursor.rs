@@ -2061,7 +2061,7 @@ mod incremental_writer_tests {
         assert_eq!(taken.moves.len(), 95);
         assert!(response.moves.is_empty());
         assert!(taken.keyboard_presses.is_empty());
-        assert_eq!(response.keyboard_presses.len(), 95);
+        assert_eq!(response.keyboard_presses.len(), expected.keyboard_presses.len());
     }
 
     #[test]
