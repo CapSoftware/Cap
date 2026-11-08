@@ -488,6 +488,23 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
             },
         )
         .await;
+        // Opening the link can hold the main thread while the browser starts,
+        // so wait for the decision itself before the settle time.
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the main window decision",
+            Duration::from_secs(60),
+            || {
+                let log = without_ansi(&sandbox.log(name));
+                log.split_once("recording finished")
+                    .is_some_and(|(_, after)| {
+                        after.contains("main window kept hidden after the Instant recording")
+                            || after.contains("showing the main window")
+                    })
+            },
+        )
+        .await;
         tokio::time::sleep(Duration::from_secs(2)).await;
         kill(app);
         let log = without_ansi(&sandbox.log(name));
