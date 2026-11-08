@@ -32,6 +32,20 @@ export const isMobileRecordingDurationAllowed = ({
 		mobileFreeRecordingDurationSeconds +
 			mobileRecordingDurationToleranceSeconds;
 
+// The total and the segment durations are both client-reported; gating on the larger stops a client that
+// only understates the total. Authoritative enforcement needs the length measured after processing.
+export const mobileRecordingGateDurationSeconds = ({
+	durationSeconds,
+	videoSegments,
+}: {
+	durationSeconds: number;
+	videoSegments: ReadonlyArray<{ duration: number }>;
+}) =>
+	Math.max(
+		durationSeconds,
+		videoSegments.reduce((total, segment) => total + segment.duration, 0),
+	);
+
 export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	try {
 		const redirectUrl = new URL(redirectUri);
@@ -380,6 +394,19 @@ export const MobileCapTitleInput = Schema.Struct({
 
 export const MobileCapPasswordInput = Schema.Struct({
 	password: Schema.NullOr(Schema.String),
+});
+
+export const MobileCapEditState = Schema.Struct({
+	status: Schema.Literal("available", "pro_required", "not_editable", "busy"),
+	duration: Schema.Number,
+	hasEdits: Schema.Boolean,
+});
+
+export const MobileCapEditInput = Schema.Struct({
+	sourceDuration: Schema.Number,
+	keepRanges: Schema.Array(
+		Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+	).pipe(Schema.minItems(1), Schema.maxItems(500)),
 });
 
 export const MobileFolderCreateInput = Schema.Struct({
@@ -794,6 +821,39 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.get("getCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileCapEditState)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("saveCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileCapEditInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
+	)
+	.add(
+		HttpApiEndpoint.post("restoreCapEdit", "/caps/:id/edit/restore")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback")

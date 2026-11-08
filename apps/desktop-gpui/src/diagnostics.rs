@@ -668,6 +668,7 @@ fn settings_snapshot() -> Value {
         "instanceId": instance_id,
         "enableTelemetry": settings.enable_telemetry,
         "editorPreviewQuality": settings.editor_preview_quality.as_json(),
+        "editorPreviewSpeed": settings.editor_preview_speed.as_f64(),
         "captureKeyboardEvents": settings.capture_keyboard_events,
     })
 }

@@ -37,7 +37,13 @@ pub struct ControlsWindow {
     ticking_live: bool,
     level_bar: Entity<ui::MicrophoneLevel>,
     issue_room: bool,
+    /// Repaints the marker button once its acknowledgement has played out.
+    _marker_settle: gpui::Task<()>,
+    marker_seen: Option<std::time::Instant>,
 }
+
+/// How long the marker button stays lit after a marker goes in.
+const MARKER_ACKNOWLEDGEMENT: Duration = Duration::from_millis(900);
 
 #[derive(Clone, Copy)]
 enum DestructiveAction {
@@ -65,6 +71,7 @@ impl ControlsWindow {
         let theme = Theme::for_window(window, cx, false);
         cx.observe_in(&session, window, |this, _, window, cx| {
             this.fit_to_issue(window, cx);
+            this.settle_marker_acknowledgement(window, cx);
             let live = this.timer_is_live(cx);
             if live != this.ticking_live {
                 this.ticking_live = live;
@@ -93,6 +100,8 @@ impl ControlsWindow {
             ticking_live: false,
             level_bar,
             issue_room: false,
+            _marker_settle: gpui::Task::ready(()),
+            marker_seen: None,
         };
         this.ticking_live = this.timer_is_live(cx);
         this._tick = Self::spawn_tick(window, cx);
@@ -103,11 +112,18 @@ impl ControlsWindow {
 
     fn issue(&self, cx: &gpui::App) -> Option<String> {
         let session = self.session.read(cx);
-        session.error.clone().or_else(|| {
-            session
-                .storage_warning
-                .then(|| tr::controls::low_storage().to_owned())
-        })
+        session
+            .error
+            .clone()
+            .or_else(|| {
+                (session.paused_for_sleep && session.is_paused())
+                    .then(|| tr::controls::paused_for_sleep().to_owned())
+            })
+            .or_else(|| {
+                session
+                    .storage_warning
+                    .then(|| tr::controls::low_storage().to_owned())
+            })
     }
 
     fn fit_to_issue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -191,6 +207,116 @@ impl ControlsWindow {
             } else {
                 theme.gray_11.into()
             }))
+    }
+
+    fn settle_marker_acknowledgement(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let added = self.session.read(cx).marker_added_at();
+        if added.is_none() || added == self.marker_seen {
+            return;
+        }
+        self.marker_seen = added;
+        self._marker_settle = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(MARKER_ACKNOWLEDGEMENT).await;
+            this.update_in(cx, |_, window, cx| {
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        });
+    }
+
+    /// Studio only: Instant recordings have no editor timeline to mark. The
+    /// flag fills and turns blue for a moment after each marker, and the
+    /// running count sits on its corner.
+    fn render_marker(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let session = self.session.read(cx);
+        let available = session.markers_available();
+        let count = session.marker_count();
+        let lit = session
+            .marker_added_at()
+            .is_some_and(|added| added.elapsed() < MARKER_ACKNOWLEDGEMENT);
+        let shortcut: Vec<String> = crate::store::hotkeys_raw()
+            .get(crate::store::RECORDING_MARKER_HOTKEY)
+            .and_then(crate::store::hotkey_from_value)
+            .map(|hotkey| {
+                crate::settings_pages::hotkey_display_keys(&hotkey)
+                    .iter()
+                    .map(|key| crate::settings_pages::hotkey_key_text(key).to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let icon_color: gpui::Hsla = if !available {
+            Theme::with_alpha(theme.gray_11, 0.5)
+        } else if lit {
+            theme.blue_9.into()
+        } else {
+            theme.gray_11.into()
+        };
+        div()
+            .id("marker")
+            .relative()
+            .w(px(28.))
+            .h(px(32.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.))
+            .when(lit, |this| this.bg(theme.blue_3))
+            .when(available && !lit, |this| {
+                this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+            })
+            .child(
+                svg()
+                    .path(if lit {
+                        "icons/flag-filled.svg"
+                    } else {
+                        "icons/flag.svg"
+                    })
+                    .size(px(20.))
+                    .text_color(icon_color),
+            )
+            .when(count > 0, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(1.))
+                        .right(px(0.))
+                        .min_w(px(13.))
+                        .h(px(13.))
+                        .px(px(3.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(if lit { theme.blue_9 } else { theme.gray_11 })
+                        .text_size(px(9.))
+                        .line_height(px(13.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.gray_1)
+                        .child(SharedString::from(if count > 99 {
+                            "99+".to_string()
+                        } else {
+                            count.to_string()
+                        })),
+                )
+            })
+            .tooltip(move |_, cx| {
+                ui::Tooltip::new(&theme, tr::controls::marker::add())
+                    .keys(shortcut.clone())
+                    .view(cx)
+            })
+            .when(available, |this| {
+                this.active(|style| style.bg(theme.blue_4))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let at = std::time::Instant::now();
+                        this.session
+                            .update(cx, |session, cx| session.add_marker(at, cx));
+                    }))
+            })
+            .into_any_element()
     }
 
     fn render_stop(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -403,6 +529,7 @@ impl ControlsWindow {
     fn render_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
+        let studio = session.mode() == Some(RecordingMode::Studio);
         let paused = session.is_paused();
         let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
         let pause_pending = session.pause_pending();
@@ -507,8 +634,14 @@ impl ControlsWindow {
                                     }))
                                 },
                             ))
-                            // TODO: the recording settings popover menu.
-                            .child(self.action_button("settings", "icons/settings.svg", true)),
+                            // Studio's marker button takes the slot of the
+                            // settings menu, which has no popover yet.
+                            .child(if studio {
+                                self.render_marker(cx)
+                            } else {
+                                self.action_button("settings", "icons/settings.svg", true)
+                                    .into_any_element()
+                            }),
                     ),
             )
             .child(

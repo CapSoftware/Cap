@@ -752,6 +752,9 @@ pub enum ColorTarget {
     /// The right-hand stop of the horizontal gradient, only reachable while
     /// `gradient_color` is set.
     TextGradient(usize),
+    /// A shape's stroke and fill, per shape index.
+    ShapeStroke(usize),
+    ShapeFill(usize),
 }
 
 impl ColorTarget {
@@ -1808,6 +1811,18 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.text_segments.get(index))
                 .and_then(|segment| segment.gradient_color.clone()),
+            ColorTarget::ShapeStroke(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.shape_segments.get(index))
+                .map(|segment| segment.stroke_color.clone()),
+            ColorTarget::ShapeFill(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.shape_segments.get(index))
+                .map(|segment| segment.fill_color.clone()),
             _ => None,
         }
     }
@@ -1952,6 +1967,24 @@ impl EditorWindow {
                         return false;
                     }
                     segment.gradient_color = Some(hex);
+                    true
+                })
+            }
+            ColorTarget::ShapeStroke(index) => {
+                self.edit_shape_segment("shape-stroke-color", index, window, cx, move |segment| {
+                    if segment.stroke_color == hex {
+                        return false;
+                    }
+                    segment.stroke_color = hex;
+                    true
+                })
+            }
+            ColorTarget::ShapeFill(index) => {
+                self.edit_shape_segment("shape-fill-color", index, window, cx, move |segment| {
+                    if segment.fill_color == hex {
+                        return false;
+                    }
+                    segment.fill_color = hex;
                     true
                 })
             }
@@ -2617,50 +2650,40 @@ impl EditorWindow {
                 this.select_sidebar_tab(*index, window, cx);
             }));
 
-        div()
-            .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .h_full()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(self.card_line())
-                    .shadow(theme.editor.card_shadow())
-                    .child(rail)
-                    .children(self.sidebar.image_import_error.as_ref().map(|error| {
-                        div()
-                            .p(px(12.))
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child(error.clone())
-                    }))
-                    .children(self.sidebar.picking_image.then(|| {
-                        div()
-                            .p(px(12.))
-                            .child(tr::editor::sidebar::importing_image())
-                    }))
-                    .child(if let Some((index, group)) = self.sidebar.style_target {
-                        self.render_style_group(index, group, cx)
-                    } else if self.audio_picker.is_some() {
-                        self.render_audio_library(cx)
-                    } else {
-                        match selection {
-                            Some(selection) => self.render_selection_panel(&selection, cx),
-                            None => self.render_tab_body(cx),
-                        }
-                    }),
-            )
+        // The panel card around it, and the switcher above the rail, are the
+        // root's (`crate::editor_side_panel`).
+        div().size_full().flex().flex_col().min_h_0().child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .overflow_hidden()
+                .child(rail)
+                .children(self.sidebar.image_import_error.as_ref().map(|error| {
+                    div()
+                        .p(px(12.))
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(error.clone())
+                }))
+                .children(self.sidebar.picking_image.then(|| {
+                    div()
+                        .p(px(12.))
+                        .child(tr::editor::sidebar::importing_image())
+                }))
+                .child(if let Some((index, group)) = self.sidebar.style_target {
+                    self.render_style_group(index, group, cx)
+                } else if self.audio_picker.is_some() {
+                    self.render_audio_library(cx)
+                } else {
+                    match selection {
+                        Some(selection) => self.render_selection_panel(&selection, cx),
+                        None => self.render_tab_body(cx),
+                    }
+                }),
+        )
     }
 
     /// The scroll region (`:679-692`): `custom-scroll overflow-x-hidden
@@ -4180,6 +4203,7 @@ impl EditorWindow {
             "text" => TrackKind::Text,
             "caption" => TrackKind::Caption,
             "mask" => TrackKind::Mask,
+            "shape" => TrackKind::Shape,
             "audio" => TrackKind::Audio,
             "keyboard" => TrackKind::Keyboard,
             "scene" => TrackKind::Scene,
