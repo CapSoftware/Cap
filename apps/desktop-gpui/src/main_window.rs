@@ -2302,6 +2302,19 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
+            // Where the start put the main window, and where the end of the
+            // recording leaves it (`mainWindowRecordingStartBehaviour`).
+            let log_main_window = |when: &str, cx: &mut gpui::AsyncWindowContext| {
+                if let Ok((visible, minimized)) = cx.update(|window, _| {
+                    (
+                        crate::platform::window_is_visible(window),
+                        crate::platform::window_is_minimized(window),
+                    )
+                }) {
+                    tracing::info!(visible, minimized, "auto-record main window {when}");
+                }
+            };
+            log_main_window("while recording", cx);
             let app: &gpui::AsyncApp = cx;
             if delete {
                 tracing::info!("auto-record delete requested");
@@ -2310,6 +2323,19 @@ impl MainWindow {
                 tracing::info!("auto-record stop requested");
                 app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
             }
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let app: &gpui::AsyncApp = cx;
+                if app.update(|cx| session.read(cx).phase == Phase::Idle) {
+                    break;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            log_main_window("after the recording", cx);
         })
         .detach();
     }
