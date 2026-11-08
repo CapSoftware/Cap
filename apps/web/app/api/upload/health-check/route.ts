@@ -51,7 +51,29 @@ const jsonResponse = (
 		},
 	);
 
-const verifyUserStorage = (
+// Enforces an explicit same-origin check when browser fetch metadata or Origin
+// headers are present so cross-site pages cannot trigger probes via SameSite=None cookies.
+const isCrossSiteRequest = (request: HttpServerRequest.HttpServerRequest): boolean => {
+	const headers = request.headers as Record<string, string | undefined>;
+	const fetchSite = (headers["sec-fetch-site"] ?? "").toLowerCase();
+	if (fetchSite === "cross-site") {
+		return true;
+	}
+	const origin = headers.origin;
+	const host = headers.host;
+	if (!origin || !host) {
+		return false;
+	}
+	try {
+		return new URL(origin).host !== host;
+	} catch {
+		return true;
+	}
+};
+
+// Executes the write-and-delete storage probe exclusively on POST and propagates
+// deleteObject failures instead of swallowing them.
+const verifyUserStorageWrite = (
 	userId: CurrentUser["Type"]["id"],
 	organizationId: CurrentUser["Type"]["activeOrganizationId"],
 	probeSlice: Uint8Array,
@@ -66,9 +88,16 @@ const verifyUserStorage = (
 			contentType: "application/octet-stream",
 			contentLength: probeSlice.byteLength,
 		});
-		yield* writable.access
-			.deleteObject(probeKey)
-			.pipe(Effect.catchAll(() => Effect.void));
+		yield* writable.access.deleteObject(probeKey);
+	});
+
+// Verifies storage provider configuration on GET without performing any bucket write or delete.
+const verifyUserStorageReadyReadOnly = (
+	userId: CurrentUser["Type"]["id"],
+	organizationId: CurrentUser["Type"]["activeOrganizationId"],
+) =>
+	Effect.gen(function* () {
+		yield* Storage.getWritableAccessForUser(userId, organizationId);
 	});
 
 const checkProbeRateLimit = (
@@ -93,131 +122,146 @@ const rateLimitedResponse = () =>
 		429,
 	);
 
+const crossSiteForbiddenResponse = () =>
+	jsonResponse(
+		{
+			ok: false,
+			status: "degraded",
+			bytesReceived: 0,
+			message: "Cross-site upload health probe requests are not permitted.",
+		},
+		403,
+	);
+
+const readBoundedProbeBody = (request: HttpServerRequest.HttpServerRequest) =>
+	Effect.gen(function* () {
+		const declared = Number(request.headers["content-length"] ?? "0");
+		if (Number.isFinite(declared) && declared > MAX_PROBE_BYTES) {
+			return null;
+		}
+		return yield* request.arrayBuffer.pipe(
+			HttpServerRequest.withMaxBodySize(Option.some(MAX_PROBE_BYTES)),
+			Effect.map((buf) => new Uint8Array(buf)),
+			Effect.catchAll(() => Effect.succeed(null)),
+		);
+	});
+
+const handleProbePost = () =>
+	Effect.gen(function* () {
+		const user = yield* CurrentUser;
+		const request = yield* HttpServerRequest.HttpServerRequest;
+		if (isCrossSiteRequest(request)) {
+			return crossSiteForbiddenResponse();
+		}
+		if (yield* checkProbeRateLimit(user.id, request)) {
+			return rateLimitedResponse();
+		}
+
+		const bodyBuffer = yield* readBoundedProbeBody(request);
+		if (bodyBuffer === null) {
+			return jsonResponse(
+				{
+					ok: false,
+					status: "degraded",
+					bytesReceived: MAX_PROBE_BYTES,
+					message: "Upload probe payload exceeds maximum allowed size.",
+				},
+				413,
+			);
+		}
+
+		if (bodyBuffer.byteLength < MIN_PROBE_BYTES) {
+			return jsonResponse(
+				{
+					ok: false,
+					status: "degraded",
+					bytesReceived: bodyBuffer.byteLength,
+					message: "Upload probe payload is too small, please contact support.",
+				},
+				400,
+			);
+		}
+
+		const storageOk = yield* verifyUserStorageWrite(
+			user.id,
+			user.activeOrganizationId,
+			bodyBuffer.subarray(0, MIN_PROBE_BYTES),
+		).pipe(
+			Effect.as(true),
+			Effect.catchAll(() => Effect.succeed(false)),
+		);
+		if (!storageOk) {
+			return jsonResponse(
+				{
+					ok: false,
+					status: "degraded",
+					bytesReceived: bodyBuffer.byteLength,
+					message:
+						"Upload storage destination is unavailable, please contact support.",
+				},
+				503,
+			);
+		}
+
+		return jsonResponse(
+			{
+				ok: true,
+				status: "healthy",
+				bytesReceived: bodyBuffer.byteLength,
+				message: "Upload health check succeeded.",
+			},
+			200,
+		);
+	});
+
+const handleHealthGet = () =>
+	Effect.gen(function* () {
+		const user = yield* CurrentUser;
+		const request = yield* HttpServerRequest.HttpServerRequest;
+		if (isCrossSiteRequest(request)) {
+			return crossSiteForbiddenResponse();
+		}
+		if (yield* checkProbeRateLimit(user.id, request)) {
+			return rateLimitedResponse();
+		}
+
+		const storageReady = yield* verifyUserStorageReadyReadOnly(
+			user.id,
+			user.activeOrganizationId,
+		).pipe(
+			Effect.as(true),
+			Effect.catchAll(() => Effect.succeed(false)),
+		);
+		if (!storageReady) {
+			return jsonResponse(
+				{
+					ok: false,
+					status: "degraded",
+					bytesReceived: 0,
+					message:
+						"Upload storage destination is unavailable, please contact support.",
+				},
+				503,
+			);
+		}
+
+		return jsonResponse(
+			{
+				ok: true,
+				status: "healthy",
+				bytesReceived: 0,
+				message: "Upload health-check endpoint ready.",
+			},
+			200,
+		);
+	});
+
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers
-				.handle("probeUploadHealth", () =>
-					Effect.gen(function* () {
-						const user = yield* CurrentUser;
-						const request = yield* HttpServerRequest.HttpServerRequest;
-						if (yield* checkProbeRateLimit(user.id, request)) {
-							return rateLimitedResponse();
-						}
-
-						const declared = Number(request.headers["content-length"] ?? "0");
-						if (Number.isFinite(declared) && declared > MAX_PROBE_BYTES) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: MAX_PROBE_BYTES,
-									message: "Upload probe payload exceeds maximum allowed size.",
-								},
-								413,
-							);
-						}
-
-						const bodyBuffer = yield* request.arrayBuffer.pipe(
-							HttpServerRequest.withMaxBodySize(Option.some(MAX_PROBE_BYTES)),
-							Effect.map((buf) => new Uint8Array(buf)),
-							Effect.catchAll(() => Effect.succeed(null)),
-						);
-						if (bodyBuffer === null) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: MAX_PROBE_BYTES,
-									message: "Upload probe payload exceeds maximum allowed size.",
-								},
-								413,
-							);
-						}
-
-						if (bodyBuffer.byteLength < MIN_PROBE_BYTES) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: bodyBuffer.byteLength,
-									message:
-										"Upload probe payload is too small, please contact support.",
-								},
-								400,
-							);
-						}
-
-						const storageOk = yield* verifyUserStorage(
-							user.id,
-							user.activeOrganizationId,
-							bodyBuffer.subarray(0, MIN_PROBE_BYTES),
-						).pipe(
-							Effect.as(true),
-							Effect.catchAll(() => Effect.succeed(false)),
-						);
-						if (!storageOk) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: bodyBuffer.byteLength,
-									message:
-										"Upload storage destination is unavailable, please contact support.",
-								},
-								503,
-							);
-						}
-
-						return jsonResponse(
-							{
-								ok: true,
-								status: "healthy",
-								bytesReceived: bodyBuffer.byteLength,
-								message: "Upload health check succeeded.",
-							},
-							200,
-						);
-					}),
-				)
-				.handle("getUploadHealth", () =>
-					Effect.gen(function* () {
-						const user = yield* CurrentUser;
-						const request = yield* HttpServerRequest.HttpServerRequest;
-						if (yield* checkProbeRateLimit(user.id, request)) {
-							return rateLimitedResponse();
-						}
-						const storageOk = yield* verifyUserStorage(
-							user.id,
-							user.activeOrganizationId,
-							new Uint8Array(MIN_PROBE_BYTES),
-						).pipe(
-							Effect.as(true),
-							Effect.catchAll(() => Effect.succeed(false)),
-						);
-						if (!storageOk) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: 0,
-									message:
-										"Upload storage destination is unavailable, please contact support.",
-								},
-								503,
-							);
-						}
-						return jsonResponse(
-							{
-								ok: true,
-								status: "healthy",
-								bytesReceived: 0,
-								message: "Upload health-check endpoint ready.",
-							},
-							200,
-						);
-					}),
-				),
+				.handle("probeUploadHealth", handleProbePost)
+				.handle("getUploadHealth", handleHealthGet),
 		),
 	),
 );

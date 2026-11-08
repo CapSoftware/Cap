@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	rateLimited: false,
 	storageHealthy: true,
+	deleteHealthy: true,
 	putObject: vi.fn(),
 	deleteObject: vi.fn(),
 }));
@@ -36,7 +37,9 @@ vi.mock("@/lib/server", async () => {
 							},
 							deleteObject: (...args: unknown[]) => {
 								mocks.deleteObject(...args);
-								return Effect.void;
+								return mocks.deleteHealthy
+									? Effect.void
+									: Effect.fail(new Error("Delete failed"));
 							},
 						},
 						bucketId: Option.none(),
@@ -63,11 +66,12 @@ describe("Cap desktop upload health-check API route", () => {
 	beforeEach(() => {
 		mocks.rateLimited = false;
 		mocks.storageHealthy = true;
+		mocks.deleteHealthy = true;
 		mocks.putObject.mockClear();
 		mocks.deleteObject.mockClear();
 	});
 
-	it("verifies storage connectivity and rejects undersized or oversized payloads", async () => {
+	it("verifies POST storage write/delete and rejects invalid or cross-site probes", async () => {
 		const validPayload = new Uint8Array(1024).fill(42);
 		const okRes = await POST(
 			new Request("http://localhost/api/upload/health-check", {
@@ -81,6 +85,15 @@ describe("Cap desktop upload health-check API route", () => {
 		expect(okJson.bytesReceived).toBe(1024);
 		expect(mocks.putObject).toHaveBeenCalledTimes(1);
 		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);
+
+		const crossSiteRes = await POST(
+			new Request("http://localhost/api/upload/health-check", {
+				method: "POST",
+				headers: { "sec-fetch-site": "cross-site" },
+				body: validPayload,
+			}),
+		);
+		expect(crossSiteRes.status).toBe(403);
 
 		const smallRes = await POST(
 			new Request("http://localhost/api/upload/health-check", {
@@ -99,24 +112,34 @@ describe("Cap desktop upload health-check API route", () => {
 		);
 		expect(oversizedRes.status).toBe(413);
 
-		mocks.storageHealthy = false;
-		const degradedRes = await POST(
+		mocks.deleteHealthy = false;
+		const deleteFailedRes = await POST(
 			new Request("http://localhost/api/upload/health-check", {
 				method: "POST",
 				body: validPayload,
 			}),
 		);
-		expect(degradedRes.status).toBe(503);
+		expect(deleteFailedRes.status).toBe(503);
+	});
 
-		mocks.storageHealthy = true;
+	it("keeps GET strictly read-only without bucket mutations", async () => {
 		const getRes = await GET(
 			new Request("http://localhost/api/upload/health-check", {
 				method: "GET",
 			}),
 		);
 		expect(getRes.status).toBe(200);
+		expect(mocks.putObject).not.toHaveBeenCalled();
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
 
-		mocks.putObject.mockClear();
+		const crossSiteGetRes = await GET(
+			new Request("http://localhost/api/upload/health-check", {
+				method: "GET",
+				headers: { "sec-fetch-site": "cross-site" },
+			}),
+		);
+		expect(crossSiteGetRes.status).toBe(403);
+
 		mocks.rateLimited = true;
 		const limitedGetRes = await GET(
 			new Request("http://localhost/api/upload/health-check", {
