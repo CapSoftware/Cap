@@ -2318,7 +2318,7 @@ impl ActorBuilder {
         self,
         #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         let recording_dir = self.output_path.clone();
         #[cfg(target_os = "linux")]
         let lifecycle = self.lifetime.lifecycle.clone();
@@ -2381,8 +2381,30 @@ impl ActorBuilder {
             }
             result
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(target_os = "macos")]
+        {
+            preserve_failed_startup(&recording_dir, startup.await)
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         startup.await
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn preserve_failed_startup<T>(
+    recording_dir: &Path,
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    match result {
+        Err(error) if recording_dir.join("recording-meta.json").exists() => {
+            match persist_failed_recording(recording_dir, &format!("{error:#}")) {
+                Ok(()) => Err(error),
+                Err(persist) => Err(error.context(format!(
+                    "Could not preserve failed Studio startup: {persist:#}"
+                ))),
+            }
+        }
+        result => result,
     }
 }
 
@@ -7226,5 +7248,59 @@ mod clean_stop_receipt_tests {
             std::fs::read(directory.path().join("project-config.json")).unwrap(),
             serde_json::to_vec_pretty(claim.configuration()).unwrap()
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod failed_startup_tests {
+    use super::*;
+
+    fn status(recording_dir: &Path) -> Option<StudioRecordingStatus> {
+        let meta = RecordingMeta::load_for_project(recording_dir).unwrap();
+        let RecordingMetaInner::Studio(studio) = meta.inner else {
+            unreachable!();
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = *studio else {
+            unreachable!();
+        };
+        inner.status
+    }
+
+    #[test]
+    fn a_start_that_fails_after_writing_its_metadata_is_kept_as_failed() {
+        let directory = tempfile::tempdir().unwrap();
+        write_in_progress_meta(directory.path(), None).unwrap();
+
+        let result =
+            preserve_failed_startup::<()>(directory.path(), Err(anyhow!("capture refused")));
+
+        assert_eq!(result.unwrap_err().to_string(), "capture refused");
+        assert!(matches!(
+            status(directory.path()),
+            Some(StudioRecordingStatus::Failed { error }) if error == "capture refused"
+        ));
+    }
+
+    #[test]
+    fn a_start_that_fails_before_writing_metadata_writes_none() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let result = preserve_failed_startup::<()>(directory.path(), Err(anyhow!("no display")));
+
+        assert!(result.is_err());
+        assert!(!directory.path().join("recording-meta.json").exists());
+    }
+
+    #[test]
+    fn a_start_that_succeeds_stays_in_progress() {
+        let directory = tempfile::tempdir().unwrap();
+        write_in_progress_meta(directory.path(), None).unwrap();
+
+        preserve_failed_startup(directory.path(), Ok(())).unwrap();
+
+        assert!(matches!(
+            status(directory.path()),
+            Some(StudioRecordingStatus::InProgress)
+        ));
     }
 }
