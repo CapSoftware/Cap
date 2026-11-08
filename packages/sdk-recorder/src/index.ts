@@ -113,6 +113,11 @@ export class CapRecorder {
 	}
 
 	async start(options?: Pick<RecorderOptions, "maxDurationMs">): Promise<void> {
+		if (this._phase === "error" || this._phase === "complete") {
+			this._videoId = null;
+			this._durationMs = 0;
+			this.setPhase("idle");
+		}
 		if (this._phase !== "idle") {
 			throw new Error(`Cannot start from phase "${this._phase}"`);
 		}
