@@ -804,7 +804,9 @@ async fn finish_failed_capture(
     stop: impl Future<Output = anyhow::Result<()>>,
     persist_stopped: impl FnOnce() -> anyhow::Result<()>,
 ) -> (bool, anyhow::Result<PathBuf>) {
-    if let Err(error) = stop.await {
+    if let Err(error) = stop.await
+        && !cap_recording::instant_recording::capture_stopped_after_failure(&error)
+    {
         return (
             false,
             Err(error.context("Failed capture shutdown is unconfirmed; local files preserved")),
@@ -2043,13 +2045,7 @@ fn persist_instant_meta(
             InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
         };
 
-        let pretty_name = completed
-            .project_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Cap Recording")
-            .to_string();
+        let pretty_name = project_pretty_name(&completed.project_path);
         let meta = match &completed.meta {
             InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
                 error: "instant recording stopped before completion".to_string(),
@@ -2183,12 +2179,7 @@ fn persist_in_progress_instant_meta(
                 recording_dir: project_path.to_path_buf(),
             }
         };
-        let pretty_name = project_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Cap Recording")
-            .to_string();
+        let pretty_name = project_pretty_name(project_path);
 
         let meta = cap_project::RecordingMeta {
             platform: Some(cap_project::Platform::default()),
@@ -2563,7 +2554,8 @@ async fn start_attempt_with_upload(
             let mut builder = defaults.apply_to_studio_builder(
                 studio_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
-                    .with_window_only(window_only),
+                    .with_window_only(window_only)
+                    .with_pretty_name(project_pretty_name(&project_dir)),
                 camera_lock.is_some(),
                 None,
             );
@@ -2890,6 +2882,15 @@ fn create_project_dir(
     Ok(base.join(filename))
 }
 
+fn project_pretty_name(project_path: &std::path::Path) -> String {
+    project_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Cap Recording")
+        .to_string()
+}
+
 /// Preserve GPUI's colon and slash replacement, then strip invalid characters
 /// as the Tauri recording and screenshot paths do.
 pub(crate) fn project_bundle_filename(name: &str) -> String {
@@ -2919,13 +2920,14 @@ fn format_recording_project_name(
     let formatted = template
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
-        .replace("{target_kind}", target_kind)
-        .replace("{target_name}", &target_name);
+        .replace("{target_kind}", target_kind);
     let formatted = replace_datetime_template_token(&formatted, "date", "%Y-%m-%d", datetime);
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
     let formatted =
         replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
-    formatted
+    // Last, so a window title keeps any placeholder it contains, as it does
+    // `{random}`.
+    formatted.replace("{target_name}", &target_name)
 }
 
 fn replace_random_template_tokens(input: &str) -> String {
@@ -2981,8 +2983,16 @@ fn replace_datetime_template_token(
         if token == name {
             output.push_str(&datetime.format(default_format).to_string());
         } else if let Some(custom_format) = token.strip_prefix(&format!("{name}:")) {
+            use std::fmt::Write as _;
             let format = cap_utils::moment_format_to_chrono(custom_format);
-            output.push_str(&datetime.format(&format).to_string());
+            // A format chrono cannot render (a stray `%`) stays as typed, like
+            // an unknown placeholder: `to_string` would panic the start.
+            let mut rendered = String::new();
+            if write!(rendered, "{}", datetime.format(&format)).is_ok() {
+                output.push_str(&rendered);
+            } else {
+                output.push_str(&candidate[..=end]);
+            }
         } else {
             output.push_str(&candidate[..=end]);
         }
@@ -3222,6 +3232,65 @@ mod tests {
         );
 
         assert!(name.contains("Implement {random} placeholder"));
+    }
+
+    #[test]
+    fn recording_project_names_keep_a_custom_format_chrono_cannot_render() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{date:YYYY 100%}-{moment:YYYY %Q}-{time:HH.mm}"),
+                "Example Window",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "{date:YYYY 100%}-{moment:YYYY %Q}-09.15"
+        );
+    }
+
+    #[test]
+    fn recording_project_names_keep_date_placeholders_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{target_name} {date}"),
+                "Notes {date} {time:100%}",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "Notes {date} {time:100%} 2026-08-25"
+        );
+    }
+
+    #[test]
+    fn studio_and_instant_projects_are_named_by_the_project_name_template() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 11, 6, 15, 29, 14)
+            .single()
+            .unwrap();
+        let name = format_recording_project_name(
+            None,
+            "Untitled",
+            "Window",
+            RecordingMode::Studio,
+            timestamp,
+        );
+        let project_path = std::path::Path::new("/recordings").join(project_bundle_filename(&name));
+
+        assert_eq!(
+            project_pretty_name(&project_path),
+            "Untitled (Window) 2026-11-06 03.29 PM"
+        );
     }
 
     #[test]
@@ -4922,6 +4991,28 @@ mod failed_capture_tests {
         assert!(!stopped);
         assert!(!written.load(Ordering::SeqCst));
         assert!(format!("{:#}", result.unwrap_err()).contains("cancel failed"));
+    }
+
+    #[tokio::test]
+    async fn stop_after_a_joined_pipeline_failure_confirms_capture_stopped() {
+        let written = AtomicBool::new(false);
+        let (stopped, result) = finish_failed_capture(
+            async {
+                Err(anyhow::Error::new(
+                    cap_recording::instant_recording::CaptureStoppedAfterFailure::from(anyhow!(
+                        "Task mux-video failed: encoder rejected a frame"
+                    )),
+                ))
+            },
+            || {
+                written.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(stopped);
+        assert!(written.load(Ordering::SeqCst));
+        assert!(format!("{:#}", result.unwrap_err()).contains("local files preserved"));
     }
 
     #[tokio::test]

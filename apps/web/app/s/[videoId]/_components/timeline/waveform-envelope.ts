@@ -37,8 +37,7 @@ const toSeconds = (
 };
 
 /**
- * Cue time ranges only. `parseVTT` in `_components/utils/transcript-utils`
- * drops end times and milliseconds, which are exactly what an envelope needs.
+ * Cue time ranges only.
  */
 export function parseVttCues(vtt: string): VttCue[] {
 	if (typeof vtt !== "string" || !vtt.includes("-->")) return [];

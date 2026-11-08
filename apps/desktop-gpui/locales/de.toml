@@ -2173,6 +2173,9 @@ mode = "Zoom-Modus"
 positions_mixed = "Die Segmente zoomen auf unterschiedliche Stellen. Ziehen Sie, um alle auf dieselbe Stelle zu setzen."
 title = "Zoom {number}"
 
+[editor.side_panel]
+style = "Stil"
+
 [editor.sidebar]
 desktop_import_failed = "Ihr Desktop-Hintergrundbild konnte nicht importiert werden"
 importing_image = "Bild wird importiert…"
@@ -2336,9 +2339,9 @@ text_item = "Text"
 [editor.clips]
 append_error = "Clip konnte nicht hinzugefügt werden: {message}"
 append_error_title = "Aufnahmefehler"
-back = "Zurück zum Editor"
 cap_filter = "Cap-Aufnahme"
 clip = "Clip {number}"
+count = { one = "{count} Clip", other = "{count} Clips" }
 empty_description = "Nehmen Sie einen Clip auf oder importieren Sie einen, dann erscheint er hier."
 empty_title = "Noch keine Clips"
 import = "Importieren"
@@ -2349,6 +2352,7 @@ import_mp4 = "MP4-Video…"
 importing = "Import läuft…"
 mp4_filter = "MP4-Video"
 prepare_controls_failed = "Die Aufnahmesteuerung konnte nicht vorbereitet werden: {error}"
+record = "Aufnehmen"
 record_new = "Neuen Clip aufnehmen"
 save_before_recording_failed = "Das aktuelle Projekt konnte vor der Aufnahme nicht gespeichert werden: {error}"
 split = "Teil {number}"
@@ -3012,8 +3016,6 @@ delete_recording = "Aufnahme löschen"
 export = "Exportieren"
 open_bundle = "Aufnahmepaket öffnen"
 presets = "Vorlagen"
-transcript = "Transkript"
-transcript_tooltip = "Per Transkript bearbeiten"
 
 [editor.window.image]
 changed = "Dieses Bild hat sich bei der Auswahl eines Ersatzes geändert. Wählen Sie es aus und versuchen Sie es erneut."

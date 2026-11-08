@@ -2,6 +2,7 @@ import {
 	STRIPE_SAML_SSO_LEGACY_PRICE_ID,
 	STRIPE_SAML_SSO_PRICE_ID,
 	STRIPE_SAML_SSO_PRODUCT_ID,
+	STRIPE_SCIM_PRICE_ID,
 	STRIPE_SIGNED_BAA_PRICE_IDS,
 } from "../../constants/plans.ts";
 
@@ -38,9 +39,28 @@ export function isSsoSubscription(subscription: SubscriptionIdentity) {
 	);
 }
 
+export function isScimPrice(priceId: string | null | undefined) {
+	return (
+		Boolean(priceId) &&
+		(priceId === STRIPE_SCIM_PRICE_ID ||
+			priceId === process.env.STRIPE_SCIM_PRICE_ID)
+	);
+}
+
+export function isStandaloneScimSubscription(
+	subscription: SubscriptionIdentity,
+) {
+	const items = subscription.items?.data ?? [];
+	return (
+		subscription.metadata?.type === "scim" ||
+		(items.length > 0 && items.every((item) => isScimPrice(item.price?.id)))
+	);
+}
+
 export function isProSubscription(subscription: SubscriptionIdentity) {
 	return (
 		!isSsoSubscription(subscription) &&
+		!isStandaloneScimSubscription(subscription) &&
 		subscription.metadata?.type !== "signed_baa" &&
 		!subscription.items?.data.some((item) =>
 			Object.values(STRIPE_SIGNED_BAA_PRICE_IDS).some(

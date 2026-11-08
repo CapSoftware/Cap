@@ -2175,6 +2175,9 @@ mode = "Zoom Mode"
 positions_mixed = "Segments zoom into different spots. Drag to move them all to the same one."
 title = { text = "Zoom {number}", context = "{number} is the segment's position on the track, starting at 1." }
 
+[editor.side_panel]
+style = { text = "Style", context = "Tab of the editor's side panel that holds the look settings: background, camera, audio, cursor, captions." }
+
 [editor.sidebar]
 desktop_import_failed = { text = "Couldn't import your desktop wallpaper", context = "Alert title. The alert body is a technical error message in English." }
 importing_image = "Importing image…"
@@ -2338,9 +2341,9 @@ text_item = "Text"
 [editor.clips]
 append_error = { text = "Failed to add clip: {message}", context = "{message} explains why." }
 append_error_title = "Recording Error"
-back = "Back to editor"
 cap_filter = { text = "Cap Recording", context = "File type filter name for .cap recordings in the file picker." }
 clip = { text = "Clip {number}", context = "Default clip name; {number} starts at 1." }
+count = { one = "{count} clip", other = "{count} clips", context = "How many clips the Clips tab lists." }
 empty_description = "Record or import a clip and it will show up here."
 empty_title = "No clips yet"
 import = "Import"
@@ -2351,6 +2354,7 @@ import_mp4 = "MP4 Video…"
 importing = "Importing…"
 mp4_filter = { text = "MP4 Video", context = "File type filter name in the file picker." }
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
+record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
@@ -3014,8 +3018,6 @@ delete_recording = "Delete recording"
 export = "Export"
 open_bundle = "Open recording bundle"
 presets = "Presets"
-transcript = "Transcript"
-transcript_tooltip = "Edit by transcript"
 
 [editor.window.image]
 changed = "This image changed while choosing a replacement. Select it and try again."
