@@ -17,17 +17,22 @@ use gpui::{
 use super::cuts::{self, CutReport, RestoreBlocker};
 use super::model::{TranscriptDoc, TranscriptEdl};
 use super::{
-    CleanupTab, DragUnit, FOLLOW_PAUSE, MAX_PLAYER_SHARE, MIN_PLAYER_SHARE, PAUSE_KEEP_RANGE,
-    PAUSE_LONGER_RANGE, SearchState, WordDrag, WordSelection, category_index,
+    CleanupTab, DragUnit, FOLLOW_PAUSE, PAUSE_KEEP_RANGE, PAUSE_LONGER_RANGE, SearchState,
+    WordDrag, WordSelection, category_index,
 };
 use crate::editor_window::EditorWindow;
 use crate::i18n::tr;
 use crate::theme::Theme;
 use crate::ui;
 
-const TEXT_SIZE: f32 = 15.;
-const LINE_HEIGHT: f32 = 25.;
-const STAMP_WIDTH: f32 = 46.;
+/// The reading column: 14px on a 22px line reads comfortably at the panel's
+/// standard width, and [`READING_WIDTH`] keeps lines near 75 characters when
+/// the panel is dragged wider.
+const TEXT_SIZE: f32 = 14.;
+const LINE_HEIGHT: f32 = 22.;
+const READING_WIDTH: f32 = 600.;
+const STAMP_WIDTH: f32 = 44.;
+const PARAGRAPH_GAP: f32 = 12.;
 const FOLLOW_MARGIN: f32 = 48.;
 const FOLLOW_ANCHOR: f32 = 0.32;
 const LISTEN_BEFORE: f64 = 1.5;
@@ -163,6 +168,7 @@ struct ParagraphPainter {
     edl: Option<Arc<TranscriptEdl>>,
     selection: Option<Range<usize>>,
     active: Option<usize>,
+    active_paragraph: Option<usize>,
     hovered_cut: Option<Range<usize>>,
     matches: Arc<Vec<Range<usize>>>,
     current_match: Option<Range<usize>>,
@@ -279,22 +285,28 @@ impl ParagraphPainter {
         let stamp_editor = self.editor.clone();
         let layouts = self.layouts.clone();
         let paint_layout = layout.clone();
+        let playing = self.active_paragraph == Some(index);
         div()
             .id(("transcript-paragraph", index))
             .w_full()
+            .max_w(px(READING_WIDTH + STAMP_WIDTH))
             .flex()
             .flex_row()
             .items_start()
-            .pb(px(14.))
+            .pb(px(PARAGRAPH_GAP))
             .child(
                 div()
                     .id(("transcript-stamp", index))
                     .flex_none()
                     .w(px(STAMP_WIDTH))
-                    .pt(px(3.))
                     .text_size(px(11.))
-                    .line_height(px(LINE_HEIGHT - 4.))
-                    .text_color(self.palette.text_3)
+                    .line_height(px(LINE_HEIGHT))
+                    .text_color(if playing {
+                        self.palette.accent
+                    } else {
+                        self.palette.text_3
+                    })
+                    .when(playing, |stamp| stamp.font_weight(FontWeight::MEDIUM))
                     .cursor_pointer()
                     .hover(|style| style.text_color(self.palette.text_2))
                     .children(stamp)
@@ -549,44 +561,41 @@ fn byte_at(layout: &TextLayout, position: Point<Pixels>) -> usize {
 }
 
 impl EditorWindow {
-    pub(crate) fn toggle_transcript(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.project_ready() {
-            return;
+    /// Leaving the Transcript tab. Only [`EditorWindow::set_panel_tab`]
+    /// calls this.
+    pub(crate) fn close_transcript_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.transcript.open = false;
+        self.transcript.drag = None;
+        self.focus_root(window, cx);
+    }
+
+    /// Arriving on the Transcript tab. Only [`EditorWindow::set_panel_tab`]
+    /// calls this, after closing whichever tab was open.
+    pub(crate) fn open_transcript_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.transcript.open = true;
+        self.transcript.dirty = true;
+        let started = Instant::now();
+        self.transcript_refresh();
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            words = self
+                .transcript
+                .doc
+                .as_ref()
+                .map_or(0, |doc| doc.words.len()),
+            paragraphs = self
+                .transcript
+                .doc
+                .as_ref()
+                .map_or(0, |doc| doc.paragraphs.len()),
+            "transcript opened"
+        );
+        self.transcript_sync_active(false, cx);
+        if let Some(active) = self.transcript.active {
+            self.transcript_reveal(active, true);
         }
-        if self.transcript.open {
-            self.transcript.open = false;
-            self.transcript.drag = None;
-            self.transcript.resize = None;
-            self.focus_root(window, cx);
-        } else {
-            if self.clips.open {
-                self.close_clips(window, cx);
-            }
-            self.transcript.open = true;
-            self.transcript.dirty = true;
-            let started = Instant::now();
-            self.transcript_refresh();
-            tracing::info!(
-                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-                words = self
-                    .transcript
-                    .doc
-                    .as_ref()
-                    .map_or(0, |doc| doc.words.len()),
-                paragraphs = self
-                    .transcript
-                    .doc
-                    .as_ref()
-                    .map_or(0, |doc| doc.paragraphs.len()),
-                "transcript opened"
-            );
-            self.transcript_sync_active(false, cx);
-            if let Some(active) = self.transcript.active {
-                self.transcript_reveal(active, true);
-            }
-            window.focus(&self.transcript.focus, cx);
-            self.transcript_load_energy(cx);
-        }
+        window.focus(&self.transcript.focus, cx);
+        self.transcript_load_energy(cx);
         cx.notify();
     }
 
@@ -1436,36 +1445,9 @@ impl EditorWindow {
         self.invalidate_transcript(cx);
     }
 
-    pub(crate) fn transcript_resize_move(
-        &mut self,
-        x: f32,
-        row_width: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let Some((start_x, start_share)) = self.transcript.resize else {
-            return;
-        };
-        if row_width <= 0.0 {
-            return;
-        }
-        let share =
-            (start_share + (x - start_x) / row_width).clamp(MIN_PLAYER_SHARE, MAX_PLAYER_SHARE);
-        if (share - self.transcript.player_share).abs() > f32::EPSILON {
-            self.transcript.player_share = share;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn transcript_resize_end(&mut self, cx: &mut Context<Self>) {
-        if self.transcript.resize.take().is_some() {
-            self.transcript.persist_split();
-            cx.notify();
-        }
-    }
-
     pub(crate) fn render_transcript(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project_changed = self.transcript.dirty;
@@ -1481,11 +1463,13 @@ impl EditorWindow {
         let body: AnyElement = match (self.transcript.doc.clone(), self.transcript.edl.clone()) {
             (Some(doc), edl) if !doc.is_empty() => {
                 let search = self.transcript.search.as_ref();
+                let active_paragraph = self.transcript.active.map(|word| doc.paragraph_of(word));
                 let painter = ParagraphPainter {
                     doc,
                     edl,
                     selection: self.transcript.selection.map(WordSelection::range),
                     active: self.transcript.active,
+                    active_paragraph,
                     hovered_cut: self.transcript.hovered_cut.and_then(|run| {
                         self.transcript
                             .edl
@@ -1513,8 +1497,9 @@ impl EditorWindow {
                     .id("transcript-body")
                     .flex_1()
                     .min_h_0()
-                    .px(px(14.))
-                    .pt(px(10.))
+                    .pl(px(12.))
+                    .pr(px(16.))
+                    .pt(px(14.))
                     .text_size(px(TEXT_SIZE))
                     .line_height(px(LINE_HEIGHT))
                     .text_color(palette.text_1)
@@ -1529,21 +1514,13 @@ impl EditorWindow {
             _ => self.render_transcript_empty(cx),
         };
 
-        let focused = self.transcript.focus.is_focused(window);
+        // The panel card, and its focus ring, are the root's
+        // (`crate::editor_side_panel`); this is the Transcript tab's body.
         div()
             .id("transcript-panel")
             .size_full()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(if focused {
-                Hsla::from(theme.editor.line_strong)
-            } else {
-                self.card_line()
-            })
-            .bg(self.panel_bg())
-            .shadow(theme.editor.card_shadow())
             .overflow_hidden()
             .track_focus(&self.transcript.focus)
             .on_key_down(cx.listener(Self::transcript_key_down))
@@ -1590,71 +1567,44 @@ impl EditorWindow {
             .doc
             .as_ref()
             .is_some_and(|doc| !doc.is_empty());
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .flex_none()
-            .h(px(44.))
-            .px(px(12.))
-            .border_b_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_baseline()
-                    .gap(px(8.))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child(tr::editor::transcript::title()),
-                    )
-                    .children(words.filter(|_| has_doc).map(|count| {
-                        div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .truncate()
-                            .child(SharedString::from(tr::editor::transcript::words(count)))
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(2.))
-                    .child(
-                        ui::EditorButton::plain(&theme, "transcript-search")
-                            .left_icon("icons/search.svg")
-                            .tooltip(&theme, tr::editor::transcript::search())
-                            .disabled(!has_doc)
-                            .pressed(self.transcript.search.is_some())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.transcript.search.is_some() {
-                                    this.transcript_close_search(window, cx);
-                                } else {
-                                    this.transcript_open_search(window, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "transcript-cleanup")
-                            .left_icon("icons/scissors.svg")
-                            .label(tr::editor::transcript::cleanup())
-                            .tooltip(&theme, tr::editor::transcript::cleanup_tooltip())
-                            .disabled(!has_doc)
-                            .pressed(self.transcript.cleanup.open)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.transcript.cleanup.open = !this.transcript.cleanup.open;
-                                this.invalidate_transcript(cx);
-                            })),
-                    ),
-            )
+        crate::editor_side_panel::panel_header(
+            &theme,
+            tr::editor::transcript::title(),
+            words
+                .filter(|_| has_doc)
+                .map(|count| SharedString::from(tr::editor::transcript::words(count))),
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-search")
+                        .left_icon("icons/search.svg")
+                        .tooltip(&theme, tr::editor::transcript::search())
+                        .disabled(!has_doc)
+                        .pressed(self.transcript.search.is_some())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.transcript.search.is_some() {
+                                this.transcript_close_search(window, cx);
+                            } else {
+                                this.transcript_open_search(window, cx);
+                            }
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "transcript-cleanup")
+                        .left_icon("icons/scissors.svg")
+                        .label(tr::editor::transcript::cleanup())
+                        .tooltip(&theme, tr::editor::transcript::cleanup_tooltip())
+                        .disabled(!has_doc)
+                        .pressed(self.transcript.cleanup.open)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.transcript.cleanup.open = !this.transcript.cleanup.open;
+                            this.invalidate_transcript(cx);
+                        })),
+                ),
+        )
     }
 
     fn render_transcript_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2145,17 +2095,14 @@ impl EditorWindow {
             _ => SharedString::default(),
         };
         div()
-            .flex()
-            .flex_row()
-            .items_center()
             .flex_none()
-            .h(px(32.))
-            .px(px(12.))
-            .border_t_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .text_size(px(12.))
+            .min_h(px(30.))
+            .px(px(16.))
+            .py(px(8.))
+            .text_size(px(11.))
+            .line_height(px(15.))
             .text_color(Hsla::from(theme.editor.text_3))
-            .child(div().truncate().child(message))
+            .child(message)
     }
 
     fn render_transcript_empty(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2222,47 +2169,22 @@ impl EditorWindow {
             .into_any_element()
         };
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(10.))
-            .px(px(32.))
-            .child(
-                svg()
-                    .path("icons/scan-text.svg")
-                    .size(px(28.))
-                    .text_color(Hsla::from(theme.editor.text_3)),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_1))
-                    .child(tr::editor::transcript::empty_title()),
-            )
-            .child(
-                div()
-                    .max_w(px(300.))
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .text_center()
-                    .text_color(Hsla::from(theme.editor.text_2))
-                    .child(tr::editor::transcript::empty_description()),
-            )
-            .child(div().pt(px(6.)).child(action))
-            .children(snapshot.generation_error.map(|error| {
-                div()
-                    .max_w(px(300.))
-                    .text_size(px(12.))
-                    .text_center()
-                    .text_color(Hsla::from(theme.red_9))
-                    .child(error)
-            }))
-            .into_any_element()
+        crate::editor_side_panel::panel_empty_state(
+            &theme,
+            "icons/scan-text.svg",
+            tr::editor::transcript::empty_title(),
+            tr::editor::transcript::empty_description(),
+        )
+        .child(div().pt(px(6.)).child(action))
+        .children(snapshot.generation_error.map(|error| {
+            div()
+                .max_w(px(280.))
+                .text_size(px(12.))
+                .text_center()
+                .text_color(Hsla::from(theme.red_9))
+                .child(error)
+        }))
+        .into_any_element()
     }
 
     fn transcript_energy_offsets(&self) -> Option<Vec<(f64, f64)>> {
