@@ -121,6 +121,13 @@ impl RecoveryPurpose {
         !matches!(self, Self::Salvage)
     }
 
+    fn staging(self) -> RecoveryStaging {
+        match self {
+            Self::Recover | Self::Salvage => RecoveryStaging::Copy,
+            Self::Finalize => RecoveryStaging::Hardlink,
+        }
+    }
+
     fn success_message(self) -> &'static str {
         match self {
             Self::Recover | Self::Salvage => "Successfully recovered recording",
@@ -1275,10 +1282,7 @@ impl RecoveryManager {
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
     ) -> Result<RecoveredRecording, RecoveryError> {
-        let staging = match purpose {
-            RecoveryPurpose::Recover => RecoveryStaging::Copy,
-            RecoveryPurpose::Finalize => RecoveryStaging::Hardlink,
-        };
+        let staging = purpose.staging();
         Self::finalize_with_publication(
             recording,
             FinalizePlan { purpose, staging },
@@ -8342,6 +8346,22 @@ mod transactional_recovery_tests {
                 .unwrap();
             assert_eq!(std::fs::read(&empty_destination).unwrap(), b"");
         }
+    }
+
+    #[test]
+    fn only_clean_finalization_hardlinks_recovery_inputs() {
+        assert!(matches!(
+            RecoveryPurpose::Recover.staging(),
+            RecoveryStaging::Copy
+        ));
+        assert!(matches!(
+            RecoveryPurpose::Salvage.staging(),
+            RecoveryStaging::Copy
+        ));
+        assert!(matches!(
+            RecoveryPurpose::Finalize.staging(),
+            RecoveryStaging::Hardlink
+        ));
     }
 
     #[test]
