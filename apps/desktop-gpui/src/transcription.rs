@@ -1949,8 +1949,9 @@ fn recover_unheard_speech(
 #[cfg(test)]
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
+    segment_words: usize,
 ) -> Vec<CaptionSegment> {
-    caption_segments_from_groups(vec![tokens.into_iter().collect()], "auto")
+    caption_segments_from_groups(vec![tokens.into_iter().collect()], "auto", segment_words)
 }
 
 /// Each group (a Whisper segment, or everything Parakeet heard) is
@@ -1958,6 +1959,7 @@ fn caption_segments_from_tokens(
 fn caption_segments_from_groups(
     groups: Vec<Vec<CaptionWord>>,
     language: &str,
+    segment_words: usize,
 ) -> Vec<CaptionSegment> {
     let single = groups.len() == 1;
     let groups: Vec<Vec<CaptionWord>> = groups
@@ -1975,9 +1977,9 @@ fn caption_segments_from_groups(
     let mut segments = Vec::new();
     for (group_index, words) in groups.into_iter().enumerate() {
         let chunks = if english {
-            caption_word_chunks_skipping_fillers(&words)
+            caption_word_chunks_skipping_fillers_with(&words, segment_words)
         } else {
-            caption_word_chunks(&words)
+            caption_word_chunks_with(&words, segment_words)
         };
         for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
             segments.push(CaptionSegment {
@@ -2152,6 +2154,7 @@ pub fn transcribe_blocking(
     project_path: &Path,
     model: &str,
     language: &str,
+    segment_words: usize,
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
 ) -> Result<Transcript, String> {
@@ -2206,7 +2209,11 @@ pub fn transcribe_blocking(
                 &TUNING,
                 &AtomicBool::new(false),
             );
-            Ok(caption_segments_from_groups(groups, language))
+            Ok(caption_segments_from_groups(
+                groups,
+                language,
+                segment_words,
+            ))
         });
     if is_parakeet_model(model) {
         schedule_parakeet_release();
@@ -2219,6 +2226,7 @@ pub fn transcribe_blocking(
             model,
             language,
             &cap_project::transcription_source_ranges(timeline, recording_durations),
+            segment_words,
         ),
     })
 }
@@ -2319,9 +2327,11 @@ fn transcribe_project_with(
 // Caption words & chunking
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+use cap_project::caption_words::caption_word_chunks;
 use cap_project::caption_words::{
-    MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks,
-    caption_word_chunks_skipping_fillers, normalize_caption_words,
+    MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks_skipping_fillers_with,
+    caption_word_chunks_with, normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -3318,7 +3328,12 @@ mod tests {
     fn a_refinement_request_persists_until_it_is_cleared() {
         let project = tempfile::tempdir().unwrap();
         assert!(refinement_request(project.path()).is_none());
-        let request = RefinementRequest::new("best", "en", &[0.0..12.5, 20.0..30.0]);
+        let request = RefinementRequest::new(
+            "best",
+            "en",
+            &[0.0..12.5, 20.0..30.0],
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        );
         save_refinement_request(project.path(), &request).unwrap();
         assert_eq!(refinement_request(project.path()), Some(request));
         clear_refinement_request(project.path());

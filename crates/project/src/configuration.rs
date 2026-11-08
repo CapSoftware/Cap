@@ -2493,6 +2493,8 @@ pub struct CaptionSettings {
     pub word_transition_duration: f32,
     #[serde(alias = "activeWordHighlight")]
     pub active_word_highlight: bool,
+    #[serde(alias = "segmentWords")]
+    pub segment_words: u32,
     #[serde(alias = "manualPosition")]
     pub manual_position: Option<XY<f32>>,
     pub preset: String,
@@ -2540,6 +2542,10 @@ impl CaptionSettings {
         false
     }
 
+    fn default_segment_words() -> u32 {
+        6
+    }
+
     fn default_preset() -> String {
         "classic".to_string()
     }
@@ -2573,6 +2579,7 @@ impl Default for CaptionSettings {
             linger_duration: Self::default_linger_duration(),
             word_transition_duration: Self::default_word_transition_duration(),
             active_word_highlight: Self::default_active_word_highlight(),
+            segment_words: Self::default_segment_words(),
             manual_position: None,
             preset: Self::default_preset(),
             animation: Self::default_animation(),

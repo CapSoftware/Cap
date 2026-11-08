@@ -138,7 +138,20 @@ pub fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWo
 /// merges into the previous segment when it starts with a weak word, which can
 /// put the merged segment over the max.
 pub fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
-    chunk_spans(words.len(), |index| {
+    caption_word_chunks_with(words, TARGET_CAPTION_WORDS_PER_SEGMENT)
+}
+
+/// [`caption_word_chunks`] with a caller-chosen segment size. `words_per_segment`
+/// of 1 is the one word on screen at a time style: the multi-word rules (weak
+/// boundary extension and the short tail merge) do not apply there and every
+/// word becomes its own segment. Above 1 the chunker aims for `words_per_segment`
+/// words, extends up to two past it to avoid ending on a weak word, and merges a
+/// trailing fragment shorter than [`MIN_FINAL_CAPTION_WORDS`].
+pub fn caption_word_chunks_with(
+    words: &[CaptionWord],
+    words_per_segment: usize,
+) -> Vec<&[CaptionWord]> {
+    chunk_spans(words.len(), words_per_segment, |index| {
         caption_boundary_word_is_weak(&words[index])
     })
     .into_iter()
@@ -151,6 +164,15 @@ pub fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
 /// and open the segment after them, so the captions break exactly where a
 /// transcript without them would.
 pub fn caption_word_chunks_skipping_fillers(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
+    caption_word_chunks_skipping_fillers_with(words, TARGET_CAPTION_WORDS_PER_SEGMENT)
+}
+
+/// [`caption_word_chunks_skipping_fillers`] with a caller-chosen segment size,
+/// as for [`caption_word_chunks_with`].
+pub fn caption_word_chunks_skipping_fillers_with(
+    words: &[CaptionWord],
+    words_per_segment: usize,
+) -> Vec<&[CaptionWord]> {
     let spoken: Vec<usize> = words
         .iter()
         .enumerate()
@@ -158,9 +180,9 @@ pub fn caption_word_chunks_skipping_fillers(words: &[CaptionWord]) -> Vec<&[Capt
         .map(|(index, _)| index)
         .collect();
     if spoken.is_empty() {
-        return caption_word_chunks(words);
+        return caption_word_chunks_with(words, words_per_segment);
     }
-    let spans = chunk_spans(spoken.len(), |index| {
+    let spans = chunk_spans(spoken.len(), words_per_segment, |index| {
         caption_boundary_word_is_weak(&words[spoken[index]])
     });
     let last = spans.len() - 1;
@@ -181,19 +203,28 @@ pub fn caption_word_chunks_skipping_fillers(words: &[CaptionWord]) -> Vec<&[Capt
         .collect()
 }
 
-fn chunk_spans(len: usize, weak: impl Fn(usize) -> bool) -> Vec<std::ops::Range<usize>> {
+fn chunk_spans(
+    len: usize,
+    words_per_segment: usize,
+    weak: impl Fn(usize) -> bool,
+) -> Vec<std::ops::Range<usize>> {
+    if words_per_segment <= 1 {
+        return (0..len).map(|index| index..index + 1).collect();
+    }
+    let target = words_per_segment;
+    let max = words_per_segment + 2;
     let mut chunks = Vec::new();
     let mut start = 0;
 
     while start < len {
         let remaining = len - start;
-        if remaining <= TARGET_CAPTION_WORDS_PER_SEGMENT {
+        if remaining <= target {
             chunks.push(start..len);
             break;
         }
 
-        let mut end = (start + TARGET_CAPTION_WORDS_PER_SEGMENT).min(len);
-        while end < len && weak(end - 1) && end - start < MAX_CAPTION_WORDS_PER_SEGMENT {
+        let mut end = (start + target).min(len);
+        while end < len && weak(end - 1) && end - start < max {
             end += 1;
         }
 
@@ -606,5 +637,43 @@ mod tests {
         let accented = words(&["the", "café"]);
         assert!(!reads_as_english(&accented));
         assert!(!reads_as_english(&[]));
+    }
+
+    #[test]
+    fn caption_word_chunks_with_one_word_per_segment_bypasses_multi_word_rules() {
+        let words = [
+            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, text)| word(text, index))
+        .collect::<Vec<_>>();
+
+        let chunks = caption_word_chunks_with(&words, 1);
+
+        assert_eq!(chunks.len(), words.len());
+        for (chunk, word) in chunks.iter().zip(&words) {
+            assert_eq!(chunk.len(), 1);
+            assert_eq!(chunk[0].text, word.text);
+        }
+    }
+
+    #[test]
+    fn caption_word_chunks_with_custom_size_keeps_the_multi_word_rules() {
+        let words = [
+            "one", "two", "of", "four", "five", "six", "seven", "eight", "nine",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, text)| word(text, index))
+        .collect::<Vec<_>>();
+
+        let chunks = caption_word_chunks_with(&words, 3);
+
+        // The first boundary lands on "of", a weak word, so it extends one past
+        // the target of 3 instead of ending there.
+        assert_eq!(caption_text_from_words(chunks[0]), "one two of four");
+        assert_eq!(caption_text_from_words(chunks[1]), "five six seven");
+        assert_eq!(caption_text_from_words(chunks[2]), "eight nine");
     }
 }
