@@ -15,7 +15,6 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
@@ -34,6 +33,7 @@ import {
 	UPLOAD_PROGRESS_VERSION,
 } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);

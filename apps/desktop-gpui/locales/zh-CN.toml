@@ -386,6 +386,8 @@ quarter = "1/4"
 
 [settings.shortcuts]
 blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+cancelling_description = "适用于通过快捷键或 Cap 图标开始的截图和录制。"
+cancelling_title = "取消"
 needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
 needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
 record_shortcut = "录制快捷键"
@@ -413,7 +415,15 @@ title = "Studio 录制之后"
 hint = "始终会复制分享链接"
 title = "Instant 录制之后"
 
+[settings.shortcuts.on_cancel]
+hint = "按 Esc 或关闭选择器"
+title = "取消时"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "显示 Cap"
+cancel_show_cap_hint = "回到录制器"
+cancel_stay_hidden = "保持隐藏"
+cancel_stay_hidden_hint = "除非 Cap 原本已打开"
 instant_copy_link = "仅复制链接"
 instant_copy_link_hint = "不打开任何内容"
 instant_open_link = "打开链接"
@@ -2163,6 +2173,9 @@ mode = "缩放模式"
 positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
 title = "缩放 {number}"
 
+[editor.side_panel]
+style = "样式"
+
 [editor.sidebar]
 desktop_import_failed = "无法导入桌面壁纸"
 importing_image = "正在导入图片…"
@@ -2326,9 +2339,9 @@ text_item = "文字"
 [editor.clips]
 append_error = "无法添加片段：{message}"
 append_error_title = "录制错误"
-back = "返回编辑器"
 cap_filter = "Cap 录制"
 clip = "片段 {number}"
+count = { other = "{count} 个片段" }
 empty_description = "录制或导入一个片段后，它会显示在这里。"
 empty_title = "还没有片段"
 import = "导入"
@@ -2339,6 +2352,7 @@ import_mp4 = "MP4 视频…"
 importing = "正在导入…"
 mp4_filter = "MP4 视频"
 prepare_controls_failed = "无法准备录制控件：{error}"
+record = "录制"
 record_new = "录制新片段"
 save_before_recording_failed = "录制前无法保存当前项目：{error}"
 split = "拆分 {number}"
@@ -3002,8 +3016,6 @@ delete_recording = "删除录制"
 export = "导出"
 open_bundle = "打开录制包"
 presets = "预设"
-transcript = "转写"
-transcript_tooltip = "通过转写编辑"
 
 [editor.window.image]
 changed = "选择替换图片时此图片已更改。请选中它后重试。"

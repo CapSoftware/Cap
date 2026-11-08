@@ -1,5 +1,5 @@
-//! Text-based editing: the transcript panel beside the player, where deleting
-//! words cuts them out of the video.
+//! Text-based editing: the Transcript tab of the editor's side panel, where
+//! deleting words cuts them out of the video.
 //!
 //! The source of truth never changes shape. Caption words stay in source time
 //! in `project.captions`, the clip list in `project.timeline` says what plays,
@@ -30,13 +30,8 @@ use self::energy::EnergyEnvelope;
 use self::model::{TranscriptDoc, TranscriptEdl};
 
 pub(crate) const STORE_SECTION: &str = "editorTranscript";
-const SPLIT_KEY: &str = "playerShare";
 const PAUSE_LONGER_KEY: &str = "pauseLongerThan";
 const PAUSE_KEEP_KEY: &str = "pauseKeep";
-
-pub(crate) const MIN_PLAYER_SHARE: f32 = 0.3;
-pub(crate) const MAX_PLAYER_SHARE: f32 = 0.75;
-const DEFAULT_PLAYER_SHARE: f32 = 0.55;
 
 pub(crate) const DEFAULT_PAUSE_LONGER_THAN: f64 = 1.0;
 pub(crate) const DEFAULT_PAUSE_KEEP: f64 = 0.5;
@@ -157,8 +152,9 @@ pub(crate) fn category_index(kind: DisfluencyKind) -> usize {
 }
 
 pub(crate) struct TranscriptState {
+    /// Whether the side panel is on its Transcript tab. Switch with
+    /// `EditorWindow::set_panel_tab`, which keeps it exclusive with Clips.
     pub open: bool,
-    pub player_share: f32,
     pub doc: Option<Arc<TranscriptDoc>>,
     pub edl: Option<Arc<TranscriptEdl>>,
     /// Set by every project change; the models are only re-derived while the
@@ -176,7 +172,6 @@ pub(crate) struct TranscriptState {
     pub cleanup: CleanupState,
     pub focus: FocusHandle,
     pub layouts: Rc<RefCell<HashMap<usize, TextLayout>>>,
-    pub resize: Option<(f32, f32)>,
     pub energy: Option<Arc<EnergyEnvelope>>,
     pub energy_loading: bool,
     pub energy_offsets: Vec<(f64, f64)>,
@@ -185,16 +180,8 @@ pub(crate) struct TranscriptState {
 
 impl TranscriptState {
     pub fn new(focus: FocusHandle) -> Self {
-        let player_share = crate::store::store_section(STORE_SECTION)
-            .get(SPLIT_KEY)
-            .and_then(serde_json::Value::as_f64)
-            .filter(|value| value.is_finite())
-            .map_or(DEFAULT_PLAYER_SHARE, |value| {
-                (value as f32).clamp(MIN_PLAYER_SHARE, MAX_PLAYER_SHARE)
-            });
         Self {
             open: false,
-            player_share,
             doc: None,
             edl: None,
             dirty: true,
@@ -210,20 +197,11 @@ impl TranscriptState {
             cleanup: CleanupState::new(),
             focus,
             layouts: Rc::new(RefCell::new(HashMap::new())),
-            resize: None,
             energy: None,
             energy_loading: false,
             energy_offsets: Vec::new(),
             voiced_for: 0,
         }
-    }
-
-    pub fn persist_split(&self) {
-        crate::store::set_store_setting(
-            STORE_SECTION,
-            SPLIT_KEY,
-            serde_json::json!(self.player_share),
-        );
     }
 
     pub fn refresh(

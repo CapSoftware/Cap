@@ -1717,6 +1717,52 @@ fn a_brief_loud_sound_does_not_turn_a_quiet_word_into_silence() {
     );
 }
 
+#[test]
+fn a_silence_across_a_recording_boundary_is_one_pause() {
+    let level = |db: f64| 10f64.powf(db / 10.0) as f32;
+    let take = |voiced: Range<f64>| -> Vec<f32> {
+        (0..(5.0 / HOP_SECONDS) as usize)
+            .map(|hop| {
+                let time = hop as f64 * HOP_SECONDS;
+                let db = if voiced.contains(&time) { -20.0 } else { -60.0 };
+                level(db + (hop % 5) as f64 * 0.4)
+            })
+            .collect()
+    };
+    let durations = [5.0, 5.0];
+    let envelope = EnergyEnvelope::new(vec![take(1.0..3.8), take(0.9..2.0)], &durations);
+    let words = [
+        ("before", 1.0, 3.0),
+        ("pausing", 3.0, 5.4),
+        ("again", 5.4, 7.0),
+    ];
+    let project = project(&words, &durations);
+    let mut doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    doc.refine_voiced(Some(&envelope));
+    assert!(
+        (doc.voiced[1].end - 3.8).abs() < 0.03,
+        "{:?}",
+        doc.voiced[1]
+    );
+    assert!(
+        (doc.voiced[2].start - 5.9).abs() < 0.03,
+        "{:?}",
+        doc.voiced[2]
+    );
+
+    let edl = TranscriptEdl::build(&doc, timeline(&project), &durations);
+    let pauses = plan_pause_cuts(&doc, &edl, Some(&envelope), 1.0, 0.5);
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert!(
+        (pauses[0].length - 2.1).abs() < 0.05,
+        "{}",
+        pauses[0].length
+    );
+    for cut in &pauses[0].cuts {
+        assert!(cut.start > 3.8 && cut.end < 5.9, "{cut:?}");
+    }
+}
+
 fn three_words_with_a_cut(cut: Range<f64>) -> (ProjectConfiguration, TranscriptDoc, TranscriptEdl) {
     let words = [
         ("before", 1.0, 1.4),
@@ -1767,4 +1813,38 @@ fn a_word_cut_entirely_still_lets_the_pause_around_it_join() {
     for cut in pauses.iter().flat_map(|pause| &pause.cuts) {
         assert!(cut.end <= 2.15 || cut.start >= 2.85, "{cut:?}");
     }
+}
+
+#[test]
+fn removing_neighbouring_fillers_together_matches_removing_them_one_at_a_time() {
+    let words = [
+        ("we", 1.0, 1.3),
+        ("um", 1.5, 1.8),
+        ("uh", 3.0, 3.3),
+        ("the", 3.5, 3.8),
+        ("export", 4.0, 4.4),
+    ];
+    let durations = [5.0];
+    let doc = TranscriptDoc::build(&captions(&words));
+    let runs: Vec<Range<usize>> = doc
+        .fillers
+        .iter()
+        .map(|filler| filler.words.clone())
+        .collect();
+    assert_eq!(runs, [1..2, 2..3]);
+
+    let mut together = project(&words, &durations);
+    let cuts = plan_word_cuts(&doc, None, None, &runs);
+    apply_source_cuts(timeline_mut(&mut together), &durations, &cuts);
+
+    let mut apart = project(&words, &durations);
+    for run in &runs {
+        let (doc, edl) = model(&apart, &durations);
+        let cuts = plan_word_cuts(&doc, None, Some(&edl.kept), std::slice::from_ref(run));
+        apply_source_cuts(timeline_mut(&mut apart), &durations, &cuts);
+    }
+
+    assert_eq!(kept(&apart, &durations), [true, false, false, true, true]);
+    assert_eq!(kept(&together, &durations), kept(&apart, &durations));
+    assert_eq!(bounds(&together), bounds(&apart));
 }

@@ -386,6 +386,8 @@ quarter = "Quart"
 
 [settings.shortcuts]
 blocked_while_recording = "Impossible de modifier les raccourcis tant que cet enregistrement utilise sa touche d'arrêt. Arrêtez d'abord l'enregistrement."
+cancelling_description = "Pour les captures et les enregistrements lancés depuis un raccourci ou l'icône de Cap."
+cancelling_title = "Annulation"
 needs_modifier_macos = "Incluez ⌘, ⌃ ou ⌥ pour que le raccourci ne gêne pas la saisie."
 needs_modifier_other = "Incluez Ctrl, Alt ou Win pour que le raccourci ne gêne pas la saisie."
 record_shortcut = "Définir un raccourci"
@@ -413,7 +415,15 @@ title = "Après un enregistrement Studio"
 hint = "Le lien de partage est toujours copié"
 title = "Après un enregistrement Instant"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc ou fermeture du sélecteur"
+title = "Quand vous annulez"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Afficher Cap"
+cancel_show_cap_hint = "Retour à l'enregistreur"
+cancel_stay_hidden = "Rester masqué"
+cancel_stay_hidden_hint = "Sauf si Cap était ouvert"
 instant_copy_link = "Copier le lien seulement"
 instant_copy_link_hint = "Rien ne s'ouvre"
 instant_open_link = "Ouvrir le lien"
@@ -2163,6 +2173,9 @@ mode = "Mode de zoom"
 positions_mixed = "Les segments zooment sur des points différents. Faites glisser pour tous les placer au même endroit."
 title = "Zoom {number}"
 
+[editor.side_panel]
+style = "Style"
+
 [editor.sidebar]
 desktop_import_failed = "Impossible d'importer votre fond d'écran"
 importing_image = "Importation de l'image…"
@@ -2326,9 +2339,9 @@ text_item = "Texte"
 [editor.clips]
 append_error = "Impossible d'ajouter le clip : {message}"
 append_error_title = "Erreur d'enregistrement"
-back = "Retour à l'éditeur"
 cap_filter = "Enregistrement Cap"
 clip = "Clip {number}"
+count = { one = "{count} clip", many = "{count} de clips", other = "{count} clips" }
 empty_description = "Enregistrez ou importez un clip et il apparaîtra ici."
 empty_title = "Aucun clip pour l'instant"
 import = "Importer"
@@ -2339,6 +2352,7 @@ import_mp4 = "Vidéo MP4…"
 importing = "Importation…"
 mp4_filter = "Vidéo MP4"
 prepare_controls_failed = "Impossible de préparer les commandes d'enregistrement : {error}"
+record = "Enregistrer"
 record_new = "Enregistrer un nouveau clip"
 save_before_recording_failed = "Impossible de sauvegarder le projet actuel avant l'enregistrement : {error}"
 split = "Partie {number}"
@@ -3002,8 +3016,6 @@ delete_recording = "Supprimer l'enregistrement"
 export = "Exporter"
 open_bundle = "Ouvrir le dossier de l'enregistrement"
 presets = "Préréglages"
-transcript = "Transcription"
-transcript_tooltip = "Modifier via la transcription"
 
 [editor.window.image]
 changed = "Cette image a changé pendant le choix d'un remplacement. Sélectionnez-la et réessayez."
