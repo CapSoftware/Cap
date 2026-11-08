@@ -56,6 +56,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 # can construct `NativeCameraFrame.timestamp` for its synthetic frames.
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
+cap-fail = { path = "../../crates/fail" }
 cap-project = { path = "../../crates/project" }
 # The cursor style picker draws the same SVG assets the renderer composites.
 # gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
