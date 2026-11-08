@@ -14,7 +14,8 @@ use crate::{
 pub const LOW_BANDWIDTH_MAX_RESOLUTION: u32 = 854;
 pub const HIGH_SPEED_THRESHOLD_MBPS: f64 = 15.0;
 pub const STANDARD_SPEED_THRESHOLD_MBPS: f64 = 5.0;
-pub const DEFAULT_PROBE_PAYLOAD_BYTES: usize = 64 * 1024;
+pub const CALIBRATION_PROBE_BYTES: usize = 16;
+pub const DEFAULT_PROBE_PAYLOAD_BYTES: usize = 256 * 1024;
 
 static STARTUP_HEALTH: OnceLock<Mutex<Option<StartupHealthCheckStatus>>> = OnceLock::new();
 
@@ -66,7 +67,7 @@ impl AdaptiveUploadTier {
             Self::High => format!("{mbps:.1} Mbps • HD Ready"),
             Self::Standard => format!("{mbps:.1} Mbps • 720p Adaptive"),
             Self::Low => format!("{mbps:.1} Mbps • Low Bandwidth (480p)"),
-            Self::Offline => "Upload check failed — contact support".to_string(),
+            Self::Offline => "Upload check failed, contact support".to_string(),
         }
     }
 }
@@ -79,6 +80,22 @@ pub struct SpeedProbeSample {
 }
 
 impl SpeedProbeSample {
+    pub fn from_differential(
+        payload_bytes: usize,
+        calibration_bytes: usize,
+        upload_elapsed: Duration,
+        baseline_overhead: Duration,
+    ) -> Self {
+        let bytes_transferred = payload_bytes.saturating_sub(calibration_bytes).max(1);
+        let elapsed = upload_elapsed
+            .saturating_sub(baseline_overhead)
+            .max(Duration::from_millis(1));
+        Self {
+            bytes_transferred,
+            elapsed,
+        }
+    }
+
     pub fn throughput_mbps(&self) -> f64 {
         let secs = self.elapsed.as_secs_f64();
         if secs <= 0.0 || self.bytes_transferred == 0 {
@@ -109,12 +126,14 @@ pub fn evaluate_startup_health(
             speed_mbps: 0.0,
             tier: AdaptiveUploadTier::Offline,
             indicator_message:
-                "Upload health check failed — please contact support".to_string(),
+                "Upload health check failed, please contact support".to_string(),
             contact_support_required: true,
         };
     }
 
-    let mbps = sample.map(|s| s.throughput_mbps()).unwrap_or(0.0);
+    let mbps = sample
+        .map(|s| s.throughput_mbps())
+        .unwrap_or(HIGH_SPEED_THRESHOLD_MBPS);
     let tier = AdaptiveUploadTier::from_mbps(mbps);
     let upload_ok = tier != AdaptiveUploadTier::Offline;
 

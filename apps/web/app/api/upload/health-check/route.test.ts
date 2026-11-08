@@ -1,5 +1,5 @@
-import { CurrentUser, HttpAuthMiddleware, Organisation, User } from "@cap/web-domain";
 import { Storage } from "@cap/web-backend";
+import { HttpAuthMiddleware, Organisation, User } from "@cap/web-domain";
 import { Effect, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

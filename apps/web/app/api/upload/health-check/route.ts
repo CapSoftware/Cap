@@ -134,38 +134,31 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									status: "degraded",
 									bytesReceived: bodyBuffer.byteLength,
 									message:
-										"Upload probe payload is too small — please contact support.",
+										"Upload probe payload is too small, please contact support.",
 								},
 								400,
 							);
 						}
 
-						const isThroughputOnly = new URL(
-							request.url,
-							"http://localhost",
-						).searchParams.get("mode") === "throughput";
-
-						if (!isThroughputOnly) {
-							const storageOk = yield* verifyUserStorage(
-								user.id,
-								user.activeOrganizationId,
-								bodyBuffer.subarray(0, MIN_PROBE_BYTES),
-							).pipe(
-								Effect.as(true),
-								Effect.catchAll(() => Effect.succeed(false)),
+						const storageOk = yield* verifyUserStorage(
+							user.id,
+							user.activeOrganizationId,
+							bodyBuffer.subarray(0, MIN_PROBE_BYTES),
+						).pipe(
+							Effect.as(true),
+							Effect.catchAll(() => Effect.succeed(false)),
+						);
+						if (!storageOk) {
+							return jsonResponse(
+								{
+									ok: false,
+									status: "degraded",
+									bytesReceived: bodyBuffer.byteLength,
+									message:
+										"Upload storage destination is unavailable, please contact support.",
+								},
+								503,
 							);
-							if (!storageOk) {
-								return jsonResponse(
-									{
-										ok: false,
-										status: "degraded",
-										bytesReceived: bodyBuffer.byteLength,
-										message:
-											"Upload storage destination is unavailable — please contact support.",
-									},
-									503,
-								);
-							}
 						}
 
 						return jsonResponse(
@@ -182,9 +175,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				.handle("getUploadHealth", () =>
 					Effect.gen(function* () {
 						const user = yield* CurrentUser;
-						const storageOk = yield* Storage.getWritableAccessForUser(
+						const storageOk = yield* verifyUserStorage(
 							user.id,
 							user.activeOrganizationId,
+							new Uint8Array(MIN_PROBE_BYTES),
 						).pipe(
 							Effect.as(true),
 							Effect.catchAll(() => Effect.succeed(false)),
@@ -196,7 +190,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									status: "degraded",
 									bytesReceived: 0,
 									message:
-										"Upload storage destination is unavailable — please contact support.",
+										"Upload storage destination is unavailable, please contact support.",
 								},
 								503,
 							);

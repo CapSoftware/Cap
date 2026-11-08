@@ -6,12 +6,18 @@
 use std::time::{Duration, Instant};
 
 use cap_recording::upload_probe::{
-    DEFAULT_PROBE_PAYLOAD_BYTES, SpeedProbeSample, build_probe_payload, record_startup_health,
-    should_run_speed_probe,
+    CALIBRATION_PROBE_BYTES, DEFAULT_PROBE_PAYLOAD_BYTES, SpeedProbeSample, build_probe_payload,
+    record_startup_health, should_run_speed_probe,
 };
 use gpui::App;
 
 use crate::session::{Phase, RecordingSession};
+
+struct ProbeEndpoint<'a> {
+    client: &'a reqwest::Client,
+    url: &'a str,
+    token: &'a str,
+}
 
 pub(crate) fn holds_off_idle_sleep(phase: Phase) -> bool {
     phase != Phase::Idle
@@ -34,6 +40,26 @@ fn spawn_startup_upload_probe(cx: &mut App) {
     gpui_tokio::Tokio::spawn(cx, run_startup_upload_probe()).detach();
 }
 
+async fn check_storage_ready(endpoint: &ProbeEndpoint<'_>) -> bool {
+    let req = crate::auth::apply_desktop_headers(endpoint.client.get(endpoint.url))
+        .bearer_auth(endpoint.token);
+    req.send()
+        .await
+        .map(|resp| resp.status().is_success())
+        .unwrap_or(false)
+}
+
+async fn measure_probe_post(endpoint: &ProbeEndpoint<'_>, payload_bytes: usize) -> Option<Duration> {
+    let payload = build_probe_payload(payload_bytes);
+    let started = Instant::now();
+    let req = crate::auth::apply_desktop_headers(endpoint.client.post(endpoint.url))
+        .bearer_auth(endpoint.token)
+        .header("Content-Type", "application/octet-stream")
+        .body(payload);
+    let resp = req.send().await.ok()?;
+    resp.status().is_success().then(|| started.elapsed())
+}
+
 async fn run_startup_upload_probe() {
     let auth = crate::store::auth_snapshot();
     let Some(token) = auth.token.filter(|token| !token.is_empty()) else {
@@ -44,44 +70,31 @@ async fn run_startup_upload_probe() {
     };
     let server = crate::auth::server_url();
     let health_url = format!("{server}/api/upload/health-check");
-    let health_start = Instant::now();
-    let health_req = crate::auth::apply_desktop_headers(client.get(&health_url)).bearer_auth(&token);
+    let endpoint = ProbeEndpoint {
+        client: &client,
+        url: &health_url,
+        token: &token,
+    };
 
-    let Ok(health_resp) = health_req.send().await else {
+    if !check_storage_ready(&endpoint).await {
+        record_startup_health(false, None);
+        return;
+    }
+    let Some(baseline_overhead) = measure_probe_post(&endpoint, CALIBRATION_PROBE_BYTES).await else {
         record_startup_health(false, None);
         return;
     };
-    if !health_resp.status().is_success() {
-        record_startup_health(false, None);
-        return;
-    }
-    let request_overhead = health_start.elapsed() / 2;
-
-    let throughput_url = format!("{health_url}?mode=throughput");
-    let payload = build_probe_payload(DEFAULT_PROBE_PAYLOAD_BYTES);
-    let bytes_transferred = payload.len();
-    let upload_start = Instant::now();
-    let upload_req = crate::auth::apply_desktop_headers(client.post(throughput_url))
-        .bearer_auth(token)
-        .header("Content-Type", "application/octet-stream")
-        .body(payload);
-
-    match upload_req.send().await {
-        Ok(response) if response.status().is_success() => {
-            let elapsed = upload_start
-                .elapsed()
-                .saturating_sub(request_overhead)
-                .max(Duration::from_millis(1));
-            let sample = SpeedProbeSample {
-                bytes_transferred,
-                elapsed,
-            };
-            record_startup_health(true, Some(sample));
-        }
-        Ok(_) | Err(_) => {
-            record_startup_health(true, None);
-        }
-    }
+    let sample = measure_probe_post(&endpoint, DEFAULT_PROBE_PAYLOAD_BYTES)
+        .await
+        .map(|upload_elapsed| {
+            SpeedProbeSample::from_differential(
+                DEFAULT_PROBE_PAYLOAD_BYTES,
+                CALIBRATION_PROBE_BYTES,
+                upload_elapsed,
+                baseline_overhead,
+            )
+        });
+    record_startup_health(true, sample);
 }
 
 #[cfg(target_os = "macos")]
