@@ -51,8 +51,6 @@ const jsonResponse = (
 		},
 	);
 
-// Enforces an explicit same-origin check when browser fetch metadata or Origin
-// headers are present so cross-site pages cannot trigger probes via SameSite=None cookies.
 const isCrossSiteRequest = (request: HttpServerRequest.HttpServerRequest): boolean => {
 	const headers = request.headers as Record<string, string | undefined>;
 	const fetchSite = (headers["sec-fetch-site"] ?? "").toLowerCase();
@@ -71,8 +69,6 @@ const isCrossSiteRequest = (request: HttpServerRequest.HttpServerRequest): boole
 	}
 };
 
-// Executes the write-and-delete storage probe exclusively on POST and propagates
-// deleteObject failures instead of swallowing them.
 const verifyUserStorageWrite = (
 	userId: CurrentUser["Type"]["id"],
 	organizationId: CurrentUser["Type"]["activeOrganizationId"],
@@ -91,7 +87,6 @@ const verifyUserStorageWrite = (
 		yield* writable.access.deleteObject(probeKey);
 	});
 
-// Verifies storage provider configuration on GET without performing any bucket write or delete.
 const verifyUserStorageReadyReadOnly = (
 	userId: CurrentUser["Type"]["id"],
 	organizationId: CurrentUser["Type"]["activeOrganizationId"],
