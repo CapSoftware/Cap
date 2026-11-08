@@ -62,7 +62,16 @@ impl Default for ConverterPoolConfig {
 }
 
 impl ConverterPoolConfig {
-    pub fn bounded_for_conversion(&self, conversion: &ConversionConfig) -> Self {
+    pub fn bounded_for_conversion(
+        &self,
+        conversion: &ConversionConfig,
+    ) -> Result<Self, ConvertError> {
+        if self.worker_count == 0 || self.output_capacity == 0 {
+            return Err(ConvertError::ConversionFailed(
+                "Converter pool requires at least one worker and one output slot".to_string(),
+            ));
+        }
+
         let in_bytes = estimate_frame_bytes(
             conversion.input_format,
             conversion.input_width,
@@ -74,33 +83,39 @@ impl ConverterPoolConfig {
             conversion.output_height,
         );
         let worker_frame_bytes = in_bytes.saturating_add(out_bytes);
-        let hard_max_workers = CONVERTER_POOL_BYTE_BUDGET / worker_frame_bytes;
-        let min_workers = usize::from(hard_max_workers > 0);
-        let max_workers = (CONVERTER_POOL_BYTE_BUDGET / 2 / worker_frame_bytes).max(min_workers);
-        let worker_count = self.worker_count.clamp(min_workers, max_workers);
+        if worker_frame_bytes.saturating_add(out_bytes) > CONVERTER_POOL_BYTE_BUDGET {
+            return Err(ConvertError::ConversionFailed(
+                "Conversion frame sizes exceed converter pool byte budget".to_string(),
+            ));
+        }
+
+        let max_workers_with_out =
+            CONVERTER_POOL_BYTE_BUDGET.saturating_sub(out_bytes) / worker_frame_bytes;
+        let max_workers =
+            (CONVERTER_POOL_BYTE_BUDGET / 2 / worker_frame_bytes).clamp(1, max_workers_with_out);
+        let worker_count = self.worker_count.clamp(1, max_workers);
 
         let remaining_after_workers = CONVERTER_POOL_BYTE_BUDGET
             .saturating_sub(worker_count.saturating_mul(worker_frame_bytes));
         let input_headroom = remaining_after_workers.saturating_sub(out_bytes);
-        let min_input = usize::from(input_headroom >= in_bytes);
+        let min_input = usize::from(input_headroom >= in_bytes && self.input_capacity > 0);
         let max_input = (input_headroom / 2 / in_bytes).max(min_input);
         let input_capacity = self.input_capacity.clamp(min_input, max_input);
 
         let remaining_for_output = remaining_after_workers
             .saturating_sub(input_capacity.saturating_mul(in_bytes));
         let max_out_slots = remaining_for_output / out_bytes;
-        let min_output = usize::from(max_out_slots > 0);
-        let max_output = (max_out_slots / 2).max(min_output);
-        let output_capacity = self.output_capacity.clamp(min_output, max_output);
+        let max_output = (max_out_slots / 2).max(1);
+        let output_capacity = self.output_capacity.clamp(1, max_output);
         let max_pool = max_out_slots.saturating_sub(output_capacity);
 
-        Self {
+        Ok(Self {
             worker_count,
             input_capacity,
             output_capacity,
             drop_strategy: self.drop_strategy,
             frame_pool_capacity: self.frame_pool_capacity.min(max_pool),
-        }
+        })
     }
 }
 
@@ -158,7 +173,7 @@ impl AsyncConverterPool {
         conversion_config: ConversionConfig,
         pool_config: ConverterPoolConfig,
     ) -> Result<Self, ConvertError> {
-        let bounded_config = pool_config.bounded_for_conversion(&conversion_config);
+        let bounded_config = pool_config.bounded_for_conversion(&conversion_config)?;
         let first_converter = create_converter(conversion_config.clone())?;
         let converter_name = first_converter.name().to_string();
 
@@ -520,12 +535,28 @@ mod tests {
             drop_strategy: DropStrategy::DropOldest,
             frame_pool_capacity: 16,
         };
-        let bounded = requested.bounded_for_conversion(&conversion);
+        let bounded = requested
+            .bounded_for_conversion(&conversion)
+            .expect("4K BGRA -> NV12 should fit within converter pool budget");
         let in_bytes = estimate_frame_bytes(Pixel::BGRA, 3840, 2160);
         let out_bytes = estimate_frame_bytes(Pixel::NV12, 3840, 2160);
         let retained_bytes = (bounded.input_capacity + bounded.worker_count) * in_bytes
             + (bounded.output_capacity + bounded.frame_pool_capacity + bounded.worker_count)
                 * out_bytes;
+        assert!(bounded.worker_count >= 1);
+        assert!(bounded.output_capacity >= 1);
         assert!(retained_bytes <= CONVERTER_POOL_BYTE_BUDGET);
+    }
+
+    #[test]
+    fn rejects_conversions_exceeding_converter_pool_byte_budget() {
+        let requested = ConverterPoolConfig::default();
+        let oversized_worker =
+            ConversionConfig::new(Pixel::BGRA, 4096, 4096, Pixel::NV12, 4096, 4096);
+        assert!(requested.bounded_for_conversion(&oversized_worker).is_err());
+
+        let oversized_output =
+            ConversionConfig::new(Pixel::RGB24, 3840, 2160, Pixel::BGRA, 3840, 2160);
+        assert!(requested.bounded_for_conversion(&oversized_output).is_err());
     }
 }
