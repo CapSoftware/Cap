@@ -2518,6 +2518,14 @@ async fn start_attempt_with_upload(
     // the user's persisted settings, applied through the same shared
     // `RecordingDefaults` seam so both apps build recordings identically.
     let settings = crate::store::GeneralSettings::load();
+    // The instant output cap is plan-gated at start time, not at settings
+    // time (`recording.rs:1634-1639`): free stays at the free cap even if a
+    // stale store value says otherwise.
+    let base_instant_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
+        settings.instant_mode_max_resolution
+    } else {
+        cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    };
     let defaults = cap_recording::RecordingDefaults {
         custom_cursor_capture: settings.custom_cursor_capture,
         capture_keyboard_events: settings.capture_keyboard_events,
@@ -2525,18 +2533,10 @@ async fn start_attempt_with_upload(
         max_fps: settings.max_fps,
         studio_recording_quality: settings.studio_recording_quality.into(),
         out_of_process_muxer: settings.out_of_process_muxer,
-        instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
+        instant_mode_max_resolution: base_instant_max_resolution,
     }
     .apply_detected_upload_speed();
-    // The instant output cap is plan-gated at start time, not at settings
-    // time (`recording.rs:1634-1639`): free stays at the free cap even if a
-    // stale store value says otherwise.
-    let instant_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
-        settings.instant_mode_max_resolution
-    } else {
-        cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
-    }
-    .min(defaults.instant_mode_max_resolution);
+    let instant_max_resolution = defaults.instant_mode_max_resolution;
 
     #[cfg(target_os = "macos")]
     let excluded_windows = {
