@@ -197,6 +197,40 @@ test("starts again after a failed upload without leaking the old capture", async
 	}
 });
 
+test.each(["complete", "error"] as const)(
+	"restarting from the %s callback without destroy keeps recording",
+	async (event) => {
+		const tracks: Track[] = [];
+		mockCapture(async () => {
+			const track = new Track();
+			tracks.push(track);
+			return new Stream([track]);
+		});
+		const calls = mockSdkApi({
+			failPartUpload: () => event === "error" && tracks.length === 1,
+		});
+		const recorder = createRecorder();
+		let restart: Promise<void> | undefined;
+		recorder.on(event, () => {
+			restart = recorder.start();
+		});
+		try {
+			await recorder.start();
+			await recorder.stop().catch(() => {});
+			expect(restart).toBeDefined();
+			await restart;
+			expect(recorder.phase).toBe("recording");
+			expect(tracks).toHaveLength(2);
+
+			const second = await recorder.stop();
+			expect(second.videoId).toBe("test-video-2");
+			expect(calls.createdVideos).toBe(2);
+		} finally {
+			recorder.destroy();
+		}
+	},
+);
+
 test("starts again after a completed recording with fresh state", async () => {
 	const tracks: Track[] = [];
 	mockCapture(async () => {

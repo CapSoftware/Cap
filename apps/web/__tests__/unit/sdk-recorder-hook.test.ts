@@ -166,6 +166,26 @@ describe("SDK React recorder ownership", () => {
 		expect(value().durationMs).toBe(0);
 	});
 
+	it("clears the previous result when a restart enters idle", async () => {
+		await render();
+		await start();
+		await act(async () => {
+			await value().stop();
+		});
+		expect(value().phase).toBe("complete");
+		expect(value().videoId).toBe("first-video");
+		expect(value().durationMs).toBe(2000);
+		await start();
+		expect(value().phase).toBe("recording");
+		expect(value().videoId).toBeNull();
+		expect(value().durationMs).toBe(0);
+		now = 4500;
+		await act(async () => {
+			for (const interval of intervals.values()) interval();
+		});
+		expect(value().durationMs).toBe(1500);
+	});
+
 	it("retains the same capture across equivalent rerenders and limit-only changes", async () => {
 		await render();
 		await start();

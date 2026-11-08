@@ -285,17 +285,17 @@ export class CapRecorder {
 				embedUrl,
 			};
 
+			if (this.recorder === recorder) this.cleanup();
 			this.setPhase("complete");
 			this.emit("complete", result);
-			if (this.recorder === recorder) this.cleanup();
 
 			return result;
 		} catch (error) {
 			this.assertCurrentRecording(recorder);
+			if (this.recorder === recorder) this.cleanup();
 			this.setPhase("error");
 			const err = error instanceof Error ? error : new Error(String(error));
 			this.emit("error", { error: err });
-			if (this.recorder === recorder) this.cleanup();
 			throw err;
 		}
 	}
