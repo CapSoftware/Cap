@@ -1,0 +1,35 @@
+name: GPUI Shape Ordering Benchmark
+on:
+  push:
+    branches:
+      - perf/gpui-shape-overlay-order
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Test overlay semantics
+        run: cargo test -p cap-project overlay_frame_order_tests -- --nocapture
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Benchmark old vs optimized on same machine
+        run: |
+          set -o pipefail
+          cargo run --release -p cap-project --example gpui_shape_order_benchmark | tee gpui-shape-bench.jsonl
+          {
+            echo '### GPUI shape ordering A/B'
+            echo ''
+            echo '```json'
+            cat gpui-shape-bench.jsonl
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpui-shape-order-bench
+          path: gpui-shape-bench.jsonl
