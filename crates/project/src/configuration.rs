@@ -3162,9 +3162,7 @@ impl ProjectConfiguration {
                     segments
                         .iter()
                         .enumerate()
-                        .filter(|(_, segment)| {
-                            segment.track == track && segment.is_active_at(time)
-                        })
+                        .filter(|(_, segment)| segment.track == track && segment.is_active_at(time))
                         .map(|(index, _)| index),
                 );
             }
