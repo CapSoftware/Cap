@@ -2110,11 +2110,16 @@ impl ScreenshotEditorWindow {
         true
     }
 
-    pub(crate) fn clear_crop_selection(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn cancel_crop_gesture(&mut self) -> bool {
         let had_gesture = matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. }));
         if had_gesture {
             self.annotation_state.gesture = None;
         }
+        had_gesture
+    }
+
+    pub(crate) fn clear_crop_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let had_gesture = self.cancel_crop_gesture();
         let had_selection = self.annotation_state.crop_selection.take().is_some();
         if had_gesture || had_selection {
             cx.notify();
@@ -2124,9 +2129,7 @@ impl ScreenshotEditorWindow {
     }
 
     pub(crate) fn take_pending_crop_bounds(&mut self) -> Option<Crop> {
-        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
-            self.annotation_state.gesture = None;
-        }
+        self.cancel_crop_gesture();
         self.annotation_state.crop_selection.take()
     }
 

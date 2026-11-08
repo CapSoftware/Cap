@@ -1216,9 +1216,7 @@ impl ScreenshotEditorWindow {
         if !change(&mut self.project) {
             return;
         }
-        if matches!(self.annotation_state.gesture, Some(Gesture::Crop { .. })) {
-            self.annotation_state.gesture = None;
-        }
+        self.cancel_crop_gesture();
         if self.project.background.crop != prev_crop {
             self.clear_crop_selection(cx);
         }
