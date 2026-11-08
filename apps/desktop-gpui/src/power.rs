@@ -3,17 +3,13 @@
 //! (lid closed, Sleep chosen, battery empty) the recording is paused first, so
 //! capture never dies inside sleep, and it waits paused for the user on wake.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use cap_recording::{
-    RecordingDefaults,
-    upload_probe::{
-        DEFAULT_PROBE_PAYLOAD_BYTES, SpeedProbeSample, build_probe_payload, record_startup_health,
-        should_run_speed_probe,
-    },
+use cap_recording::upload_probe::{
+    DEFAULT_PROBE_PAYLOAD_BYTES, SpeedProbeSample, build_probe_payload, record_startup_health,
+    should_run_speed_probe,
 };
 use gpui::App;
-use serde_json::Value;
 
 use crate::session::{Phase, RecordingSession};
 
@@ -47,39 +43,44 @@ async fn run_startup_upload_probe() {
         return;
     };
     let server = crate::auth::server_url();
-    let url = format!("{server}/api/upload/health-check");
+    let health_url = format!("{server}/api/upload/health-check");
+    let health_start = Instant::now();
+    let health_req = crate::auth::apply_desktop_headers(client.get(&health_url)).bearer_auth(&token);
+
+    let Ok(health_resp) = health_req.send().await else {
+        record_startup_health(false, None);
+        return;
+    };
+    if !health_resp.status().is_success() {
+        record_startup_health(false, None);
+        return;
+    }
+    let request_overhead = health_start.elapsed() / 2;
+
+    let throughput_url = format!("{health_url}?mode=throughput");
     let payload = build_probe_payload(DEFAULT_PROBE_PAYLOAD_BYTES);
     let bytes_transferred = payload.len();
-    let start = Instant::now();
-    let request = crate::auth::apply_desktop_headers(client.post(url))
+    let upload_start = Instant::now();
+    let upload_req = crate::auth::apply_desktop_headers(client.post(throughput_url))
         .bearer_auth(token)
         .header("Content-Type", "application/octet-stream")
         .body(payload);
 
-    match request.send().await {
+    match upload_req.send().await {
         Ok(response) if response.status().is_success() => {
+            let elapsed = upload_start
+                .elapsed()
+                .saturating_sub(request_overhead)
+                .max(Duration::from_millis(1));
             let sample = SpeedProbeSample {
                 bytes_transferred,
-                elapsed: start.elapsed(),
+                elapsed,
             };
-            let status = record_startup_health(true, Some(sample));
-            apply_adaptive_recording_defaults(status.speed_mbps);
+            record_startup_health(true, Some(sample));
         }
         Ok(_) | Err(_) => {
-            record_startup_health(false, None);
+            record_startup_health(true, None);
         }
-    }
-}
-
-fn apply_adaptive_recording_defaults(speed_mbps: f64) {
-    let adapted = RecordingDefaults::default().with_upload_speed_mbps(speed_mbps);
-    let current = crate::store::GeneralSettings::load().instant_mode_max_resolution;
-    if adapted.instant_mode_max_resolution < current {
-        crate::store::set_store_setting(
-            "general_settings",
-            "instantModeMaxResolution",
-            Value::from(adapted.instant_mode_max_resolution),
-        );
     }
 }
 

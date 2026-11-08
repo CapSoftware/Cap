@@ -38,7 +38,6 @@ impl Default for RecordingDefaults {
             out_of_process_muxer: DEFAULT_OUT_OF_PROCESS_MUXER,
             instant_mode_max_resolution: DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
         }
-        .apply_detected_upload_speed()
     }
 }
 
@@ -58,21 +57,33 @@ impl RecordingDefaults {
         camera_active: bool,
         override_fps: Option<u32>,
     ) -> studio_recording::ActorBuilder {
-        let effective = self.apply_detected_upload_speed();
         builder
-            .with_custom_cursor(effective.custom_cursor_capture)
-            .with_keyboard_capture(effective.capture_keyboard_events)
-            .with_fragmented(effective.crash_recovery_recording)
-            .with_out_of_process_muxer(effective.out_of_process_muxer)
-            .with_max_fps(effective.studio_max_fps(camera_active, override_fps))
-            .with_quality(effective.studio_recording_quality)
+            .with_custom_cursor(self.custom_cursor_capture)
+            .with_keyboard_capture(self.capture_keyboard_events)
+            .with_fragmented(self.crash_recovery_recording)
+            .with_out_of_process_muxer(self.out_of_process_muxer)
+            .with_max_fps(self.studio_max_fps(camera_active, override_fps))
+            .with_quality(self.studio_recording_quality)
     }
 
     pub fn with_upload_speed_mbps(mut self, mbps: f64) -> Self {
         let tier = crate::upload_probe::AdaptiveUploadTier::from_mbps(mbps);
-        self.instant_mode_max_resolution = tier.max_instant_resolution();
-        self.studio_recording_quality = tier.studio_quality();
+        self.instant_mode_max_resolution = self
+            .instant_mode_max_resolution
+            .min(tier.max_instant_resolution());
         self
+    }
+
+    pub fn effective_instant_mode_max_resolution(self) -> u32 {
+        self.apply_detected_upload_speed()
+            .instant_mode_max_resolution
+    }
+
+    pub fn recommended_studio_quality(self) -> StudioQuality {
+        match crate::upload_probe::latest_upload_speed_mbps() {
+            Some(mbps) => crate::upload_probe::AdaptiveUploadTier::from_mbps(mbps).studio_quality(),
+            None => self.studio_recording_quality,
+        }
     }
 
     pub fn apply_detected_upload_speed(self) -> Self {

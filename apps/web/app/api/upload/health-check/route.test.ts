@@ -16,7 +16,8 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
-	const authLayer = Layer.succeed(HttpAuthMiddleware, () =>
+	const authLayer = Layer.succeed(
+		HttpAuthMiddleware,
 		Effect.succeed({
 			id: User.UserId.make("user_test"),
 			email: "user@cap.so",

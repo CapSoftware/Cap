@@ -140,25 +140,32 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							);
 						}
 
-						const storageOk = yield* verifyUserStorage(
-							user.id,
-							user.activeOrganizationId,
-							bodyBuffer.subarray(0, MIN_PROBE_BYTES),
-						).pipe(
-							Effect.as(true),
-							Effect.catchAll(() => Effect.succeed(false)),
-						);
-						if (!storageOk) {
-							return jsonResponse(
-								{
-									ok: false,
-									status: "degraded",
-									bytesReceived: bodyBuffer.byteLength,
-									message:
-										"Upload storage destination is unavailable — please contact support.",
-								},
-								503,
+						const isThroughputOnly = new URL(
+							request.url,
+							"http://localhost",
+						).searchParams.get("mode") === "throughput";
+
+						if (!isThroughputOnly) {
+							const storageOk = yield* verifyUserStorage(
+								user.id,
+								user.activeOrganizationId,
+								bodyBuffer.subarray(0, MIN_PROBE_BYTES),
+							).pipe(
+								Effect.as(true),
+								Effect.catchAll(() => Effect.succeed(false)),
 							);
+							if (!storageOk) {
+								return jsonResponse(
+									{
+										ok: false,
+										status: "degraded",
+										bytesReceived: bodyBuffer.byteLength,
+										message:
+											"Upload storage destination is unavailable — please contact support.",
+									},
+									503,
+								);
+							}
 						}
 
 						return jsonResponse(
