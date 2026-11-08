@@ -81,9 +81,7 @@ fn previous_visible_shape_order(project: &ProjectConfiguration, time: f64) -> Ve
                 .shape_segments
                 .iter()
                 .enumerate()
-                .filter(|(_, segment)| {
-                    segment.track == track.track && segment.is_active_at(time)
-                })
+                .filter(|(_, segment)| segment.track == track.track && segment.is_active_at(time))
                 .map(|(index, _)| index),
         );
     }
@@ -149,7 +147,10 @@ fn main() {
             project.visible_shape_order(time)
         );
         for _ in 0..8 {
-            black_box(previous_visible_shape_order(black_box(&project), black_box(time)));
+            black_box(previous_visible_shape_order(
+                black_box(&project),
+                black_box(time),
+            ));
             black_box(project.visible_shape_order(black_box(time)));
         }
 
@@ -158,7 +159,10 @@ fn main() {
         for run in 0..9 {
             if run % 2 == 0 {
                 before.push(measure(iterations, || {
-                    black_box(previous_visible_shape_order(black_box(&project), black_box(time)));
+                    black_box(previous_visible_shape_order(
+                        black_box(&project),
+                        black_box(time),
+                    ));
                 }));
                 after.push(measure(iterations, || {
                     black_box(project.visible_shape_order(black_box(time)));
@@ -168,7 +172,10 @@ fn main() {
                     black_box(project.visible_shape_order(black_box(time)));
                 }));
                 before.push(measure(iterations, || {
-                    black_box(previous_visible_shape_order(black_box(&project), black_box(time)));
+                    black_box(previous_visible_shape_order(
+                        black_box(&project),
+                        black_box(time),
+                    ));
                 }));
             }
         }
