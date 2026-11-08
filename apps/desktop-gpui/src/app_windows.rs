@@ -2733,6 +2733,31 @@ fn overlay_handle(display: Option<DisplayId>, cx: &App) -> Option<WindowHandle<O
     }
 }
 
+fn target_overlay_window_bounds(
+    bounds: scap_targets::bounds::LogicalBounds,
+    capture_scale: f32,
+) -> Bounds<Pixels> {
+    #[cfg(target_os = "windows")]
+    let origin = point(
+        px(bounds.position().x() as f32),
+        px(bounds.position().y() as f32),
+    );
+    #[cfg(target_os = "linux")]
+    let origin = point(
+        px(bounds.position().x() as f32 / capture_scale),
+        px(bounds.position().y() as f32 / capture_scale),
+    );
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let origin = point(px(0.), px(0.));
+    Bounds {
+        origin,
+        size: size(
+            px(bounds.size().width() as f32 / capture_scale),
+            px(bounds.size().height() as f32 / capture_scale),
+        ),
+    }
+}
+
 fn open_overlay(
     display: &scap_targets::Display,
     select: Entity<TargetSelect>,
@@ -2751,20 +2776,7 @@ fn open_overlay(
             crate::target_overlay::capture_scale_factor(window)
         })
         .unwrap_or(1.);
-    #[cfg(target_os = "windows")]
-    let origin = point(
-        px(bounds.position().x() as f32),
-        px(bounds.position().y() as f32),
-    );
-    #[cfg(not(target_os = "windows"))]
-    let origin = point(px(0.), px(0.));
-    let window_bounds = WindowBounds::Windowed(Bounds {
-        origin,
-        size: size(
-            px(width as f32 / capture_scale),
-            px(height as f32 / capture_scale),
-        ),
-    });
+    let window_bounds = WindowBounds::Windowed(target_overlay_window_bounds(bounds, capture_scale));
     #[cfg(target_os = "linux")]
     let overlay_display = if uses_wayland() {
         let Some(matched) = platform_display_for_capture(display, cx) else {
@@ -2790,10 +2802,8 @@ fn open_overlay(
         WindowOptions {
             #[cfg(target_os = "linux")]
             app_id: Some(crate::app_windows::app_id().into()),
-            // The origin is corrected right after opening -- gpui's own
-            // window-origin math cannot express "cover this display" (see
-            // `platform::set_window_frame_cg`). The size is honoured, and it is
-            // the size the renderer is built for.
+            // macOS corrects the origin after opening; X11 needs the display's
+            // origin here because its native panel placement is a no-op.
             window_bounds: Some(window_bounds),
             #[cfg(target_os = "linux")]
             display_id: overlay_display.as_ref().map(|display| display.id()),
@@ -8637,6 +8647,60 @@ mod tests {
             Some(&selected),
             Some(&other)
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_secondary_overlay_does_not_cover_the_primary_display() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        for capture_scale in [1., 1.5, 2.] {
+            let primary = target_overlay_window_bounds(
+                LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(3840., 2160.)),
+                capture_scale,
+            );
+            let secondary = target_overlay_window_bounds(
+                LogicalBounds::new(
+                    LogicalPosition::new(3840., 0.),
+                    LogicalSize::new(1920., 1080.),
+                ),
+                capture_scale,
+            );
+
+            assert_eq!(primary.origin, point(px(0.), px(0.)));
+            assert_eq!(secondary.origin.x, primary.size.width);
+            assert_eq!(secondary.origin.y, px(0.));
+            assert!(!secondary.contains(&primary.center()));
+            assert_eq!(secondary.size.width * 2., primary.size.width);
+            assert_eq!(secondary.size.height * 2., primary.size.height);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_overlay_bounds_preserve_offset_and_negative_display_coordinates() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        for (position, capture_scale, expected_origin, expected_size) in [
+            ((5120., 258.), 2., (2560., 129.), (960., 540.)),
+            ((-1920., 180.), 1.5, (-1280., 120.), (1280., 720.)),
+            ((0., -1080.), 1., (0., -1080.), (1920., 1080.)),
+            ((-1920., -1080.), 2., (-960., -540.), (960., 540.)),
+        ] {
+            let bounds = target_overlay_window_bounds(
+                LogicalBounds::new(
+                    LogicalPosition::new(position.0, position.1),
+                    LogicalSize::new(1920., 1080.),
+                ),
+                capture_scale,
+            );
+
+            assert_eq!(
+                bounds.origin,
+                point(px(expected_origin.0), px(expected_origin.1))
+            );
+            assert_eq!(bounds.size, size(px(expected_size.0), px(expected_size.1)));
+        }
     }
 
     #[test]
