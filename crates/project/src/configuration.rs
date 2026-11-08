@@ -216,7 +216,7 @@ pub enum CornerStyle {
     Rounded,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
     pub position: XY<u32>,

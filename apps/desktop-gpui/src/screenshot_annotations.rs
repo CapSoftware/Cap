@@ -2146,7 +2146,13 @@ impl ScreenshotEditorWindow {
         };
         self.edit_project(
             move |project| {
-                if project.background.crop.as_ref() == Some(&crop) {
+                if project
+                    .background
+                    .crop
+                    .as_ref()
+                    .map(|c| (c.position, c.size))
+                    == Some((crop.position, crop.size))
+                {
                     return false;
                 }
                 project.background.crop = Some(crop);

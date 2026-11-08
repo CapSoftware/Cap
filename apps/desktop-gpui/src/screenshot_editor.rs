@@ -1212,12 +1212,24 @@ impl ScreenshotEditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let prev_crop = self.project.background.crop.clone();
+        let prev_crop = self
+            .project
+            .background
+            .crop
+            .as_ref()
+            .map(|c| (c.position, c.size));
         if !change(&mut self.project) {
             return;
         }
         self.cancel_crop_gesture();
-        if self.project.background.crop != prev_crop {
+        if self
+            .project
+            .background
+            .crop
+            .as_ref()
+            .map(|c| (c.position, c.size))
+            != prev_crop
+        {
             self.clear_crop_selection(cx);
         }
         // Padding, crop and aspect all move the content rect underneath the
