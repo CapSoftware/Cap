@@ -607,7 +607,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             });
 
         let cancel_token = CancellationToken::new();
-        let capturer = Capturer::new(Arc::new(builder.build()?));
+        let capturer = Capturer::new(Arc::new(builder.build()?), self.config.crop_bounds);
 
         Ok((
             VideoSourceConfig {
@@ -650,6 +650,10 @@ pub struct CaptureError(pub arc::R<ns::Error>);
 struct Capturer {
     started: Arc<AtomicBool>,
     capturer: Arc<scap_screencapturekit::Capturer>,
+    /// The size of the source rect this stream reads now. A restart builds
+    /// a new stream for the window's size at that moment, so this is kept
+    /// per stream rather than per recording.
+    source_size: Arc<Mutex<Option<LogicalSize>>>,
 }
 
 impl Clone for Capturer {
@@ -657,17 +661,26 @@ impl Clone for Capturer {
         Self {
             started: self.started.clone(),
             capturer: self.capturer.clone(),
+            source_size: self.source_size.clone(),
             // error_rx: self.error_rx.resubscribe(),
         }
     }
 }
 
 impl Capturer {
-    fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
+    fn new(
+        capturer: Arc<scap_screencapturekit::Capturer>,
+        crop_bounds: Option<super::CropBounds>,
+    ) -> Self {
         Self {
             started: Arc::new(AtomicBool::new(false)),
             capturer,
+            source_size: Arc::new(Mutex::new(crop_bounds.map(|bounds| bounds.size()))),
         }
+    }
+
+    fn source_size(&self) -> Option<LogicalSize> {
+        self.source_size.lock().ok().and_then(|size| *size)
     }
 
     fn mark_stopped(&self) {
@@ -796,7 +809,6 @@ impl output_pipeline::VideoSource for VideoSource {
             let original_capturer = capturer.clone();
             ctx.tasks()
                 .spawn("screen-capture-window-follow", async move {
-                    let mut reading = params.config.crop_bounds.map(|bounds| bounds.size());
                     loop {
                         select! {
                             _ = follow_cancel.cancelled() => break Ok(()),
@@ -807,14 +819,14 @@ impl output_pipeline::VideoSource for VideoSource {
                         else {
                             continue;
                         };
-                        if reading == Some(crop.size()) {
-                            continue;
-                        }
                         let capturer = active_capturer
                             .lock()
                             .ok()
                             .and_then(|active| active.clone())
                             .unwrap_or_else(|| original_capturer.clone());
+                        if capturer.source_size() == Some(crop.size()) {
+                            continue;
+                        }
                         // A stopped stream, paused or waiting on a restart, takes
                         // the window's size when it is rebuilt.
                         if !capturer.started.load(atomic::Ordering::Relaxed) {
@@ -830,7 +842,9 @@ impl output_pipeline::VideoSource for VideoSource {
                         match update.await {
                             Ok(()) => {
                                 debug!(?crop, "Window capture follows the window's new size");
-                                reading = Some(crop.size());
+                                if let Ok(mut size) = capturer.source_size.lock() {
+                                    *size = Some(crop.size());
+                                }
                             }
                             Err(error) => warn!(%error, "Could not resize the window capture"),
                         }
@@ -1372,7 +1386,7 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
             }
         });
 
-    let capturer = Capturer::new(Arc::new(builder.build()?));
+    let capturer = Capturer::new(Arc::new(builder.build()?), crop_bounds);
     capturer.start().await?;
     Ok(capturer)
 }

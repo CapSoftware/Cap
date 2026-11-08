@@ -52,19 +52,20 @@ pub struct CursorCaptureTarget {
     pub crop_bounds: CursorCropBounds,
     pub display: scap_targets::Display,
     pub window: Option<scap_targets::WindowId>,
+    /// The size of the frames the screen capture writes. A window-only
+    /// capture keeps it when the window is resized, so the cursor is placed
+    /// against it rather than against the window alone.
+    pub frame_size: Option<(u32, u32)>,
 }
 
-/// `frame_aspect` is the shape of the recording's frame, taken from the
-/// window the first time it is read, as the capture's output size is.
+/// `frame_aspect` is the shape of the recording's frame, width over height.
 #[cfg(target_os = "macos")]
 fn macos_window_crop(
     window: &scap_targets::WindowId,
     display: &scap_targets::Display,
-    frame_aspect: &mut Option<f64>,
+    frame_aspect: Option<f64>,
 ) -> Option<CursorCropBounds> {
-    use crate::sources::screen_capture::{
-        even_pixel_crop, trim_window_corners, window_frame_bounds,
-    };
+    use crate::sources::screen_capture::{trim_window_corners, window_frame_bounds};
     use scap_targets::bounds::{LogicalBounds, LogicalPosition};
 
     let window_bounds = scap_targets::Window::from_id_direct(window)?
@@ -80,11 +81,10 @@ fn macos_window_crop(
         ),
         window_bounds.size(),
     ));
-    let aspect = *frame_aspect.get_or_insert_with(|| {
-        let first = even_pixel_crop(trimmed, display.raw_handle().scale().unwrap_or(1.0)).size();
-        first.width() / first.height()
-    });
-    let frame = window_frame_bounds(trimmed, aspect);
+    let frame = match frame_aspect {
+        Some(aspect) => window_frame_bounds(trimmed, aspect),
+        None => trimmed,
+    };
     Some(CursorCropBounds::new_macos(frame))
 }
 
@@ -724,7 +724,10 @@ pub fn spawn_cursor_recorder(
         #[cfg(any(windows, target_os = "macos"))]
         let mut last_window_crop: Option<CursorCropBounds> = None;
         #[cfg(target_os = "macos")]
-        let mut window_frame_aspect = None;
+        let window_frame_aspect = target
+            .frame_size
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .map(|(width, height)| f64::from(width) / f64::from(height));
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
         // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
@@ -816,7 +819,7 @@ pub fn spawn_cursor_recorder(
             let window_crop = target
                 .window
                 .as_ref()
-                .and_then(|window| macos_window_crop(window, &display, &mut window_frame_aspect));
+                .and_then(|window| macos_window_crop(window, &display, window_frame_aspect));
             #[cfg(any(windows, target_os = "macos"))]
             let position_changed =
                 position_changed || (window_crop.is_some() && window_crop != last_window_crop);

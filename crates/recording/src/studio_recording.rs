@@ -3405,7 +3405,7 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "linux")]
     let mut start_time = start_time;
 
-    let (screen, system_audio, cursor_display) = if camera_only {
+    let (screen, system_audio, cursor_display, screen_frame_size) = if camera_only {
         #[cfg(target_os = "linux")]
         {
             let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
@@ -3446,7 +3446,7 @@ async fn create_segment_pipeline(
             }
             .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (screen, None, None, None)
         }
 
         #[cfg(any(target_os = "macos", windows))]
@@ -3483,7 +3483,7 @@ async fn create_segment_pipeline(
                 .await
                 .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (screen, None, None, None)
         }
     } else {
         let capture_target = base_inputs.capture_target.clone();
@@ -3556,7 +3556,12 @@ async fn create_segment_pipeline(
         .await
         .context("screen pipeline setup")?;
 
-        (screen, system_audio, Some(display))
+        (
+            screen,
+            system_audio,
+            Some(display),
+            Some((screen_info.width, screen_info.height)),
+        )
     };
 
     #[cfg(target_os = "macos")]
@@ -3759,6 +3764,7 @@ async fn create_segment_pipeline(
                             &base_inputs.capture_target,
                             base_inputs.window_only,
                         ),
+                        frame_size: screen_frame_size,
                     },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
