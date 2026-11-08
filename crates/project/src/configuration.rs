@@ -3152,13 +3152,23 @@ impl ProjectConfiguration {
             .map(|track| track.track)
             .collect();
 
-        if let [track] = shape_tracks.as_slice() {
-            return segments
-                .iter()
-                .enumerate()
-                .filter(|(_, segment)| segment.track == *track && segment.is_active_at(time))
-                .map(|(index, _)| index)
-                .collect();
+        if shape_tracks.len() == 1
+            || (shape_tracks.len() <= 16
+                && segments.len().saturating_mul(shape_tracks.len()) <= 8_192)
+        {
+            let mut order = Vec::new();
+            for track in shape_tracks {
+                order.extend(
+                    segments
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, segment)| {
+                            segment.track == track && segment.is_active_at(time)
+                        })
+                        .map(|(index, _)| index),
+                );
+            }
+            return order;
         }
 
         let track_positions: HashMap<_, _> = shape_tracks
