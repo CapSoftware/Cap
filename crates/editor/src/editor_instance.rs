@@ -2507,15 +2507,25 @@ mod tests {
         };
         let mut initial_config = ProjectConfiguration::default();
         initial_config.timeline = Some(TimelineConfiguration {
+            segments: Vec::new(),
+            transitions: Vec::new(),
             zoom_segments: vec![initial_zoom],
-            ..Default::default()
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            shape_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
         });
 
         let (project_tx, mut project_rx) = watch::channel(initial_config);
         let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
         let initial = Arc::clone(&snapshot);
 
-        // User splits zoom into two, then adjusts the new split zoom to a new area (x: 0.75, y: 0.75)
         let split_head = ZoomSegment {
             start: 1.0,
             end: 3.0,
