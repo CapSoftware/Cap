@@ -2894,6 +2894,13 @@ async fn confirm_export_resources(
     let result = async {
         let warning = check.map_err(|error| error.to_string())??;
         if let Some(message) = warning {
+            // The `CAP_GPUI_AUTO_EXPORT` hook runs unattended, so nobody is
+            // there to answer the prompt. It goes on as "Proceed anyway" would;
+            // a drive too full to export has already failed the check above.
+            if std::env::var_os("CAP_GPUI_AUTO_EXPORT").is_some() {
+                tracing::warn!(%message, "auto export proceeds past the resources warning");
+                return Ok(true);
+            }
             tracing::info!(%message, "export waits for the user to confirm its resources");
             #[cfg(target_os = "linux")]
             let confirmed = {
