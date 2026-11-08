@@ -27,36 +27,74 @@ export interface DeepLinkStartPayload {
 
 const CAP_ACTION_BASE_URL = "cap-desktop://action";
 const DEFAULT_DASHBOARD_URL = "https://cap.so/dashboard";
+const ACTIVE_SCREEN_JXA_SCRIPT = [
+	'ObjC.import("AppKit");',
+	"const mouse = $.NSEvent.mouseLocation;",
+	"const screens = $.NSScreen.screens;",
+	"const count = screens.count;",
+	"let chosen = null;",
+	"for (let i = 0; i < count; i++) {",
+	"  const s = screens.objectAtIndex(i);",
+	"  const f = s.frame;",
+	"  if (mouse.x >= f.origin.x && mouse.x <= f.origin.x + f.size.width && mouse.y >= f.origin.y && mouse.y <= f.origin.y + f.size.height) {",
+	"    chosen = s;",
+	"    break;",
+	"  }",
+	"}",
+	"if (!chosen) { chosen = $.NSScreen.mainScreen; }",
+	'chosen ? ObjC.unwrap(chosen.localizedName) : "";',
+].join(" ");
 
-function parseFirstDisplayFromSystemProfiler(rawJson: string): string | null {
+export function parseUnambiguousDisplayFromSystemProfiler(
+	rawJson: string,
+): string | null {
 	try {
 		const parsed = JSON.parse(rawJson) as {
 			SPDisplaysDataType?: Array<{
 				spdisplays_ndrvs?: Array<{ _name?: string }>;
 			}>;
 		};
+		const names: string[] = [];
 		for (const gpu of parsed.SPDisplaysDataType ?? []) {
 			for (const display of gpu.spdisplays_ndrvs ?? []) {
 				const name = display._name?.trim();
 				if (name) {
-					return name;
+					names.push(name);
 				}
 			}
 		}
+		return names.length === 1 ? names[0] : null;
 	} catch {
 		return null;
 	}
-	return null;
+}
+
+function queryActiveScreenViaAppKit(): string | null {
+	try {
+		const activeName = execFileSync(
+			"osascript",
+			["-l", "JavaScript", "-e", ACTIVE_SCREEN_JXA_SCRIPT],
+			{ encoding: "utf8", timeout: 2000 },
+		).trim();
+		return activeName || null;
+	} catch {
+		return null;
+	}
 }
 
 export function detectActiveMacDisplayName(): string | null {
+	const activeScreen = queryActiveScreenViaAppKit();
+	if (activeScreen) {
+		return activeScreen;
+	}
+
 	try {
 		const output = execFileSync(
 			"system_profiler",
 			["SPDisplaysDataType", "-json"],
 			{ encoding: "utf8", timeout: 3000 },
 		);
-		return parseFirstDisplayFromSystemProfiler(output);
+		return parseUnambiguousDisplayFromSystemProfiler(output);
 	} catch {
 		return null;
 	}

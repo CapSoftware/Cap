@@ -12,6 +12,7 @@
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true,
 		"jsx": "react-jsx",
-		"resolveJsonModule": true
+		"resolveJsonModule": true,
+		"outDir": "dist"
 	}
 }

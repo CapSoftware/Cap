@@ -5,6 +5,7 @@ import {
 	buildStartRecordingPayload,
 	buildStopRecordingDeepLink,
 	extractShareableCapUrl,
+	parseUnambiguousDisplayFromSystemProfiler,
 	resolveDashboardUrl,
 } from "./deeplink";
 
@@ -44,6 +45,29 @@ describe("Cap Raycast deep-link builders", () => {
 		expect(() => buildStartRecordingPayload({}, () => null)).toThrow(
 			/No target screen name/,
 		);
+
+		const singleDisplayJson = JSON.stringify({
+			SPDisplaysDataType: [
+				{ spdisplays_ndrvs: [{ _name: "Built-in Retina Display" }] },
+			],
+		});
+		expect(parseUnambiguousDisplayFromSystemProfiler(singleDisplayJson)).toBe(
+			"Built-in Retina Display",
+		);
+
+		const multiDisplayJson = JSON.stringify({
+			SPDisplaysDataType: [
+				{
+					spdisplays_ndrvs: [
+						{ _name: "Built-in Retina Display" },
+						{ _name: "Studio Display" },
+					],
+				},
+			],
+		});
+		expect(
+			parseUnambiguousDisplayFromSystemProfiler(multiDisplayJson),
+		).toBeNull();
 	});
 
 	it("encodes stop_recording and resolves dashboard and share URLs", () => {
