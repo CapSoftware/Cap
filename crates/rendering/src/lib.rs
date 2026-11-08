@@ -318,18 +318,109 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
     #[cfg(target_os = "windows")]
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = match DX12_SHADER_COMPILER.get() {
+        Some((compiler, _)) => dx12_instance(compiler.clone()),
+        None => {
+            let bundled = bundled_dxc_compiler();
+            let uses_dxc = !matches!(bundled, wgpu::Dx12Compiler::Fxc);
+            let (instance, compiler) = dx12_instance_with_fxc_fallback(bundled);
+            let fxc_fallback = uses_dxc && matches!(compiler, wgpu::Dx12Compiler::Fxc);
+            let _ = DX12_SHADER_COMPILER.set((compiler, fxc_fallback));
+            instance
+        }
+    };
+
+    instance
+}
+
+/// The compiler the first instance ended up on, so later instances skip a
+/// DXC that already failed to load, and whether that is the FXC fallback.
+#[cfg(target_os = "windows")]
+static DX12_SHADER_COMPILER: std::sync::OnceLock<(wgpu::Dx12Compiler, bool)> =
+    std::sync::OnceLock::new();
+
+/// WARP crashes on the first frame rendered with FXC-compiled shaders, so the
+/// FXC fallback only renders on hardware adapters.
+#[cfg(not(target_arch = "wasm32"))]
+fn software_adapters_unusable() -> bool {
+    #[cfg(target_os = "windows")]
+    let unusable = DX12_SHADER_COMPILER
+        .get()
+        .is_some_and(|(_, fxc_fallback)| *fxc_fallback);
+    #[cfg(not(target_os = "windows"))]
+    let unusable = false;
+
+    unusable
+}
+
+#[cfg(target_os = "windows")]
+fn dx12_instance_descriptor(shader_compiler: wgpu::Dx12Compiler) -> wgpu::InstanceDescriptor {
+    wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
         backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: bundled_dxc_compiler(),
-            },
+            dx12: wgpu::Dx12BackendOptions { shader_compiler },
             ..Default::default()
         },
         ..Default::default()
-    });
+    }
+}
 
-    instance
+#[cfg(target_os = "windows")]
+fn dx12_instance(shader_compiler: wgpu::Dx12Compiler) -> wgpu::Instance {
+    wgpu::Instance::new(&dx12_instance_descriptor(shader_compiler))
+}
+
+/// wgpu drops a backend that fails to initialise and only logs it at debug
+/// level, so a DXC that will not load leaves an instance with no DX12 adapters
+/// at all, not even WARP. FXC ships with Windows, so rebuild on it instead.
+#[cfg(target_os = "windows")]
+fn dx12_instance_with_fxc_fallback(
+    compiler: wgpu::Dx12Compiler,
+) -> (wgpu::Instance, wgpu::Dx12Compiler) {
+    let instance = dx12_instance(compiler.clone());
+    // SAFETY: the raw instance is only checked for presence, never used.
+    let has_dx12 = unsafe { instance.as_hal::<wgpu_hal::api::Dx12>() }.is_some();
+    if has_dx12 || matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+        return (instance, compiler);
+    }
+
+    tracing::warn!(
+        error = dx12_init_error(compiler),
+        "DX12 with bundled DXC failed to initialise; retrying with FXC"
+    );
+    (
+        dx12_instance(wgpu::Dx12Compiler::Fxc),
+        wgpu::Dx12Compiler::Fxc,
+    )
+}
+
+/// wgpu does not surface why a backend failed, so initialise the DX12 backend
+/// directly once more to get the error for the log.
+#[cfg(target_os = "windows")]
+fn dx12_init_error(compiler: wgpu::Dx12Compiler) -> String {
+    use wgpu_hal::Instance as _;
+
+    let desc = dx12_instance_descriptor(compiler);
+    let hal_desc = wgpu_hal::InstanceDescriptor {
+        name: "wgpu",
+        flags: desc.flags,
+        backend_options: desc.backend_options,
+    };
+    // SAFETY: the same call wgpu-core makes in `Instance::new`; the instance,
+    // if any, is dropped straight away.
+    match unsafe { wgpu_hal::dx12::Instance::init(&hal_desc) } {
+        Ok(_) => "unknown".to_string(),
+        Err(error) => {
+            let mut message = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                message.push_str(": ");
+                message.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            message
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2601,6 +2692,9 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     if force_software_adapter {
         tracing::warn!("Forcing software WGPU adapter");
     }
+    let usable = |adapter: &wgpu::Adapter| {
+        !software_adapters_unusable() || !is_software_wgpu_adapter(&adapter.get_info())
+    };
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
     let preferred = if force_software_adapter {
@@ -2624,7 +2718,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let mut last_error = None;
     let mut created = None;
-    if let Some(adapter) = preferred {
+    if let Some(adapter) = preferred.filter(usable) {
         match try_rendering_device(adapter).await {
             Ok(found) => created = Some(found),
             Err(error) => last_error = Some(error),
@@ -2634,7 +2728,11 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     // without compute shaders, a broken install). Only then are the others
     // enumerated, hardware first, then the fallback adapter.
     if created.is_none() {
-        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter)
+            .await
+            .into_iter()
+            .filter(usable)
+        {
             match try_rendering_device(adapter).await {
                 Ok(found) => {
                     created = Some(found);
@@ -11682,5 +11780,74 @@ mod per_frame_cache_tests {
         assert_eq!(layers.mask.uniform_buffer_count(), 3);
         assert!(layers.mask.bind_groups_created() <= 6);
         assert!(layers.background_color_grade.bind_groups_created() <= 2);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod dx12_compiler_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn unloadable_dxc_falls_back_to_fxc() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dxc_path = dir.path().join("dxcompiler.dll");
+        let dxil_path = dir.path().join("dxil.dll");
+        std::fs::write(&dxc_path, b"").expect("write dxcompiler.dll");
+        std::fs::write(&dxil_path, b"").expect("write dxil.dll");
+        let broken = wgpu::Dx12Compiler::DynamicDxc {
+            dxc_path: dxc_path.to_string_lossy().into_owned(),
+            dxil_path: dxil_path.to_string_lossy().into_owned(),
+            max_shader_model: wgpu::DxcShaderModel::V6_7,
+        };
+
+        assert!(
+            dx12_instance(broken.clone())
+                .enumerate_adapters(wgpu::Backends::all())
+                .is_empty(),
+            "a DXC that fails to load should drop the DX12 backend"
+        );
+        println!("dx12 init error: {}", dx12_init_error(broken.clone()));
+
+        let (instance, compiler) = dx12_instance_with_fxc_fallback(broken);
+        assert!(matches!(compiler, wgpu::Dx12Compiler::Fxc));
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("FXC instance has a DX12 adapter");
+        let (device, queue) =
+            pollster::block_on(request_rendering_device(&adapter)).expect("device on FXC");
+
+        // FXC compiles at pipeline creation, so build every production
+        // rendering pipeline on the fallback device.
+        device.push_error_scope(wgpu::ErrorFilter::Internal);
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let started = Instant::now();
+        let _layers = RendererLayers::new(&device, &queue);
+        let _transitions = TransitionCompositor::new(&device);
+        let compile_time = started.elapsed();
+        let validation = pollster::block_on(device.pop_error_scope());
+        let internal = pollster::block_on(device.pop_error_scope());
+        assert!(
+            validation.is_none() && internal.is_none(),
+            "pipeline on FXC failed: {validation:?} {internal:?}"
+        );
+
+        let info = adapter.get_info();
+        println!(
+            "device created on FXC: adapter={} backend={:?} type={:?} pipelines={compile_time:?}",
+            info.name, info.backend, info.device_type
+        );
+    }
+
+    #[test]
+    fn loadable_bundled_dxc_is_kept() {
+        let compiler = bundled_dxc_compiler();
+        if matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+            println!("no bundled DXC next to the test binary; nothing to check");
+            return;
+        }
+
+        let (instance, kept) = dx12_instance_with_fxc_fallback(compiler);
+        assert!(matches!(kept, wgpu::Dx12Compiler::DynamicDxc { .. }));
+        assert!(!instance.enumerate_adapters(wgpu::Backends::DX12).is_empty());
     }
 }

@@ -8,6 +8,7 @@ on:
       - "apps/desktop-gpui/src/app_windows.rs"
       - "apps/desktop-gpui/src/camera_window.rs"
       - "apps/desktop-gpui/src/picker_probe.rs"
+      - "apps/desktop-gpui/src/picker_probe/**"
       - "apps/desktop-gpui/src/main_window.rs"
       - "apps/desktop-gpui/src/foreign_window.rs"
       - "apps/desktop-gpui/src/window_arrange.rs"
@@ -177,6 +178,20 @@ jobs:
               scripts/picker-smoke/run.sh "$app" "$out"
               ;;
           esac
+
+      # An area recording keeps its outline on screen, out of the video and
+      # out of the mouse's way (picker_probe/area_recording.rs). Windows only:
+      # macOS leaves the outline out of the capture by window number, which a
+      # screenshot does not, and Linux closes the outline when recording.
+      - name: Area recording probe
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          CAP_PICKER_PROBE_AREA_RECORDING=1 PICKER_SMOKE_POLLS=480 \
+            scripts/picker-smoke/run.sh \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui.exe" \
+            "$RUNNER_TEMP/picker-smoke/area-recording"
 
       - name: Upload logs
         if: always()
