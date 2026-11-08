@@ -3069,15 +3069,14 @@ impl ProjectConfiguration {
         }
 
         let saved_tracks: HashSet<_> = saved.iter().copied().collect();
-        let available_tracks: HashSet<_> = available.iter().copied().collect();
-        let mut included = HashSet::with_capacity(available_tracks.len());
+        let mut available_tracks: HashSet<_> = available.iter().copied().collect();
         for track in available {
-            if !saved_tracks.contains(track) && included.insert(*track) {
+            if !saved_tracks.contains(track) && available_tracks.remove(track) {
                 ordered.push(*track);
             }
         }
         for track in saved {
-            if available_tracks.contains(track) && included.insert(*track) {
+            if available_tracks.remove(track) {
                 ordered.push(*track);
             }
         }
@@ -3144,45 +3143,68 @@ impl ProjectConfiguration {
             return Vec::new();
         }
 
-        let shape_tracks: Vec<_> = self
-            .overlay_tracks()
-            .into_iter()
-            .rev()
+        let tracks = self.overlay_tracks();
+        let shape_count = tracks
+            .iter()
             .filter(|track| track.kind == OverlayTrackKind::Shape)
-            .map(|track| track.track)
-            .collect();
-
-        if shape_tracks.len() == 1
-            || (shape_tracks.len() <= 16
-                && segments.len().saturating_mul(shape_tracks.len()) <= 8_192)
-        {
+            .count();
+        if shape_count == 0 {
+            return Vec::new();
+        }
+        if shape_count <= 16 && segments.len().saturating_mul(shape_count) <= 8_192 {
             let mut order = Vec::new();
-            for track in shape_tracks {
+            for track in tracks
+                .into_iter()
+                .rev()
+                .filter(|track| track.kind == OverlayTrackKind::Shape)
+            {
                 order.extend(
                     segments
                         .iter()
                         .enumerate()
-                        .filter(|(_, segment)| segment.track == track && segment.is_active_at(time))
+                        .filter(|(_, segment)| {
+                            segment.track == track.track && segment.is_active_at(time)
+                        })
                         .map(|(index, _)| index),
                 );
             }
             return order;
         }
 
-        let track_positions: HashMap<_, _> = shape_tracks
-            .iter()
+        let track_positions: HashMap<_, _> = tracks
+            .into_iter()
+            .rev()
+            .filter(|track| track.kind == OverlayTrackKind::Shape)
             .enumerate()
-            .map(|(position, track)| (*track, position))
+            .map(|(position, track)| (track.track, position))
             .collect();
-        let mut grouped = vec![Vec::new(); shape_tracks.len()];
+        let missing = usize::MAX;
+        let mut first = vec![missing; shape_count];
+        let mut last = vec![missing; shape_count];
+        let mut next = vec![missing; segments.len()];
+        let mut count = 0;
         for (index, segment) in segments.iter().enumerate() {
             if segment.is_active_at(time)
                 && let Some(&position) = track_positions.get(&segment.track)
             {
-                grouped[position].push(index);
+                if last[position] == missing {
+                    first[position] = index;
+                } else {
+                    next[last[position]] = index;
+                }
+                last[position] = index;
+                count += 1;
             }
         }
-        grouped.into_iter().flatten().collect()
+        let mut ordered = Vec::with_capacity(count);
+        for start in first {
+            let mut index = start;
+            while index != missing {
+                ordered.push(index);
+                index = next[index];
+            }
+        }
+        ordered
     }
 
     fn style_override_at<T>(
