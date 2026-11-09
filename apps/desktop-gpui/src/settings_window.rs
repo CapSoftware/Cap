@@ -3168,7 +3168,8 @@ impl SettingsWindow {
             "recording-delete",
             "icons/trash.svg",
             tr::settings::recordings::delete(),
-            false,
+            // The recording being captured or finalized owns its folder.
+            library::is_recording_in_progress(&path),
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
         ))

@@ -57,7 +57,7 @@ fn fragment_streams(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
                 files.push(path);
             }
         }
-        segments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut segments);
         if let Some(init) = init {
             if segments.is_empty() {
                 continue;
