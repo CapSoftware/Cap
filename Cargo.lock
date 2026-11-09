@@ -1862,6 +1862,7 @@ dependencies = [
  "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-media-info",
  "cap-mediafoundation-utils",

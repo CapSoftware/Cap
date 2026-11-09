@@ -246,7 +246,7 @@ private struct EditorTimeline: View {
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.black)
             }
-            .offset(x: x)
+            // Hit area and gesture go before the offset, which only moves drawing; after it they stay at x = 0.
             .contentShape(.rect.inset(by: -10))
             .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
@@ -265,6 +265,7 @@ private struct EditorTimeline: View {
                         model.endTrim(clip: index, edge: edge)
                     }
             )
+            .offset(x: x)
             .accessibilityLabel(edge == .start ? "Trim start" : "Trim end")
             .accessibilityAdjustableAction { direction in
                 let step = direction == .increment ? 0.5 : -0.5
