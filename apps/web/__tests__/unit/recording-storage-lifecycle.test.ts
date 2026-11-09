@@ -156,15 +156,17 @@ function databaseFixture(video = recording(), password?: string | null) {
 		],
 	]);
 	const uploads = new Map<string, typeof Db.videoUploads.$inferSelect>();
-	const shares = new Map<unknown, Map<string, { videoId: string }>>(
-		[Db.sharedVideos, Db.spaceVideos].map((table) => [
-			table,
-			new Map([
-				["root-share", { videoId }],
-				["folder-share", { videoId }],
-				["other-share", { videoId: "other-video" }],
-			]),
-		]),
+	const dependentRows = new Map<unknown, Map<string, { videoId: string }>>(
+		[Db.sharedVideos, Db.spaceVideos, Db.comments, Db.notifications].map(
+			(table) => [
+				table,
+				new Map([
+					["root-share", { videoId }],
+					["folder-share", { videoId }],
+					["other-share", { videoId: "other-video" }],
+				]),
+			],
+		),
 	);
 	const mutations: DatabaseMutation[] = [];
 	const events: string[] = [];
@@ -258,10 +260,10 @@ function databaseFixture(video = recording(), password?: string | null) {
 						: mutation.table === Db.videoProcessingJobs
 							? jobs
 							: null;
-				const shareRows = shares.get(mutation.table);
-				if (shareRows && mutation.operation === "delete") {
-					for (const [id, row] of shareRows) {
-						if (row.videoId === mutation.id) shareRows.delete(id);
+				const relatedRows = dependentRows.get(mutation.table);
+				if (relatedRows && mutation.operation === "delete") {
+					for (const [id, row] of relatedRows) {
+						if (row.videoId === mutation.id) relatedRows.delete(id);
 					}
 				}
 				if (!table) continue;
@@ -320,7 +322,7 @@ function databaseFixture(video = recording(), password?: string | null) {
 		rows,
 		jobs,
 		uploads,
-		shares,
+		dependentRows,
 		mutations,
 		events,
 		objectDeleteConditions,
@@ -1157,7 +1159,19 @@ describe("recording storage lifecycle", () => {
 		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
 		expect(database.rows.has(videoId)).toBe(false);
 		for (const table of [Db.sharedVideos, Db.spaceVideos]) {
-			expect(database.shares.get(table)).toEqual(
+			expect(database.dependentRows.get(table)).toEqual(
+				new Map([["other-share", { videoId: "other-video" }]]),
+			);
+		}
+	});
+
+	it("removes feedback only for the deleted recording", async () => {
+		const database = databaseFixture();
+		await storageFixture([[outputKey, "verified-video"]]);
+
+		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
+		for (const table of [Db.comments, Db.notifications]) {
+			expect(database.dependentRows.get(table)).toEqual(
 				new Map([["other-share", { videoId: "other-video" }]]),
 			);
 		}
@@ -1218,8 +1232,8 @@ describe("recording storage lifecycle", () => {
 			state: "source-blocked",
 			errorCode: "video-deleting",
 		});
-		for (const shares of database.shares.values()) {
-			expect([...shares.values()].map((share) => share.videoId)).toEqual([
+		for (const dependentRows of database.dependentRows.values()) {
+			expect([...dependentRows.values()].map((row) => row.videoId)).toEqual([
 				videoId,
 				videoId,
 				"other-video",

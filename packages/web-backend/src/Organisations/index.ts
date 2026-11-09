@@ -202,6 +202,12 @@ export class Organisations extends Effect.Service<Organisations>()(
 
 						if (videoIds.length > 0) {
 							await tx
+								.select({ id: Db.videos.id })
+								.from(Db.videos)
+								.where(Dz.inArray(Db.videos.id, videoIds))
+								.orderBy(Dz.asc(Db.videos.id))
+								.for("update");
+							await tx
 								.delete(Db.comments)
 								.where(Dz.inArray(Db.comments.videoId, videoIds));
 							await tx

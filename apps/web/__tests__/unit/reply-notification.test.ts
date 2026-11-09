@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
-	const client = drizzle(mocks.query);
+	const database = drizzle(mocks.query);
+	const client = Object.assign(database, {
+		transaction: <T>(operation: (tx: typeof database) => Promise<T>) =>
+			operation(database),
+	});
 	return { db: () => client };
 });
 vi.mock("@cap/database/emails/config", () => ({
@@ -35,6 +39,7 @@ function prepareReply({
 			rows: [[{ notifications: { pauseReplies } }, "reply-org"]],
 		})
 		.mockResolvedValueOnce({ rows: existingReply ? [["existing-reply"]] : [] })
+		.mockResolvedValueOnce({ rows: [["video"]] })
 		.mockResolvedValueOnce({ rows: [{ affectedRows: 1, insertId: 0 }] });
 }
 
