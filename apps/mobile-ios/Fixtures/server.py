@@ -269,6 +269,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"folders": [] if "folderId" in q else folders, "caps": items, "page": 1, "limit": 30, "total": len(items), "collectionTotal": len(items), "hasMore": False})
         if path == "/api/mobile/caps/statuses": return self.send(200, {"caps": [{"id": "cap_miami", "upload": caps[5]["upload"]}]})
         if path == "/api/mobile/analytics": return self.send(200, analytics(q.get("range", "7d")))
+        if path == "/api/mobile/user/notification-preferences":
+            if self.command == "PATCH":
+                NOTIFICATIONS.update({k: v for k, v in self.body().items() if k in NOTIFICATIONS and isinstance(v, bool)})
+            return self.send(200, NOTIFICATIONS)
         if path == "/api/mobile/organization/settings": return self.send(200, {"id": "org_cap", "name": orgs[0]["name"], "role": "owner", "canManage": True, "iconUrl": None, "allowedEmailDomain": "cap.so", "customDomain": "videos.cap.so", "domainVerified": True})
         for done in [k for k, v in EDITS.items() if v["until"] <= datetime.now(timezone.utc).timestamp()]:
             edited = next((x for x in caps if x["id"] == done), None)
@@ -330,6 +334,7 @@ class H(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = route
 
 UPLOADS = {}
+NOTIFICATIONS = {"comments": True, "replies": True, "views": True, "anonymousViews": True, "reactions": True}
 EDITS = {}
 ensure_media()
 class Server(ThreadingHTTPServer):

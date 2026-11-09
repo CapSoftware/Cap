@@ -18,6 +18,42 @@ public enum MemberRole: String, UnknownCaseDecodable {
     }
 }
 
+/// The same switches as cap.so's notification settings: they cover email and cap.so alerts.
+public struct NotificationPreferences: Codable, Sendable, Hashable {
+    public var comments: Bool
+    public var replies: Bool
+    public var views: Bool
+    public var anonymousViews: Bool
+    public var reactions: Bool
+
+    public init(comments: Bool = true, replies: Bool = true, views: Bool = true, anonymousViews: Bool = true, reactions: Bool = true) {
+        self.comments = comments
+        self.replies = replies
+        self.views = views
+        self.anonymousViews = anonymousViews
+        self.reactions = reactions
+    }
+
+    public enum Kind: String, CaseIterable, Sendable {
+        case comments, replies, views, anonymousViews, reactions
+
+        var keyPath: WritableKeyPath<NotificationPreferences, Bool> {
+            switch self {
+            case .comments: \.comments
+            case .replies: \.replies
+            case .views: \.views
+            case .anonymousViews: \.anonymousViews
+            case .reactions: \.reactions
+            }
+        }
+    }
+
+    public subscript(kind: Kind) -> Bool {
+        get { self[keyPath: kind.keyPath] }
+        set { self[keyPath: kind.keyPath] = newValue }
+    }
+}
+
 public struct CapUser: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let name: String?

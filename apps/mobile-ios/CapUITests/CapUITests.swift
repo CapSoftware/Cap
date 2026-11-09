@@ -366,6 +366,30 @@ final class CapUITests: XCTestCase {
         shot("65-cap-analytics")
     }
 
+    func testNotificationSettings() {
+        var app = launch(route: "tab:settings")
+        let link = app.buttons["Notifications"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15))
+        link.tap()
+        let views = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        XCTAssertTrue(views.waitForExistence(timeout: 10))
+        XCTAssertEqual(views.value as? String, "1")
+        views.switches.firstMatch.tap()
+        XCTAssertTrue(XCTNSPredicateExpectation.wait(for: views, value: "0"))
+        shot("66-notifications")
+        app.terminate()
+
+        // The change was saved on the server.
+        app = launch(route: "tab:settings")
+        XCTAssertTrue(app.buttons["Notifications"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Notifications"].firstMatch.tap()
+        let saved = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10))
+        XCTAssertEqual(saved.value as? String, "0")
+        saved.switches.firstMatch.tap()
+        XCTAssertTrue(XCTNSPredicateExpectation.wait(for: saved, value: "1"))
+    }
+
     func testEmptyAccount() {
         var app = launch(key: CapUITests.emptyKey, user: "user_empty")
         sleep(4)
@@ -378,5 +402,12 @@ final class CapUITests: XCTestCase {
         app = launch(route: "tab:settings", key: CapUITests.emptyKey, user: "user_empty")
         sleep(3)
         shot("72-empty-settings")
+    }
+}
+
+private extension XCTNSPredicateExpectation {
+    static func wait(for element: XCUIElement, value: String, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 }
