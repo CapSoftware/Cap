@@ -17,16 +17,18 @@ const VIDEO = Video.VideoId.make("video-1");
 
 let videoRow: unknown[] | undefined;
 let earlierVideos: number;
+let imported: number;
 
 beforeEach(() => {
 	videoRow = ["user-owner", "2026-10-20 12:00:00", 0, "canceled", null];
 	earlierVideos = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
+	imported = 0;
 	mocks.query.mockReset().mockImplementation(async (query: string) => {
 		if (query.includes("left join `users`")) {
 			return { rows: videoRow ? [videoRow] : [] };
 		}
 		if (query.includes("count(")) {
-			return { rows: [[earlierVideos]] };
+			return { rows: [[earlierVideos, imported]] };
 		}
 		throw new Error(`unexpected query: ${query}`);
 	});
@@ -60,6 +62,21 @@ describe("isVideoLockedByShareableLinkLimit", () => {
 		videoRow = ["user-owner", "2026-08-01 12:00:00", 0, null, null];
 		expect(await isVideoLockedByShareableLinkLimit(VIDEO)).toBe(false);
 		expect(countQueries()).toBe(0);
+	});
+
+	it("never locks an imported video, however many came before it", async () => {
+		imported = 1;
+		earlierVideos = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH * 10;
+		expect(await isVideoLockedByShareableLinkLimit(VIDEO)).toBe(false);
+	});
+
+	it("leaves imported videos out of the allowance count", async () => {
+		await isVideoLockedByShareableLinkLimit(VIDEO);
+		const [[query]] = mocks.query.mock.calls.filter(([query]) =>
+			String(query).includes("count("),
+		);
+		expect(query).toContain("not exists (select `id` from `imported_videos`");
+		expect(query).toContain("exists (select `id` from `imported_videos`");
 	});
 
 	it("treats a missing video as unlocked", async () => {
