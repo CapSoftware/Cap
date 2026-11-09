@@ -269,6 +269,15 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"folders": [] if "folderId" in q else folders, "caps": items, "page": 1, "limit": 30, "total": len(items), "collectionTotal": len(items), "hasMore": False})
         if path == "/api/mobile/caps/statuses": return self.send(200, {"caps": [{"id": "cap_miami", "upload": caps[5]["upload"]}]})
         if path == "/api/mobile/analytics": return self.send(200, analytics(q.get("range", "7d")))
+        if path == "/api/mobile/user/push-tokens" and self.command == "POST":
+            b = self.body()
+            if not re.fullmatch(r"[0-9a-fA-F]{32,200}", str(b.get("token", ""))) or b.get("environment") not in ("sandbox", "production"): return self.send(400, {})
+            PUSH_TOKENS[b["token"].lower()] = b["environment"]
+            return self.send(200, {"success": True})
+        if path == "/api/mobile/user/push-tokens/remove" and self.command == "POST":
+            PUSH_TOKENS.pop(str(self.body().get("token", "")).lower(), None)
+            return self.send(200, {"success": True})
+        if path == "/fixture/push-tokens": return self.send(200, PUSH_TOKENS)
         if path == "/api/mobile/user/notification-preferences":
             if self.command == "PATCH":
                 time.sleep(random.uniform(0, 0.3))  # lets concurrent saves finish out of order
@@ -335,6 +344,7 @@ class H(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = route
 
 UPLOADS = {}
+PUSH_TOKENS = {}
 NOTIFICATIONS = {"comments": True, "replies": True, "views": True, "anonymousViews": True, "reactions": True}
 EDITS = {}
 ensure_media()

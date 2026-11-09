@@ -76,6 +76,7 @@ import {
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { pushSessionHash } from "@/lib/mobile-push";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -153,6 +154,7 @@ type MobileOrganizationIconInput =
 	(typeof Mobile.MobileOrganizationIconInput)["Type"];
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
+type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
 type MobileNotificationPreferences =
 	(typeof Mobile.MobileNotificationPreferences)["Type"];
 type MobileNotificationPreferencesInput =
@@ -790,6 +792,72 @@ const updateNotificationPreferences = Effect.fn(
 		);
 	}
 	return yield* getNotificationPreferences();
+});
+
+const MAX_PUSH_TOKENS_PER_USER = 10;
+
+const registerPushToken = Effect.fn("Mobile.registerPushToken")(function* (
+	input: MobilePushTokenInput,
+	authorization: string | undefined,
+) {
+	const user = yield* CurrentUser;
+	const apiKey = parseBearerToken(authorization);
+	if (!apiKey) return yield* Effect.fail(new HttpApiError.BadRequest());
+	const database = yield* Database;
+	const token = input.token.toLowerCase();
+	const sessionHash = pushSessionHash(apiKey);
+	yield* database.use(async (db) => {
+		// A token belongs to one install; signing in as someone else on the same phone moves it.
+		await db
+			.insert(Db.mobilePushTokens)
+			.values({
+				id: nanoId(),
+				userId: user.id,
+				token,
+				sessionHash,
+				environment: input.environment,
+			})
+			.onDuplicateKeyUpdate({
+				set: { userId: user.id, sessionHash, environment: input.environment },
+			});
+		const stale = await db
+			.select({ id: Db.mobilePushTokens.id })
+			.from(Db.mobilePushTokens)
+			.where(eq(Db.mobilePushTokens.userId, user.id))
+			.orderBy(
+				desc(Db.mobilePushTokens.updatedAt),
+				desc(Db.mobilePushTokens.id),
+			)
+			.limit(1000)
+			.offset(MAX_PUSH_TOKENS_PER_USER);
+		if (stale.length > 0) {
+			await db.delete(Db.mobilePushTokens).where(
+				inArray(
+					Db.mobilePushTokens.id,
+					stale.map((row) => row.id),
+				),
+			);
+		}
+	});
+	return { success: true as const };
+});
+
+const removePushToken = Effect.fn("Mobile.removePushToken")(function* (
+	token: string,
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	yield* database.use((db) =>
+		db
+			.delete(Db.mobilePushTokens)
+			.where(
+				and(
+					eq(Db.mobilePushTokens.token, token.toLowerCase()),
+					eq(Db.mobilePushTokens.userId, user.id),
+				),
+			),
+	);
+	return { success: true as const };
 });
 
 const getCurrentBlockedUserIds = Effect.fn("Mobile.getBlockedUserIds")(
@@ -3607,9 +3675,22 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const token = parseBearerToken(headers.authorization);
 								if (!token)
 									return yield* Effect.fail(new HttpApiError.Unauthorized());
-								yield* database.use((db) =>
-									db.delete(Db.authApiKeys).where(eq(Db.authApiKeys.id, token)),
-								);
+								yield* database.use(async (db) => {
+									await db
+										.delete(Db.authApiKeys)
+										.where(eq(Db.authApiKeys.id, token));
+									// Delivery already skips tokens whose session is gone; this only tidies up,
+									// so it must never stop the key above from being revoked.
+									await db
+										.delete(Db.mobilePushTokens)
+										.where(
+											eq(
+												Db.mobilePushTokens.sessionHash,
+												pushSessionHash(token),
+											),
+										)
+										.catch(() => undefined);
+								});
 								return { success: true as const };
 							}),
 						),
@@ -3625,6 +3706,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("updateNotificationPreferences", ({ payload }) =>
 						withMappedErrors(updateNotificationPreferences(payload)),
+					)
+					.handle("registerPushToken", ({ payload, headers }) =>
+						withMappedErrors(registerPushToken(payload, headers.authorization)),
+					)
+					.handle("removePushToken", ({ payload }) =>
+						withMappedErrors(removePushToken(payload.token)),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>

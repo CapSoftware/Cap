@@ -143,6 +143,7 @@ final class UploadCenter {
         job.phase = .done(shareURL: shareURL, capId: capId)
         guard let session else { return }
         session.toasts.show("Upload complete", systemImage: "arrow.up.circle.fill")
+        PushNotifications.shared.askAfterFirstUpload()
         session.invalidateLibraries()
         if let key = session.currentLibraryKey {
             Task { await session.library(for: key).refresh() }

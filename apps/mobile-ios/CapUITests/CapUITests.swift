@@ -399,6 +399,64 @@ final class CapUITests: XCTestCase {
         XCTAssertTrue(waitForServerNotifications(["views": true, "reactions": true]))
     }
 
+    /// Needs a fresh install (no notification permission yet) and a simulator that can reach APNs.
+    func testPushNotificationsRegister() {
+        let app = launch(route: "tab:settings")
+        let link = app.buttons["Notifications"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15))
+        link.tap()
+        let turnOn = app.buttons["Turn on push notifications"]
+        XCTAssertTrue(turnOn.waitForExistence(timeout: 10))
+        shot("67-push-off")
+        var request = URLRequest(url: URL(string: "\(fixtureURL)/fixture/push-tokens")!)
+        request.setValue("Bearer \(CapUITests.key)", forHTTPHeaderField: "Authorization")
+        let before = Set(fetchObject(request).keys)
+        turnOn.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons["Allow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 10))
+        allow.tap()
+
+        XCTAssertTrue(app.staticTexts["Push notifications are on"].waitForExistence(timeout: 10))
+        shot("68-push-on")
+        let deadline = Date().addingTimeInterval(30)
+        var added: [String: Any] = [:]
+        repeat {
+            added = fetchObject(request).filter { !before.contains($0.key) }
+            if !added.isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        XCTAssertEqual(added.values.compactMap { $0 as? String }, ["sandbox"], "the app should register one new sandbox token")
+    }
+
+    /// Manual end-to-end check: a real APNs push sent to the registered token while this waits
+    /// (CAP_PUSH_E2E=1) must show a banner, and tapping it must open that Cap.
+    func testTappingPushOpensCap() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["CAP_PUSH_E2E"] == "1", "needs a push sent from outside the test")
+        let app = launch(route: "tab:settings")
+        XCTAssertTrue(app.buttons["Notifications"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Notifications"].firstMatch.tap()
+        let turnOn = app.buttons["Turn on push notifications"]
+        if turnOn.waitForExistence(timeout: 5) {
+            turnOn.tap()
+            let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+            XCTAssertTrue(allow.waitForExistence(timeout: 10))
+            allow.tap()
+        }
+        XCTAssertTrue(app.staticTexts["Push notifications are on"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home)
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Love the new editor'")).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 120), "the push banner should appear")
+        shot("69-push-banner")
+        banner.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.buttons["More"].firstMatch.waitForExistence(timeout: 15), "tapping the push should open the Cap")
+        shot("70-push-opened-cap")
+    }
+
     private func waitForServerNotifications(_ expected: [String: Bool], timeout: TimeInterval = 10) -> Bool {
         var request = URLRequest(url: URL(string: "\(fixtureURL)/api/mobile/user/notification-preferences")!)
         request.setValue("Bearer \(CapUITests.key)", forHTTPHeaderField: "Authorization")
@@ -412,10 +470,14 @@ final class CapUITests: XCTestCase {
     }
 
     private func fetchJSON(_ request: URLRequest) -> [String: Bool] {
+        fetchObject(request).compactMapValues { $0 as? Bool }
+    }
+
+    private func fetchObject(_ request: URLRequest) -> [String: Any] {
         let done = DispatchSemaphore(value: 0)
         let box = JSONBox()
         URLSession.shared.dataTask(with: request) { data, _, _ in
-            box.value = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Bool]) ?? [:]
+            box.value = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
             done.signal()
         }.resume()
         done.wait()
@@ -445,5 +507,5 @@ private extension XCTNSPredicateExpectation {
 }
 
 private final class JSONBox: @unchecked Sendable {
-    var value: [String: Bool] = [:]
+    var value: [String: Any] = [:]
 }

@@ -198,6 +198,15 @@ export const MobileNotificationPreferencesInput = Schema.Struct({
 	reactions: Schema.optional(Schema.Boolean),
 });
 
+export const MobilePushTokenInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.pattern(/^[0-9a-fA-F]{32,200}$/)),
+	environment: Schema.Literal("sandbox", "production"),
+});
+
+export const MobilePushTokenRemoveInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.maxLength(200)),
+});
+
 export const MobileContentReportInput = Schema.Struct({
 	reason: Schema.Literal(
 		"harassment",
@@ -697,6 +706,25 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 		)
 			.setPayload(MobileNotificationPreferencesInput)
 			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("registerPushToken", "/user/push-tokens")
+			.setHeaders(MobileAuthHeaders)
+			.setPayload(MobilePushTokenInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("removePushToken", "/user/push-tokens/remove")
+			.setPayload(MobilePushTokenRemoveInput)
+			.addSuccess(MobileSuccessResponse)
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Forbidden)
