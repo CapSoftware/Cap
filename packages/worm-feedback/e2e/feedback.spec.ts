@@ -77,13 +77,14 @@ async function maskedPixels(page: Page) {
 			signature: sample("#signature"),
 			header: sample("header"),
 			underNote: (() => {
-				const note = (window as unknown as { __noteRect?: DOMRect }).__noteRect;
-				if (!note) throw new Error("no note");
+				const point = (window as unknown as { __notePoint?: number[] })
+					.__notePoint;
+				if (!point) throw new Error("no unmasked page point under the note");
 				return Array.from(
 					context
 						.getImageData(
-							Math.round((note.left + 4) * scale),
-							Math.round((note.top + note.height / 2) * scale),
+							Math.round((point[0] ?? 0) * scale),
+							Math.round((point[1] ?? 0) * scale),
 							1,
 							1,
 						)
@@ -158,8 +159,23 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 		const note = document
 			.querySelector("worm-feedback")
 			?.shadowRoot?.querySelector("textarea");
-		(window as unknown as { __noteRect?: DOMRect }).__noteRect =
-			note?.getBoundingClientRect();
+		const rect = note?.getBoundingClientRect();
+		if (!rect) return;
+		const hidden =
+			"input,textarea,select,[contenteditable]:not([contenteditable=false]),[data-worm-mask]";
+		for (let y = rect.top + 8; y < rect.bottom - 8; y += 8)
+			for (let x = rect.left + 8; x < rect.right - 8; x += 8) {
+				const under = document
+					.elementsFromPoint(x, y)
+					.find((element) => element.tagName !== "WORM-FEEDBACK");
+				if (under && !under.closest(hidden)) {
+					(window as unknown as { __notePoint?: number[] }).__notePoint = [
+						x,
+						y,
+					];
+					return;
+				}
+			}
 	});
 	await panel.getByRole("button", { name: "Add screenshot" }).click();
 	await expect(panel.getByText("Screenshot added")).toBeVisible({
