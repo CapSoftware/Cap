@@ -80,7 +80,10 @@ import {
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import {
+	areViewerDownloadsEnabled,
+	canUserDownloadVideo,
+} from "@/lib/video-download-permissions";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
@@ -830,7 +833,7 @@ async function AuthorizedContent({
 	const isVideoDownloadReady =
 		!hasActiveUpload && video.source?.type !== "desktopSegments";
 
-	const canDownloadVideoPromise =
+	const memberCanDownloadPromise =
 		userId && isVideoDownloadReady
 			? canUserDownloadVideo({
 					userId,
@@ -838,6 +841,22 @@ async function AuthorizedContent({
 					videoId,
 				})
 			: Promise.resolve(false);
+
+	// This component only renders once the view gates have passed, so the
+	// opt-in setting and the share limit are all that is left to decide.
+	const viewerDownloadsEnabled =
+		isVideoDownloadReady &&
+		!video.isScreenshot &&
+		areViewerDownloadsEnabled({
+			videoSettings: video.videoSettings,
+			organizationSettings: video.orgSettings,
+		});
+	const canDownloadVideoPromise = viewerDownloadsEnabled
+		? Promise.all([memberCanDownloadPromise, overShareLimitPromise]).then(
+				([memberCanDownload, overShareLimit]) =>
+					memberCanDownload || !overShareLimit,
+			)
+		: memberCanDownloadPromise;
 
 	const dashboardDestinationPromise = getShareDashboardDestination({
 		viewer: user
@@ -854,7 +873,7 @@ async function AuthorizedContent({
 		return null;
 	});
 
-	const videoHasEditsPromise = canDownloadVideoPromise.then((canDownload) => {
+	const videoHasEditsPromise = memberCanDownloadPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
 		return db()
 			.select({ editSpec: videoEdits.editSpec })

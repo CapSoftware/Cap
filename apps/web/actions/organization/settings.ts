@@ -22,6 +22,7 @@ type OrganizationSettingsInput = {
 	disableReactions?: boolean;
 	disableTranscript?: boolean;
 	disableComments?: boolean;
+	allowViewerDownloads?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
@@ -90,6 +91,13 @@ export async function updateOrganizationSettings(
 
 	if (!organization) {
 		throw new Error("Organization not found");
+	}
+
+	if (
+		settings.allowViewerDownloads !== undefined &&
+		typeof settings.allowViewerDownloads !== "boolean"
+	) {
+		throw new Error("Invalid viewer download setting");
 	}
 
 	await requireOrganizationSettingsManager(user.id, organizationId);

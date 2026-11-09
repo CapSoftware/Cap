@@ -1,12 +1,54 @@
 import { db } from "@cap/database";
 import {
 	organizationMembers,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
 } from "@cap/database/schema";
-import type { User, Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import type { Organisation, User, Video } from "@cap/web-domain";
+import { and, eq, isNull } from "drizzle-orm";
+
+type ViewerDownloadSettings =
+	| { allowViewerDownloads?: boolean }
+	| null
+	| undefined;
+
+// Opt-in and off unless someone turns it on. The video's own value wins over
+// the organization default in both directions. This only decides whether
+// viewers may download at all: every caller still has to run the view gates
+// (privacy, email restriction, password, share limit) before signing a URL.
+export function areViewerDownloadsEnabled({
+	videoSettings,
+	organizationSettings,
+}: {
+	videoSettings: ViewerDownloadSettings;
+	organizationSettings: ViewerDownloadSettings;
+}): boolean {
+	const videoValue = videoSettings?.allowViewerDownloads;
+	if (typeof videoValue === "boolean") return videoValue;
+	return organizationSettings?.allowViewerDownloads === true;
+}
+
+export async function videoAllowsViewerDownloads(video: {
+	orgId: Organisation.OrganisationId;
+	settings: ViewerDownloadSettings;
+}): Promise<boolean> {
+	if (video.settings?.allowViewerDownloads === false) return false;
+
+	const [organization] = await db()
+		.select({ settings: organizations.settings })
+		.from(organizations)
+		.where(
+			and(eq(organizations.id, video.orgId), isNull(organizations.tombstoneAt)),
+		);
+	if (!organization) return false;
+
+	return areViewerDownloadsEnabled({
+		videoSettings: video.settings,
+		organizationSettings: organization.settings,
+	});
+}
 
 // Download access must not be broader than view access. VideosPolicy.canView
 // grants org members access only through an explicit sharedVideos row (see

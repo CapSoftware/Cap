@@ -26,6 +26,7 @@ const defaultSettings: OrganizationSettings = {
 	disableChapters: false,
 	disableReactions: false,
 	disableTranscript: false,
+	allowViewerDownloads: false,
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
@@ -42,6 +43,7 @@ const options: Array<{
 	value: BooleanOrganizationSettingKey;
 	description: string;
 	pro?: boolean;
+	enablesWhenTrue?: boolean;
 }> = [
 	{
 		label: "Enable comments",
@@ -81,6 +83,12 @@ const options: Array<{
 		value: "hideShareableLinkCapLogo",
 		description: "Show Cap branding at the top of shareable links",
 		pro: true,
+	},
+	{
+		label: "Allow viewer downloads",
+		value: "allowViewerDownloads",
+		description: "Let anyone who can view a cap download it",
+		enablesWhenTrue: true,
 	},
 ];
 
@@ -198,7 +206,13 @@ const OrganizationCapSettings = ({
 						}
 
 						const option = options.find((opt) => opt.value === changedKey);
-						if (changedKey === "hideShareableLinkCapLogo") {
+						if (changedKey === "allowViewerDownloads") {
+							toast.success(
+								debouncedUpdateSettings[changedKey]
+									? "Viewer downloads enabled"
+									: "Viewer downloads disabled",
+							);
+						} else if (changedKey === "hideShareableLinkCapLogo") {
 							toast.success(
 								debouncedUpdateSettings[changedKey]
 									? "Cap logo hidden"
@@ -306,7 +320,11 @@ const OrganizationCapSettings = ({
 							onCheckedChange={() => {
 								handleToggle(option.value);
 							}}
-							checked={!settings?.[option.value]}
+							checked={
+								option.enablesWhenTrue
+									? settings?.[option.value] === true
+									: !settings?.[option.value]
+							}
 						/>
 					</div>
 				))}

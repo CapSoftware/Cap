@@ -1096,6 +1096,20 @@ export const ShareHeader = ({
 								<div className="flex min-w-0 max-w-[60%] justify-end lg:max-w-xs">
 									{renderSharedStatus()}
 								</div>
+							) : canDownload ? (
+								<div className="flex shrink-0 items-center gap-2">
+									<Button
+										variant="gray"
+										size="xs"
+										className="gap-1.5 px-3"
+										disabled={isDownloading}
+										onClick={() => download("current")}
+									>
+										<Download className="size-3.5 text-gray-12" />
+										Download
+									</Button>
+									{data.public && renderShareButton()}
+								</div>
 							) : (
 								data.public && renderShareButton("shrink-0")
 							)}

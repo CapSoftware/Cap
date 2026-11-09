@@ -8,7 +8,11 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
+import {
+	canUserDownloadVideo,
+	videoAllowsViewerDownloads,
+} from "@/lib/video-download-permissions";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export type VideoDownloadVariant = "current" | "original";
@@ -70,12 +74,31 @@ export async function downloadVideo(videoId: Video.VideoId) {
 	}
 }
 
+// The same gates the share page applies before it shows the video: privacy,
+// email restriction and password through the view policy, then the free plan
+// share limit. Run before anything about the video is returned to a viewer.
+async function viewerPassesViewGates(video: typeof videos.$inferSelect) {
+	const canView = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+		yield* videosPolicy.canViewLoaded(
+			decodeStorageVideo(video),
+			Option.fromNullable(video.password),
+		);
+		return true;
+	})
+		.pipe(provideOptionalAuth, runPromise)
+		.catch(() => false);
+	if (!canView) return false;
+
+	return !(await isVideoLockedByShareableLinkLimit(video.id));
+}
+
 export async function getVideoDownloadInfo(
 	videoId: Video.VideoId,
 	variant: VideoDownloadVariant = "current",
 ): Promise<VideoDownloadInfo> {
 	const user = await getCurrentUser();
-	if (!user || !videoId) {
+	if (!videoId) {
 		throw new Error("Missing required data for downloading video");
 	}
 
@@ -84,16 +107,34 @@ export async function getVideoDownloadInfo(
 		.from(videos)
 		.where(eq(videos.id, videoId));
 
-	if (!video) throw new Error("Video not found");
+	if (!video) {
+		throw new Error(
+			user ? "Video not found" : "Missing required data for downloading video",
+		);
+	}
 
-	const allowed = await canUserDownloadVideo({
-		userId: user.id,
-		ownerId: video.ownerId,
-		videoId,
-	});
+	const memberAllowed = user
+		? await canUserDownloadVideo({
+				userId: user.id,
+				ownerId: video.ownerId,
+				videoId,
+			})
+		: false;
 
-	if (!allowed) {
-		throw new Error("You don't have permission to download this video");
+	// Viewers only ever get the video as it is published. The original can hold
+	// footage the owner has since cut out.
+	const viewerAllowed =
+		!memberAllowed &&
+		variant === "current" &&
+		(await videoAllowsViewerDownloads(video)) &&
+		(await viewerPassesViewGates(video));
+
+	if (!memberAllowed && !viewerAllowed) {
+		throw new Error(
+			user
+				? "You don't have permission to download this video"
+				: "Missing required data for downloading video",
+		);
 	}
 
 	if (variant === "current") {

@@ -237,6 +237,7 @@ export const organizations = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			allowViewerDownloads?: boolean;
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
@@ -488,6 +489,7 @@ export const videos = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			allowViewerDownloads?: boolean;
 			defaultPlaybackSpeed?: number;
 			callToAction?: VideoCallToAction;
 		}>(),

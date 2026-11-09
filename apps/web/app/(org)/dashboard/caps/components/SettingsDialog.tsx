@@ -31,11 +31,14 @@ interface SettingsDialogProps {
 	onSaved?: () => void;
 }
 
+type SettingKey = ViewerSettingKey | "allowViewerDownloads";
+
 const options: {
 	label: string;
-	value: ViewerSettingKey;
+	value: SettingKey;
 	description: string;
 	pro?: boolean;
+	enablesWhenTrue?: boolean;
 }[] = [
 	{
 		label: "Enable comments",
@@ -70,6 +73,12 @@ const options: {
 		description: "Enabling this also allows summary and chapters",
 		pro: true,
 	},
+	{
+		label: "Allow viewer downloads",
+		value: "allowViewerDownloads",
+		description: "Let anyone who can view this cap download it",
+		enablesWhenTrue: true,
+	},
 ];
 
 export const SettingsDialog = ({
@@ -95,6 +104,7 @@ export const SettingsDialog = ({
 			disableChapters: data?.disableChapters,
 			disableReactions: data?.disableReactions,
 			disableTranscript: data?.disableTranscript,
+			allowViewerDownloads: data?.allowViewerDownloads,
 			defaultPlaybackSpeed: data?.defaultPlaybackSpeed,
 		}),
 		[],
@@ -130,7 +140,7 @@ export const SettingsDialog = ({
 	};
 
 	const toggleSettingHandler = useCallback(
-		(value: ViewerSettingKey) => {
+		(value: SettingKey) => {
 			setSettings((prev) => {
 				const key = value;
 				const currentValue = prev?.[key];
@@ -156,8 +166,11 @@ export const SettingsDialog = ({
 		[organizationSettings],
 	);
 
-	const getEffectiveValue = (key: ViewerSettingKey) => {
-		const inheritedSources = inheritedSpaceSettings?.[key];
+	const getInheritedSources = (key: SettingKey) =>
+		key === "allowViewerDownloads" ? undefined : inheritedSpaceSettings?.[key];
+
+	const getEffectiveValue = (key: SettingKey) => {
+		const inheritedSources = getInheritedSources(key);
 		if (inheritedSources && inheritedSources.length > 0) return true;
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
@@ -166,8 +179,8 @@ export const SettingsDialog = ({
 			: orgValue;
 	};
 
-	const getInheritedLabel = (key: ViewerSettingKey) => {
-		const sources = inheritedSpaceSettings?.[key];
+	const getInheritedLabel = (key: SettingKey) => {
+		const sources = getInheritedSources(key);
 		if (!sources || sources.length === 0) return null;
 		if (sources.length === 1) return `Required by ${sources[0]?.name}`;
 		return `Required by ${sources.length} spaces`;
@@ -191,7 +204,7 @@ export const SettingsDialog = ({
 					<DialogTitle>Settings</DialogTitle>
 				</DialogHeader>
 				<div className="grid grid-cols-2 gap-3 p-5">
-					{options.map((option) => {
+					{options.map((option, index) => {
 						const key = option.value;
 						const effectiveValue = getEffectiveValue(key);
 						const orgValue = organizationSettings?.[key] ?? false;
@@ -199,7 +212,12 @@ export const SettingsDialog = ({
 						return (
 							<div
 								key={option.value}
-								className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
+								className={clsx(
+									"flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1",
+									options.length % 2 === 1 &&
+										index === options.length - 1 &&
+										"col-span-2",
+								)}
 							>
 								<div
 									className={clsx(
@@ -217,7 +235,7 @@ export const SettingsDialog = ({
 										{effectiveValue && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
 												{inheritedLabel ??
-													`Org ${orgValue ? "disabled" : "enabled"}`}
+													`Org ${orgValue === Boolean(option.enablesWhenTrue) ? "enabled" : "disabled"}`}
 											</p>
 										)}
 									</div>
@@ -231,7 +249,11 @@ export const SettingsDialog = ({
 											getEffectiveValue("disableTranscript"))
 									}
 									onCheckedChange={() => toggleSettingHandler(option.value)}
-									checked={!effectiveValue}
+									checked={
+										option.enablesWhenTrue
+											? Boolean(effectiveValue)
+											: !effectiveValue
+									}
 								/>
 							</div>
 						);
