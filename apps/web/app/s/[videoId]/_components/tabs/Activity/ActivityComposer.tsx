@@ -23,7 +23,7 @@ interface ActivityComposerProps {
 	/** Whose video this is, for the placeholder. */
 	ownerName?: string | null;
 	disabled?: boolean;
-	onSubmit: (content: string) => void;
+	onSubmit: (content: string) => void | Promise<void>;
 	setShowAuthOverlay: (show: boolean) => void;
 	/** Owner is on Pro and the viewer is signed in; the upload path re-checks. */
 	canRecordMedia?: boolean;

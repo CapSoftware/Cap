@@ -24,7 +24,7 @@ const FEATURES = [
 	"SOC 2 Type II compliant",
 	"ISO 27001 compliant",
 	"HIPAA compliant",
-	"SCIM provisioning can be arranged",
+	"SCIM directory sync add-on",
 	"Custom S3 & Google Drive storage",
 	"Volume discounts available",
 ];

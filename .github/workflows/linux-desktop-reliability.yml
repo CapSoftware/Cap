@@ -106,8 +106,16 @@ jobs:
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
 
+      # With debug assertions, wgpu-types turns on Vulkan debug labels, which
+      # release builds never use. Labelling a GPUI buffer races with the
+      # export creating its own Vulkan instance, and the Vulkan loader
+      # (1.4.341) crashes in loader_get_icd_and_device about once per 100
+      # exports. Building only wgpu-types without them gives the app the
+      # release build's instance flags.
       - name: Build cap-gpui
-        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+        run: >-
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+          --config 'profile.dev.package.wgpu-types.debug-assertions=false'
 
       # niri 26.04 shares screencasts only as DMA-BUFs with a mandatory
       # modifier (GitHub #2941). niri itself refuses software rendering, so a

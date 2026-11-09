@@ -522,7 +522,10 @@ impl InstantUpload {
         manifest: SegmentUploadManifest,
     ) -> Result<(), String> {
         let screenshot = self.screenshot_upload(project_path);
-        self.authorize_manifest(manifest)?;
+        if let Err(error) = self.authorize_manifest(manifest) {
+            self.finish_segments().await?;
+            return Err(error);
+        }
         let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
         screenshot?;
         segments
@@ -2904,6 +2907,22 @@ mod tests {
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
+    }
+
+    #[tokio::test]
+    async fn lost_completion_authorization_cannot_accept_a_successful_worker() {
+        let authorization = CompletionAuthorization::new();
+        drop(authorization.required);
+        let mut upload =
+            upload_with_task(tokio::spawn(async { Ok(()) }), Some(authorization.control));
+        upload.completion_permit = Some(authorization.permit);
+
+        let error = upload
+            .finish_with_screenshot(Path::new("unused.cap"), SegmentUploadManifest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Instant completion authorization was lost");
+        upload.abort_segments().await;
     }
 
     #[tokio::test]

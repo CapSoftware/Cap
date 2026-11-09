@@ -3,6 +3,7 @@ use ffmpeg::frame;
 pub mod colour;
 pub mod h264;
 pub mod h264_packet;
+pub mod hardware_crash;
 pub mod hevc;
 mod packed_yuv;
 pub mod prores;
