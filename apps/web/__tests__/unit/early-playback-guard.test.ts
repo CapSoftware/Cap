@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, createElement, createRef } from "react";
+import { act, type ComponentProps, createElement, createRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seekLength } from "@/app/s/[videoId]/_components/early-length";
@@ -13,6 +13,20 @@ import {
 	parseEarlyPlaybackStatus,
 	useEarlyPlayback,
 } from "@/app/s/[videoId]/_components/early-playback";
+import {
+	claimPlayback,
+	stopAll,
+	suspendMainVideo,
+	useMainVideoInterlock,
+} from "@/app/s/[videoId]/_components/media-comment/media-playback-registry";
+import {
+	PlaybackProvider,
+	usePlayback,
+} from "@/app/s/[videoId]/_components/playback/PlaybackContext";
+import {
+	createPlaybackStore,
+	type PlaybackStore,
+} from "@/app/s/[videoId]/_components/playback/playback-store";
 
 describe("Early playback rules", () => {
 	it("reads the status numbers only from a ready response", () => {
@@ -131,13 +145,21 @@ describe("Early playback seek guard", () => {
 	let paused: boolean;
 	let status: Record<string, string>;
 	let state: EarlyPlaybackState;
+	let playback: PlaybackStore | null;
+	let pause: ReturnType<typeof vi.fn>;
 	const videoRef = createRef<HTMLVideoElement>() as {
 		current: HTMLVideoElement | null;
 	};
 
-	function Probe({ playerComplete }: { playerComplete: boolean }) {
+	function Probe({
+		playerComplete,
+		enabled = true,
+	}: {
+		playerComplete: boolean;
+		enabled?: boolean;
+	}) {
 		state = useEarlyPlayback({
-			enabled: true,
+			enabled,
 			statusUrl: "/api/playlist?videoType=segments-status&earlyPlayback=1",
 			playerComplete,
 			videoRef,
@@ -145,9 +167,15 @@ describe("Early playback seek guard", () => {
 		return null;
 	}
 
-	const render = (playerComplete = false) =>
+	function InterlockProbe() {
+		playback = usePlayback();
+		useMainVideoInterlock();
+		return createElement(Probe, { playerComplete: false });
+	}
+
+	const render = (playerComplete = false, enabled = true) =>
 		act(async () => {
-			root.render(createElement(Probe, { playerComplete }));
+			root.render(createElement(Probe, { playerComplete, enabled }));
 		});
 	const poll = () =>
 		act(async () => {
@@ -168,27 +196,39 @@ describe("Early playback seek guard", () => {
 		);
 		duration = 44;
 		paused = false;
+		playback = null;
 		video = document.createElement("video");
 		Object.defineProperty(video, "duration", { get: () => duration });
 		Object.defineProperty(video, "seekable", {
-			get: () => ({ length: 1, start: () => 0, end: () => duration }),
+			get: () => ({
+				length: Number.isFinite(duration) ? 1 : 0,
+				start: () => 0,
+				end: () => duration,
+			}),
 		});
 		Object.defineProperty(video, "paused", { get: () => paused });
 		Object.defineProperty(video, "readyState", { get: () => 4 });
-		video.pause = vi.fn(() => {
+		pause = vi.fn(() => {
+			if (paused) return;
 			paused = true;
+			video.dispatchEvent(new Event("pause"));
 		});
+		video.pause = pause;
 		video.play = vi.fn(async () => {
 			paused = false;
 			video.dispatchEvent(new Event("play"));
 		});
 		videoRef.current = video;
+		document.body.append(video);
 		container = document.createElement("div");
 		root = createRoot(container);
 	});
 
 	afterEach(async () => {
+		stopAll();
 		await act(async () => root.unmount());
+		playback?.detach();
+		video.remove();
 		vi.useRealTimers();
 		vi.unstubAllGlobals();
 	});
@@ -198,7 +238,7 @@ describe("Early playback seek guard", () => {
 		video.currentTime = 30;
 		expect(video.currentTime).toBe(30);
 		expect(state.held).toBe(null);
-		expect(video.pause).not.toHaveBeenCalled();
+		expect(pause).not.toHaveBeenCalled();
 	});
 
 	it("holds a seek past the uploaded part, then plays it once it arrives", async () => {
@@ -209,7 +249,7 @@ describe("Early playback seek guard", () => {
 		});
 		expect(video.currentTime).toBe(20);
 		expect(state.held).toBe(90);
-		expect(video.pause).toHaveBeenCalledOnce();
+		expect(pause).toHaveBeenCalledOnce();
 		expect(state.ready).toBe(44);
 		expect(state.recorded).toBe(120);
 
@@ -235,6 +275,76 @@ describe("Early playback seek guard", () => {
 		});
 		expect(state.held).toBe(null);
 		expect(video.currentTime).toBe(90);
+	});
+
+	it.each(["element", "store"])(
+		"honors an explicit pause through the %s while a seek is held",
+		async (source) => {
+			await render();
+			playback = createPlaybackStore(120);
+			playback.attach(video);
+			await act(async () => {
+				video.currentTime = 90;
+			});
+			expect(state.held).toBe(90);
+			expect(paused).toBe(true);
+			if (source === "store") playback.pause();
+			else video.pause();
+			status["X-Cap-Ready-Duration"] = "92";
+			duration = 92;
+			await poll();
+			expect(state.held).toBe(null);
+			expect(video.currentTime).toBe(90);
+			expect(video.play).not.toHaveBeenCalled();
+			expect(paused).toBe(true);
+		},
+	);
+
+	it("keeps the viewer paused when they return to an uploaded position", async () => {
+		await render();
+		await act(async () => {
+			video.currentTime = 90;
+			video.pause();
+			video.currentTime = 10;
+		});
+		expect(state.held).toBe(null);
+		expect(video.currentTime).toBe(10);
+		expect(video.play).not.toHaveBeenCalled();
+		expect(paused).toBe(true);
+	});
+
+	it("does not interrupt a comment when a held seek becomes available", async () => {
+		const providerProps: ComponentProps<typeof PlaybackProvider> = {
+			videoRef,
+			stageRef: { current: document.body },
+			fallbackDuration: 120,
+			children: createElement(InterlockProbe),
+		};
+		await act(async () => {
+			root.render(createElement(PlaybackProvider, providerProps));
+		});
+		await act(async () => {
+			video.currentTime = 90;
+		});
+		expect(state.held).toBe(90);
+		expect(playback?.getPlaying()).toBe(false);
+		const comment = document.createElement("audio");
+		const stopComment = vi.fn();
+		claimPlayback(comment, stopComment);
+		suspendMainVideo();
+		status["X-Cap-Ready-Duration"] = "92";
+		duration = 92;
+		await poll();
+		expect(state.held).toBe(null);
+		expect(video.currentTime).toBe(90);
+		expect(video.play).not.toHaveBeenCalled();
+		expect(stopComment).not.toHaveBeenCalled();
+	});
+
+	it("restores the original pause method when the guard is disabled", async () => {
+		await render();
+		await render(false, false);
+		expect(video.pause).toBe(pause);
 	});
 
 	it("drops the hold when the viewer presses play or seeks somewhere ready", async () => {
@@ -274,7 +384,9 @@ describe("Early playback seek guard", () => {
 	it("lets the player place its start before the duration is known", async () => {
 		duration = Number.NaN;
 		await render();
-		video.currentTime = 0;
+		await act(async () => {
+			video.currentTime = 0;
+		});
 		expect(state.held).toBe(null);
 	});
 

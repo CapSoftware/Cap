@@ -207,8 +207,20 @@ export function useEarlyPlayback({
 		const getTime = descriptor?.get;
 		const setTime = descriptor?.set;
 		if (!getTime || !setTime) return;
+		const pauseDescriptor = Object.getOwnPropertyDescriptor(video, "pause");
+		const pause = video.pause;
 		const currentTime = () => getTime.call(video) as number;
 		const seekTo = (time: number) => setTime.call(video, time);
+
+		// Pausing an already-paused element emits no event to cancel a held seek's resume.
+		Object.defineProperty(video, "pause", {
+			configurable: true,
+			writable: true,
+			value: () => {
+				resumeAfterHoldRef.current = false;
+				pause.call(video);
+			},
+		});
 
 		const releaseHold = () => {
 			heldRef.current = null;
@@ -274,7 +286,7 @@ export function useEarlyPlayback({
 					setHeld(time);
 					if (!video.paused) {
 						pausedByHoldRef.current = true;
-						video.pause();
+						pause.call(video);
 					}
 				},
 			});
@@ -300,6 +312,9 @@ export function useEarlyPlayback({
 			video.removeEventListener("play", onPlay);
 			video.removeEventListener("durationchange", onDurationChange);
 			Reflect.deleteProperty(video, "currentTime");
+			if (pauseDescriptor)
+				Object.defineProperty(video, "pause", pauseDescriptor);
+			else Reflect.deleteProperty(video, "pause");
 			resolveHoldRef.current = () => {};
 		};
 	}, [enabled, playerComplete, videoRef]);

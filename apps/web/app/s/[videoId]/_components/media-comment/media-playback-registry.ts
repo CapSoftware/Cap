@@ -84,7 +84,7 @@ export function stopAll(): void {
 export function suspendMainVideo(): void {
 	if (!mainStore || resumeMain) return;
 	resumeMain = mainStore.getPlaying();
-	if (resumeMain) mainStore.pause();
+	mainStore.pause();
 }
 
 const interlocks = new Map<
