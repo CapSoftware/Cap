@@ -3918,6 +3918,29 @@ mod tests {
         ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer,
     };
 
+    #[test]
+    fn studio_window_only_builder_selects_isolated_capture() {
+        let id: scap_targets::WindowId = "247".parse().unwrap();
+        let target = screen_capture::ScreenCaptureTarget::Window { id: id.clone() };
+        let builder = ActorBuilder::new(PathBuf::new(), target.clone());
+        assert_eq!(
+            crate::window_only_target(&target, builder.window_only),
+            None
+        );
+        let builder = builder.with_window_only(true);
+        assert_eq!(
+            crate::window_only_target(&target, builder.window_only),
+            Some(id)
+        );
+        assert_eq!(
+            crate::window_only_target(
+                &screen_capture::ScreenCaptureTarget::CameraOnly,
+                builder.window_only
+            ),
+            None
+        );
+    }
+
     fn sidecar_response() -> CursorActorResponse {
         CursorActorResponse {
             cursors: [(

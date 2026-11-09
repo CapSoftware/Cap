@@ -1658,7 +1658,16 @@ mod tests {
         let id: scap_targets::WindowId = "247".parse().unwrap();
         let window = ScreenCaptureTarget::Window { id: id.clone() };
 
-        assert_eq!(instant_capture_window(&window, true, false), Some(id));
+        let builder = ActorBuilder::new(PathBuf::new(), window.clone());
+        assert_eq!(
+            instant_capture_window(&window, builder.window_only, false),
+            None
+        );
+        let builder = builder.with_window_only(true);
+        assert_eq!(
+            instant_capture_window(&window, builder.window_only, false),
+            Some(id)
+        );
         assert_eq!(instant_capture_window(&window, true, true), None);
         assert_eq!(instant_capture_window(&window, false, false), None);
         assert_eq!(
