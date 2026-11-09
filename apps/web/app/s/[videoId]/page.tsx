@@ -369,8 +369,19 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
+	const headersList = await headers();
+	// The desktop app opens the copied link with `recordingStopped` for the
+	// person who just recorded, and that link is on the organization's custom
+	// domain when it has one. The session cookie only exists on the main origin,
+	// so landing there would show the owner a signed-out page without transcript
+	// editing or any other owner control.
+	const recordingStoppedRedirect = awaitRecording
+		? await resolveRestrictedShareRedirect(headersList, videoId, searchParams)
+		: null;
+	if (recordingStoppedRedirect) redirect(recordingStoppedRedirect);
+
 	const foreignShareRedirect = await resolveForeignShareRedirect(
-		await headers(),
+		headersList,
 		videoId,
 		searchParams,
 	);

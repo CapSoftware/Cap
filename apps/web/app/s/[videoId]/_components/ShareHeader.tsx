@@ -860,6 +860,7 @@ export const ShareHeader = ({
 					onPasswordUpdated={handlePasswordUpdated}
 					user={user}
 					onUpgradeRequest={setUpgradeModalOpen}
+					shareUrl={getVideoLink()}
 				/>
 			)}
 			{shareLinkDialogMounted && (
