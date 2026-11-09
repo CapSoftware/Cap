@@ -186,7 +186,7 @@ export const CapCard = ({
 			Effect.gen(function* () {
 				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
 				if (Option.isSome(result)) {
-					startBrowserDownload(result.value.downloadUrl, result.value.fileName);
+					startBrowserDownload(result.value.downloadUrl);
 				} else {
 					throw new Error("Failed to get download URL");
 				}

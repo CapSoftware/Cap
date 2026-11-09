@@ -47,22 +47,24 @@ beforeEach(async () => {
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	container?.remove();
+	for (const frame of document.querySelectorAll("body > iframe"))
+		frame.remove();
 	vi.restoreAllMocks();
 	mocks.getVideoDownloadInfo.mockReset();
 	mocks.toastPromise.mockReset();
 });
+
+const downloadFrames = () =>
+	Array.from(document.querySelectorAll<HTMLIFrameElement>("body > iframe"));
 
 it("hands the signed URL to the browser instead of buffering the file", async () => {
 	const fetchSpy = vi.fn();
 	vi.stubGlobal("fetch", fetchSpy);
 	const createObjectURL = vi.fn();
 	URL.createObjectURL = createObjectURL;
-	const clicked: HTMLAnchorElement[] = [];
-	vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-		this: HTMLAnchorElement,
-	) {
-		clicked.push(this);
-	});
+	const click = vi
+		.spyOn(HTMLAnchorElement.prototype, "click")
+		.mockImplementation(() => undefined);
 
 	await act(async () => {
 		download?.("current");
@@ -72,11 +74,29 @@ it("hands the signed URL to the browser instead of buffering the file", async ()
 	expect(mocks.getVideoDownloadInfo).toHaveBeenCalledWith("video", "current");
 	expect(fetchSpy).not.toHaveBeenCalled();
 	expect(createObjectURL).not.toHaveBeenCalled();
-	expect(clicked).toHaveLength(1);
-	expect(clicked[0]?.href).toBe(signedUrl);
-	expect(clicked[0]?.download).toBe("Two hour recording.mp4");
-	expect(clicked[0]?.isConnected).toBe(false);
+	expect(click).not.toHaveBeenCalled();
+	expect(downloadFrames().map((frame) => frame.src)).toEqual([signedUrl]);
+	expect(downloadFrames()[0]?.hidden).toBe(true);
 	vi.unstubAllGlobals();
+});
+
+it("replaces the previous download frame on the next download", async () => {
+	const nextUrl = `${signedUrl}&next=1`;
+	await act(async () => {
+		download?.("current");
+		await mocks.toastPromise.mock.calls[0]?.[0];
+	});
+	mocks.getVideoDownloadInfo.mockResolvedValue({
+		success: true,
+		downloadUrl: nextUrl,
+		filename: "Two hour recording (original).mp4",
+	});
+	await act(async () => {
+		download?.("original");
+		await mocks.toastPromise.mock.calls[1]?.[0];
+	});
+
+	expect(downloadFrames().map((frame) => frame.src)).toEqual([nextUrl]);
 });
 
 it("reports the server error without starting a download", async () => {
@@ -97,4 +117,5 @@ it("reports the server error without starting a download", async () => {
 		"Video is still processing",
 	);
 	expect(click).not.toHaveBeenCalled();
+	expect(downloadFrames()).toHaveLength(0);
 });

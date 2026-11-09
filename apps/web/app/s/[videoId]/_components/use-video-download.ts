@@ -30,7 +30,7 @@ export function useVideoDownload(videoId: Video.VideoId) {
 					throw new Error(result.error);
 				}
 
-				startBrowserDownload(result.downloadUrl, result.filename);
+				startBrowserDownload(result.downloadUrl);
 			};
 
 			const promise = run();
