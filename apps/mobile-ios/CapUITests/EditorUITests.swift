@@ -93,7 +93,6 @@ final class EditorUITests: XCTestCase {
         XCTAssertTrue(length.exists)
         let original = length.label
 
-        // Select the only clip so its handles show.
         timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         sleep(1)
         save("94-editor-handles")
