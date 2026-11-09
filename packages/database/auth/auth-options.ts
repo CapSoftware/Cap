@@ -223,6 +223,10 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							prompt: "select_account",
 						},
 					},
+					// Lets people who first signed up with an email code use Google
+					// with the same address. Gated on Google's `email_verified` in the
+					// signIn callback, like OIDC.
+					allowDangerousEmailAccountLinking: true,
 				}),
 				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
 					? [
@@ -397,6 +401,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					const claims = profile as OidcClaims | undefined;
 					if (!claims?.email || claims.email_verified !== true) {
 						return "/login?error=OidcEmailUnverified";
+					}
+				}
+				if (account?.provider === "google") {
+					const claims = profile as { email_verified?: boolean } | undefined;
+					if (claims?.email_verified !== true) {
+						return "/login?error=GoogleEmailUnverified";
 					}
 				}
 				if (account?.provider === "workos") {

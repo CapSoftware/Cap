@@ -117,6 +117,8 @@ const CONTEXT: SsoAuthContext = {
 	},
 };
 const AUTHENTICATED_USER = { id: "authenticated-user", email: PROFILE.email };
+// Google sends `email_verified`; sign-ins without it are refused.
+const VERIFIED_GOOGLE_PROFILE = { email: PROFILE.email, email_verified: true };
 
 function callbacksFor(options: NextAuthOptions) {
 	const signIn = options.callbacks?.signIn;
@@ -305,6 +307,33 @@ describe("authOptions", () => {
 		},
 	);
 
+	it("lets Google sign-in link an existing account with the same email", () => {
+		const google = authOptions().providers.find(
+			(provider) => provider.id === "google",
+		);
+		expect(
+			(google?.options as { allowDangerousEmailAccountLinking?: boolean })
+				?.allowDangerousEmailAccountLinking,
+		).toBe(true);
+	});
+
+	it("only accepts Google sign-ins whose email Google has verified", async () => {
+		const { signIn } = callbacksFor(authOptions());
+		const account: Account = {
+			provider: "google",
+			providerAccountId: "google-user",
+			type: "oauth",
+		};
+		for (const email_verified of [undefined, false, true]) {
+			const profile = { email: PROFILE.email, email_verified };
+			await expect(
+				signIn({ user: AUTHENTICATED_USER, account, profile }),
+			).resolves.toBe(
+				email_verified === true ? true : "/login?error=GoogleEmailUnverified",
+			);
+		}
+	});
+
 	describe("trusted-proxy authorize", () => {
 		type Authorize = (
 			credentials: Record<string, string> | undefined,
@@ -477,6 +506,7 @@ describe("authOptions", () => {
 			callbacks.signIn({
 				user: { id: "u1", email: "Anyone@Blocked.example" },
 				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+				profile: VERIFIED_GOOGLE_PROFILE,
 			}),
 		).resolves.toBe("/login?error=SignupBlocked");
 		await expect(
@@ -494,6 +524,7 @@ describe("authOptions", () => {
 			callbacks.signIn({
 				user: { id: "u3", email: "else@other.example" },
 				account: { provider: "google", providerAccountId: "g3", type: "oauth" },
+				profile: VERIFIED_GOOGLE_PROFILE,
 			}),
 		).resolves.toBe(true);
 	});
@@ -544,12 +575,14 @@ describe("authOptions", () => {
 			callbacks.signIn({
 				user: { id: "u1", email: "new@throwaway.example" },
 				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+				profile: VERIFIED_GOOGLE_PROFILE,
 			}),
 		).resolves.toBe("/login?error=DisposableEmail");
 		await expect(
 			callbacks.signIn({
 				user: { id: "u2", email: "person@company.example" },
 				account: { provider: "google", providerAccountId: "g2", type: "oauth" },
+				profile: VERIFIED_GOOGLE_PROFILE,
 			}),
 		).resolves.toBe(true);
 		mocks.disposableSignup.mockReset();
@@ -574,6 +607,7 @@ describe("authOptions", () => {
 			callbacks.signIn({
 				user: { id: "u1", email: "anyone@blocked.example" },
 				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+				profile: VERIFIED_GOOGLE_PROFILE,
 			}),
 		).resolves.toBe(true);
 	});

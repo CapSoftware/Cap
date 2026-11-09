@@ -99,6 +99,10 @@ export function LoginForm() {
 			} else if (error === "SsoMissingProfileAttributes") {
 				setShowOrgInput(true);
 				return;
+			} else if (error === "GoogleEmailUnverified") {
+				return toast.error(
+					"Your Google account's email isn't verified. Verify it with Google or sign in with an email code.",
+				);
 			} else if (error === "SignupBlocked") {
 				return;
 			} else if (error === "DisposableEmail") {
