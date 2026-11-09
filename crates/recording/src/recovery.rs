@@ -1065,7 +1065,7 @@ impl RecoveryManager {
             })
             .collect();
 
-        fragments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
         fragments
     }
 

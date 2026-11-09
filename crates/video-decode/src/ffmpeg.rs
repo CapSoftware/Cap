@@ -275,7 +275,7 @@ pub fn open_fragmented_input(
                 .file_name()
                 .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
     });
-    fragments.sort();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
     if fragments.is_empty() {
         return Err(format!(
             "no .m4s segments found in fragmented directory: {}",
@@ -642,6 +642,50 @@ mod tests {
             assert!(!expected.is_empty());
             assert_eq!(frames(&mut candidate), expected);
         }
+    }
+
+    #[test]
+    fn fragmented_decoder_reads_past_fragment_999_in_order() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("segments");
+        let mut encoder = SegmentedVideoEncoder::init(
+            source.clone(),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 32,
+                height: 32,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(1, 1),
+            },
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        let frame_count = 2_040_u64;
+        for index in 0..frame_count {
+            let mut frame = avframe::Video::new(avformat::Pixel::NV12, 32, 32);
+            frame.data_mut(0).fill(32 + (index % 192) as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(frame, Duration::from_secs(index))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        assert!(source.join("segment_1000.m4s").is_file());
+        assert!(source.join("segment_999.m4s").is_file());
+
+        let mut decoder = FFmpegDecoder::new(&source, None).unwrap();
+        let time_base = decoder.decoder().time_base();
+        let seconds = decoder
+            .frames()
+            .map(|frame| {
+                let frame = frame.unwrap();
+                frame.timestamp().or_else(|| frame.pts()).unwrap() as f64 * f64::from(time_base)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(seconds.len() as u64, frame_count);
+        assert!(seconds.windows(2).all(|pair| pair[1] > pair[0]));
+        assert!((seconds.last().unwrap() - seconds[0] - (frame_count - 1) as f64).abs() < 0.01);
     }
 
     #[test]
