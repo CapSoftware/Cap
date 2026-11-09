@@ -2,7 +2,6 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV } from "@cap/env";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -53,6 +52,7 @@ import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
@@ -158,8 +158,6 @@ export const CapCard = ({
 	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
-	const customDomain = activeOrganization?.organization.customDomain;
-	const domainVerified = activeOrganization?.organization.domainVerified;
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -365,13 +363,7 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(
-			NODE_ENV === "development"
-				? `${webUrl}/s/${cap.id}`
-				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
-					? `https://${customDomain}/s/${cap.id}`
-					: `${webUrl}/s/${cap.id}`,
-		);
+		handleCopy(videoShareUrl(webUrl, cap.id, activeOrganization?.organization));
 	};
 	const canEditVideo =
 		isOwner &&
