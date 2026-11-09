@@ -35,7 +35,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 			queryKey: ["notifications", activeOrganization?.organization.id],
 			queryFn: async () => {
 				const resp = await api.notifications.get();
-				if (resp.status !== 200) {
+				if (!resp.ok) {
 					toast.error("Failed to fetch notifications");
 					return { notifications: [], count: {} };
 				}

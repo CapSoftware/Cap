@@ -1871,9 +1871,6 @@ pub fn insert_zoom_segment(
     index
 }
 
-/// `generalSettings.data?.defaultZoomAmount ?? 1.5` (`TL/ZoomTrack.tsx:226`).
-pub const DEFAULT_ZOOM_AMOUNT: f64 = 1.5;
-
 pub const MIN_AUDIO_SEGMENT_DURATION: f64 = 0.5;
 
 pub fn used_lane_count<T: TrackSegmentOps>(segments: &[T]) -> u32 {
@@ -2332,9 +2329,6 @@ pub fn clip_trim_end(
 // ---------------------------------------------------------------------------
 // Auto zoom
 // ---------------------------------------------------------------------------
-
-/// `DEFAULT_AUTO_ZOOM_AMOUNT` (`src-tauri/src/recording.rs:3704`).
-pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
 
 pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
@@ -4895,7 +4889,7 @@ mod tests {
     fn a_new_zoom_segment_lands_in_time_order() {
         let mut config = zoom_fixture();
         let timeline = config.timeline.as_mut().unwrap();
-        let index = insert_zoom_segment(timeline, 10., 11.5, DEFAULT_ZOOM_AMOUNT);
+        let index = insert_zoom_segment(timeline, 10., 11.5, 1.5);
         assert_eq!(index, 1);
         assert_eq!(timeline.zoom_segments[1].start, 10.);
         assert_eq!(timeline.zoom_segments[1].amount, 1.5);
