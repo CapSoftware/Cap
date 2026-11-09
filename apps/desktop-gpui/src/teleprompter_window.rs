@@ -238,6 +238,12 @@ pub struct TeleprompterWindow {
 
 impl TeleprompterWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, true);
+        Self::with_theme(theme, window, cx)
+    }
+
+    fn with_theme(theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = TeleprompterState::load();
         let save = Rc::new(RefCell::new(PendingSave {
             state: state.clone(),
@@ -299,9 +305,8 @@ impl TeleprompterWindow {
             window.refresh();
         });
 
-        crate::theme::bind_window(window, cx);
         Self {
-            theme: Theme::for_window(window, cx, true),
+            theme,
             state,
             settings_open: false,
             playback_state,
@@ -1130,14 +1135,19 @@ mod tests {
         cx.update(|cx| {
             RecordingSession::init(cx);
         });
-        {
-            let (view, cx) = cx.add_window_view(TeleprompterWindow::new);
+        let view = {
+            let cx = cx.add_empty_window();
+            let view = cx.update(|window, cx| {
+                cx.new(|cx| TeleprompterWindow::with_theme(Theme::light(), window, cx))
+            });
             view.update_in(cx, |view, window, cx| {
                 view.type_script(" New ending. 中文 👋", window, cx);
                 view.change_font_size(FONT_SIZE_STEP, window, cx);
             });
-        }
+            view
+        };
         cx.quit();
+        drop(view);
         let saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         store::set_test_tauri_store_path(None);
