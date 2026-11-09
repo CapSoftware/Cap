@@ -425,6 +425,8 @@ jobs:
           cat "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
           for line in first_shown=yes hidden=yes shown_again=yes device_lost=1 restore_failed=0 cap_alive=yes panics=0; do
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
+          done
+
       # A screenshot taken through the area picker must match the desktop as
       # it was before Cap started: nothing of the selection overlay left in
       # it. Hyprland's own border and shadow are off, because it draws them
