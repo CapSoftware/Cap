@@ -5053,6 +5053,11 @@ impl MainWindow {
             tr::settings::screenshots::open_folder(),
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
+        // The recording being captured or finalized owns its folder; the
+        // delete itself refuses it too.
+        if library::is_recording_in_progress(&path) {
+            return row;
+        }
         row.child(self.library_action(
             "lib-rec-delete",
             "icons/trash.svg",

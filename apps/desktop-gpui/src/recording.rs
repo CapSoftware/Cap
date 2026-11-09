@@ -109,6 +109,9 @@ pub struct ActiveRecording {
     // The mic error channel must outlive the stream or error sends panic the
     // sender side into logs; we keep it and drain nothing.
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
+    /// Keeps the library from deleting this folder until the recording, and
+    /// any clone a stop future holds, is gone.
+    _in_progress: Arc<crate::library::RecordingInProgress>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2382,6 +2385,7 @@ async fn start_attempt_with_upload(
     )?;
 
     tracing::info!(dir = %project_dir.display(), "starting recording");
+    let in_progress = Arc::new(crate::library::RecordingInProgress::begin(&project_dir));
 
     if config.camera.is_some()
         && let Some(ready) = &config.input_readiness.camera
@@ -2684,6 +2688,7 @@ async fn start_attempt_with_upload(
         _mic_feed: mic_feed,
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
+        _in_progress: in_progress,
     })
 }
 
