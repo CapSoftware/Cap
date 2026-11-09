@@ -9,7 +9,7 @@ pub static PSEUDO: LocaleSpec = LocaleSpec {
     code: "pseudo",
     ident: "Pseudo",
     endonym: "Pseudo",
-    plural: ONE_IS_ONE,
+    plural: PluralRule::OneIsOne,
 };
 
 const PSEUDO_PADDING: &str = "ļöŕéṁ îþšûṁ ðöļöŕ šîţ åṁéţ ";
@@ -67,51 +67,109 @@ impl Category {
     }
 }
 
+/// How a language selects plural forms. A `usize` count is always a whole
+/// number, so the `other` form only ever catches what the rule does not name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OneRule {
-    Never,
-    ExactlyOne,
-    ZeroOrOne,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PluralRule {
-    pub one: OneRule,
-    pub many_millions: bool,
+pub enum PluralRule {
+    /// English and German: one is exactly 1.
+    OneIsOne,
+    /// Hindi: zero and one share the one form.
+    ZeroAndOneAreOne,
+    /// Chinese and Japanese: no plural distinction.
+    NoPlurals,
+    /// French: one covers zero and one, and whole millions take many.
+    ZeroOrOneAndMillions,
+    /// Spanish: one is exactly 1, and whole millions take many.
+    OneAndMillions,
+    /// Russian: one, few and many follow the last two digits.
+    SlavicOneFewMany,
 }
 
 impl PluralRule {
     pub fn category(self, n: usize) -> Category {
-        let one = match self.one {
-            OneRule::Never => false,
-            OneRule::ExactlyOne => n == 1,
-            OneRule::ZeroOrOne => n <= 1,
-        };
-        if one {
-            Category::One
-        } else if self.many_millions && n != 0 && n.is_multiple_of(1_000_000) {
-            Category::Many
-        } else {
-            Category::Other
+        let millions = n != 0 && n.is_multiple_of(1_000_000);
+        match self {
+            Self::OneIsOne => {
+                if n == 1 {
+                    Category::One
+                } else {
+                    Category::Other
+                }
+            }
+            Self::ZeroAndOneAreOne => {
+                if n <= 1 {
+                    Category::One
+                } else {
+                    Category::Other
+                }
+            }
+            Self::NoPlurals => Category::Other,
+            Self::ZeroOrOneAndMillions => {
+                if n <= 1 {
+                    Category::One
+                } else if millions {
+                    Category::Many
+                } else {
+                    Category::Other
+                }
+            }
+            Self::OneAndMillions => {
+                if n == 1 {
+                    Category::One
+                } else if millions {
+                    Category::Many
+                } else {
+                    Category::Other
+                }
+            }
+            Self::SlavicOneFewMany => {
+                let last = n % 10;
+                let last_two = n % 100;
+                if last == 1 && last_two != 11 {
+                    Category::One
+                } else if (2..=4).contains(&last) && !(12..=14).contains(&last_two) {
+                    Category::Few
+                } else if last == 0 || (5..=9).contains(&last) || (11..=14).contains(&last_two) {
+                    Category::Many
+                } else {
+                    Category::Other
+                }
+            }
         }
     }
 
+    /// Every form the rule can produce, in the order the generated `Plural`
+    /// enum lists them.
     pub fn categories(self) -> Vec<Category> {
-        let mut categories = Vec::new();
-        if self.one != OneRule::Never {
-            categories.push(Category::One);
+        match self {
+            Self::NoPlurals => vec![Category::Other],
+            Self::OneIsOne | Self::ZeroAndOneAreOne => {
+                vec![Category::One, Category::Other]
+            }
+            Self::ZeroOrOneAndMillions | Self::OneAndMillions => {
+                vec![Category::One, Category::Many, Category::Other]
+            }
+            Self::SlavicOneFewMany => {
+                vec![
+                    Category::One,
+                    Category::Few,
+                    Category::Many,
+                    Category::Other,
+                ]
+            }
         }
-        if self.many_millions {
-            categories.push(Category::Many);
-        }
-        categories.push(Category::Other);
-        categories
     }
 
-    fn required(self) -> impl Iterator<Item = Category> {
-        self.categories()
-            .into_iter()
-            .filter(|category| *category != Category::Many)
+    /// The forms every catalog must translate. The millions `many` of French
+    /// and Spanish is optional: a language that has no distinct form for a
+    /// million falls back to `other` through the generated `_` arm.
+    fn required(self) -> Vec<Category> {
+        match self {
+            Self::ZeroOrOneAndMillions | Self::OneAndMillions => {
+                vec![Category::One, Category::Other]
+            }
+            rule => rule.categories(),
+        }
     }
 }
 
@@ -123,69 +181,54 @@ pub struct LocaleSpec {
     pub plural: PluralRule,
 }
 
-const ONE_IS_ONE: PluralRule = PluralRule {
-    one: OneRule::ExactlyOne,
-    many_millions: false,
-};
-
-const ZERO_AND_ONE_ARE_ONE: PluralRule = PluralRule {
-    one: OneRule::ZeroOrOne,
-    many_millions: false,
-};
-
-const NO_PLURALS: PluralRule = PluralRule {
-    one: OneRule::Never,
-    many_millions: false,
-};
-
 pub const LOCALES: &[LocaleSpec] = &[
     LocaleSpec {
         code: "en",
         ident: "En",
         endonym: "English",
-        plural: ONE_IS_ONE,
+        plural: PluralRule::OneIsOne,
     },
     LocaleSpec {
         code: "zh-CN",
         ident: "ZhCn",
         endonym: "简体中文",
-        plural: NO_PLURALS,
+        plural: PluralRule::NoPlurals,
     },
     LocaleSpec {
         code: "ja",
         ident: "Ja",
         endonym: "日本語",
-        plural: NO_PLURALS,
+        plural: PluralRule::NoPlurals,
     },
     LocaleSpec {
         code: "fr",
         ident: "Fr",
         endonym: "Français",
-        plural: PluralRule {
-            one: OneRule::ZeroOrOne,
-            many_millions: true,
-        },
+        plural: PluralRule::ZeroOrOneAndMillions,
     },
     LocaleSpec {
         code: "es",
         ident: "Es",
         endonym: "Español",
-        plural: PluralRule {
-            one: OneRule::ExactlyOne,
-            many_millions: true,
-        },
+        plural: PluralRule::OneAndMillions,
     },
     LocaleSpec {
         code: "de",
         ident: "De",
         endonym: "Deutsch",
-        plural: ONE_IS_ONE,
+        plural: PluralRule::OneIsOne,
     },
     LocaleSpec {
         code: "hi",
         ident: "Hi",
         endonym: "हिन्दी",
-        plural: ZERO_AND_ONE_ARE_ONE,
+        plural: PluralRule::ZeroAndOneAreOne,
+    },
+    LocaleSpec {
+        code: "ru",
+        ident: "Ru",
+        endonym: "Русский",
+        plural: PluralRule::SlavicOneFewMany,
     },
 ];
 
@@ -1156,15 +1199,31 @@ fn emit_locale_field(
 
 fn emit_rule(code: &mut Code, spec: &LocaleSpec) {
     code.open(format!("fn {}(n: usize) -> Plural {{", plural_fn(spec)));
-    let mut branches = Vec::new();
-    match spec.plural.one {
-        OneRule::Never => {}
-        OneRule::ExactlyOne => branches.push(("n == 1", Category::One)),
-        OneRule::ZeroOrOne => branches.push(("n <= 1", Category::One)),
-    }
-    if spec.plural.many_millions {
-        branches.push(("n != 0 && n.is_multiple_of(1_000_000)", Category::Many));
-    }
+    let millions = "n != 0 && n.is_multiple_of(1_000_000)";
+    let branches: &[(&str, Category)] = match spec.plural {
+        PluralRule::OneIsOne => &[("n == 1", Category::One)],
+        PluralRule::ZeroAndOneAreOne => &[("n <= 1", Category::One)],
+        PluralRule::NoPlurals => &[],
+        PluralRule::ZeroOrOneAndMillions => {
+            &[("n <= 1", Category::One), (millions, Category::Many)]
+        }
+        PluralRule::OneAndMillions => &[("n == 1", Category::One), (millions, Category::Many)],
+        PluralRule::SlavicOneFewMany => {
+            code.line("let last = n % 10;");
+            code.line("let last_two = n % 100;");
+            &[
+                ("last == 1 && last_two != 11", Category::One),
+                (
+                    "(2..=4).contains(&last) && !(12..=14).contains(&last_two)",
+                    Category::Few,
+                ),
+                (
+                    "last == 0 || (5..=9).contains(&last) || (11..=14).contains(&last_two)",
+                    Category::Many,
+                ),
+            ]
+        }
+    };
     if branches.is_empty() {
         code.line("let _ = n;");
         code.line("Plural::Other");
@@ -1448,6 +1507,24 @@ mod tests {
                 assert_eq!(rule(code).category(n), Category::Other);
             }
         }
+        let ru = rule("ru");
+        assert_eq!(ru.category(1), Category::One);
+        assert_eq!(ru.category(21), Category::One);
+        assert_eq!(ru.category(101), Category::One);
+        assert_eq!(ru.category(2), Category::Few);
+        assert_eq!(ru.category(3), Category::Few);
+        assert_eq!(ru.category(4), Category::Few);
+        assert_eq!(ru.category(22), Category::Few);
+        assert_eq!(ru.category(0), Category::Many);
+        assert_eq!(ru.category(5), Category::Many);
+        assert_eq!(ru.category(11), Category::Many);
+        assert_eq!(ru.category(12), Category::Many);
+        assert_eq!(ru.category(13), Category::Many);
+        assert_eq!(ru.category(14), Category::Many);
+        assert_eq!(ru.category(25), Category::Many);
+        assert_eq!(ru.category(111), Category::Many);
+        assert_eq!(ru.category(112), Category::Many);
+        assert_eq!(ru.category(1_000), Category::Many);
     }
 
     #[test]
