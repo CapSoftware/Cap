@@ -195,6 +195,21 @@ impl RecordingMeta {
             file.write_all(bytes)?;
             file.sync_all()
         })
+        .inspect_err(|error| {
+            let path = self.project_path.join("recording-meta.json");
+            let (kind, os_error) = match error {
+                Either::Left(_) => (None, None),
+                Either::Right(error) => (Some(error.kind()), error.raw_os_error()),
+            };
+            warn!(
+                path = %path.display(),
+                path_len = path.as_os_str().len(),
+                ?kind,
+                ?os_error,
+                %error,
+                "Recording metadata save failed"
+            );
+        })
     }
 
     fn save_for_project_with(
@@ -220,11 +235,24 @@ impl RecordingMeta {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(Either::Right(error)),
         };
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".recording-meta-")
-            .suffix(".json.tmp")
-            .tempfile_in(&self.project_path)
-            .map_err(Either::Right)?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".recording-meta-").suffix(".json.tmp");
+        // tempfile marks its Windows files FILE_ATTRIBUTE_TEMPORARY and clears
+        // that in keep() through a SetFileAttributesW call on the raw path,
+        // which fails once the path passes MAX_PATH. Studio finalization saves
+        // inside `<project>/.recovery-<uuid>/staged`, so long recording names
+        // failed every stop there while std's long-path-aware I/O succeeded.
+        #[cfg(windows)]
+        let temporary = builder.make_in(&self.project_path, |path| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+        });
+        #[cfg(not(windows))]
+        let temporary = builder.tempfile_in(&self.project_path);
+        let mut temporary = temporary.map_err(Either::Right)?;
         if let Some(permissions) = permissions {
             temporary
                 .as_file()
@@ -235,11 +263,8 @@ impl RecordingMeta {
         #[cfg(windows)]
         {
             // tempfile 3.23 lacks Rust's Windows rename fallback for open readers.
-            let (file, path) = temporary
-                .keep()
-                .map_err(|error| Either::Right(error.error))?;
-            let mut path = tempfile::TempPath::from_path(path);
-            std::fs::rename(&path, &meta_path).map_err(Either::Right)?;
+            let (file, mut path) = temporary.into_parts();
+            replace_metadata_file(&path, &meta_path).map_err(Either::Right)?;
             path.disable_cleanup(true);
             drop(file);
         }
@@ -368,6 +393,43 @@ impl RecordingMeta {
                 }
             },
             RecordingMetaInner::Instant(_) => {}
+        }
+    }
+}
+
+/// Antivirus, the search indexer and cloud sync briefly open a file that was
+/// just written, and Windows refuses to replace a file another handle holds
+/// without FILE_SHARE_DELETE, so those refusals are retried briefly.
+#[cfg(windows)]
+fn replace_metadata_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    let started = std::time::Instant::now();
+    let mut retries = 0_u32;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+                ) && started.elapsed() < std::time::Duration::from_secs(2) =>
+            {
+                retries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            result => {
+                if retries > 0 {
+                    warn!(
+                        path = %to.display(),
+                        retries,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        succeeded = result.is_ok(),
+                        "Recording metadata replace was blocked by another handle"
+                    );
+                }
+                return result;
+            }
         }
     }
 }
