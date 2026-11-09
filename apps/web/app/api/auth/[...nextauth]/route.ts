@@ -125,6 +125,30 @@ function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
 	return new NextRequest(url, request);
 }
 
+// The signIn callback can't see the request, so a refused Google sign-in loses
+// the destination kept in the callback-url cookie. Without it, the email-code
+// fallback lands on /dashboard and a mobile sign-in never hands off its session.
+function keepGoogleErrorReturnPath(request: NextRequest, response: Response) {
+	const location = response.headers.get("location");
+	if (!location) return;
+	const webUrl = serverEnv().WEB_URL;
+	const redirectUrl = new URL(location, webUrl);
+	if (
+		redirectUrl.origin !== new URL(webUrl).origin ||
+		redirectUrl.pathname !== "/login" ||
+		redirectUrl.searchParams.get("error") !== "GoogleEmailUnverified" ||
+		redirectUrl.searchParams.has("next")
+	)
+		return;
+	const returnTo = getSafeNextPath(
+		request.cookies.get("next-auth.callback-url")?.value,
+		webUrl,
+	);
+	if (returnTo === "/dashboard") return;
+	redirectUrl.searchParams.set("next", returnTo);
+	response.headers.set("location", redirectUrl.toString());
+}
+
 async function handler(
 	request: NextRequest,
 	context: { params: Promise<{ nextauth: string[] }> },
@@ -133,11 +157,15 @@ async function handler(
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
 	if (nextauth[1] !== "workos") {
-		return NextAuth(
+		const response: Response = await NextAuth(
 			withSignInEmailIdentifier(request, nextauth),
 			context,
 			authOptions(),
 		);
+		if (nextauth[0] === "callback" && nextauth[1] === "google") {
+			keepGoogleErrorReturnPath(request, response);
+		}
+		return response;
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");

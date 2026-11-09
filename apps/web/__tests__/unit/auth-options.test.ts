@@ -117,7 +117,6 @@ const CONTEXT: SsoAuthContext = {
 	},
 };
 const AUTHENTICATED_USER = { id: "authenticated-user", email: PROFILE.email };
-// Google sends `email_verified`; sign-ins without it are refused.
 const VERIFIED_GOOGLE_PROFILE = { email: PROFILE.email, email_verified: true };
 
 function callbacksFor(options: NextAuthOptions) {

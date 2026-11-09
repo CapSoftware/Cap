@@ -655,3 +655,50 @@ describe("SSO auth request boundary", () => {
 		expect(response.headers.get("set-cookie")).not.toContain("cap-sso-intent");
 	});
 });
+
+describe("Google sign-in refused for an unverified email", () => {
+	const refused = () =>
+		mocks.nextAuth.mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: {
+					location: `${env.WEB_URL}/login?error=GoogleEmailUnverified`,
+				},
+			}),
+		);
+
+	it("keeps the return path so the email-code fallback can finish the flow", async () => {
+		refused();
+		const { request, context } = makeRequest({
+			action: "callback",
+			provider: "google",
+			intent: null,
+			callbackCookie: `${env.WEB_URL}/s/video123?t=42`,
+		});
+
+		const location = new URL(
+			(await GET(request, context)).headers.get("location") ?? "",
+		);
+
+		expect(location.pathname).toBe("/login");
+		expect(location.searchParams.get("error")).toBe("GoogleEmailUnverified");
+		expect(location.searchParams.get("next")).toBe("/s/video123?t=42");
+	});
+
+	it("drops a return path that leaves the Cap origin", async () => {
+		refused();
+		const { request, context } = makeRequest({
+			action: "callback",
+			provider: "google",
+			intent: null,
+			callbackCookie: "https://attacker.example/steal",
+		});
+
+		const location = new URL(
+			(await GET(request, context)).headers.get("location") ?? "",
+		);
+
+		expect(location.searchParams.get("error")).toBe("GoogleEmailUnverified");
+		expect(location.searchParams.has("next")).toBe(false);
+	});
+});
