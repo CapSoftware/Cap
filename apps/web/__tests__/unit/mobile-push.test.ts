@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	config: { keyId: "k", teamId: "t", privateKey: "p" } as unknown,
-	recentView: false,
+	firstViewId: "n1" as string | null,
+	joinedSessions: 0,
 	tokens: [] as { token: string; environment: string }[],
 	results: new Map<string, string>(),
 	sent: [] as { targets: unknown; message: unknown }[],
 	deleted: [] as unknown[],
-	recentViewQueries: 0,
+	firstViewQueries: 0,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -29,21 +30,28 @@ vi.mock("@cap/database", async () => {
 		db: () => ({
 			select: () => {
 				let table: unknown;
+				let ordered = false;
 				const query = {
 					from: (value: unknown) => {
 						table = value;
 						return query;
 					},
-					where: () => {
-						if (table === schema.mobilePushTokens) {
-							return Promise.resolve(mocks.tokens);
-						}
+					innerJoin: (joined: unknown) => {
+						if (joined === schema.authApiKeys) mocks.joinedSessions += 1;
+						return query;
+					},
+					where: () => query,
+					orderBy: () => {
+						ordered = true;
 						return query;
 					},
 					limit: async () => {
+						if (table === schema.mobilePushTokens) return mocks.tokens;
 						if (table === schema.notifications) {
-							mocks.recentViewQueries += 1;
-							return mocks.recentView ? [{ id: "older" }] : [];
+							if (!ordered)
+								return [{ createdAt: new Date("2026-11-09T12:03:00Z") }];
+							mocks.firstViewQueries += 1;
+							return mocks.firstViewId ? [{ id: mocks.firstViewId }] : [];
 						}
 						if (table === schema.videos) return [{ name: "Launch demo" }];
 						if (table === schema.users) return [{ name: "Alex" }];
@@ -69,12 +77,13 @@ import {
 
 beforeEach(() => {
 	mocks.config = { keyId: "k", teamId: "t", privateKey: "p" };
-	mocks.recentView = false;
+	mocks.firstViewId = "n1";
+	mocks.joinedSessions = 0;
 	mocks.tokens = [{ token: "aa11", environment: "production" }];
 	mocks.results = new Map([["aa11", "sent"]]);
 	mocks.sent = [];
 	mocks.deleted = [];
-	mocks.recentViewQueries = 0;
+	mocks.firstViewQueries = 0;
 });
 
 describe("push copy", () => {
@@ -138,7 +147,8 @@ describe("notification push delivery", () => {
 				},
 			},
 		]);
-		expect(mocks.recentViewQueries).toBe(0);
+		expect(mocks.firstViewQueries).toBe(0);
+		expect(mocks.joinedSessions).toBe(1);
 	});
 
 	it("does nothing when APNs isn't configured", async () => {
@@ -147,20 +157,30 @@ describe("notification push delivery", () => {
 		expect(mocks.sent).toHaveLength(0);
 	});
 
-	it("skips a view push when the Cap had a view notification in the last 10 minutes", async () => {
-		mocks.recentView = true;
+	it("skips a view push when an earlier view in the same 10 minutes already pushed", async () => {
+		mocks.firstViewId = "earlier";
 		await deliverNotificationPush({
 			...comment,
 			type: "view",
 			content: undefined,
 		});
-		expect(mocks.recentViewQueries).toBe(1);
+		expect(mocks.firstViewQueries).toBe(1);
 		expect(mocks.sent).toHaveLength(0);
+	});
+
+	it("pushes the view that comes first in its 10 minutes", async () => {
+		await deliverNotificationPush({
+			...comment,
+			type: "view",
+			content: undefined,
+		});
+		expect(mocks.firstViewQueries).toBe(1);
+		expect(mocks.sent).toHaveLength(1);
 	});
 
 	it("sends the first anonymous view with the viewer's name", async () => {
 		await deliverNotificationPush({
-			notificationId: "n2",
+			notificationId: "n1",
 			type: "anon_view",
 			recipientId: "owner",
 			videoId: "cap1",
