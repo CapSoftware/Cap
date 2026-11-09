@@ -76,6 +76,9 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: () => Promise.resolve(true),
 }));
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: () => Promise.resolve(false),
+}));
 vi.mock("@/lib/server", () => ({ runPromise: Effect.runPromise }));
 
 import { getVideoDownloadInfo } from "@/actions/videos/download";
