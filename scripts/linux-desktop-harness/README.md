@@ -71,6 +71,11 @@ around a closing window whatever the window shows.
 desktop's wallpaper as its background (`CAP_GPUI_AUTO_DESKTOP_BACKGROUND=1`).
 GNOME keeps its default JPEG XL wallpaper; `WALLPAPER=swaybg` starts swaybg
 with a PNG first, as Omarchy does on Hyprland.
+`SCENARIO=device-loss` (Hyprland) closes Cap's main window, loses the GPU
+device (`GPUI_INJECT_DEVICE_LOSS` names a file, and creating it makes the
+renderer's next frame end as it does when the driver reports the device lost)
+and launches Cap again: the frame that finds the loss is the one that would
+have mapped the window, and the window must still come back (GitHub #3946).
 `SCENARIO=register` launches Cap from a shell `ROUNDS` times, each time once
 with its `so.cap.Cap.desktop` entry removed and once with it in place, and
 counts the launches that registered the app id with the portals.
