@@ -3,7 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
-import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import {
+	findScreenshotObjectKey,
+	provideOptionalAuth,
+	Storage,
+	VideosPolicy,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -96,7 +101,7 @@ export async function getVideoDownloadInfo(
 		throw new Error("You don't have permission to download this video");
 	}
 
-	if (variant === "current") {
+	if (variant === "current" && !video.isScreenshot) {
 		const [activeUpload] = await db()
 			.select({ phase: videoUploads.phase })
 			.from(videoUploads)
@@ -148,22 +153,43 @@ export async function getVideoDownloadInfo(
 				downloadKey = source.getFileKey();
 			}
 		}
-		const downloadUrl = await Effect.gen(function* () {
+		const download = await Effect.gen(function* () {
 			const videosPolicy = yield* VideosPolicy;
 			yield* videosPolicy.canViewLoaded(
 				decodedVideo,
 				Option.fromNullable(video.password),
 			);
 			const [bucket] = yield* Storage.getAccessForVideo(decodedVideo);
+			if (variant === "current" && video.isScreenshot) {
+				const objects = yield* bucket.listObjects({
+					prefix: `${video.ownerId}/${videoId}/`,
+				});
+				const screenshotKey = findScreenshotObjectKey(objects.Contents ?? []);
+				if (!screenshotKey) return null;
+				const extension = screenshotKey.slice(
+					screenshotKey.lastIndexOf(".") + 1,
+				);
+				const screenshotFilename = `${video.name}.${extension}`;
+				return {
+					downloadUrl: yield* bucket.getSignedDownloadUrl(
+						screenshotKey,
+						screenshotFilename,
+					),
+					filename: screenshotFilename,
+				};
+			}
 			const exists = yield* bucket.headObject(downloadKey).pipe(
 				Effect.as(true),
 				Effect.catchAll(() => Effect.succeed(false)),
 			);
 			if (!exists) return null;
-			return yield* bucket.getSignedDownloadUrl(downloadKey, filename);
+			return {
+				downloadUrl: yield* bucket.getSignedDownloadUrl(downloadKey, filename),
+				filename,
+			};
 		}).pipe(provideOptionalAuth, runPromise);
 
-		if (!downloadUrl) {
+		if (!download) {
 			return {
 				success: false,
 				error:
@@ -173,7 +199,7 @@ export async function getVideoDownloadInfo(
 			};
 		}
 
-		return { success: true as const, downloadUrl, filename };
+		return { success: true as const, ...download };
 	} catch (error) {
 		console.error("Error generating download URL:", error);
 		return {
