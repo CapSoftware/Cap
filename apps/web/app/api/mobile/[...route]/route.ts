@@ -153,6 +153,7 @@ type MobileOrganizationIconInput =
 	(typeof Mobile.MobileOrganizationIconInput)["Type"];
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
+type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
 type MobileNotificationPreferences =
 	(typeof Mobile.MobileNotificationPreferences)["Type"];
 type MobileNotificationPreferencesInput =
@@ -790,6 +791,47 @@ const updateNotificationPreferences = Effect.fn(
 		);
 	}
 	return yield* getNotificationPreferences();
+});
+
+const registerPushToken = Effect.fn("Mobile.registerPushToken")(function* (
+	input: MobilePushTokenInput,
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const token = input.token.toLowerCase();
+	// A token belongs to one install; signing in as someone else on the same phone moves it.
+	yield* database.use((db) =>
+		db
+			.insert(Db.mobilePushTokens)
+			.values({
+				id: nanoId(),
+				userId: user.id,
+				token,
+				environment: input.environment,
+			})
+			.onDuplicateKeyUpdate({
+				set: { userId: user.id, environment: input.environment },
+			}),
+	);
+	return { success: true as const };
+});
+
+const removePushToken = Effect.fn("Mobile.removePushToken")(function* (
+	token: string,
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	yield* database.use((db) =>
+		db
+			.delete(Db.mobilePushTokens)
+			.where(
+				and(
+					eq(Db.mobilePushTokens.token, token.toLowerCase()),
+					eq(Db.mobilePushTokens.userId, user.id),
+				),
+			),
+	);
+	return { success: true as const };
 });
 
 const getCurrentBlockedUserIds = Effect.fn("Mobile.getBlockedUserIds")(
@@ -3625,6 +3667,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("updateNotificationPreferences", ({ payload }) =>
 						withMappedErrors(updateNotificationPreferences(payload)),
+					)
+					.handle("registerPushToken", ({ payload }) =>
+						withMappedErrors(registerPushToken(payload)),
+					)
+					.handle("removePushToken", ({ payload }) =>
+						withMappedErrors(removePushToken(payload.token)),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>
