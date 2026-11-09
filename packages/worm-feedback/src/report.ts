@@ -85,6 +85,7 @@ export async function buildEvidence(
 					voice: {
 						mimeType: options.voice.mimeType,
 						durationMs: options.voice.durationMs,
+						startedAt: options.voice.startedAt,
 					},
 				}
 			: {}),

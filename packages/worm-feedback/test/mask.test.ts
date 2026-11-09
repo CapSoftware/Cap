@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { maskClone, shouldMask } from "../src/screenshot";
+import {
+	MASK_COLOR,
+	maskClone,
+	maskedElements,
+	pageBackground,
+	paintMasks,
+	shouldMask,
+} from "../src/screenshot";
 
 const clone = (html: string) => {
 	const wrap = document.createElement("div");
@@ -71,5 +78,70 @@ describe("screenshot masking", () => {
 		const paragraph = clone("<p>Hello</p>");
 		maskClone(paragraph);
 		expect(paragraph.outerHTML).toBe("<p>Hello</p>");
+	});
+});
+
+describe("painting masks over the drawn screenshot", () => {
+	it("covers every masked element's box, including canvas and iframes", () => {
+		document.body.innerHTML = `
+			<canvas data-worm-mask id="signature"></canvas>
+			<iframe data-worm-mask id="viewer"></iframe>
+			<input id="name">
+			<div id="widget"><input id="inside-widget"></div>
+			<input id="hidden-away">`;
+		const box = (id: string, rect: Partial<DOMRect>) => {
+			const element = document.getElementById(id);
+			if (element)
+				element.getBoundingClientRect = () =>
+					({ left: 0, top: 0, width: 0, height: 0, ...rect }) as DOMRect;
+		};
+		box("signature", { left: 10, top: 20, width: 100, height: 40 });
+		box("viewer", { left: 0, top: 100, width: 300, height: 200 });
+		box("name", { left: 5, top: 5, width: 50, height: 10 });
+		box("inside-widget", { left: 1, top: 1, width: 10, height: 10 });
+		const rects: number[][] = [];
+		const context = {
+			fillStyle: "",
+			fillRect: (...args: number[]) => rects.push(args),
+		};
+		const painted = paintMasks(
+			context,
+			maskedElements(),
+			2,
+			document.getElementById("widget"),
+		);
+		expect(painted).toBe(3);
+		expect(context.fillStyle).toBe(MASK_COLOR);
+		expect(rects).toContainEqual([20, 40, 201, 81]);
+		expect(rects).toContainEqual([0, 200, 601, 401]);
+	});
+
+	it("finds masked elements inside open shadow roots", () => {
+		document.body.innerHTML = "<div id='host'></div>";
+		const shadow = document
+			.getElementById("host")
+			?.attachShadow({ mode: "open" });
+		if (shadow) shadow.innerHTML = "<p data-worm-mask>Jane</p><input>";
+		expect(maskedElements()).toHaveLength(2);
+	});
+
+	it("uses a real page colour for the background", () => {
+		document.body.style.background = "";
+		document.documentElement.style.background = "rgb(1, 2, 3)";
+		expect(pageBackground()).toBe("rgb(1, 2, 3)");
+		document.documentElement.style.background = "";
+		expect(pageBackground()).toBe("#ffffff");
+	});
+});
+
+describe("the widget itself", () => {
+	it("is never searched for masks, so its own fields leave no box", () => {
+		document.body.innerHTML = "<input id='page'><div id='widget'></div>";
+		const widget = document.getElementById("widget");
+		const shadow = widget?.attachShadow({ mode: "open" });
+		if (shadow) shadow.innerHTML = "<textarea></textarea>";
+		const found = maskedElements(document, widget);
+		expect(found).toHaveLength(1);
+		expect(found[0]?.id).toBe("page");
 	});
 });

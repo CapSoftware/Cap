@@ -238,3 +238,61 @@ describe("console objects", () => {
 		expect(text).toContain("[redacted]");
 	});
 });
+
+describe("masked and editable content in click labels", () => {
+	beforeEach(() => {
+		document.body.innerHTML = `
+			<div contenteditable="true" data-testid="editor"><p id="typed">Pt reports chest pain</p></div>
+			<table><tr><td data-worm-mask>Jane Doe</td><td><button id="open">Open</button></td></tr></table>
+			<a href="#" id="link"><span data-worm-mask>Jane Doe</span> chart</a>`;
+	});
+
+	it("never records text typed into an editor", () => {
+		const description = describeClick(document.getElementById("typed"), null);
+		expect(JSON.stringify(description)).not.toContain("chest pain");
+		expect(description?.masked).toBe(true);
+	});
+
+	it("drops a row label that comes from a masked cell", () => {
+		const description = describeClick(document.getElementById("open"), null);
+		expect(description?.text).toBe("Open");
+		expect(JSON.stringify(description)).not.toContain("Jane");
+	});
+
+	it("keeps only structure for a control that contains masked text", () => {
+		const description = describeClick(document.getElementById("link"), null);
+		expect(JSON.stringify(description)).not.toContain("Jane");
+		expect(description?.masked).toBe(true);
+	});
+});
+
+describe("stopping alongside other instrumentation", () => {
+	it("leaves a later wrapper in place and stops recording", async () => {
+		const realFetch = window.fetch;
+		window.fetch = vi.fn(
+			async () => new Response("", { status: 500 }),
+		) as typeof window.fetch;
+		const collector = createCollector({
+			host: () => null,
+			ignoreOrigin: "https://worm.test",
+		});
+		const ours = window.fetch;
+		const theirs = vi.fn((...args: Parameters<typeof fetch>) =>
+			ours(...args),
+		) as typeof window.fetch;
+		window.fetch = theirs;
+		collector.stop();
+		expect(window.fetch).toBe(theirs);
+		await window.fetch("/api/after-stop");
+		expect(collector.requests.size).toBe(0);
+		window.fetch = realFetch;
+	});
+});
+
+describe("field labels with masked text", () => {
+	it("drops a label that contains a masked span", () => {
+		document.body.innerHTML = `<label for="dose">Dose for <span data-worm-mask>Jane Doe</span></label><input id="dose">`;
+		const description = describeClick(document.getElementById("dose"), null);
+		expect(JSON.stringify(description)).not.toContain("Jane");
+	});
+});

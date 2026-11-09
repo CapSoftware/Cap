@@ -22,6 +22,7 @@ export interface VoiceMemo {
 	blob: Blob;
 	mimeType: string;
 	durationMs: number;
+	startedAt: number;
 }
 
 export function voiceSupported(): boolean {
@@ -39,6 +40,7 @@ export class VoiceRecorder {
 	private startedAt = 0;
 	private chunks: Blob[] = [];
 	private done?: Promise<VoiceMemo>;
+	private cancelled = false;
 
 	constructor(private readonly onLimit: () => void = () => {}) {}
 
@@ -50,7 +52,12 @@ export class VoiceRecorder {
 		const mimeType = pickAudioType();
 		if (!mimeType)
 			throw new Error("Voice memos are not supported in this browser.");
-		this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		if (this.cancelled) {
+			for (const track of stream.getTracks()) track.stop();
+			throw new Error("Recording was cancelled.");
+		}
+		this.stream = stream;
 		const recorder = new MediaRecorder(this.stream, {
 			mimeType,
 			audioBitsPerSecond: 48_000,
@@ -68,6 +75,7 @@ export class VoiceRecorder {
 					blob: new Blob(this.chunks, { type }),
 					mimeType: type,
 					durationMs: Math.min(this.elapsedMs, MAX_VOICE_MS),
+					startedAt: this.startedAt,
 				});
 			};
 		});
@@ -90,6 +98,7 @@ export class VoiceRecorder {
 	}
 
 	cancel(): void {
+		this.cancelled = true;
 		clearTimeout(this.timer);
 		if (this.recorder && this.recorder.state !== "inactive")
 			this.recorder.stop();

@@ -252,10 +252,15 @@ pub fn walk_folder(
         )
     });
     let (start_ms, end_ms) = if voice.is_some() {
-        let start = evidence["capturedAt"]
+        let start = evidence["voice"]["startedAt"]
             .as_i64()
-            .unwrap_or(created)
-            .saturating_sub(voice_ms);
+            .filter(|started| *started > 0)
+            .unwrap_or_else(|| {
+                evidence["capturedAt"]
+                    .as_i64()
+                    .unwrap_or(created)
+                    .saturating_sub(voice_ms)
+            });
         (start, start.saturating_add(voice_ms))
     } else {
         (first_event.min(created), created)
@@ -366,7 +371,7 @@ mod tests {
                 "userAgent": "Mozilla/5.0 (iPhone)",
                 "context": { "userId": "u1" },
                 "posthog": { "sessionId": "ph-1", "replayUrl": "https://us.posthog.com/replay/ph-1" },
-                "voice": { "mimeType": "audio/mp4", "durationMs": 4000 },
+                "voice": { "mimeType": "audio/mp4", "durationMs": 4000, "startedAt": 1794248900000_i64 },
                 "events": [
                     { "t": 1794248920000_i64, "ev": "click", "url": "/patients/:id", "el": { "testid": "save-intake" } },
                     { "t": 1794248921000_i64, "ev": "write", "url": "/patients/:id", "method": "POST", "request": "/api/intake/:id", "status": 409, "requestId": "req-1" },
@@ -431,8 +436,8 @@ mod tests {
         let chapter: Value = serde_json::from_slice(&file("01-feedback/chapter.json")).unwrap();
         assert_eq!(chapter["video"], "voice.m4a");
         assert_eq!(chapter["kind"], "feedback");
-        assert_eq!(chapter["startMs"], 1794248924000_i64);
-        assert_eq!(chapter["endMs"], 1794248928000_i64);
+        assert_eq!(chapter["startMs"], 1794248900000_i64);
+        assert_eq!(chapter["endMs"], 1794248904000_i64);
         let session: Value = serde_json::from_slice(&file("session.json")).unwrap();
         assert_eq!(session["ask"], "Saving the intake\nform fails");
         assert_eq!(session["chapters"][0]["dir"], "01-feedback");

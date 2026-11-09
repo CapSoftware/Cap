@@ -48,10 +48,11 @@ The page's Content Security Policy must allow `connect-src` to your Worm server,
 
 Only the report, sent to your configured server: the note, the evidence JSON, an optional JPEG screenshot and an optional voice memo (WebM/Opus in Chrome and Firefox, MP4/AAC in Safari on iPhone and Mac).
 
-- Screenshots are drawn from the DOM. Every input, textarea, select, editable region and every element marked `data-worm-mask` (and everything inside it) is painted over and its contents are removed from the copy before it is drawn. The page itself is never changed. Mark anything else that can show patient or personal data with `data-worm-mask`.
-- Clicks use the walk recorder's label rules (`vendor/ux-walk/src/labels.mjs`): test ids, roles and visible labels, never field values. Inside a `data-worm-mask` region only the element's tag, role and test ids are kept. Emails in labels become `[email]`.
+- Screenshots are drawn from the DOM. Every input, textarea, select, editable region and every element marked `data-worm-mask` (and everything inside it) has its contents removed from the copy before it is drawn, and its on-screen box is painted over afterwards, which also covers a marked canvas, video or iframe. Elements in open shadow roots are included. The page itself is never changed. Mark anything else that can show patient or personal data with `data-worm-mask`.
+- Clicks use the walk recorder's label rules (`vendor/ux-walk/src/labels.mjs`): test ids, roles and visible labels, never field values. A click inside a `data-worm-mask` region or an editable region, or on a control that contains one, keeps only the element's tag, role and test ids, and a table row's label is dropped when that row has masked cells. Emails in labels become `[email]`.
 - Console text and errors pass through the walk recorder's redaction (`vendor/ux-walk/src/redact.mjs`) plus key-based redaction of logged objects; query strings are cut from URLs.
 - Failed requests record method, path, status, duration and a request id header. No bodies, headers or cookies.
+- The widget marks itself for exclusion from session replay tools (`ph-no-capture`, `rr-block`, `sentry-block`, `fs-exclude`, `data-private`), so a note being typed is not recorded by the page's replay.
 - Screenshots and PHI: a screenshot shows whatever is on screen outside the masked elements. For a healthcare app, mask record views, or leave screenshots to people who know what is on their screen.
 
 ## Develop

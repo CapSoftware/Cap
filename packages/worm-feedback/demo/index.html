@@ -34,10 +34,14 @@
 			<section data-testid="chart-panel">
 				<h2>Chart summary</h2>
 				<div class="chart" data-worm-mask data-testid="chart-summary">DOB 1990-01-01 · MRN 5550123 · Allergies: penicillin</div>
-				<p class="hint">The yellow summary is marked <code>data-worm-mask</code>, so it is blacked out in feedback screenshots and its text never appears in click labels.</p>
+				<canvas id="signature" data-worm-mask width="240" height="48" style="display:block;margin-top:8px;width:240px;height:48px"></canvas>
+				<p class="hint">The yellow summary and the red signature pad are marked <code>data-worm-mask</code>, so they are painted over in feedback screenshots and their text never appears in click labels.</p>
 			</section>
 		</main>
 		<script>
+			const pad = document.getElementById("signature").getContext("2d");
+			pad.fillStyle = "#dc2626";
+			pad.fillRect(0, 0, 240, 48);
 			document.getElementById("save").addEventListener("click", async () => {
 				console.error("Save failed for jane@example.com", { token: "demo-secret" });
 				try {

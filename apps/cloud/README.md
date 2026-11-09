@@ -74,9 +74,9 @@ npx wrangler secret put FEEDBACK_SITES
 {"wf_pub_your_site_key":{"name":"Your app","origins":["https://app.example.org"],"retentionDays":30}}
 ```
 
-Without this secret every report is refused. The key is not a secret; it is visible in the page. Origin checks stop other websites' browsers, not scripts that forge an Origin header, so the Worker also rate limits reports per origin and browser (10 a minute) and per origin (120 a minute) through the `FEEDBACK_LIMIT` and `FEEDBACK_SITE_LIMIT` bindings in `wrangler.jsonc`. Reports are limited to 12 MB: a note of 4,000 characters, 256 KB of evidence, a 4 MB screenshot (JPEG, PNG or WebP) and a 6 MB voice memo (WebM, MP4/AAC, Ogg, AAC or MP3), each checked against its file signature.
+Without this secret every report is refused. The key is not a secret; it is visible in the page. Origin checks stop other websites' browsers, not scripts that forge an Origin header, so the Worker also rate limits reports per origin and IP address (about 10 a minute) and per origin (about 120 a minute) through the `FEEDBACK_LIMIT` and `FEEDBACK_SITE_LIMIT` bindings in `wrangler.jsonc`. Cloudflare counts these per location, so they are approximate. The per-origin limit slows what a flood can write to your bucket (about 120 reports a minute for each configured origin in each Cloudflare location); the trade-off is that someone forging your origin, with or without your site key, can use it up and block real reports for that minute. Reports are limited to 12 MB: a note of 4,000 characters, 256 KB of evidence, a 4 MB screenshot (JPEG, PNG or WebP) and a 6 MB voice memo (WebM, MP4/AAC, Ogg, AAC or MP3), each checked against its file signature.
 
-Reports are stored in the private bucket under `feedback/v1/`. The API denies access after the retention ends and the bucket's 31-day lifecycle removes the objects. There is no public read. Listing, reading and deleting require the owner credential:
+Reports are stored in the private bucket under `feedback/` (report, screenshot and voice memo), with a list entry under `feedback-index/` holding the site, route and the first 160 characters of the note, and a tombstone under `feedback-tombstones/` after deletion. The API denies access after the retention ends. The whole-bucket 31-day lifecycle rule from [Deploy your own](#deploy-your-own) then removes all three; a rule limited to one prefix would leave the others. There is no public read. Listing, reading and deleting require the owner credential:
 
 ```sh
 cap feedback list
@@ -84,7 +84,7 @@ cap feedback pull REPORT_ID --out ~/Movies/ux-walk
 cap feedback delete REPORT_ID
 ```
 
-`pull` verifies each attachment's checksum and writes a new walk-shaped folder: `session.json`, and a `01-feedback` chapter with `chapter.json`, `feedback.md` (the note and evidence for a person or agent), `feedback.json`, `actions.jsonl`, the screenshot and the voice memo. With a voice memo, `ux-walk process <chapter>` transcribes it with your configured provider; nothing is transcribed unless you run it.
+`pull` verifies each attachment's checksum and writes a new walk-shaped folder: `session.json`, and a `01-feedback` chapter with `chapter.json`, `feedback.md` (the note and evidence for a person or agent), `feedback.json`, `actions.jsonl`, the screenshot and the voice memo. With a voice memo, `ux-walk process <chapter>` transcribes it with your configured provider; nothing is transcribed unless you run it. The chapter's clock starts when the memo started, so the processed timeline shows the speech; clicks, errors and requests from before the memo stay in `feedback.md` and `actions.jsonl`.
 
 ## Checks
 

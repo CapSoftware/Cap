@@ -74,7 +74,22 @@ async function maskedPixels(page: Page) {
 			name: sample("#patient-name"),
 			note: sample("#visit-note"),
 			chart: sample("[data-testid=chart-summary]"),
+			signature: sample("#signature"),
 			header: sample("header"),
+			underNote: (() => {
+				const note = (window as unknown as { __noteRect?: DOMRect }).__noteRect;
+				if (!note) throw new Error("no note");
+				return Array.from(
+					context
+						.getImageData(
+							Math.round((note.left + 4) * scale),
+							Math.round((note.top + note.height / 2) * scale),
+							1,
+							1,
+						)
+						.data.slice(0, 3),
+				);
+			})(),
 		};
 	});
 }
@@ -139,6 +154,13 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 	await panel
 		.getByLabel("Your note")
 		.fill("Saving the intake form fails with a conflict.");
+	await page.evaluate(() => {
+		const note = document
+			.querySelector("worm-feedback")
+			?.shadowRoot?.querySelector("textarea");
+		(window as unknown as { __noteRect?: DOMRect }).__noteRect =
+			note?.getBoundingClientRect();
+	});
 	await panel.getByRole("button", { name: "Add screenshot" }).click();
 	await expect(panel.getByText("Screenshot added")).toBeVisible({
 		timeout: 20_000,
@@ -158,6 +180,14 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 	expect(near(pixels.header, [15, 118, 110]), `header ${pixels.header}`).toBe(
 		true,
 	);
+	expect(
+		near(pixels.underNote, [63, 63, 70]),
+		`page under the widget is not masked ${pixels.underNote}`,
+	).toBe(false);
+	expect(
+		near(pixels.signature, [63, 63, 70]),
+		`masked canvas ${pixels.signature}`,
+	).toBe(true);
 
 	await panel.getByRole("button", { name: "Record voice memo" }).click();
 	const stop = panel.getByRole("button", { name: /Stop recording/ });

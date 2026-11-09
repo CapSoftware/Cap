@@ -81,7 +81,7 @@ export interface Evidence {
 	timezone?: string;
 	context: Record<string, string>;
 	posthog?: { sessionId?: string; replayUrl?: string };
-	voice?: { mimeType: string; durationMs: number };
+	voice?: { mimeType: string; durationMs: number; startedAt: number };
 	events: EvidenceEvent[];
 }
 

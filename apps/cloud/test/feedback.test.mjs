@@ -314,10 +314,25 @@ test("limits on size, format and evidence are enforced", async () => {
 		(await post(form({ evidenceText: "x".repeat(256 * 1024 + 1) }))).status,
 		400,
 	);
+	assert.equal(
+		(
+			await post(
+				form({ voice: Buffer.concat([webm, Buffer.alloc(7 * 1024 * 1024)]) }),
+			)
+		).status,
+		413,
+	);
 	const huge = await post(
 		form({ voice: Buffer.concat([webm, Buffer.alloc(13 * 1024 * 1024)]) }),
-	);
-	assert.equal(huge.status, 413);
+	).catch((error) => error);
+	// The Worker refuses on Content-Length before reading, so the client can see the
+	// connection close mid-upload instead of the 413.
+	if (huge instanceof Error)
+		assert.match(
+			`${huge.message} ${huge.cause?.code ?? ""}`,
+			/EPIPE|ECONNRESET|fetch failed/,
+		);
+	else assert.equal(huge.status, 413);
 	const plain = await runtime.dispatchFetch(
 		"https://worm.test/api/v1/feedback",
 		{

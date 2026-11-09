@@ -43,6 +43,8 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 	const send = window.fetch.bind(window);
 	const host = document.createElement("worm-feedback");
 	host.setAttribute("data-worm-mask", "");
+	host.className = "ph-no-capture rr-block sentry-block fs-exclude";
+	host.setAttribute("data-private", "");
 	const root = host.attachShadow({ mode: "open" });
 	const sheet = element("style", { textContent: STYLE });
 	const frame = element("div", {
@@ -133,6 +135,9 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 	let recorder: VoiceRecorder | null = null;
 	let ticker: ReturnType<typeof setInterval> | undefined;
 	let sending = false;
+	let starting = false;
+	let capturing = false;
+	let draft = 0;
 
 	const setStatus = (text: string, kind: "" | "error" | "ok" = "") => {
 		status.textContent = text;
@@ -140,9 +145,12 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 	};
 	const refresh = () => {
 		sendButton.disabled =
-			sending || !!recorder || (!note.value.trim() && !screenshot && !voice);
-		screenshotButton.disabled = sending;
-		voiceButton.disabled = sending;
+			sending ||
+			capturing ||
+			!!recorder ||
+			(!note.value.trim() && !screenshot && !voice);
+		screenshotButton.disabled = sending || capturing;
+		voiceButton.disabled = sending || starting;
 	};
 	const clearScreenshot = () => {
 		if (shotUrl) URL.revokeObjectURL(shotUrl);
@@ -174,9 +182,12 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 
 	screenshotButton.addEventListener("click", async () => {
 		setStatus("Taking screenshot…");
-		screenshotButton.disabled = true;
+		const generation = draft;
+		capturing = true;
+		refresh();
 		try {
 			const blob = await captureScreenshot(host);
+			if (generation !== draft) return;
 			clearScreenshot();
 			screenshot = blob;
 			shotUrl = URL.createObjectURL(blob);
@@ -189,9 +200,12 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 			screenshotButton.textContent = "Retake screenshot";
 			setStatus("");
 		} catch {
-			setStatus("Couldn't take a screenshot on this page.", "error");
+			if (generation === draft)
+				setStatus("Couldn't take a screenshot on this page.", "error");
+		} finally {
+			capturing = false;
+			refresh();
 		}
-		refresh();
 	});
 
 	const stopRecording = async () => {
@@ -224,17 +238,26 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 		const next = new VoiceRecorder(() => {
 			stopRecording();
 		});
+		recorder = next;
+		starting = true;
+		refresh();
 		try {
-			recorder = next;
-			refresh();
 			await next.start();
 		} catch {
-			recorder = null;
+			if (recorder === next) {
+				recorder = null;
+				setStatus(
+					"Microphone is unavailable. You can still type a note.",
+					"error",
+				);
+			}
+			return;
+		} finally {
+			starting = false;
 			refresh();
-			setStatus(
-				"Microphone is unavailable. You can still type a note.",
-				"error",
-			);
+		}
+		if (recorder !== next) {
+			next.cancel();
 			return;
 		}
 		voiceButton.setAttribute("aria-pressed", "true");
@@ -252,6 +275,7 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 	});
 
 	const reset = () => {
+		draft++;
 		note.value = "";
 		clearScreenshot();
 		clearVoice();

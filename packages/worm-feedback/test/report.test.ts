@@ -80,6 +80,7 @@ describe("report", () => {
 				blob: new Blob(["a"], { type: "audio/mp4" }),
 				mimeType: "audio/mp4",
 				durationMs: 1000,
+				startedAt: 1,
 			},
 		});
 		expect(form.get("key")).toBe("wf_pub_demo");

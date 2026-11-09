@@ -6,6 +6,7 @@ import type { ElementDescription, EvidenceEvent, RouteRule } from "./types";
 
 export const LIMIT = 50;
 export const MASKED = "[data-worm-mask]";
+export const EDITABLE = "[contenteditable]:not([contenteditable=false])";
 const DEFAULT_REQUEST_ID_HEADERS = [
 	"x-request-id",
 	"x-correlation-id",
@@ -63,8 +64,12 @@ export function describeClick(
 ): ElementDescription | null {
 	const labels = elementLabels({ genericTestids });
 	const description = labels.desc(target, host) as ElementDescription | null;
-	if (!description) return null;
-	if (target?.closest?.(MASKED)) {
+	if (!description || !target) return null;
+	const control = target.closest(labels.INTERACTIVE) ?? target;
+	const hidden =
+		target.closest(`${MASKED},${EDITABLE}`) ||
+		control.querySelector(`${MASKED},${EDITABLE}`);
+	if (hidden) {
 		return {
 			tag: description.tag,
 			role: description.role,
@@ -76,14 +81,21 @@ export function describeClick(
 	}
 	const clean = (value?: string | null) =>
 		value == null ? value : value.replace(EMAIL, "[email]");
+	const rowMasked = control.closest("[role=row],tr")?.querySelector(MASKED);
+	const labelMasked = [
+		control.id
+			? document.querySelector(`label[for="${CSS.escape(control.id)}"]`)
+			: null,
+		control.closest("label"),
+	].some((label) => label?.querySelector(MASKED));
 	return {
 		...description,
 		text: clean(description.text) ?? undefined,
-		label: clean(description.label) ?? undefined,
+		label: labelMasked ? undefined : (clean(description.label) ?? undefined),
 		aria: clean(description.aria),
 		title: clean(description.title),
 		ctx: clean(description.ctx) ?? undefined,
-		row: clean(description.row) ?? undefined,
+		row: rowMasked ? undefined : (clean(description.row) ?? undefined),
 	};
 }
 
@@ -109,6 +121,7 @@ export function createCollector(options: CollectorOptions): Collector {
 		return !!host && event.composedPath().includes(host);
 	};
 	const cleanups: Array<() => void> = [];
+	let live = true;
 	const listen = <K extends keyof WindowEventMap>(
 		type: K,
 		handler: (event: WindowEventMap[K]) => void,
@@ -151,29 +164,29 @@ export function createCollector(options: CollectorOptions): Collector {
 		});
 	});
 
-	const original = { warn: console.warn, error: console.error };
 	for (const [method, level] of [
 		["warn", "warning"],
 		["error", "error"],
 	] as const) {
-		const call = original[method];
-		console[method] = function (this: Console, ...args: unknown[]) {
-			try {
-				logs.push({
-					t: now(),
-					ev: "console",
-					url: route(),
-					level,
-					text: consoleText(args),
-				});
-			} catch {}
+		const call = console[method];
+		const wrapper = function (this: Console, ...args: unknown[]) {
+			if (live)
+				try {
+					logs.push({
+						t: now(),
+						ev: "console",
+						url: route(),
+						level,
+						text: consoleText(args),
+					});
+				} catch {}
 			return call.apply(this, args);
 		};
+		console[method] = wrapper;
+		cleanups.push(() => {
+			if (console[method] === wrapper) console[method] = call;
+		});
 	}
-	cleanups.push(() => {
-		console.warn = original.warn;
-		console.error = original.error;
-	});
 
 	const record = (
 		method: string,
@@ -183,6 +196,7 @@ export function createCollector(options: CollectorOptions): Collector {
 		requestId?: string | null,
 		failure?: string,
 	) => {
+		if (!live) return;
 		const upper = method.toUpperCase();
 		requests.push({
 			t: now(),
@@ -206,7 +220,7 @@ export function createCollector(options: CollectorOptions): Collector {
 
 	const fetchBefore = window.fetch;
 	if (typeof fetchBefore === "function") {
-		window.fetch = async function (
+		const wrapper = async function (
 			this: unknown,
 			input: RequestInfo | URL,
 			init?: RequestInit,
@@ -244,8 +258,9 @@ export function createCollector(options: CollectorOptions): Collector {
 				throw error;
 			}
 		} as typeof window.fetch;
+		window.fetch = wrapper;
 		cleanups.push(() => {
-			window.fetch = fetchBefore;
+			if (window.fetch === wrapper) window.fetch = fetchBefore;
 		});
 	}
 
@@ -254,7 +269,7 @@ export function createCollector(options: CollectorOptions): Collector {
 		const open = xhr.open;
 		const send = xhr.send;
 		const meta = new WeakMap<XMLHttpRequest, { method: string; url: string }>();
-		xhr.open = function (
+		const openWrapper = function (
 			this: XMLHttpRequest,
 			method: string,
 			url: string | URL,
@@ -268,7 +283,7 @@ export function createCollector(options: CollectorOptions): Collector {
 				...rest,
 			);
 		} as typeof xhr.open;
-		xhr.send = function (
+		const sendWrapper = function (
 			this: XMLHttpRequest,
 			body?: Document | XMLHttpRequestBodyInit | null,
 		) {
@@ -297,9 +312,11 @@ export function createCollector(options: CollectorOptions): Collector {
 			}
 			return send.call(this, body);
 		};
+		xhr.open = openWrapper;
+		xhr.send = sendWrapper;
 		cleanups.push(() => {
-			xhr.open = open;
-			xhr.send = send;
+			if (xhr.open === openWrapper) xhr.open = open;
+			if (xhr.send === sendWrapper) xhr.send = send;
 		});
 	}
 
@@ -313,6 +330,7 @@ export function createCollector(options: CollectorOptions): Collector {
 				(a, b) => a.t - b.t,
 			),
 		stop: () => {
+			live = false;
 			for (const cleanup of cleanups.splice(0)) cleanup();
 		},
 	};
