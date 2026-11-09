@@ -36,6 +36,7 @@ export type GoogleDriveFile = {
 	sha256Checksum?: string;
 	headRevisionId?: string;
 	modifiedTime?: string;
+	driveId?: string;
 	parents?: string[];
 	trashed?: boolean;
 	appProperties?: Record<string, string>;
@@ -44,6 +45,7 @@ export type GoogleDriveFile = {
 
 type GoogleDriveListResponse = {
 	files?: GoogleDriveFile[];
+	nextPageToken?: string;
 };
 
 type GoogleDriveTokenResponse = {
@@ -781,6 +783,49 @@ export const ensureGoogleDriveFolder = (
 			);
 		}
 		return created.id;
+	});
+
+export const listGoogleDriveFolders = (
+	config: GoogleDriveIntegrationConfig,
+	parentId = "root",
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	Effect.gen(function* () {
+		const url = new URL(
+			appendSharedDriveListParams(`${DRIVE_API_BASE}/files`, config),
+		);
+		url.searchParams.set(
+			"q",
+			`'${escapeDriveQueryValue(parentId)}' in parents and mimeType='${GOOGLE_DRIVE_FOLDER_MIME_TYPE}' and trashed=false`,
+		);
+		url.searchParams.set("fields", "nextPageToken,files(id,name,driveId)");
+		url.searchParams.set("spaces", "drive");
+		const folders: Array<Required<GoogleDriveFolderLocation>> = [];
+		let pageToken: string | undefined;
+		do {
+			if (pageToken) url.searchParams.set("pageToken", pageToken);
+			const response = yield* driveFetch(
+				config,
+				url.toString(),
+				undefined,
+				tokenStore,
+			);
+			const body = yield* Effect.tryPromise({
+				try: () => parseDriveJson<GoogleDriveListResponse>(response),
+				catch: (cause) => new Storage.StorageError({ cause }),
+			});
+			for (const folder of body.files ?? []) {
+				if (!folder.id || !folder.name) continue;
+				folders.push({
+					id: folder.id,
+					name: folder.name,
+					driveId: folder.driveId ?? null,
+					driveName: null,
+				});
+			}
+			pageToken = body.nextPageToken;
+		} while (pageToken);
+		return folders;
 	});
 
 export const getGoogleDriveFolderLocation = (

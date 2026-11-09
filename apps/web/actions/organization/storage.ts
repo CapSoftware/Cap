@@ -21,6 +21,7 @@ import {
 	getGoogleDriveAuthUrl,
 	getGoogleDriveFolderLocation,
 	getGoogleDriveUserEmail,
+	listGoogleDriveFolders,
 } from "@cap/web-backend";
 import { type Organisation, S3Bucket, Storage } from "@cap/web-domain";
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -96,9 +97,6 @@ export type OrganizationGoogleDriveFolder = {
 	driveName: string | null;
 };
 
-const googleDriveFolderMimeType = "application/vnd.google-apps.folder";
-const driveApiBase = "https://www.googleapis.com/drive/v3";
-
 const requireOrganizationStorageManager = async (
 	organizationId: Organisation.OrganisationId,
 ) => {
@@ -167,17 +165,6 @@ const parseDriveConfig = async (
 
 const hasDriveLocation = (config: GoogleDriveIntegrationConfig) =>
 	config.folderId.trim().length > 0;
-
-const escapeDriveQueryValue = (value: string) =>
-	value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-
-const parseDriveResponse = async <T>(response: Response) => {
-	const text = await response.text();
-	if (!response.ok) {
-		throw new Error(`Google Drive request failed: ${response.status} ${text}`);
-	}
-	return text ? (JSON.parse(text) as T) : ({} as T);
-};
 
 const toReadableError = (error: unknown) => {
 	if (error instanceof Error) return error;
@@ -637,42 +624,10 @@ export async function listOrganizationGoogleDriveFolders({
 
 	try {
 		const config = await parseDriveConfig(drive);
-		const accessToken =
-			await getGoogleDriveAccessToken(config).pipe(runPromise);
-		const query = [
-			`'${escapeDriveQueryValue(parentId)}' in parents`,
-			`mimeType='${googleDriveFolderMimeType}'`,
-			"trashed=false",
-		].join(" and ");
-		const url = new URL(`${driveApiBase}/files`);
-		url.searchParams.set("q", query);
-		url.searchParams.set("fields", "files(id,name,driveId)");
-		url.searchParams.set("spaces", "drive");
-		url.searchParams.set("supportsAllDrives", "true");
-		url.searchParams.set("includeItemsFromAllDrives", "true");
-		if (config.driveId) {
-			url.searchParams.set("corpora", "drive");
-			url.searchParams.set("driveId", config.driveId);
-		}
-
-		const response = await fetch(url, {
-			headers: { Authorization: `Bearer ${accessToken}` },
-		});
-		const body = await parseDriveResponse<{
-			files?: Array<{ id?: string; name?: string; driveId?: string | null }>;
-		}>(response);
-
-		return {
-			folders:
-				body.files
-					?.filter((folder) => folder.id && folder.name)
-					.map((folder) => ({
-						id: folder.id as string,
-						name: folder.name as string,
-						driveId: folder.driveId ?? null,
-						driveName: null,
-					})) ?? [],
-		};
+		const folders = await listGoogleDriveFolders(config, parentId).pipe(
+			runPromise,
+		);
+		return { folders };
 	} catch (error) {
 		throw toReadableError(error);
 	}
