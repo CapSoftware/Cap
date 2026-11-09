@@ -12,6 +12,7 @@ on:
       - apps/desktop-gpui/**
       - apps/cli/**
       - apps/cloud/**
+      - packages/feedback-widget/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
       - crates/fork-cli-shim/**
@@ -29,6 +30,7 @@ on:
       - apps/desktop-gpui/**
       - apps/cli/**
       - apps/cloud/**
+      - packages/feedback-widget/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
       - crates/fork-cli-shim/**
@@ -59,6 +61,17 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --prefix apps/cloud
       - run: npm run check --prefix apps/cloud
+  feedback-widget:
+    if: github.repository == 'CantrellJax/ux-walk-cap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --prefix packages/feedback-widget
+      - run: npm run check --prefix packages/feedback-widget
   library-contract:
     if: github.repository == 'CantrellJax/ux-walk-cap'
     runs-on: ubuntu-latest
@@ -128,7 +141,7 @@ jobs:
             apps/desktop-gpui -> target
       - name: Format changed Rust surfaces
         run: |
-          rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/fork.rs apps/desktop-gpui/src/fork_titles.rs apps/cli/src/fork_cli.rs crates/fork-cli-shim/src/lib.rs apps/desktop-gpui/src/ux_walk_checkpoints.rs apps/cli/src/recovery.rs crates/cloud-sharing/src/recovery.rs apps/desktop-gpui/src/assets.rs apps/desktop-gpui/src/platform.rs apps/desktop-gpui/src/permission_guide.rs apps/desktop-gpui/src/camera_window.rs apps/desktop-gpui/src/target_overlay.rs apps/desktop-gpui/src/ux_walk_browser.rs apps/desktop-gpui/src/ux_walk_browser_target.rs apps/desktop-gpui/tests/ux_walk_browser_contract.rs apps/desktop-gpui/src/tray.rs apps/desktop-gpui/src/tray/ux_walk.rs apps/desktop-gpui/src/tray/mac_mode_picker.rs apps/desktop-gpui/src/updates.rs apps/desktop-gpui/src/installer.rs apps/desktop-gpui/src/ux_walk.rs apps/desktop-gpui/src/ux_walk/assets.rs apps/desktop-gpui/src/ux_walk/external.rs apps/cli/src/walk.rs apps/desktop-gpui/src/ux_walk_journal.rs apps/desktop-gpui/src/ux_walk_library.rs apps/desktop-gpui/src/library.rs apps/desktop-gpui/src/library/ux_walk.rs apps/desktop-gpui/tests/ux_walk_library_contract.rs apps/desktop-gpui/src/ux_walk_window.rs apps/desktop-gpui/src/ux_walk_window/filing.rs apps/desktop-gpui/src/ux_walk_filing.rs apps/desktop-gpui/src/session.rs apps/desktop-gpui/src/session/ux_walk.rs apps/desktop-gpui/src/controls_window.rs apps/desktop-gpui/src/recording.rs apps/desktop-gpui/src/recording/local_instant.rs apps/desktop-gpui/src/deeplink.rs apps/desktop-gpui/src/menus.rs apps/desktop-gpui/src/menus/fork.rs apps/desktop-gpui/src/hotkeys.rs apps/desktop-gpui/tests/ux_walk_journal_contract.rs apps/desktop-gpui/src/ux_walk_preferences.rs apps/desktop-gpui/src/ux_walk_projects.rs apps/desktop-gpui/src/settings_ux_walk.rs apps/desktop-gpui/src/settings_ux_walk_projects.rs apps/desktop-gpui/src/settings_window.rs apps/desktop-gpui/src/settings_window/fork.rs apps/desktop-gpui/src/fork_policy.rs apps/desktop-gpui/src/settings_pages.rs apps/desktop-gpui/src/settings_pages/fork.rs apps/desktop-gpui/src/store.rs apps/desktop-gpui/src/diagnostics.rs apps/desktop-gpui/src/transcription.rs apps/desktop-gpui/src/mode_choice.rs apps/desktop-gpui/src/mode_select_window.rs apps/desktop-gpui/src/main_window.rs apps/desktop-gpui/src/main_window/ux_walk.rs apps/desktop-gpui/src/onboarding_window.rs apps/desktop-gpui/src/onboarding_window/ux_walk.rs apps/desktop-gpui/src/onboarding_doodles.rs apps/desktop-gpui/src/app_windows.rs apps/cli/src/credentials.rs apps/cli/src/automation.rs apps/cli/src/recordings.rs apps/cli/src/update.rs apps/cli/src/upload.rs apps/cli/src/sharing.rs apps/cli/src/main.rs apps/cli/src/guide.rs apps/cli/src/agents.rs apps/desktop-gpui/src/settings_sharing.rs apps/desktop-gpui/src/auth.rs apps/desktop-gpui/src/sign_in.rs apps/desktop-gpui/src/upload.rs apps/desktop-gpui/src/upload/queue.rs apps/desktop-gpui/src/editor_export.rs apps/desktop-gpui/src/editor_window/frame.rs apps/desktop-gpui/src/screenshot_editor.rs crates/cloud-sharing/src/lib.rs
+          rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/fork.rs apps/desktop-gpui/src/fork_titles.rs apps/cli/src/fork_cli.rs crates/fork-cli-shim/src/lib.rs apps/desktop-gpui/src/ux_walk_checkpoints.rs apps/cli/src/recovery.rs crates/cloud-sharing/src/recovery.rs apps/cli/src/feedback.rs crates/cloud-sharing/src/feedback.rs apps/desktop-gpui/src/assets.rs apps/desktop-gpui/src/platform.rs apps/desktop-gpui/src/permission_guide.rs apps/desktop-gpui/src/camera_window.rs apps/desktop-gpui/src/target_overlay.rs apps/desktop-gpui/src/ux_walk_browser.rs apps/desktop-gpui/src/ux_walk_browser_target.rs apps/desktop-gpui/tests/ux_walk_browser_contract.rs apps/desktop-gpui/src/tray.rs apps/desktop-gpui/src/tray/ux_walk.rs apps/desktop-gpui/src/tray/mac_mode_picker.rs apps/desktop-gpui/src/updates.rs apps/desktop-gpui/src/installer.rs apps/desktop-gpui/src/ux_walk.rs apps/desktop-gpui/src/ux_walk/assets.rs apps/desktop-gpui/src/ux_walk/external.rs apps/cli/src/walk.rs apps/desktop-gpui/src/ux_walk_journal.rs apps/desktop-gpui/src/ux_walk_library.rs apps/desktop-gpui/src/library.rs apps/desktop-gpui/src/library/ux_walk.rs apps/desktop-gpui/tests/ux_walk_library_contract.rs apps/desktop-gpui/src/ux_walk_window.rs apps/desktop-gpui/src/ux_walk_window/filing.rs apps/desktop-gpui/src/ux_walk_filing.rs apps/desktop-gpui/src/session.rs apps/desktop-gpui/src/session/ux_walk.rs apps/desktop-gpui/src/controls_window.rs apps/desktop-gpui/src/recording.rs apps/desktop-gpui/src/recording/local_instant.rs apps/desktop-gpui/src/deeplink.rs apps/desktop-gpui/src/menus.rs apps/desktop-gpui/src/menus/fork.rs apps/desktop-gpui/src/hotkeys.rs apps/desktop-gpui/tests/ux_walk_journal_contract.rs apps/desktop-gpui/src/ux_walk_preferences.rs apps/desktop-gpui/src/ux_walk_projects.rs apps/desktop-gpui/src/settings_ux_walk.rs apps/desktop-gpui/src/settings_ux_walk_projects.rs apps/desktop-gpui/src/settings_window.rs apps/desktop-gpui/src/settings_window/fork.rs apps/desktop-gpui/src/fork_policy.rs apps/desktop-gpui/src/settings_pages.rs apps/desktop-gpui/src/settings_pages/fork.rs apps/desktop-gpui/src/store.rs apps/desktop-gpui/src/diagnostics.rs apps/desktop-gpui/src/transcription.rs apps/desktop-gpui/src/mode_choice.rs apps/desktop-gpui/src/mode_select_window.rs apps/desktop-gpui/src/main_window.rs apps/desktop-gpui/src/main_window/ux_walk.rs apps/desktop-gpui/src/onboarding_window.rs apps/desktop-gpui/src/onboarding_window/ux_walk.rs apps/desktop-gpui/src/onboarding_doodles.rs apps/desktop-gpui/src/app_windows.rs apps/cli/src/credentials.rs apps/cli/src/automation.rs apps/cli/src/recordings.rs apps/cli/src/update.rs apps/cli/src/upload.rs apps/cli/src/sharing.rs apps/cli/src/main.rs apps/cli/src/guide.rs apps/cli/src/agents.rs apps/desktop-gpui/src/settings_sharing.rs apps/desktop-gpui/src/auth.rs apps/desktop-gpui/src/sign_in.rs apps/desktop-gpui/src/upload.rs apps/desktop-gpui/src/upload/queue.rs apps/desktop-gpui/src/editor_export.rs apps/desktop-gpui/src/editor_window/frame.rs apps/desktop-gpui/src/screenshot_editor.rs crates/cloud-sharing/src/lib.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true crates/recording/src/sources/screen_capture/mod.rs crates/recording/src/sources/screen_capture/macos.rs crates/recording/src/sources/screen_capture/window_target.rs crates/recording/src/studio_recording.rs crates/recording/src/instant_recording.rs crates/recording/tests/macos_window_target_contract.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/desktop-gpui/src/onboarding_window/stage.rs apps/desktop-gpui/src/permissions.rs
           rustfmt +1.95.0 --edition 2024 --config skip_children=true apps/cli/src/agents.rs

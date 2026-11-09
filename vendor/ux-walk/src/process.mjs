@@ -186,9 +186,10 @@ export async function processChapter(dir, cfg, { force = [], speakers, glossary,
   if (hasAudio && !has('audio.m4a')) {
     step('extracting audio');
     // Two tracks (microphone + call): the transcriber hears both, mixed at their own levels.
-    await run('ffmpeg', audioTracks > 1
-      ? ['-v', 'error', '-y', '-i', ch.video, '-filter_complex', '[0:a:0][0:a:1]amix=inputs=2:duration=longest:normalize=0[a]', '-map', '[a]', '-c:a', 'aac', '-b:a', '96k', audio]
-      : ['-v', 'error', '-y', '-i', ch.video, '-vn', '-map', '0:a:0', '-c:a', 'copy', audio]);
+    // A browser voice memo (WebM or Ogg Opus) cannot be copied into M4A; it is re-encoded to AAC.
+    if (audioTracks > 1) await run('ffmpeg', ['-v', 'error', '-y', '-i', ch.video, '-filter_complex', '[0:a:0][0:a:1]amix=inputs=2:duration=longest:normalize=0[a]', '-map', '[a]', '-c:a', 'aac', '-b:a', '96k', audio]);
+    else await run('ffmpeg', ['-v', 'error', '-y', '-i', ch.video, '-vn', '-map', '0:a:0', '-c:a', 'copy', audio])
+      .catch(() => run('ffmpeg', ['-v', 'error', '-y', '-i', ch.video, '-vn', '-map', '0:a:0', '-c:a', 'aac', '-b:a', '96k', audio]));
   }
 
   // A call on its own track with speech on it: transcribe the mic and the call apart (ElevenLabs, AssemblyAI).

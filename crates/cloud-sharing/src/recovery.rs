@@ -13,11 +13,7 @@ impl SharingClient {
         if uploading && !settings.backup_enabled {
             return Err("Private walk backup is off. Evidence remains saved locally.".into());
         }
-        let token = std::env::var("CAP_UX_UPLOAD_TOKEN")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .or_else(|| entry(current.as_str()).ok()?.get_password().ok())
-            .ok_or("Add your server's upload credential in Settings → Sharing.")?;
+        let token = stored_token(&current)?;
         Self::with_credentials(settings, token)
     }
 

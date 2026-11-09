@@ -34,6 +34,12 @@ Feedback from using a real meeting recording and external transcript exposed clo
 
 The feedback-driven follow-up is tracked as oncall-7r3pm.1. Separate source tracks, confidence review, transcript import alignment and automatic destination filing are not claimed by the first sharing-server release.
 
+## Feedback from web apps
+
+The first drop-in is a feedback button (`packages/feedback-widget`) that any web app can embed, on a phone or a laptop. A person sends a typed note, an optional screenshot with every field and `data-worm-mask` element painted over, and an optional voice memo of up to two minutes. The report carries the route without its query, the last 50 clicks named by the walk recorder's label rules, console warnings and errors, uncaught exceptions, failed request metadata with request ids, and the PostHog session id and replay link when the app uses PostHog. Replay comes from PostHog; Worm does not record sessions in the browser.
+
+Reports go only to the site owner's own Worm server: the existing Worker and private R2 bucket, configured with the sites and origins allowed to send (see [apps/cloud](apps/cloud/README.md)). Reading them requires the owner credential. `cap feedback pull` writes a report as a walk-shaped folder so the existing processor, report and agent prompt work on it; transcription of the voice memo runs only when the owner processes that folder with their configured provider. Desktop tab video, native phone screen recording and issue filing from reports are later phases.
+
 ## Cloud processing later
 
 Add asynchronous processing behind the existing local processing contract, preserving the user's provider choice. A job should carry the recording manifest version, selected inputs, provider and output contract; retries must not create duplicate shares or issues. Durable processing, a queue and progress events can deliver the same summary page after the app closes.

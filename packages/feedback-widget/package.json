@@ -1,0 +1,31 @@
+{
+	"name": "@cap-ux/feedback",
+	"version": "0.1.0",
+	"private": true,
+	"license": "AGPL-3.0-only",
+	"type": "module",
+	"main": "dist/feedback-widget.mjs",
+	"module": "dist/feedback-widget.mjs",
+	"types": "dist/feedback-widget.d.ts",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "node build.mjs",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:e2e": "npm run build && playwright test",
+		"check": "npm run typecheck && npm test && npm run test:e2e"
+	},
+	"dependencies": {
+		"modern-screenshot": "4.7.0"
+	},
+	"devDependencies": {
+		"@playwright/test": "1.61.1",
+		"@types/node": "20.19.43",
+		"esbuild": "0.28.2",
+		"jsdom": "26.1.0",
+		"typescript": "5.9.3",
+		"vitest": "3.2.6"
+	}
+}

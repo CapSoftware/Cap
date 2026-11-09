@@ -50,6 +50,12 @@ For a retained outbox, `node <bundle>/checkpoint-worker.mjs /absolute/path/nativ
 
 Ordinary Reprocess preserves confirmed chapter speaker maps, participant lists and attribution notes only when capture, chapter bounds and transcript provenance still match. Confirmed maps take precedence over Meet inference. Changed source or fresh full transcription archives the old metadata and captions in `speaker-attribution-history/` and marks the report for speaker reconfirmation.
 
+## Collect feedback from a web app
+
+The Worm feedback button (`packages/feedback-widget`) puts a feedback button in your own web app for people using it on a phone or laptop. They send a typed note, an optional screenshot with typed fields and `data-worm-mask` elements painted over, and an optional voice memo of up to two minutes. It uses the same click labels and redaction rules as a walk's browser collector (`vendor/ux-walk/src/labels.mjs` and `redact.mjs`): never field values, request bodies, headers or cookies. With PostHog on the page, each report stores the PostHog session id and replay link.
+
+Reports go only to your own Worm server, which must list the site and its origins. `cap feedback list` shows them; `cap feedback pull <id>` saves one as a new walk folder in your walk output folder with `feedback.md`, the screenshot, the voice memo and the evidence as `actions.jsonl`. Run `ux-walk process` on its chapter to transcribe the voice memo with your selected provider; nothing is transcribed or uploaded to a provider until you do. `cap feedback delete <id>` removes it from the server. Setup and limits are in [the cloud README](apps/cloud/README.md) and [the widget README](packages/feedback-widget/README.md).
+
 ## Prepare an editable demo
 
 The bundled `cap-demo` companion skill can prepare an existing recording for optional local FilmCraft and EffectCraft tools. Run `node <skilldir>/cap-demo.mjs prepare /path/to/native-walk.json --out /path/to/new-demo`, review the generated `edit.json`, then run `node <skilldir>/cap-demo.mjs render /path/to/new-demo`. A `.cap` project or video is also accepted; videos can reuse an SRT with `--captions`. `doctor` checks the optional tools. The skill is installed with the existing `zworm agents install` workflow.

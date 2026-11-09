@@ -1,7 +1,16 @@
 import brand from "../../../crates/fork-brand/brand.json";
+import { feedback } from "./feedback";
 import { recovery } from "./recovery";
+import {
+	bearer,
+	boundedBody,
+	equal,
+	HttpError,
+	hash,
+	response,
+} from "./shared";
 
-type RuntimeEnv = Env & { UPLOAD_TOKEN?: string };
+type RuntimeEnv = Env & { UPLOAD_TOKEN?: string; FEEDBACK_SITES?: string };
 
 interface Share {
 	id: string;
@@ -17,38 +26,6 @@ interface Share {
 
 const PART_SIZE = 8 * 1024 * 1024;
 const TYPES = new Set(["video/mp4", "image/png", "image/jpeg"]);
-const encoder = new TextEncoder();
-
-class HttpError extends Error {
-	constructor(
-		public status: number,
-		message: string,
-	) {
-		super(message);
-	}
-}
-
-function response(body: unknown, status = 200): Response {
-	return Response.json(body, { status });
-}
-
-async function hash(value: string): Promise<string> {
-	const bytes = new Uint8Array(
-		await crypto.subtle.digest("SHA-256", encoder.encode(value)),
-	);
-	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-		"",
-	);
-}
-
-async function equal(left: string, right: string): Promise<boolean> {
-	const [a, b] = await Promise.all([hash(left), hash(right)]);
-	return crypto.subtle.timingSafeEqual(encoder.encode(a), encoder.encode(b));
-}
-
-function bearer(request: Request): string {
-	return request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
-}
 
 async function owner(request: Request, env: RuntimeEnv): Promise<string> {
 	if (!env.UPLOAD_TOKEN || env.UPLOAD_TOKEN.length < 32) {
@@ -61,35 +38,6 @@ async function owner(request: Request, env: RuntimeEnv): Promise<string> {
 	if (!(await equal(token, env.UPLOAD_TOKEN)))
 		throw new HttpError(401, "Invalid upload credential.");
 	return "self-hosted-owner";
-}
-
-async function boundedBody(
-	request: Request,
-	limit: number,
-): Promise<Uint8Array> {
-	const reader = request.body?.getReader();
-	if (!reader) throw new HttpError(400, "A request body is required.");
-	let size = 0;
-	const chunks: Uint8Array[] = [];
-	try {
-		for (;;) {
-			const { value, done } = await reader.read();
-			if (done) break;
-			size += value.byteLength;
-			if (size > limit)
-				throw new HttpError(413, "Request exceeds the allowed size.");
-			chunks.push(value);
-		}
-	} finally {
-		await reader.cancel();
-	}
-	const body = new Uint8Array(size);
-	let offset = 0;
-	for (const chunk of chunks) {
-		body.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return body;
 }
 
 async function json(request: Request): Promise<Record<string, unknown>> {
@@ -256,6 +204,11 @@ async function route(request: Request, env: RuntimeEnv): Promise<Response> {
 		url.pathname.startsWith("/api/v1/recovery/")
 	)
 		return recovery(request, env.MEDIA, await owner(request, env));
+	if (
+		url.pathname === "/api/v1/feedback" ||
+		url.pathname.startsWith("/api/v1/feedback/")
+	)
+		return feedback(request, env, () => owner(request, env));
 	if (url.pathname === "/healthz")
 		return response({ product: "capux", protocol: 1 });
 	if (url.pathname === "/api/v1/shares" && request.method === "POST")

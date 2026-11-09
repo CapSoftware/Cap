@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>Feedback widget demo</title>
+		<style>
+			:root { color-scheme: light; --ink: #0f172a; --muted: #475569; --line: #e2e8f0; --brand: #0f766e; }
+			* { box-sizing: border-box; }
+			body { margin: 0; font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink); background: #f8fafc; }
+			header { padding: 16px; background: var(--brand); color: #fff; }
+			header h1 { margin: 0; font-size: 18px; }
+			main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+			section { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+			h2 { margin: 0 0 8px; font-size: 16px; }
+			label { display: block; font-size: 14px; color: var(--muted); margin-top: 8px; }
+			input, textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+			button.app { min-height: 44px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--brand); color: #fff; font: inherit; font-weight: 600; margin-top: 12px; }
+			.chart { background: #fef3c7; border-radius: 8px; padding: 12px; }
+			p.hint { color: var(--muted); font-size: 14px; margin: 0; }
+		</style>
+	</head>
+	<body>
+		<header><h1>Demo Clinic</h1></header>
+		<main>
+			<section data-testid="intake-form">
+				<h2>Patient intake</h2>
+				<label for="patient-name">Patient name</label>
+				<input id="patient-name" name="patientName" value="Jane Q. Example" autocomplete="off" />
+				<label for="visit-note">Visit note</label>
+				<textarea id="visit-note" rows="3">Follow-up on lab results.</textarea>
+				<button class="app" type="button" data-testid="save-intake" id="save">Save intake</button>
+			</section>
+			<section data-testid="chart-panel">
+				<h2>Chart summary</h2>
+				<div class="chart" data-worm-mask data-testid="chart-summary">DOB 1990-01-01 · MRN 5550123 · Allergies: penicillin</div>
+				<canvas id="signature" data-worm-mask width="240" height="48" style="display:block;margin-top:8px;width:240px;height:48px"></canvas>
+				<p class="hint">The yellow summary and the red signature pad are marked <code>data-worm-mask</code>, so they are painted over in feedback screenshots and their text never appears in click labels.</p>
+			</section>
+		</main>
+		<script>
+			const pad = document.getElementById("signature").getContext("2d");
+			pad.fillStyle = "#dc2626";
+			pad.fillRect(0, 0, 240, 48);
+			document.getElementById("save").addEventListener("click", async () => {
+				console.error("Save failed for jane@example.com", { token: "demo-secret" });
+				try {
+					await fetch("/api/intake/123456?draft=1", { method: "POST", body: "patientName=Jane" });
+				} catch {}
+			});
+		</script>
+		<script
+			src="../dist/feedback-widget.js"
+			data-server="http://localhost:8787"
+			data-site-key="wf_pub_demo_local_site"
+			data-posthog="window"
+		></script>
+	</body>
+</html>

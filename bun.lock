@@ -428,6 +428,21 @@
         "@types/node": "^22.15.14",
       },
     },
+    "packages/feedback-widget": {
+      "name": "@cap-ux/feedback",
+      "version": "0.1.0",
+      "dependencies": {
+        "modern-screenshot": "4.7.0",
+      },
+      "devDependencies": {
+        "@playwright/test": "1.61.1",
+        "@types/node": "20.19.43",
+        "esbuild": "0.28.2",
+        "jsdom": "26.1.0",
+        "typescript": "5.9.3",
+        "vitest": "3.2.6",
+      },
+    },
     "packages/local-docker": {
       "name": "@cap/local-docker",
       "version": "0.0.0",
@@ -590,8 +605,8 @@
   "trustedDependencies": [
     "@parcel/watcher",
     "sharp",
-    "node-av",
     "esbuild",
+    "node-av",
     "cbor-extract",
     "@swc/core",
     "unrs-resolver",
@@ -885,6 +900,8 @@
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 
     "@cap-ux/cloud": ["@cap-ux/cloud@workspace:apps/cloud"],
+
+    "@cap-ux/feedback": ["@cap-ux/feedback@workspace:packages/feedback-widget"],
 
     "@cap/chrome-extension": ["@cap/chrome-extension@workspace:apps/chrome-extension"],
 
@@ -4159,6 +4176,8 @@
     "mkdirp": ["mkdirp@1.0.4", "", { "bin": { "mkdirp": "bin/cmd.js" } }, "sha512-vVqVZQyf3WLx2Shd0qJ9xuvqgAyKPLAiqITEtqW0oIUjzo3PePDd6fW9iFz30ef7Ysp/oiWqbhszeGWW2T6Gzw=="],
 
     "mlly": ["mlly@1.8.2", "", { "dependencies": { "acorn": "8.17.0", "pathe": "2.0.3", "pkg-types": "1.3.1", "ufo": "1.6.4" } }, "sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA=="],
+
+    "modern-screenshot": ["modern-screenshot@4.7.0", "", {}, "sha512-9YxN+ddPSMMlhylOv25VHzXrl9u67QRxoh7+SEewGtgUw7t6hHTrjptSDJUSne9oG4Xk/h2cwG15nIt4Hc9ujg=="],
 
     "module-details-from-path": ["module-details-from-path@1.0.4", "", {}, "sha512-EGWKgxALGMgzvxYF1UyGTy0HXX/2vHLkw6+NvDKW2jypWbHpjQuj4UMcqQWXHERJhVGKikolT06G3bcKe4fi7w=="],
 
