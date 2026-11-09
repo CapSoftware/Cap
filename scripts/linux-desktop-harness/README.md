@@ -57,6 +57,14 @@ screenshot mode does, with Cap focused as after a click, and allows it when
 the portal asks (GNOME Shell's question is answered from the Shell, so it needs
 `GNOME_UNSAFE=1`; elsewhere the permission is granted up front because the GTK
 portal's dialog aborts in the container). It checks a PNG of the display's size (`SCREEN`, 1920x1080) was saved.
+With `AREA=x,y,width,height` it takes a screenshot of that area through the
+selection overlay instead and checks nothing of the overlay is left in it: the
+area must match the same area of a screenshot the portal takes before Cap
+starts (`portal-shot.py`, `png-diff.py`). On KDE, `ANIMATION_FACTOR=4` slows
+KWin's animations the way System Settings' animation speed does, so a
+screenshot taken while the overlay is still fading out shows it. On Hyprland,
+`WINDOW_DECORATIONS=off` removes the border and shadow, which Hyprland draws
+around a closing window whatever the window shows.
 `PRELAUNCH=1` runs Cap once before, so a `LAUNCH=terminal` run finds the
 `so.cap.Cap.desktop` entry GNOME matches Cap's windows to.
 `SCENARIO=wallpaper` records a clip, opens it in the editor and imports the
