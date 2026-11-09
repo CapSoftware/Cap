@@ -3697,9 +3697,16 @@ mod tests {
         let duration = 600.0;
         let bytes = progressive_buffer_bytes(progressive_buffer_samples(duration, 48_000, 2));
         assert!(bytes <= MAX_PROGRESSIVE_BUFFER_BYTES);
-        let _limit = ProgressiveAllocationLimit::set(bytes / 2);
-
         let cache = PlaybackAudioCache::default();
+        let seeded = fixture.cached(&cache, output_info, 0.0);
+        assert!(matches!(
+            &seeded.mode,
+            PrerenderedAudioBufferMode::Progressive(_)
+        ));
+        assert!(lock(&cache.entry).is_some());
+        drop(seeded);
+
+        let _limit = ProgressiveAllocationLimit::set(bytes / 2);
         let mut buffer = PrerenderedAudioBuffer::<f32>::new_cached(
             fixture.segments.clone(),
             fixture.music.clone(),
