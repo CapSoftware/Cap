@@ -58,11 +58,11 @@ it("hands the signed URL to the browser instead of buffering the file", async ()
 	const createObjectURL = vi.fn();
 	URL.createObjectURL = createObjectURL;
 	const clicked: HTMLAnchorElement[] = [];
-	vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-		function (this: HTMLAnchorElement) {
-			clicked.push(this);
-		},
-	);
+	vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+		this: HTMLAnchorElement,
+	) {
+		clicked.push(this);
+	});
 
 	await act(async () => {
 		download?.("current");
