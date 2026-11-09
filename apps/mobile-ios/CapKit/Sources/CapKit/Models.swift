@@ -18,7 +18,6 @@ public enum MemberRole: String, UnknownCaseDecodable {
     }
 }
 
-/// Which APNs gateway a device token belongs to: debug builds get sandbox tokens.
 public enum PushEnvironment: String, Codable, Sendable {
     case sandbox, production
 }

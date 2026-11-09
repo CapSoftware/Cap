@@ -4,7 +4,6 @@ import OSLog
 import UIKit
 import UserNotifications
 
-/// Push notifications for comments, replies, reactions and views on the user's Caps.
 @MainActor
 @Observable
 final class PushNotifications {
@@ -20,7 +19,7 @@ final class PushNotifications {
     private static let tokenKey = "pushDeviceToken"
     private static let askedAfterUploadKey = "pushAskedAfterUpload"
 
-    /// A Cap the user opened from a push, picked up by the main view once it's on screen.
+    /// Set when a push is tapped before the main view is on screen; the main view opens it.
     var pendingCapId: CapID?
     private(set) var status: UNAuthorizationStatus = .notDetermined
 
@@ -30,14 +29,12 @@ final class PushNotifications {
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
-    /// Registers this install when the user already allows notifications. Safe to call on every launch and sign-in.
     func registerIfAllowed() async {
         await refreshStatus()
         guard services.vault.credentials != nil, Self.allowsAlerts(status) else { return }
         UIApplication.shared.registerForRemoteNotifications()
     }
 
-    /// Shows the system prompt. Returns whether notifications are now allowed.
     @discardableResult
     func requestAuthorization() async -> Bool {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
@@ -46,7 +43,7 @@ final class PushNotifications {
         return granted
     }
 
-    /// The first finished upload is when someone could start watching, so it's the moment to ask.
+    /// Asks once, after the first upload: the point where someone could start watching.
     func askAfterFirstUpload() {
         let defaults = UserDefaults.standard
         // The prompt only shows in the foreground; an upload finishing in the background asks next time.
@@ -73,10 +70,15 @@ final class PushNotifications {
         }
     }
 
-    /// Stops this phone getting the signed-in account's pushes. Runs before the session is revoked.
+    /// Runs before the session is revoked. Revoking deletes the token server-side too, and unregistering
+    /// here invalidates it at APNs, so a sign-out that can't reach Cap still stops this phone's pushes.
     func unregister() async {
-        guard let token = UserDefaults.standard.string(forKey: Self.tokenKey) else { return }
-        try? await services.api.removePushToken(token)
+        let defaults = UserDefaults.standard
+        if let token = defaults.string(forKey: Self.tokenKey) {
+            try? await services.api.removePushToken(token)
+            defaults.removeObject(forKey: Self.tokenKey)
+        }
+        UIApplication.shared.unregisterForRemoteNotifications()
     }
 
     func open(_ userInfo: [AnyHashable: Any]) -> Bool {
