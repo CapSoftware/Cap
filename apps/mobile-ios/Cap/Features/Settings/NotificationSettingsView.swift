@@ -6,7 +6,8 @@ struct NotificationSettingsView: View {
     @State private var preferences: NotificationPreferences?
     @State private var loadError: CapAPIError?
     @State private var error: String?
-    @State private var pending = 0
+    @State private var queue: [(NotificationPreferences.Kind, Bool)] = []
+    @State private var isSaving = false
 
     private static let rows: [(kind: NotificationPreferences.Kind, title: String, detail: String)] = [
         (.comments, "Comments", "When someone comments on one of your Caps."),
@@ -74,18 +75,28 @@ struct NotificationSettingsView: View {
     }
 
     private func set(_ kind: NotificationPreferences.Kind, enabled: Bool) async {
-        guard let previous = preferences?[kind] else { return }
+        guard preferences != nil else { return }
         preferences?[kind] = enabled
         error = nil
-        pending += 1
-        defer { pending -= 1 }
-        do {
-            let saved = try await session.api.setNotification(kind, enabled: enabled)
-            // A later toggle may still be in flight; its response carries the newest state.
-            if pending == 1 { preferences = saved }
-        } catch {
-            preferences?[kind] = previous
-            self.error = error.errorDescription
+        queue.append((kind, enabled))
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        // One request at a time, so each response includes every earlier change.
+        while !queue.isEmpty {
+            let (kind, enabled) = queue.removeFirst()
+            do {
+                let saved = try await session.api.setNotification(kind, enabled: enabled)
+                if queue.isEmpty { preferences = saved }
+            } catch {
+                queue.removeAll()
+                self.error = error.errorDescription
+                if let current = try? await session.api.notificationPreferences() {
+                    preferences = current
+                } else {
+                    preferences?[kind] = !enabled
+                }
+            }
         }
     }
 }
