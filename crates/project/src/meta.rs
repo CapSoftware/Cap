@@ -191,7 +191,23 @@ impl RecordingMeta {
     }
 
     pub fn save_for_project(&self) -> Result<(), Either<serde_json::Error, std::io::Error>> {
-        self.save_for_project_with(|file, bytes| {
+        self.save_for_project_logged(std::time::Duration::ZERO)
+    }
+
+    /// Like [`Self::save_for_project`], but on Windows waits up to two seconds
+    /// for another handle to release the metadata file. It can block, so only
+    /// call it off the UI thread.
+    pub fn save_for_project_with_retry(
+        &self,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        self.save_for_project_logged(std::time::Duration::from_secs(2))
+    }
+
+    fn save_for_project_logged(
+        &self,
+        busy_retry: std::time::Duration,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        self.save_for_project_with(busy_retry, |file, bytes| {
             file.write_all(bytes)?;
             file.sync_all()
         })
@@ -214,6 +230,7 @@ impl RecordingMeta {
 
     fn save_for_project_with(
         &self,
+        #[cfg_attr(not(windows), allow(unused_variables))] busy_retry: std::time::Duration,
         prepare: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
     ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
         let meta = serde_json::to_string_pretty(self).map_err(Either::Left)?;
@@ -264,7 +281,7 @@ impl RecordingMeta {
         {
             // tempfile 3.23 lacks Rust's Windows rename fallback for open readers.
             let (file, mut path) = temporary.into_parts();
-            replace_metadata_file(&path, &meta_path).map_err(Either::Right)?;
+            replace_metadata_file(&path, &meta_path, busy_retry).map_err(Either::Right)?;
             path.disable_cleanup(true);
             drop(file);
         }
@@ -399,9 +416,14 @@ impl RecordingMeta {
 
 /// Antivirus, the search indexer and cloud sync briefly open a file that was
 /// just written, and Windows refuses to replace a file another handle holds
-/// without FILE_SHARE_DELETE, so those refusals are retried briefly.
+/// without FILE_SHARE_DELETE, so callers off the UI thread retry those
+/// refusals for `busy_retry`.
 #[cfg(windows)]
-fn replace_metadata_file(from: &Path, to: &Path) -> std::io::Result<()> {
+fn replace_metadata_file(
+    from: &Path,
+    to: &Path,
+    busy_retry: std::time::Duration,
+) -> std::io::Result<()> {
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_SHARING_VIOLATION: i32 = 32;
     const ERROR_LOCK_VIOLATION: i32 = 33;
@@ -413,7 +435,7 @@ fn replace_metadata_file(from: &Path, to: &Path) -> std::io::Result<()> {
                 if matches!(
                     error.raw_os_error(),
                     Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
-                ) && started.elapsed() < std::time::Duration::from_secs(2) =>
+                ) && started.elapsed() < busy_retry =>
             {
                 retries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1055,7 +1077,7 @@ mod metadata_save_tests {
                 "injected file sync failure"
             };
 
-            let result = meta.save_for_project_with(|file, bytes| {
+            let result = meta.save_for_project_with(std::time::Duration::ZERO, |file, bytes| {
                 let count = if partial_write {
                     bytes.len() / 2
                 } else {
@@ -1100,17 +1122,20 @@ mod metadata_save_tests {
         let path = project.path().join("recording-meta.json");
         std::fs::write(&path, LEGACY_METADATA).unwrap();
         let mut locked = None;
-        let result = recording(project.path()).save_for_project_with(|file, bytes| {
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            locked = Some(
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(0)
-                    .open(&path)?,
-            );
-            Ok(())
-        });
+        let result = recording(project.path()).save_for_project_with(
+            std::time::Duration::ZERO,
+            |file, bytes| {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                locked = Some(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(0)
+                        .open(&path)?,
+                );
+                Ok(())
+            },
+        );
 
         assert!(locked.is_some());
         drop(locked);
@@ -1170,7 +1195,7 @@ mod metadata_save_tests {
         let mut meta = recording(project.path());
         meta.pretty_name = "Finished recording".into();
 
-        let result = meta.save_for_project();
+        let result = meta.save_for_project_with_retry();
         release.join().unwrap();
 
         result.unwrap();

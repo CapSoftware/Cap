@@ -2040,7 +2040,7 @@ impl RecoveryManager {
         let mut recording_meta = recording.meta.clone();
         recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
-            .save_for_project()
+            .save_for_project_with_retry()
             .map_err(|error| RecoveryError::meta_save(&recording.project_path, error))?;
 
         Self::create_project_config(recording, &meta, purpose)?;
