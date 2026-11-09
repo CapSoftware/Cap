@@ -1,3 +1,4 @@
+pub mod feedback;
 pub mod recovery;
 
 use std::path::{Path, PathBuf};
@@ -132,6 +133,14 @@ pub fn save(settings: &Settings) -> Result<(), String> {
     std::fs::rename(temporary, path).map_err(|_| "Could not replace sharing settings.".into())
 }
 
+fn stored_token(base: &Url) -> Result<String, String> {
+    std::env::var("CAP_UX_UPLOAD_TOKEN")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| entry(base.as_str()).ok()?.get_password().ok())
+        .ok_or_else(|| "Add your server's upload credential in Settings → Sharing.".into())
+}
+
 fn entry(server: &str) -> Result<keyring::Entry, String> {
     let account = endpoint(server)?.origin().ascii_serialization();
     keyring::Entry::new(SERVICE, &account)
@@ -201,11 +210,7 @@ impl SharingClient {
             return Err("Cloud sharing is off. Choose your server in Settings → Sharing. Your recording is saved locally.".into());
         }
         let base = endpoint(&settings.endpoint)?;
-        let token = std::env::var("CAP_UX_UPLOAD_TOKEN")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .or_else(|| entry(base.as_str()).ok()?.get_password().ok())
-            .ok_or("Add your server's upload credential in Settings → Sharing.")?;
+        let token = stored_token(&base)?;
         Self::with_credentials(settings, token)
     }
 

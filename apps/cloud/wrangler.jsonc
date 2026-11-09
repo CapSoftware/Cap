@@ -17,6 +17,24 @@
 			"bucket_name": "capux-media"
 		}
 	],
+	"ratelimits": [
+		{
+			"name": "FEEDBACK_LIMIT",
+			"namespace_id": "4801",
+			"simple": {
+				"limit": 10,
+				"period": 60
+			}
+		},
+		{
+			"name": "FEEDBACK_SITE_LIMIT",
+			"namespace_id": "4802",
+			"simple": {
+				"limit": 120,
+				"period": 60
+			}
+		}
+	],
 	"observability": {
 		"enabled": true,
 		"head_sampling_rate": 0.1,

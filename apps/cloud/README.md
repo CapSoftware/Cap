@@ -40,7 +40,7 @@ Desktop and CLI read `~/.config/cap-ux/sharing.json`. Credentials are keyed by s
 
 ## Protocol v1
 
-All JSON is bounded. Writes require `Authorization: Bearer <owner-upload-credential>`. All routes return private/no-store responses. No CORS grants are needed for the same-origin viewer or native client.
+All JSON is bounded. Writes require `Authorization: Bearer <owner-upload-credential>`, except feedback reports from configured sites. All routes return private/no-store responses. Only the feedback submission route grants CORS, and only to configured origins.
 
 | Method and path | Result |
 | --- | --- |
@@ -53,13 +53,41 @@ All JSON is bounded. Writes require `Authorization: Bearer <owner-upload-credent
 | GET or HEAD /api/v1/shares/ID/media | Authorized media; single byte ranges supported |
 | POST /api/v1/shares/ID/access | Exchange the read capability for a scoped HttpOnly playback cookie bounded by link expiry |
 | GET /s/ID#READ_CAPABILITY | Viewer; the fragment is exchanged for playback access and never sent in the HTTP URL |
+| POST /api/v1/feedback | Multipart report (`key`, `note`, `evidence`, optional `screenshot` and `voice`) from a configured origin; returns its id |
+| GET /api/v1/feedback | Owner: list reports, newest first (`cursor` pages) |
+| GET /api/v1/feedback/ID | Owner: the report with its evidence |
+| GET /api/v1/feedback/ID/screenshot or /voice | Owner: the attachment, with its SHA-256 in `X-Content-SHA256` |
+| DELETE /api/v1/feedback/ID | Owner: delete the report and its attachments |
 
 The create response's link is not readable until completion. The viewer capability is distinct from the upload credential and stored as a hash. Possessing a viewing link never authorizes uploads or revocation. Revocation has an independent tombstone so a concurrent completion cannot restore access. Expiry is enforced on every read; the bucket lifecycle later removes stored objects. Clients verify the final media's size before reporting success, revoke incomplete/failed attempts, and keep local files.
 
 Supported media: video/mp4, image/png and image/jpeg. Maximum media size: 20 GB. Multipart size: 8 MiB. Link expiry: 1–30 days. Raw traces, cookies, local configuration, API keys, notes and reports are not accepted as upload media. The current service has one administrative upload credential, not tenant accounts or a public upload form.
 
+## Feedback from your web apps
+
+The same Worker receives reports from the Worm feedback button (`packages/worm-feedback`) embedded in your own web apps. Each site owner runs their own server, so reports stay in that owner's Cloudflare account; there is no shared Worm service. Reports can contain health or other personal information: treat the bucket and the owner credential accordingly.
+
+Configure the sites allowed to send reports as a Worker secret holding JSON. Each publishable key (`wf_pub_` plus 12–64 letters, digits, `_` or `-`) is bound to the exact origins that may use it, with a retention of 1–30 days (default 30):
+
+```sh
+npx wrangler secret put FEEDBACK_SITES
+{"wf_pub_your_site_key":{"name":"Your app","origins":["https://app.example.org"],"retentionDays":30}}
+```
+
+Without this secret every report is refused. The key is not a secret; it is visible in the page. Origin checks stop other websites' browsers, not scripts that forge an Origin header, so the Worker also rate limits reports per origin and browser (10 a minute) and per origin (120 a minute) through the `FEEDBACK_LIMIT` and `FEEDBACK_SITE_LIMIT` bindings in `wrangler.jsonc`. Reports are limited to 12 MB: a note of 4,000 characters, 256 KB of evidence, a 4 MB screenshot (JPEG, PNG or WebP) and a 6 MB voice memo (WebM, MP4/AAC, Ogg, AAC or MP3), each checked against its file signature.
+
+Reports are stored in the private bucket under `feedback/v1/`. The API denies access after the retention ends and the bucket's 31-day lifecycle removes the objects. There is no public read. Listing, reading and deleting require the owner credential:
+
+```sh
+cap feedback list
+cap feedback pull REPORT_ID --out ~/Movies/ux-walk
+cap feedback delete REPORT_ID
+```
+
+`pull` verifies each attachment's checksum and writes a new walk-shaped folder: `session.json`, and a `01-feedback` chapter with `chapter.json`, `feedback.md` (the note and evidence for a person or agent), `feedback.json`, `actions.jsonl`, the screenshot and the voice memo. With a voice memo, `ux-walk process <chapter>` transcribes it with your configured provider; nothing is transcribed unless you run it.
+
 ## Checks
 
-`npm run check` regenerates binding types, typechecks, tests real R2 multipart/range/authorization/revocation behavior and packages a deployment dry run. `worker-configuration.d.ts` is generated, never edited manually. Native CI checks the shared Rust client, desktop and CLI and builds an isolated macOS preview.
+`npm run check` regenerates binding types, typechecks, tests real R2 multipart/range/authorization/revocation behavior and the feedback API's origin, size, rate-limit, owner-access and delete rules, and packages a deployment dry run. `worker-configuration.d.ts` is generated, never edited manually. Native CI checks the shared Rust client, desktop and CLI and builds an isolated macOS preview.
 
 The platform roadmap and capture handoff contract are in [CLOUD-PLATFORM.md](../../CLOUD-PLATFORM.md). Source remains available under the repository's [license](../../LICENSE).

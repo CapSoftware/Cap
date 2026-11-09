@@ -11,6 +11,7 @@ mod credentials;
 mod developers;
 mod doctor;
 mod export;
+mod feedback;
 mod fork_cli;
 mod guide;
 mod jobs;
@@ -217,6 +218,8 @@ enum Commands {
     /// Configure your Cap sharing server or revoke a link
     Sharing(sharing::SharingArgs),
     Recovery(recovery::RecoveryArgs),
+    /// List, pull or delete feedback reports sent to your Worm server
+    Feedback(feedback::FeedbackArgs),
     /// Update Cap Desktop and the bundled CLI
     Update(FormatArgs),
     /// Show how `cap upload` will authenticate (env key or Cap Desktop login)
@@ -658,6 +661,7 @@ async fn run(cli: Cli) -> Result<(), String> {
         Commands::Upload(args) => args.run(json).await,
         Commands::Sharing(args) => args.run().await,
         Commands::Recovery(args) => args.run().await,
+        Commands::Feedback(args) => args.run().await,
         Commands::Update(args) => {
             let format = resolve_format(json, args.format);
             finish_json(format, update::run(format))
