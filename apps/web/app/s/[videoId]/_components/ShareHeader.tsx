@@ -920,6 +920,8 @@ export const ShareHeader = ({
 							onOpenChange={setIsCtaDialogOpen}
 							videoId={data.id}
 							callToAction={data.callToAction ?? null}
+							source={data.callToActionSource ?? null}
+							defaultCallToAction={data.defaultCallToAction ?? null}
 							onSaved={refresh}
 							onUpgradeRequest={() => setUpgradeModalOpen(true)}
 						/>
@@ -1241,7 +1243,9 @@ export const ShareHeader = ({
 															</span>
 														) : data.callToAction ? (
 															<span className="ml-auto pl-3 text-xs text-gray-10">
-																On
+																{data.callToActionSource === "default"
+																	? "Default"
+																	: "On"}
 															</span>
 														) : null}
 													</DropdownMenuItem>

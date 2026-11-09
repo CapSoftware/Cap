@@ -35,7 +35,7 @@ import {
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { resolveShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -245,6 +245,7 @@ async function EmbedContent({
 				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
 				name: users.name,
 				image: users.image,
+				preferences: users.preferences,
 			})
 			.from(users)
 			.where(eq(users.id, video.ownerId))
@@ -259,10 +260,12 @@ async function EmbedContent({
 
 	let aiGenerationEnabled = false;
 	let ownerIsProUser = false;
+	let ownerPreferences: unknown = null;
 
 	if (videoOwner) {
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
 		ownerIsProUser = userIsPro(videoOwner);
+		ownerPreferences = videoOwner.preferences;
 	}
 
 	if (
@@ -433,7 +436,8 @@ async function EmbedContent({
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 			callToAction={
 				ownerIsProUser && !minimal
-					? parseShareCallToAction(video.settings)
+					? resolveShareCallToAction(video.settings, ownerPreferences)
+							.callToAction
 					: null
 			}
 		/>
