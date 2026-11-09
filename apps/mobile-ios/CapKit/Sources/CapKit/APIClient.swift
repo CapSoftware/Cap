@@ -385,6 +385,22 @@ extension CapAPI {
         try await expectSuccess(mobile(.post, "user", "blocks", body: Self.body(["userId": userId])))
     }
 
+    public func notificationPreferences() async throws(CapAPIError) -> NotificationPreferences {
+        try await send(mobile(.get, "user", "notification-preferences"))
+    }
+
+    public func setNotification(_ kind: NotificationPreferences.Kind, enabled: Bool) async throws(CapAPIError) -> NotificationPreferences {
+        try await send(mobile(.patch, "user", "notification-preferences", body: Self.body([kind.rawValue: enabled])))
+    }
+
+    public func registerPushToken(_ token: String, environment: PushEnvironment) async throws(CapAPIError) {
+        try await expectSuccess(mobile(.post, "user", "push-tokens", body: Self.body(["token": token, "environment": environment.rawValue])))
+    }
+
+    public func removePushToken(_ token: String) async throws(CapAPIError) {
+        try await expectSuccess(mobile(.post, "user", "push-tokens", "remove", body: Self.body(["token": token])))
+    }
+
     public func listCaps(folderId: String? = nil, spaceId: String? = nil, page: Int = 1, limit: Int = 30) async throws(CapAPIError) -> CapsPage {
         try await send(mobile(.get, "caps", query: [
             URLQueryItem(name: "folderId", value: folderId),

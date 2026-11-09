@@ -126,7 +126,7 @@ describe("current video download", () => {
 				Effect.succeed([
 					{
 						headObject: () => Effect.succeed({}),
-						getSignedObjectUrl: mocks.sign,
+						getSignedDownloadUrl: mocks.sign,
 					},
 				]),
 			);
@@ -138,6 +138,7 @@ describe("current video download", () => {
 			});
 			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
 				variant === "current" ? outputKey : originalKey,
+				variant === "current" ? "Recording.mp4" : "Recording (original).mp4",
 			);
 		},
 	);
@@ -158,7 +159,7 @@ describe.each(["current", "original"] as const)(
 				Effect.succeed([
 					{
 						headObject: () => Effect.succeed({}),
-						getSignedObjectUrl: mocks.sign,
+						getSignedDownloadUrl: mocks.sign,
 					},
 				]),
 			);

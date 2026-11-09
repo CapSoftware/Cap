@@ -35,6 +35,7 @@ import type { CurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { buildEmbedCode } from "@/lib/embed-code";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 
 interface SharingDialogProps {
@@ -60,6 +61,7 @@ interface SharingDialogProps {
 	onPasswordUpdated?: (protectedStatus: boolean) => void;
 	user?: CurrentUser | null;
 	onUpgradeRequest?: (open: boolean) => void;
+	shareUrl?: string;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -77,6 +79,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	onPasswordUpdated,
 	user: propUser,
 	onUpgradeRequest: propOnUpgradeRequest,
+	shareUrl: propShareUrl,
 }) => {
 	const {
 		spacesData: contextSpacesData,
@@ -106,7 +109,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const [viewerEmail, setViewerEmail] = useState("");
 	const router = useRouter();
 	const { webUrl } = usePublicEnv();
-	const shareUrl = `${webUrl}/s/${capId}`;
+	const shareUrl =
+		propShareUrl ??
+		videoShareUrl(webUrl, capId, activeOrganization?.organization);
 	const viewerGrants = useQuery({
 		queryKey: ["video-viewer-grants", capId],
 		queryFn: () => getVideoViewerGrants(capId),
