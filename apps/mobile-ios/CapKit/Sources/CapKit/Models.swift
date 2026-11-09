@@ -18,6 +18,10 @@ public enum MemberRole: String, UnknownCaseDecodable {
     }
 }
 
+public enum PushEnvironment: String, Codable, Sendable {
+    case sandbox, production
+}
+
 /// The same switches as cap.so's notification settings: they cover email and cap.so alerts.
 public struct NotificationPreferences: Codable, Sendable, Hashable {
     public var comments: Bool

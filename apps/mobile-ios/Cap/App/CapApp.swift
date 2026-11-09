@@ -1,4 +1,5 @@
 import CapKit
+import OSLog
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -11,15 +12,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BackgroundUploadCoordinator.shared.start()
         RecordingCoordinator.shared.start()
         UNUserNotificationCenter.current().delegate = self
+        Task { await PushNotifications.shared.registerIfAllowed() }
         return true
     }
 
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushNotifications.shared.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        Logger(subsystem: "so.cap.mobile", category: "push").error("Push registration failed: \(error.localizedDescription, privacy: .public)")
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if await PushNotifications.shared.open(response.notification.request.content.userInfo) { return }
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: false)
         await RecordingCoordinator.shared.showHome()
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        if notification.request.content.userInfo["capId"] != nil { return [.banner, .list, .sound] }
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: true)
         return []
     }
@@ -204,6 +216,13 @@ struct MainTabView: View {
             model.pendingShareLink = nil
             tab = .caps
             homePath = [.share(link)]
+        }
+        .onChange(of: PushNotifications.shared.pendingCapId, initial: true) { _, id in
+            guard let id else { return }
+            PushNotifications.shared.pendingCapId = nil
+            recorder = nil
+            tab = .caps
+            homePath = [.cap(id)]
         }
     }
 

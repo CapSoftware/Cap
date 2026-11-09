@@ -179,6 +179,20 @@ func bodyJSON(_ request: URLRequest) throws -> [String: Any] {
         #expect(transport.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
     }
 
+    @Test func registersAndRemovesPushTokens() async throws {
+        let (api, transport) = makeAPI { _ in (200, Data(#"{"success":true}"#.utf8)) }
+        try await api.registerPushToken("ab12", environment: .sandbox)
+        try await api.removePushToken("ab12")
+        let requests = transport.requests
+        #expect(requests.map { $0.url?.path() ?? "" } == ["/api/mobile/user/push-tokens", "/api/mobile/user/push-tokens/remove"])
+        #expect(requests.map { $0.httpMethod ?? "" } == ["POST", "POST"])
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer \(testCredentials.apiKey)" })
+        let bodies: [[String: Any]] = try requests.map { try bodyJSON($0) }
+        #expect(bodies[0]["token"] as? String == "ab12")
+        #expect(bodies[0]["environment"] as? String == "sandbox")
+        #expect(bodies[1]["token"] as? String == "ab12")
+    }
+
     @Test func rejectsImplausibleSessionsFromVerify() async {
         let (api, _) = makeAPI { _ in (200, Data(#"{"type":"api_key","apiKey":"x","userId":"user_123"}"#.utf8)) }
         await #expect(throws: CapAPIError.invalidResponse) {

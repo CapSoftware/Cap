@@ -686,6 +686,78 @@ fn recover_interrupted_for_editing_in(
     recover_incomplete_recording_in(dirs, project_path).map(|_| true)
 }
 
+struct InProgressProject {
+    id: u64,
+    path: PathBuf,
+    resolved: Option<PathBuf>,
+}
+
+/// A project folder's real location: its parent resolved through symlinks,
+/// plus its own name. A recording registers its folder before creating it, so
+/// this cannot canonicalize the folder itself.
+fn resolved_project_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?.canonicalize().ok()?;
+    Some(parent.join(path.file_name()?))
+}
+
+static IN_PROGRESS_PROJECTS: std::sync::Mutex<Vec<InProgressProject>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn in_progress_projects() -> std::sync::MutexGuard<'static, Vec<InProgressProject>> {
+    IN_PROGRESS_PROJECTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Marks a project folder as owned by a live recording until dropped. The
+/// recording holds it from start until its stop, including Studio
+/// finalization, has finished, so the library cannot delete the folder out
+/// from under the capture or the finalizer.
+pub struct RecordingInProgress(u64);
+
+impl RecordingInProgress {
+    pub fn begin(project_dir: &Path) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        in_progress_projects().push(InProgressProject {
+            id,
+            path: project_dir.to_path_buf(),
+            resolved: resolved_project_path(project_dir),
+        });
+        Self(id)
+    }
+}
+
+impl Drop for RecordingInProgress {
+    fn drop(&mut self) {
+        in_progress_projects().retain(|project| project.id != self.0);
+    }
+}
+
+/// Whether a live recording (or its stop) still owns `path`. Compares `path`
+/// with the spelling the recording started under and with its resolved
+/// location, without touching the filesystem, so it is cheap enough for a
+/// render. [`ensure_not_recording_in_progress`] resolves `path` as well.
+pub fn is_recording_in_progress(path: &Path) -> bool {
+    in_progress_projects()
+        .iter()
+        .any(|project| project.path == path || project.resolved.as_deref() == Some(path))
+}
+
+/// Refuses a project folder a live recording still owns, under any path that
+/// leads to it.
+pub fn ensure_not_recording_in_progress(path: &Path) -> Result<(), String> {
+    let owned = is_recording_in_progress(path)
+        || [path.canonicalize().ok(), resolved_project_path(path)]
+            .iter()
+            .flatten()
+            .any(|resolved| is_recording_in_progress(resolved));
+    if owned {
+        return Err(tr::dialog::delete_recording::recording_active().to_string());
+    }
+    Ok(())
+}
+
 /// Existing targets and roots are canonicalized before containment is checked.
 /// This keeps symlink escapes outside the allow-list while accepting Windows
 /// editor paths whose canonical form has a `\\?\` prefix. A missing strict child
@@ -697,6 +769,7 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
     {
         return Err("Invalid path".to_string());
     }
+    ensure_not_recording_in_progress(path)?;
 
     let canonical_dirs: Vec<_> = dirs
         .iter()
@@ -3341,6 +3414,78 @@ mod tests {
         }
         assert!(bundle_thumbnail_path(&recovered).is_file());
         assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The folder of a recording still being captured or finalized is not
+    /// deletable through any path that leads to it until the recording lets
+    /// go. The recording registers the folder before creating it, as
+    /// `start_attempt_with_upload` does.
+    #[test]
+    fn delete_refuses_the_recording_in_progress() {
+        let root = temp_dir("delete-active");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut dirs = vec![recordings.clone()];
+        let live = recordings.join("live.cap");
+        let other = write_studio_bundle(&recordings, "other", 1);
+
+        let recording = RecordingInProgress::begin(&live);
+        let media = live.join("content/segments/segment-0/display.mp4");
+        std::fs::create_dir_all(media.parent().unwrap()).unwrap();
+        std::fs::write(&media, b"live").unwrap();
+
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut spellings = vec![live.clone(), live.canonicalize().unwrap()];
+        #[cfg(unix)]
+        {
+            let alias = root.join("alias");
+            std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+            spellings.push(alias.join("live.cap"));
+            dirs.push(alias);
+        }
+        assert!(is_recording_in_progress(&live));
+        for spelling in &spellings {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, spelling),
+                Err(tr::dialog::delete_recording::recording_active().to_string()),
+                "{}",
+                spelling.display()
+            );
+            assert!(media.is_file(), "{}", spelling.display());
+        }
+        assert_eq!(delete_recording_directory_in(&dirs, &other), Ok(()));
+        assert!(!other.exists(), "other recordings stay deletable");
+
+        drop(recording);
+        assert!(!is_recording_in_progress(&live));
+        assert_eq!(delete_recording_directory_in(&dirs, &live), Ok(()));
+        assert!(!live.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A recording started through a symlinked library folder is recognised
+    /// when the library lists it under the real folder, where the row decides
+    /// whether to offer Delete without resolving anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_recording_started_through_a_symlink_is_in_progress_under_its_real_path() {
+        let root = temp_dir("delete-active-alias");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&recordings, &alias).unwrap();
+
+        let recording = RecordingInProgress::begin(&alias.join("live.cap"));
+        let real = recordings.canonicalize().unwrap().join("live.cap");
+        assert!(is_recording_in_progress(&alias.join("live.cap")));
+        assert!(is_recording_in_progress(&real));
+        assert!(!is_recording_in_progress(&real.with_file_name("other.cap")));
+        drop(recording);
+        assert!(!is_recording_in_progress(&real));
 
         std::fs::remove_dir_all(root).unwrap();
     }
