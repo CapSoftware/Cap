@@ -252,6 +252,17 @@ impl Iterator for DecoderPackets<'_> {
     }
 }
 
+fn sort_fragments(fragments: &mut [PathBuf]) {
+    fragments.sort_by_cached_key(|path| {
+        let index = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.strip_prefix("segment_"))
+            .and_then(|digits| digits.parse::<u64>().ok());
+        (index, path.clone())
+    });
+}
+
 pub fn open_fragmented_input(
     dir_path: &std::path::Path,
 ) -> Result<cap_enc_ffmpeg::SegmentedInput, String> {
@@ -275,7 +286,7 @@ pub fn open_fragmented_input(
                 .file_name()
                 .is_some_and(|name| name.as_encoded_bytes().starts_with(b"._"))
     });
-    fragments.sort();
+    sort_fragments(&mut fragments);
     if fragments.is_empty() {
         return Err(format!(
             "no .m4s segments found in fragmented directory: {}",
@@ -909,6 +920,30 @@ mod tests {
         assert_eq!(error, "no video stream");
         assert!(owner.upgrade().is_none());
         std::fs::rename(&original, directory.path().join("retained")).unwrap();
+    }
+
+    #[test]
+    fn fragments_are_sorted_by_numeric_index() {
+        let mut fragments: Vec<PathBuf> = [
+            "segment_1000.m4s",
+            "segment_999.m4s",
+            "segment_101.m4s",
+            "segment_100.m4s",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+        sort_fragments(&mut fragments);
+        assert_eq!(
+            fragments,
+            [
+                "segment_100.m4s",
+                "segment_101.m4s",
+                "segment_999.m4s",
+                "segment_1000.m4s"
+            ]
+            .map(PathBuf::from)
+        );
     }
 
     #[test]
