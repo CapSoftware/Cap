@@ -2962,6 +2962,11 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        // History holds the project, not the row flags, and these two rows
+        // show exactly when their overlay renders.
+        let restored = TrackLanes::from_project(&self.project, self.has_camera);
+        self.tracks.caption = restored.caption;
+        self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
         self.transcript.dirty = true;
         self.transcript.selection = None;
