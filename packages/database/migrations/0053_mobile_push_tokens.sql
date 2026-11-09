@@ -2,6 +2,7 @@ CREATE TABLE `mobile_push_tokens` (
 	`id` varchar(15) NOT NULL,
 	`userId` varchar(15) NOT NULL,
 	`token` varchar(200) NOT NULL,
+	`sessionHash` varchar(64) NOT NULL,
 	`environment` varchar(10) NOT NULL,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
@@ -9,4 +10,5 @@ CREATE TABLE `mobile_push_tokens` (
 	CONSTRAINT `token_idx` UNIQUE(`token`)
 );
 --> statement-breakpoint
-CREATE INDEX `user_id_idx` ON `mobile_push_tokens` (`userId`);
+CREATE INDEX `user_id_idx` ON `mobile_push_tokens` (`userId`);--> statement-breakpoint
+CREATE INDEX `session_hash_idx` ON `mobile_push_tokens` (`sessionHash`);

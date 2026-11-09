@@ -1,12 +1,14 @@
+import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import {
+	authApiKeys,
 	mobilePushTokens,
 	notifications,
 	users,
 	videos,
 } from "@cap/database/schema";
 import { type User, Video } from "@cap/web-domain";
-import { and, eq, gte, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { after } from "next/server";
 import {
 	apnsConfig,
@@ -24,6 +26,10 @@ export type PushNotificationType =
 
 const VIEW_PUSH_WINDOW_MS = 10 * 60 * 1000;
 const BODY_MAX_LENGTH = 140;
+const MAX_TOKENS_PER_PUSH = 10;
+
+export const pushSessionHash = (apiKey: string) =>
+	createHash("sha256").update(apiKey).digest("hex");
 
 const truncate = (value: string, max: number) => {
 	const text = value.replace(/\s+/g, " ").trim();
@@ -61,15 +67,22 @@ export const pushMessageFor = (input: {
 	};
 };
 
-/** Views come in bursts on a popular Cap, so they push at most once per Cap per window. */
-export async function hasRecentViewNotification(params: {
+/**
+ * Views push at most once per Cap per 10-minute clock window: only the window's first view notification
+ * pushes, so viewers who arrive together still send exactly one. Ties on createdAt break on id.
+ */
+export async function isFirstViewInWindow(params: {
 	recipientId: string;
 	videoId: string;
-	excludeNotificationId: string;
-	now?: number;
+	notificationId: string;
 }) {
-	const since = new Date((params.now ?? Date.now()) - VIEW_PUSH_WINDOW_MS);
-	const [recent] = await db()
+	const [own] = await db()
+		.select({ createdAt: notifications.createdAt })
+		.from(notifications)
+		.where(eq(notifications.id, params.notificationId))
+		.limit(1);
+	if (!own) return false;
+	const [first] = await db()
 		.select({ id: notifications.id })
 		.from(notifications)
 		.where(
@@ -77,28 +90,45 @@ export async function hasRecentViewNotification(params: {
 				inArray(notifications.type, ["view", "anon_view"]),
 				eq(notifications.recipientId, params.recipientId as User.UserId),
 				eq(notifications.videoId, params.videoId),
-				gte(notifications.createdAt, since),
-				ne(notifications.id, params.excludeNotificationId),
+				gte(
+					notifications.createdAt,
+					new Date(
+						Math.floor(own.createdAt.getTime() / VIEW_PUSH_WINDOW_MS) *
+							VIEW_PUSH_WINDOW_MS,
+					),
+				),
+				lte(notifications.createdAt, own.createdAt),
 			),
 		)
+		.orderBy(asc(notifications.createdAt), asc(notifications.id))
 		.limit(1);
-	return !!recent;
+	return first?.id === params.notificationId;
 }
 
 export async function deliverPushToUser(
 	userId: string,
 	message: PushMessage,
 ): Promise<void> {
-	const config = apnsConfig();
-	if (!config) return;
 	try {
+		const config = apnsConfig();
+		if (!config) return;
+		// Only tokens whose session still exists: a phone that signed out (or lost its session) stops getting pushes.
 		const rows = await db()
 			.select({
 				token: mobilePushTokens.token,
 				environment: mobilePushTokens.environment,
 			})
 			.from(mobilePushTokens)
-			.where(eq(mobilePushTokens.userId, userId as User.UserId));
+			.innerJoin(
+				authApiKeys,
+				and(
+					eq(authApiKeys.userId, mobilePushTokens.userId),
+					sql`SHA2(${authApiKeys.id}, 256) = ${mobilePushTokens.sessionHash}`,
+				),
+			)
+			.where(eq(mobilePushTokens.userId, userId as User.UserId))
+			.orderBy(sql`${mobilePushTokens.updatedAt} DESC`)
+			.limit(MAX_TOKENS_PER_PUSH);
 		if (rows.length === 0) return;
 		const results = await sendPushes(config, rows as PushTarget[], message);
 		const invalid = [...results]
@@ -127,14 +157,14 @@ export interface NotificationPushInput {
 export async function deliverNotificationPush(
 	input: NotificationPushInput,
 ): Promise<void> {
-	if (!apnsConfig()) return;
 	try {
+		if (!apnsConfig()) return;
 		if (
 			(input.type === "view" || input.type === "anon_view") &&
-			(await hasRecentViewNotification({
+			!(await isFirstViewInWindow({
 				recipientId: input.recipientId,
 				videoId: input.videoId,
-				excludeNotificationId: input.notificationId,
+				notificationId: input.notificationId,
 			}))
 		) {
 			return;

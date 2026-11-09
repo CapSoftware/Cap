@@ -713,6 +713,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 	)
 	.add(
 		HttpApiEndpoint.post("registerPushToken", "/user/push-tokens")
+			.setHeaders(MobileAuthHeaders)
 			.setPayload(MobilePushTokenInput)
 			.addSuccess(MobileSuccessResponse)
 			.middleware(HttpAuthMiddleware)

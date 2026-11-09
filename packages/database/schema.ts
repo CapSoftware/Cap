@@ -1021,6 +1021,8 @@ export const mobilePushTokens = mysqlTable(
 		id: nanoId("id").notNull().primaryKey(),
 		userId: nanoId("userId").notNull().$type<User.UserId>(),
 		token: varchar("token", { length: 200 }).notNull(),
+		// SHA-256 of the auth_api_keys id that registered it, so the token dies with that session.
+		sessionHash: varchar("sessionHash", { length: 64 }).notNull(),
 		environment: varchar("environment", {
 			length: 10,
 			enum: ["sandbox", "production"],
@@ -1031,6 +1033,7 @@ export const mobilePushTokens = mysqlTable(
 	(table) => ({
 		tokenUnique: uniqueIndex("token_idx").on(table.token),
 		userIdIndex: index("user_id_idx").on(table.userId),
+		sessionHashIndex: index("session_hash_idx").on(table.sessionHash),
 	}),
 );
 

@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "71b23be2-ca1a-4bbf-966a-0a2963d04e63",
+	"id": "1410a150-068d-45d1-b567-bb432430bf0a",
 	"prevId": "d62584f1-7632-4121-95d2-13a20e008f7f",
 	"tables": {
 		"accounts": {
@@ -2789,6 +2789,13 @@
 					"notNull": true,
 					"autoincrement": false
 				},
+				"sessionHash": {
+					"name": "sessionHash",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
 				"environment": {
 					"name": "environment",
 					"type": "varchar(10)",
@@ -2823,6 +2830,11 @@
 				"user_id_idx": {
 					"name": "user_id_idx",
 					"columns": ["userId"],
+					"isUnique": false
+				},
+				"session_hash_idx": {
+					"name": "session_hash_idx",
+					"columns": ["sessionHash"],
 					"isUnique": false
 				}
 			},

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DbClient } from "@cap/web-backend/src/Database";
 import type { HttpApi } from "@effect/platform";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
@@ -16,6 +17,7 @@ import {
 const mocks = vi.hoisted(() => ({
 	inserts: [] as { values: Record<string, unknown>; onDuplicate: unknown }[],
 	deletes: [] as unknown[],
+	stale: [] as { id: string }[],
 	dispose: async () => {},
 }));
 
@@ -34,7 +36,9 @@ vi.mock("@/lib/server", async () => {
 			const query = {
 				from: () => query,
 				where: () => query,
-				limit: async () => [{ preferences: mocks.preferences }],
+				orderBy: () => query,
+				limit: () => query,
+				offset: async () => mocks.stale,
 			};
 			return query;
 		},
@@ -122,15 +126,21 @@ describe("mobile push tokens", () => {
 	beforeEach(() => {
 		mocks.inserts = [];
 		mocks.deletes = [];
+		mocks.stale = [];
 	});
 
 	afterAll(() => mocks.dispose());
 
-	const post = (path: string, body: unknown) =>
+	const apiKey = "0f3a5c2e-6b4d-4a7f-9e1c-2d3b4a5c6d7e";
+	const sessionHash = createHash("sha256").update(apiKey).digest("hex");
+	const post = (path: string, body: unknown, authorized = true) =>
 		route.POST(
-			new Request(`http://localhost/api/mobile/user/${path}`, {
+			new Request(`http://localhost/api/mobile/${path}`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					"Content-Type": "application/json",
+					...(authorized ? { Authorization: `Bearer ${apiKey}` } : {}),
+				},
 				body: JSON.stringify(body),
 			}),
 		);
@@ -138,7 +148,7 @@ describe("mobile push tokens", () => {
 	const token = "AB".repeat(32);
 
 	it("registers a token for the signed-in user and moves it on re-register", async () => {
-		const response = await post("push-tokens", {
+		const response = await post("user/push-tokens", {
 			token,
 			environment: "sandbox",
 		});
@@ -148,30 +158,63 @@ describe("mobile push tokens", () => {
 		expect(mocks.inserts[0]?.values).toMatchObject({
 			userId: "user",
 			token: token.toLowerCase(),
+			sessionHash,
 			environment: "sandbox",
 		});
 		expect(mocks.inserts[0]?.onDuplicate).toEqual({
-			set: { userId: "user", environment: "sandbox" },
+			set: { userId: "user", sessionHash, environment: "sandbox" },
 		});
+		expect(mocks.deletes).toHaveLength(0);
+	});
+
+	it("needs the session's bearer token to register", async () => {
+		expect(
+			(await post("user/push-tokens", { token, environment: "sandbox" }, false))
+				.status,
+		).toBe(400);
+		expect(mocks.inserts).toHaveLength(0);
+	});
+
+	it("keeps only the user's 10 newest tokens", async () => {
+		mocks.stale = [{ id: "old1" }, { id: "old2" }];
+		expect(
+			(await post("user/push-tokens", { token, environment: "production" }))
+				.status,
+		).toBe(200);
+		expect(mocks.deletes).toHaveLength(1);
+		const { sql, params } = query(mocks.deletes[0]);
+		expect(sql).toContain("`mobile_push_tokens`.`id` in (?, ?)");
+		expect(params).toEqual(["old1", "old2"]);
+	});
+
+	it("drops the session's push tokens when the session is revoked", async () => {
+		expect((await post("session/revoke", {})).status).toBe(200);
+		const [pushTokens, apiKeys] = mocks.deletes.map((condition) =>
+			query(condition),
+		);
+		expect(pushTokens?.sql).toContain("`mobile_push_tokens`.`sessionHash` = ?");
+		expect(pushTokens?.params).toEqual([sessionHash]);
+		expect(apiKeys?.sql).toContain("`auth_api_keys`.`id` = ?");
 	});
 
 	it("rejects tokens that aren't hex and unknown environments", async () => {
 		expect(
 			(
-				await post("push-tokens", {
+				await post("user/push-tokens", {
 					token: "not-a-token",
 					environment: "sandbox",
 				})
 			).status,
 		).toBe(400);
 		expect(
-			(await post("push-tokens", { token, environment: "staging" })).status,
+			(await post("user/push-tokens", { token, environment: "staging" }))
+				.status,
 		).toBe(400);
 		expect(mocks.inserts).toHaveLength(0);
 	});
 
 	it("removes only the caller's own token", async () => {
-		expect((await post("push-tokens/remove", { token })).status).toBe(200);
+		expect((await post("user/push-tokens/remove", { token })).status).toBe(200);
 		expect(mocks.deletes).toHaveLength(1);
 		const { sql, params } = query(mocks.deletes[0]);
 		expect(sql).toContain("`mobile_push_tokens`.`token` = ?");
