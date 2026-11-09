@@ -3697,6 +3697,7 @@ mod tests {
         let duration = 600.0;
         let bytes = progressive_buffer_bytes(progressive_buffer_samples(duration, 48_000, 2));
         assert!(bytes <= MAX_PROGRESSIVE_BUFFER_BYTES);
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         let cache = PlaybackAudioCache::default();
         let seeded = fixture.cached(&cache, output_info, 0.0);
         assert!(matches!(
