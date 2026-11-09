@@ -72,11 +72,18 @@ describe("isVideoLockedByShareableLinkLimit", () => {
 
 	it("leaves imported videos out of the allowance count", async () => {
 		await isVideoLockedByShareableLinkLimit(VIDEO);
-		const [[query]] = mocks.query.mock.calls.filter(([query]) =>
+		const call = mocks.query.mock.calls.find(([query]) =>
 			String(query).includes("count("),
 		);
-		expect(query).toContain("not exists (select `id` from `imported_videos`");
-		expect(query).toContain("exists (select `id` from `imported_videos`");
+		const query = String(call?.[0]);
+		const params: unknown[] = call?.[1] ?? [];
+		expect(query).toContain(
+			"exists (select `id` from `imported_videos` where `imported_videos`.`id` = ?)",
+		);
+		expect(params[0]).toBe(VIDEO);
+		expect(query).toContain(
+			"not exists (select `id` from `imported_videos` where `imported_videos`.`id` = `videos`.`id`)",
+		);
 	});
 
 	it("treats a missing video as unlocked", async () => {
