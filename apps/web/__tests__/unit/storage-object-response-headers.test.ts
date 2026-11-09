@@ -15,13 +15,23 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@cap/web-backend", async () => {
 	const { Effect, Option } = await import("effect");
+	const { attachmentContentDisposition } = await import(
+		"../../../../packages/web-backend/src/Storage/content-disposition"
+	);
 	return {
+		attachmentContentDisposition,
 		provideOptionalAuth: (effect: unknown) => effect,
 		Storage: {
 			getAccessForVideo: () =>
 				Effect.succeed([
 					mocks.signedUrl
-						? { getSignedObjectUrl: () => Effect.succeed(mocks.signedUrl) }
+						? {
+								getSignedObjectUrl: () => Effect.succeed(mocks.signedUrl),
+								getSignedDownloadUrl: (_key: string, fileName: string) =>
+									Effect.succeed(
+										`${mocks.signedUrl}&download=${encodeURIComponent(fileName)}`,
+									),
+							}
 						: { headObject: mocks.head, getObjectResponse: mocks.read },
 				]),
 		},
@@ -202,5 +212,33 @@ describe("storage object content headers", () => {
 		expect(response.status).toBe(302);
 		expect(response.headers.get("Location")).toBe(mocks.signedUrl);
 		expect(mocks.read).not.toHaveBeenCalled();
+	});
+
+	it("serves a requested download as an attachment with its name", async () => {
+		mocks.read.mockReturnValue(Effect.succeed(upstream("video/mp4")));
+		const response = await GET(
+			new NextRequest(
+				`${objectUrl("owner/video/result.mp4")}&download=${encodeURIComponent("Démo.mp4")}`,
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe("video/mp4");
+		expect(response.headers.get("Content-Disposition")).toBe(
+			"attachment; filename=\"D_mo.mp4\"; filename*=UTF-8''D%C3%A9mo.mp4",
+		);
+		expectContentHeaders(response);
+	});
+
+	it("redirects a requested download to an attachment URL", async () => {
+		mocks.signedUrl = "https://bucket.example/owner/video/result.mp4?sig=1";
+		const response = await GET(
+			new NextRequest(
+				`${objectUrl("owner/video/result.mp4")}&download=Recording.mp4`,
+			),
+		);
+		expect(response.status).toBe(302);
+		expect(response.headers.get("Location")).toBe(
+			`${mocks.signedUrl}&download=Recording.mp4`,
+		);
 	});
 });
