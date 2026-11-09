@@ -49,6 +49,7 @@ afterEach(async () => {
 	container?.remove();
 	for (const frame of document.querySelectorAll("body > iframe"))
 		frame.remove();
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	mocks.getVideoDownloadInfo.mockReset();
 	mocks.toastPromise.mockReset();
@@ -80,7 +81,8 @@ it("hands the signed URL to the browser instead of buffering the file", async ()
 	vi.unstubAllGlobals();
 });
 
-it("replaces the previous download frame on the next download", async () => {
+it("keeps an earlier download alive when another one starts", async () => {
+	vi.useFakeTimers();
 	const nextUrl = `${signedUrl}&next=1`;
 	await act(async () => {
 		download?.("current");
@@ -96,7 +98,14 @@ it("replaces the previous download frame on the next download", async () => {
 		await mocks.toastPromise.mock.calls[1]?.[0];
 	});
 
-	expect(downloadFrames().map((frame) => frame.src)).toEqual([nextUrl]);
+	expect(downloadFrames().map((frame) => frame.src)).toEqual([
+		signedUrl,
+		nextUrl,
+	]);
+
+	vi.advanceTimersByTime(5 * 60 * 1000);
+	expect(downloadFrames()).toHaveLength(0);
+	vi.useRealTimers();
 });
 
 it("reports the server error without starting a download", async () => {
