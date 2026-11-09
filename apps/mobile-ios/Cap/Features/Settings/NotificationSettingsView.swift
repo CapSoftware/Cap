@@ -4,6 +4,8 @@ import SwiftUI
 struct NotificationSettingsView: View {
     @Environment(SessionModel.self) private var session
     @State private var preferences: NotificationPreferences?
+    /// The last state the server confirmed, restored if a save fails and the server can't be re-read.
+    @State private var confirmed: NotificationPreferences?
     @State private var loadError: CapAPIError?
     @State private var error: String?
     @State private var queue: [(NotificationPreferences.Kind, Bool)] = []
@@ -67,7 +69,10 @@ struct NotificationSettingsView: View {
 
     private func load() async {
         do {
-            preferences = try await session.api.notificationPreferences()
+            let loaded = try await session.api.notificationPreferences()
+            confirmed = loaded
+            // Pull to refresh mid-save would otherwise show switches that are still being saved as reverted.
+            if !isSaving { preferences = loaded }
             loadError = nil
         } catch {
             if preferences == nil { loadError = error }
@@ -87,15 +92,15 @@ struct NotificationSettingsView: View {
             let (kind, enabled) = queue.removeFirst()
             do {
                 let saved = try await session.api.setNotification(kind, enabled: enabled)
+                confirmed = saved
                 if queue.isEmpty { preferences = saved }
             } catch {
                 queue.removeAll()
                 self.error = error.errorDescription
                 if let current = try? await session.api.notificationPreferences() {
-                    preferences = current
-                } else {
-                    preferences?[kind] = !enabled
+                    confirmed = current
                 }
+                preferences = confirmed
             }
         }
     }
