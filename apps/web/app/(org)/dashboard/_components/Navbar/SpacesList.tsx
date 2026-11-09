@@ -110,6 +110,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			const result = await shareCap({
 				capId: cap.id,
 				spaceIds: [spaceId],
+				mode: "add",
 			});
 
 			if (result.success) {

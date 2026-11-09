@@ -120,6 +120,31 @@ const writes = () =>
 	);
 
 describe("sharing Caps to private spaces", () => {
+	it.each(["add", "replace"] as const)(
+		"checks private space access in %s mode before writing",
+		async (mode) => {
+			organizationShareExists = true;
+			await expect(
+				shareCap({ capId, spaceIds: [spaceId], mode }),
+			).resolves.toMatchObject({ success: false });
+			expect(organizationShareExists).toBe(true);
+			expect(writes()).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ mode: "add" as const, kept: true },
+		{ mode: "replace" as const, kept: false },
+	])("handles unselected shares in $mode mode", async ({ mode, kept }) => {
+		organizationShareExists = true;
+		spaceRole = "member";
+		await expect(
+			shareCap({ capId, spaceIds: [spaceId], mode }),
+		).resolves.toEqual({ success: true });
+		expect(organizationShareExists).toBe(kept);
+		expect(writes()).toHaveLength(kept ? 1 : 2);
+	});
+
 	it("rejects an organization member outside the space before changing any shares or visibility", async () => {
 		organizationShareExists = true;
 		await expect(
