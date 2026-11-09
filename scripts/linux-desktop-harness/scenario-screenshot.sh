@@ -48,6 +48,16 @@ if [[ $XDG_CURRENT_DESKTOP != *GNOME* ]]; then
   done
 fi
 
+# On GNOME only Cap's own request is left for the Shell to ask about. The
+# reference below is requested by a harness script, which the portal sees as
+# an app without an id and which nobody is there to allow.
+if [[ -n ${AREA:-} && $XDG_CURRENT_DESKTOP == *GNOME* ]]; then
+  gdbus call --session --dest org.freedesktop.impl.portal.PermissionStore \
+    --object-path /org/freedesktop/impl/portal/PermissionStore \
+    --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
+    screenshot true screenshot "" "['yes']" >/dev/null 2>&1
+fi
+
 # The KDE portal saves its screenshots to the Pictures folder and fails without
 # one, which a fresh home does not have.
 mkdir -p "$HOME/Pictures"
