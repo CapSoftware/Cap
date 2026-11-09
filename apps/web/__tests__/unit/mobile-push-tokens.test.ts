@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 	inserts: [] as { values: Record<string, unknown>; onDuplicate: unknown }[],
 	deletes: [] as unknown[],
 	stale: [] as { id: string }[],
+	tokenTableMissing: false,
 	dispose: async () => {},
 }));
 
@@ -52,6 +53,14 @@ vi.mock("@/lib/server", async () => {
 		delete: () => ({
 			where: async (condition: unknown) => {
 				mocks.deletes.push(condition);
+				if (
+					mocks.tokenTableMissing &&
+					new MySqlDialect()
+						.sqlToQuery(condition as SQL)
+						.sql.includes("mobile_push_tokens")
+				) {
+					throw new Error("Table 'mobile_push_tokens' doesn't exist");
+				}
 			},
 		}),
 	};
@@ -127,6 +136,7 @@ describe("mobile push tokens", () => {
 		mocks.inserts = [];
 		mocks.deletes = [];
 		mocks.stale = [];
+		mocks.tokenTableMissing = false;
 	});
 
 	afterAll(() => mocks.dispose());
@@ -187,14 +197,20 @@ describe("mobile push tokens", () => {
 		expect(params).toEqual(["old1", "old2"]);
 	});
 
-	it("drops the session's push tokens when the session is revoked", async () => {
+	it("revokes the key, then drops the session's push tokens", async () => {
 		expect((await post("session/revoke", {})).status).toBe(200);
-		const [pushTokens, apiKeys] = mocks.deletes.map((condition) =>
+		const [apiKeys, pushTokens] = mocks.deletes.map((condition) =>
 			query(condition),
 		);
+		expect(apiKeys?.sql).toContain("`auth_api_keys`.`id` = ?");
 		expect(pushTokens?.sql).toContain("`mobile_push_tokens`.`sessionHash` = ?");
 		expect(pushTokens?.params).toEqual([sessionHash]);
-		expect(apiKeys?.sql).toContain("`auth_api_keys`.`id` = ?");
+	});
+
+	it("still revokes the key when the push token table isn't there yet", async () => {
+		mocks.tokenTableMissing = true;
+		expect((await post("session/revoke", {})).status).toBe(200);
+		expect(query(mocks.deletes[0]).sql).toContain("`auth_api_keys`.`id` = ?");
 	});
 
 	it("rejects tokens that aren't hex and unknown environments", async () => {

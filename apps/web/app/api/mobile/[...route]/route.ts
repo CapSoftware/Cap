@@ -3677,16 +3677,19 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 									return yield* Effect.fail(new HttpApiError.Unauthorized());
 								yield* database.use(async (db) => {
 									await db
+										.delete(Db.authApiKeys)
+										.where(eq(Db.authApiKeys.id, token));
+									// Delivery already skips tokens whose session is gone; this only tidies up,
+									// so it must never stop the key above from being revoked.
+									await db
 										.delete(Db.mobilePushTokens)
 										.where(
 											eq(
 												Db.mobilePushTokens.sessionHash,
 												pushSessionHash(token),
 											),
-										);
-									await db
-										.delete(Db.authApiKeys)
-										.where(eq(Db.authApiKeys.id, token));
+										)
+										.catch(() => undefined);
 								});
 								return { success: true as const };
 							}),
