@@ -1015,6 +1015,25 @@ export const authApiKeys = mysqlTable(
 	}),
 );
 
+export const mobilePushTokens = mysqlTable(
+	"mobile_push_tokens",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		token: varchar("token", { length: 200 }).notNull(),
+		environment: varchar("environment", {
+			length: 10,
+			enum: ["sandbox", "production"],
+		}).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		tokenUnique: uniqueIndex("token_idx").on(table.token),
+		userIdIndex: index("user_id_idx").on(table.userId),
+	}),
+);
+
 export const agentApiKeys = mysqlTable(
 	"agent_api_keys",
 	{
