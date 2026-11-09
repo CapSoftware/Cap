@@ -494,7 +494,7 @@ impl Mp4ExportSettings {
         let audio_segments = get_audio_segments(&base.segments).await;
         let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
 
-        let has_recording_audio = audio_segments.first().is_some()
+        let has_recording_audio = !audio_segments.is_empty()
             && (base.project_config.audio.is_mic_active()
                 || base.project_config.audio.is_system_active());
         let has_audio = has_recording_audio || !music.is_empty();
@@ -2180,10 +2180,11 @@ mod tests {
         };
 
         let result = nv12_from_rendered_frame(frame);
-        let ExportFramePayload::Cpu(nv12_data) = &result.payload else {
-            panic!("CPU frame must stay a CPU payload");
-        };
-        assert_eq!(&**nv12_data, data.as_slice());
+        let (nv12_data, y_stride) = result
+            .materialize_nv12()
+            .expect("CPU frame must stay a CPU payload");
+        assert_eq!(y_stride, 4);
+        assert_eq!(nv12_data, data);
     }
 
     #[test]
