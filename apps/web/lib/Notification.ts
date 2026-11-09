@@ -10,6 +10,7 @@ import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
+import { queueNotificationPush } from "@/lib/mobile-push";
 
 export type NotificationType = Notification["type"];
 
@@ -160,6 +161,15 @@ export async function createNotification(
 				videoId: notification.videoId,
 			});
 
+			queueNotificationPush({
+				notificationId,
+				type,
+				recipientId,
+				videoId: notification.videoId,
+				authorId: notification.authorId,
+				content: notification.comment.content,
+			});
+
 			return { success: true, notificationId };
 		}
 
@@ -233,6 +243,15 @@ export async function createNotification(
 			type,
 			data,
 			videoId: notification.videoId,
+		});
+
+		queueNotificationPush({
+			notificationId,
+			type,
+			recipientId: videoResult.ownerId,
+			videoId: notification.videoId,
+			authorId: notification.authorId,
+			content: "comment" in notification ? notification.comment.content : null,
 		});
 
 		if (type === "comment") {
@@ -391,14 +410,23 @@ export async function createAnonymousViewNotification({
 		if (Number(recentNotificationCount?.count ?? 0) >= ANON_NOTIF_MAX_PER_VIDEO)
 			return;
 
+		const notificationId = nanoId();
 		await database.insert(notifications).values({
-			id: nanoId(),
+			id: notificationId,
 			orgId: videoWithOwner.activeOrganizationId,
 			recipientId: videoWithOwner.ownerId,
 			type: "anon_view",
 			data: { videoId, anonName, location },
 			videoId,
 			dedupKey,
+		});
+
+		queueNotificationPush({
+			notificationId,
+			type: "anon_view",
+			recipientId: videoWithOwner.ownerId,
+			videoId,
+			anonName,
 		});
 	} catch (error) {
 		if (isDuplicateEntryError(error)) return;
