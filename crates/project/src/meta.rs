@@ -1057,6 +1057,70 @@ mod metadata_save_tests {
         assert_no_temporary_metadata(project.path());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn metadata_saves_when_the_temporary_path_passes_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let padding = 245_usize.saturating_sub(root.path().as_os_str().len() + 1);
+        assert!((1..=255).contains(&padding));
+        let project = root.path().join("r".repeat(padding));
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            project
+                .join(".recording-meta-000000.json.tmp")
+                .as_os_str()
+                .len()
+                > 260
+        );
+
+        let mut meta = recording(&project);
+        meta.save_for_project().unwrap();
+        meta.pretty_name = "Finished recording".into();
+        meta.save_for_project().unwrap();
+
+        assert_eq!(
+            RecordingMeta::load_for_project(&project)
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
+        assert_no_temporary_metadata(&project);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn metadata_replacement_waits_for_a_handle_without_share_delete() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 1;
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&path)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(held);
+        });
+        let mut meta = recording(project.path());
+        meta.pretty_name = "Finished recording".into();
+
+        let result = meta.save_for_project();
+        release.join().unwrap();
+
+        result.unwrap();
+        assert_eq!(
+            RecordingMeta::load_for_project(project.path())
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
+        assert_no_temporary_metadata(project.path());
+    }
+
     #[cfg(unix)]
     #[test]
     fn metadata_replacement_preserves_existing_permissions() {
