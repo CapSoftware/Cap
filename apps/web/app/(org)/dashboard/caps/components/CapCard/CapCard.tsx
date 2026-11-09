@@ -11,7 +11,6 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { HttpClient } from "@effect/platform";
 import {
 	faChartSimple,
 	faCheck,
@@ -48,6 +47,7 @@ import {
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { startBrowserDownload } from "@/lib/start-browser-download";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -185,21 +185,8 @@ export const CapCard = ({
 		mutationFn: () =>
 			Effect.gen(function* () {
 				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
-				const httpClient = yield* HttpClient.HttpClient;
 				if (Option.isSome(result)) {
-					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
-					const blob = yield* fetchResponse.arrayBuffer;
-
-					const blobUrl = window.URL.createObjectURL(new Blob([blob]));
-					const link = document.createElement("a");
-					link.href = blobUrl;
-					link.download = result.value.fileName;
-					link.style.display = "none";
-					document.body.appendChild(link);
-					link.click();
-					document.body.removeChild(link);
-
-					window.URL.revokeObjectURL(blobUrl);
+					startBrowserDownload(result.value.downloadUrl);
 				} else {
 					throw new Error("Failed to get download URL");
 				}
