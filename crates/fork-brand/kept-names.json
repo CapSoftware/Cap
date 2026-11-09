@@ -45,6 +45,14 @@
 		{ "id": "capux_read", "why": "viewer cookie on existing links" },
 		{ "id": "@cap-ux/cloud", "why": "private package name held in lockfiles" },
 		{
+			"id": "@cap-ux/feedback",
+			"why": "private package name held in lockfiles"
+		},
+		{
+			"id": "data-worm-mask",
+			"why": "attribute site owners add to their own pages to hide content from feedback screenshots and click labels"
+		},
+		{
 			"id": "\"worm\"",
 			"why": "walk mode value Z3 sends in start_walk links and cap-cli walk --mode"
 		}
@@ -54,7 +62,8 @@
 		"UX-WALK.md",
 		"CLOUD-PLATFORM.md",
 		"UPSTREAM-DEVELOPMENT.md",
-		"apps/cloud/README.md"
+		"apps/cloud/README.md",
+		"packages/feedback-widget/README.md"
 	],
 	"door": [
 		"crates/fork-brand/",

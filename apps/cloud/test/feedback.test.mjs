@@ -116,8 +116,11 @@ function form({
 }
 
 async function post(body, origin = APP, target = runtime, headers = {}) {
-	const encoded = new Request("https://worm.test/", { method: "POST", body });
-	return target.dispatchFetch("https://worm.test/api/v1/feedback", {
+	const encoded = new Request("https://feedback-server.test/", {
+		method: "POST",
+		body,
+	});
+	return target.dispatchFetch("https://feedback-server.test/api/v1/feedback", {
 		method: "POST",
 		body: Buffer.from(await encoded.arrayBuffer()),
 		headers: {
@@ -128,13 +131,13 @@ async function post(body, origin = APP, target = runtime, headers = {}) {
 	});
 }
 const get = (path, headers = owner) =>
-	runtime.dispatchFetch(`https://worm.test/api/v1/feedback${path}`, {
+	runtime.dispatchFetch(`https://feedback-server.test/api/v1/feedback${path}`, {
 		headers,
 	});
 
 test("only listed origins can send, and only with their own site key", async () => {
 	const preflight = await runtime.dispatchFetch(
-		"https://worm.test/api/v1/feedback",
+		"https://feedback-server.test/api/v1/feedback",
 		{
 			method: "OPTIONS",
 			headers: { Origin: APP, "Access-Control-Request-Method": "POST" },
@@ -189,10 +192,13 @@ test("a report is stored privately and only the owner can list, read and delete 
 	}
 	assert.equal(
 		(
-			await runtime.dispatchFetch(`https://worm.test/api/v1/feedback/${id}`, {
-				method: "DELETE",
-				headers: { Origin: APP },
-			})
+			await runtime.dispatchFetch(
+				`https://feedback-server.test/api/v1/feedback/${id}`,
+				{
+					method: "DELETE",
+					headers: { Origin: APP },
+				},
+			)
 		).status,
 		401,
 	);
@@ -238,7 +244,7 @@ test("a report is stored privately and only the owner can list, read and delete 
 	assert.deepEqual(Buffer.from(await voice.arrayBuffer()), webm);
 
 	const removed = await runtime.dispatchFetch(
-		`https://worm.test/api/v1/feedback/${id}`,
+		`https://feedback-server.test/api/v1/feedback/${id}`,
 		{ method: "DELETE", headers: owner },
 	);
 	assert.equal(removed.status, 204);
@@ -334,7 +340,7 @@ test("limits on size, format and evidence are enforced", async () => {
 		);
 	else assert.equal(huge.status, 413);
 	const plain = await runtime.dispatchFetch(
-		"https://worm.test/api/v1/feedback",
+		"https://feedback-server.test/api/v1/feedback",
 		{
 			method: "POST",
 			body: JSON.stringify({ key: KEY, note: "hi" }),
@@ -389,10 +395,13 @@ test("unknown ids and methods are refused", async () => {
 	assert.equal((await get("/0000000000000-0000000000000000")).status, 404);
 	assert.equal(
 		(
-			await runtime.dispatchFetch("https://worm.test/api/v1/feedback", {
-				method: "PUT",
-				headers: owner,
-			})
+			await runtime.dispatchFetch(
+				"https://feedback-server.test/api/v1/feedback",
+				{
+					method: "PUT",
+					headers: owner,
+				},
+			)
 		).status,
 		405,
 	);

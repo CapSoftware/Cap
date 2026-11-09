@@ -13,12 +13,12 @@ await build({
 	...shared,
 	entryPoints: ["src/index.ts"],
 	format: "esm",
-	outfile: "dist/worm-feedback.mjs",
+	outfile: "dist/feedback-widget.mjs",
 });
 await build({
 	...shared,
 	entryPoints: ["src/script-tag.ts"],
 	format: "iife",
-	globalName: "WormFeedback",
-	outfile: "dist/worm-feedback.js",
+	globalName: "FeedbackWidget",
+	outfile: "dist/feedback-widget.js",
 });

@@ -428,6 +428,21 @@
         "@types/node": "^22.15.14",
       },
     },
+    "packages/feedback-widget": {
+      "name": "@cap-ux/feedback",
+      "version": "0.1.0",
+      "dependencies": {
+        "modern-screenshot": "4.7.0",
+      },
+      "devDependencies": {
+        "@playwright/test": "1.61.1",
+        "@types/node": "20.19.43",
+        "esbuild": "0.28.2",
+        "jsdom": "26.1.0",
+        "typescript": "5.9.3",
+        "vitest": "3.2.6",
+      },
+    },
     "packages/local-docker": {
       "name": "@cap/local-docker",
       "version": "0.0.0",
@@ -584,21 +599,6 @@
       },
       "devDependencies": {
         "@effect/platform-node": "^0.98.3",
-      },
-    },
-    "packages/worm-feedback": {
-      "name": "@cap-ux/feedback",
-      "version": "0.1.0",
-      "dependencies": {
-        "modern-screenshot": "4.7.0",
-      },
-      "devDependencies": {
-        "@playwright/test": "1.61.1",
-        "@types/node": "20.19.43",
-        "esbuild": "0.28.2",
-        "jsdom": "26.1.0",
-        "typescript": "5.9.3",
-        "vitest": "3.2.6",
       },
     },
   },
@@ -901,7 +901,7 @@
 
     "@cap-ux/cloud": ["@cap-ux/cloud@workspace:apps/cloud"],
 
-    "@cap-ux/feedback": ["@cap-ux/feedback@workspace:packages/worm-feedback"],
+    "@cap-ux/feedback": ["@cap-ux/feedback@workspace:packages/feedback-widget"],
 
     "@cap/chrome-extension": ["@cap/chrome-extension@workspace:apps/chrome-extension"],
 

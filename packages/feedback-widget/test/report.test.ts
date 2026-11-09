@@ -58,7 +58,7 @@ describe("report", () => {
 		history.replaceState(null, "", "/patients/123456?mrn=9");
 		const collector = createCollector({
 			host: () => null,
-			ignoreOrigin: "https://worm.test",
+			ignoreOrigin: "https://feedback-server.test",
 		});
 		stop = collector.stop;
 		const evidence = await buildEvidence(collector, {
@@ -95,7 +95,7 @@ describe("report", () => {
 	it("survives a failing getContext", async () => {
 		const collector = createCollector({
 			host: () => null,
-			ignoreOrigin: "https://worm.test",
+			ignoreOrigin: "https://feedback-server.test",
 		});
 		stop = collector.stop;
 		const evidence = await buildEvidence(collector, {

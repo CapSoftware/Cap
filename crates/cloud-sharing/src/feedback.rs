@@ -17,7 +17,7 @@ impl SharingClient {
     pub fn configured_feedback() -> Result<Self, String> {
         let settings = load()?;
         if settings.endpoint.is_empty() {
-            return Err("Choose your Worm server in Settings → Sharing first.".into());
+            return Err("Choose your sharing server in Settings → Sharing first.".into());
         }
         let base = endpoint(&settings.endpoint)?;
         let token = stored_token(&base)?;
@@ -56,7 +56,7 @@ impl SharingClient {
             || url.fragment().is_some()
             || url.query_pairs().any(|(key, _)| key != "cursor")
         {
-            return Err("Feedback requests must stay on the configured Worm server.".into());
+            return Err("Feedback requests must stay on the configured sharing server.".into());
         }
         let verb = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|_| "Invalid feedback method.")?;
@@ -66,14 +66,14 @@ impl SharingClient {
             .bearer_auth(&self.token)
             .send()
             .await
-            .map_err(|_| "Could not reach your Worm server.")?;
+            .map_err(|_| "Could not reach your sharing server.")?;
         let status = response.status().as_u16();
         if status == 404 {
             return Err("That feedback report is unavailable or has expired.".into());
         }
         if !response.status().is_success() {
             return Err(format!(
-                "Your Worm server returned HTTP {status}. Check its owner credential."
+                "Your sharing server returned HTTP {status}. Check its owner credential."
             ));
         }
         let mut bytes = Vec::new();
@@ -403,7 +403,7 @@ mod tests {
             &report(),
             "2026-11-09-1028",
             "2026-11-09T18:28:48.929Z",
-            "https://worm.example.test",
+            "https://feedback.example.test",
             Some(vec![1, 2, 3]),
             Some(vec![4, 5, 6]),
         )
@@ -483,7 +483,7 @@ mod tests {
             Settings {
                 enabled: false,
                 backup_enabled: false,
-                endpoint: "https://worm.example.test".into(),
+                endpoint: "https://feedback.example.test".into(),
                 expires_in_days: 7,
             },
             "synthetic-owner-token-with-32-characters".into(),

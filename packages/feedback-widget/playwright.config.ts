@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const channel = process.env.WORM_FEEDBACK_BROWSER_CHANNEL ?? "chrome";
+const channel = process.env.FEEDBACK_BROWSER_CHANNEL ?? "chrome";
 const media = {
 	permissions: ["microphone"],
 	launchOptions: {

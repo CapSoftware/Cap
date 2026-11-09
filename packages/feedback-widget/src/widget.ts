@@ -2,7 +2,7 @@ import { type Collector, createCollector } from "./evidence";
 import { buildEvidence, MAX_NOTE, reportForm } from "./report";
 import { captureScreenshot } from "./screenshot";
 import { STYLE } from "./styles";
-import type { WormFeedback, WormFeedbackConfig } from "./types";
+import type { FeedbackWidget, FeedbackWidgetConfig } from "./types";
 import {
 	MAX_VOICE_MS,
 	type VoiceMemo,
@@ -17,7 +17,7 @@ function origin(server: string): string {
 	const url = new URL(server);
 	const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 	if (url.protocol !== "https:" && !(local && url.protocol === "http:"))
-		throw new Error("Worm feedback needs an https server origin.");
+		throw new Error("The feedback server must be an https origin.");
 	return url.origin;
 }
 
@@ -37,11 +37,11 @@ function element<K extends keyof HTMLElementTagNameMap>(
 	return node;
 }
 
-export function mountWidget(config: WormFeedbackConfig): WormFeedback {
+export function mountWidget(config: FeedbackWidgetConfig): FeedbackWidget {
 	const server = origin(config.server);
-	if (!config.siteKey) throw new Error("Worm feedback needs a site key.");
+	if (!config.siteKey) throw new Error("The feedback widget needs a site key.");
 	const send = window.fetch.bind(window);
-	const host = document.createElement("worm-feedback");
+	const host = document.createElement("feedback-widget");
 	host.setAttribute("data-worm-mask", "");
 	host.className = "ph-no-capture rr-block sentry-block fs-exclude";
 	host.setAttribute("data-private", "");
@@ -68,7 +68,7 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 	launcher.innerHTML = ICON;
 	launcher.append(element("span", { textContent: config.label ?? "Feedback" }));
 
-	const titleId = "worm-feedback-title";
+	const titleId = "feedback-widget-title";
 	const panel = element("div", { className: "panel", hidden: true });
 	panel.setAttribute("role", "dialog");
 	panel.setAttribute("aria-labelledby", titleId);
@@ -79,7 +79,7 @@ export function mountWidget(config: WormFeedbackConfig): WormFeedback {
 		textContent: "×",
 	});
 	const note = element("textarea", {
-		id: "worm-feedback-note",
+		id: "feedback-widget-note",
 		maxLength: MAX_NOTE,
 		placeholder: "What happened? What did you expect?",
 	});

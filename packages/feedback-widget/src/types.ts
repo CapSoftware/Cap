@@ -17,7 +17,7 @@ export interface RouteRule {
 	replace: string;
 }
 
-export interface WormFeedbackConfig {
+export interface FeedbackWidgetConfig {
 	server: string;
 	siteKey: string;
 	getContext?: () => FeedbackContext | Promise<FeedbackContext>;
@@ -85,7 +85,7 @@ export interface Evidence {
 	events: EvidenceEvent[];
 }
 
-export interface WormFeedback {
+export interface FeedbackWidget {
 	open(): void;
 	close(): void;
 	destroy(): void;

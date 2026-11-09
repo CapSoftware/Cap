@@ -4,9 +4,9 @@
 	"private": true,
 	"license": "AGPL-3.0-only",
 	"type": "module",
-	"main": "dist/worm-feedback.mjs",
-	"module": "dist/worm-feedback.mjs",
-	"types": "dist/worm-feedback.d.ts",
+	"main": "dist/feedback-widget.mjs",
+	"module": "dist/feedback-widget.mjs",
+	"types": "dist/feedback-widget.d.ts",
 	"files": [
 		"dist"
 	],

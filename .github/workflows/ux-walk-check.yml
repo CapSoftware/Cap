@@ -12,7 +12,7 @@ on:
       - apps/desktop-gpui/**
       - apps/cli/**
       - apps/cloud/**
-      - packages/worm-feedback/**
+      - packages/feedback-widget/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
       - crates/fork-cli-shim/**
@@ -30,7 +30,7 @@ on:
       - apps/desktop-gpui/**
       - apps/cli/**
       - apps/cloud/**
-      - packages/worm-feedback/**
+      - packages/feedback-widget/**
       - crates/cloud-sharing/**
       - crates/fork-brand/**
       - crates/fork-cli-shim/**
@@ -70,8 +70,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm ci --ignore-scripts --prefix packages/worm-feedback
-      - run: npm run check --prefix packages/worm-feedback
+      - run: npm ci --ignore-scripts --prefix packages/feedback-widget
+      - run: npm run check --prefix packages/feedback-widget
   library-contract:
     if: github.repository == 'CantrellJax/ux-walk-cap'
     runs-on: ubuntu-latest

@@ -15,7 +15,7 @@ pub struct FeedbackArgs {
 
 #[derive(Subcommand)]
 enum FeedbackCommand {
-    /// List feedback reports on your Worm server, newest first
+    /// List feedback reports on your sharing server, newest first
     List {
         #[arg(long)]
         cursor: Option<String>,
@@ -27,7 +27,7 @@ enum FeedbackCommand {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Delete a report and its attachments from your Worm server
+    /// Delete a report and its attachments from your sharing server
     Delete { id: String },
 }
 
@@ -129,7 +129,7 @@ impl FeedbackArgs {
                 };
                 let (_, bytes) = client.feedback_request("GET", &resource).await?;
                 let value: Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| "Your Worm server returned invalid JSON.")?;
+                    .map_err(|_| "Your sharing server returned invalid JSON.")?;
                 write_json(&value)
             }
             FeedbackCommand::Pull { id, out } => {
@@ -138,9 +138,9 @@ impl FeedbackArgs {
                     .feedback_request("GET", &format!("/api/v1/feedback/{id}"))
                     .await?;
                 let report: Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| "Your Worm server returned an invalid report.")?;
+                    .map_err(|_| "Your sharing server returned an invalid report.")?;
                 if report["id"].as_str() != Some(id) {
-                    return Err("Your Worm server returned a different report.".into());
+                    return Err("Your sharing server returned a different report.".into());
                 }
                 let screenshot = attachment(&client, id, &report, "screenshot").await?;
                 let voice = attachment(&client, id, &report, "voice").await?;

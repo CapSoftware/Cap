@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
 
 const APP = "http://localhost:4173";
-const WORM = "http://localhost:8787";
+const SERVER = "http://localhost:8787";
 const root = new URL("..", import.meta.url);
 
 interface Captured {
@@ -25,7 +25,7 @@ async function serve(page: Page): Promise<Captured[]> {
 		const type = path.endsWith(".js") ? "text/javascript" : "text/html";
 		return route.fulfill({ body: await readFile(file), contentType: type });
 	});
-	await page.route(`${WORM}/api/v1/feedback`, async (route) => {
+	await page.route(`${SERVER}/api/v1/feedback`, async (route) => {
 		const request = route.request();
 		const form = await new Response(
 			new Uint8Array(request.postDataBuffer() ?? new Uint8Array()),
@@ -52,7 +52,7 @@ async function serve(page: Page): Promise<Captured[]> {
 
 async function maskedPixels(page: Page) {
 	return page.evaluate(async () => {
-		const shadow = document.querySelector("worm-feedback")?.shadowRoot;
+		const shadow = document.querySelector("feedback-widget")?.shadowRoot;
 		const image = shadow?.querySelector<HTMLImageElement>(".attachment img");
 		if (!image) throw new Error("no preview");
 		await image.decode();
@@ -124,7 +124,7 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 		.toBeGreaterThan(0);
 
 	const launcher = page
-		.locator("worm-feedback")
+		.locator("feedback-widget")
 		.getByRole("button", { name: "Send feedback" });
 	const box = await launcher.boundingBox();
 	expect(box?.width).toBeGreaterThanOrEqual(44);
@@ -132,7 +132,7 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 	await launcher.click();
 
 	const panel = page
-		.locator("worm-feedback")
+		.locator("feedback-widget")
 		.getByRole("dialog", { name: "Send feedback" });
 	await expect(panel).toBeVisible();
 	const viewport = page.viewportSize();
@@ -157,7 +157,7 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 		.fill("Saving the intake form fails with a conflict.");
 	await page.evaluate(() => {
 		const note = document
-			.querySelector("worm-feedback")
+			.querySelector("feedback-widget")
 			?.shadowRoot?.querySelector("textarea");
 		const rect = note?.getBoundingClientRect();
 		if (!rect) return;
@@ -167,7 +167,7 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 			for (let x = rect.left + 8; x < rect.right - 8; x += 8) {
 				const under = document
 					.elementsFromPoint(x, y)
-					.find((element) => element.tagName !== "WORM-FEEDBACK");
+					.find((element) => element.tagName !== "FEEDBACK-WIDGET");
 				if (under && !under.closest(hidden)) {
 					(window as unknown as { __notePoint?: number[] }).__notePoint = [
 						x,

@@ -122,7 +122,7 @@ describe("collector", () => {
 
 	beforeEach(() => {
 		document.body.innerHTML = `<button id="go">Go</button>`;
-		host = document.createElement("worm-feedback");
+		host = document.createElement("feedback-widget");
 		host.attachShadow({ mode: "open" }).innerHTML = "<button>inside</button>";
 		document.body.append(host);
 		window.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -137,7 +137,7 @@ describe("collector", () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		collector = createCollector({
 			host: () => host,
-			ignoreOrigin: "https://worm.test",
+			ignoreOrigin: "https://feedback-server.test",
 		});
 	});
 
@@ -178,7 +178,7 @@ describe("collector", () => {
 			body: "secret body",
 		});
 		await window.fetch("/api/missing/77777?x=1");
-		await window.fetch("https://worm.test/api/v1/feedback/missing");
+		await window.fetch("https://feedback-server.test/api/v1/feedback/missing");
 		await expect(window.fetch("/api/boom")).rejects.toThrow();
 		const requests = collector.requests.values();
 		expect(requests).toHaveLength(2);
@@ -274,7 +274,7 @@ describe("stopping alongside other instrumentation", () => {
 		) as typeof window.fetch;
 		const collector = createCollector({
 			host: () => null,
-			ignoreOrigin: "https://worm.test",
+			ignoreOrigin: "https://feedback-server.test",
 		});
 		const ours = window.fetch;
 		const theirs = vi.fn((...args: Parameters<typeof fetch>) =>

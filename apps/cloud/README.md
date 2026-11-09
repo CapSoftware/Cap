@@ -65,7 +65,7 @@ Supported media: video/mp4, image/png and image/jpeg. Maximum media size: 20 GB.
 
 ## Feedback from your web apps
 
-The same Worker receives reports from the Worm feedback button (`packages/worm-feedback`) embedded in your own web apps. Each site owner runs their own server, so reports stay in that owner's Cloudflare account; there is no shared Worm service. Reports can contain health or other personal information: treat the bucket and the owner credential accordingly.
+The same Worker receives reports from the Worm feedback button (`packages/feedback-widget`) embedded in your own web apps. Each site owner runs their own server, so reports stay in that owner's Cloudflare account; there is no shared Worm service. Reports can contain health or other personal information: treat the bucket and the owner credential accordingly.
 
 Configure the sites allowed to send reports as a Worker secret holding JSON. Each publishable key (`wf_pub_` plus 12–64 letters, digits, `_` or `-`) is bound to the exact origins that may use it, with a retention of 1–30 days (default 30):
 

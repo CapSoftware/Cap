@@ -6,24 +6,24 @@ The button and panel live in a Shadow DOM root, so the page's CSS cannot restyle
 
 ## Embed it
 
-Script tag (the bundle is `dist/worm-feedback.js`; host it yourself, for example next to your app's assets):
+Script tag (the bundle is `dist/feedback-widget.js`; host it yourself, for example next to your app's assets):
 
 ```html
 <script
-	src="/vendor/worm-feedback.js"
-	data-server="https://worm.example.org"
+	src="/vendor/feedback-widget.js"
+	data-server="https://feedback.example.org"
 	data-site-key="wf_pub_your_site_key"
 	data-posthog="window"
 ></script>
 ```
 
-Module (`dist/worm-feedback.mjs`):
+Module (`dist/feedback-widget.mjs`):
 
 ```js
 import { init } from "@cap-ux/feedback";
 
 init({
-	server: "https://worm.example.org",
+	server: "https://feedback.example.org",
 	siteKey: "wf_pub_your_site_key",
 	getContext: () => ({ userId: user.id, orgId: org.id, release: BUILD_SHA }),
 	posthog,
@@ -33,7 +33,7 @@ init({
 
 | Option | Meaning |
 | --- | --- |
-| `server` | Your Worm server origin. HTTPS is required except for localhost. |
+| `server` | Your sharing server origin. HTTPS is required except for localhost. |
 | `siteKey` | The publishable key for this site, configured on your server with the origins allowed to use it. It is not a secret. |
 | `getContext` | Optional. Returns ids only: `userId`, `orgId`, `release`. Anything else, and any value that is not a short id (names, emails), is dropped. |
 | `posthog` | Optional PostHog instance. Each report stores its session id and replay link so the report can be matched to PostHog's replay. `data-posthog="window"` uses `window.posthog`. |
@@ -42,7 +42,7 @@ init({
 | `genericTestids` | Wrapper test ids that name no feature, skipped in click labels as in walks. |
 | `position`, `label` | `bottom-right` (default) or `bottom-left`, and the button text. |
 
-The page's Content Security Policy must allow `connect-src` to your Worm server, and `img-src blob:` and `media-src blob:` for the screenshot and voice previews.
+The page's Content Security Policy must allow `connect-src` to your sharing server, and `img-src blob:` and `media-src blob:` for the screenshot and voice previews.
 
 ## What leaves the browser
 
@@ -59,7 +59,7 @@ Only the report, sent to your configured server: the note, the evidence JSON, an
 
 ```sh
 npm ci --ignore-scripts
-npm run build      # dist/worm-feedback.js and .mjs
+npm run build      # dist/feedback-widget.js and .mjs
 npm test           # unit tests: masking, redaction, ring buffers
 npm run test:e2e   # Playwright at desktop and phone size (Google Chrome)
 ```

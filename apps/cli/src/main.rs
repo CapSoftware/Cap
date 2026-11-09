@@ -218,7 +218,7 @@ enum Commands {
     /// Configure your Cap sharing server or revoke a link
     Sharing(sharing::SharingArgs),
     Recovery(recovery::RecoveryArgs),
-    /// List, pull or delete feedback reports sent to your Worm server
+    /// List, pull or delete feedback reports sent to your sharing server
     Feedback(feedback::FeedbackArgs),
     /// Update Cap Desktop and the bundled CLI
     Update(FormatArgs),

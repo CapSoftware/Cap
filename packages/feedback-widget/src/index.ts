@@ -1,19 +1,23 @@
-import type { PostHogLike, WormFeedback, WormFeedbackConfig } from "./types";
+import type {
+	FeedbackWidget,
+	FeedbackWidgetConfig,
+	PostHogLike,
+} from "./types";
 import { mountWidget } from "./widget";
 
 export type * from "./types";
 
-let active: WormFeedback | null = null;
+let active: FeedbackWidget | null = null;
 
-export function init(config: WormFeedbackConfig): WormFeedback {
+export function init(config: FeedbackWidgetConfig): FeedbackWidget {
 	active?.destroy();
 	const start = () => mountWidget(config);
 	if (document.body) {
 		active = start();
 		return active;
 	}
-	let mounted: WormFeedback | null = null;
-	const pending: WormFeedback = {
+	let mounted: FeedbackWidget | null = null;
+	const pending: FeedbackWidget = {
 		open: () => mounted?.open(),
 		close: () => mounted?.close(),
 		destroy: () => {
@@ -31,7 +35,7 @@ export function init(config: WormFeedbackConfig): WormFeedback {
 
 export function autoInit(
 	script: HTMLScriptElement | null,
-): WormFeedback | null {
+): FeedbackWidget | null {
 	const server = script?.dataset.server;
 	const siteKey = script?.dataset.siteKey;
 	if (!script || !server || !siteKey) return null;
