@@ -906,13 +906,13 @@ const makeGoogleDriveAccess = ({
 			fileName: string,
 			signingArgs?: Parameters<S3BucketAccess["getSignedDownloadUrl"]>[2],
 		) =>
-			createDriveObjectUrl(key, signingArgs?.expiresIn).pipe(
-				Effect.map((url) => {
-					const downloadUrl = new URL(url);
-					downloadUrl.searchParams.set("download", fileName);
-					return downloadUrl.toString();
-				}),
-			),
+			Effect.gen(function* () {
+				const downloadUrl = new URL(
+					yield* createDriveObjectUrl(key, signingArgs?.expiresIn),
+				);
+				downloadUrl.searchParams.set("download", fileName);
+				return downloadUrl.toString();
+			}),
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
