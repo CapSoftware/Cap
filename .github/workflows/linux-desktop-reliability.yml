@@ -412,6 +412,21 @@ jobs:
             grep -qx "$line" "$RUNNER_TEMP/out/hyprland-screenshot/result.txt"
           done
 
+      # A GPU device lost while the main window is hidden is found by the
+      # frame that maps the window again. The window must still come back
+      # (GitHub #3946).
+      - name: Hyprland GPU device lost while the window is hidden
+        env:
+          SCENARIO: device-loss
+        run: |
+          sudo -E env DEV_BIN="$RUNNER_TEMP/build/cap-gpui" DEV_LIBS="$RUNNER_TEMP/build/libs" \
+            bash scripts/linux-desktop-harness/run-desktop.sh hyprland "$RUNNER_TEMP/build/cap-gpui" \
+            "$RUNNER_TEMP/out/hyprland-device-loss"
+          cat "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
+          for line in first_shown=yes hidden=yes shown_again=yes device_lost=1 restore_failed=0 cap_alive=yes panics=0; do
+            grep -qx "$line" "$RUNNER_TEMP/out/hyprland-device-loss/result.txt"
+          done
+
       # The hosted runner can build v4l2loopback; Blacksmith's kernel cannot.
       - name: Install Linux desktop dependencies
         uses: ./.github/actions/install-desktop-deps
