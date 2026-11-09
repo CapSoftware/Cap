@@ -1,8 +1,11 @@
 import CapKit
 import SwiftUI
+import UIKit
 
 struct NotificationSettingsView: View {
     @Environment(SessionModel.self) private var session
+    @Environment(\.openURL) private var openURL
+    private let push = PushNotifications.shared
     @State private var preferences: NotificationPreferences?
     /// The last state the server confirmed, restored if a save fails and the server can't be re-read.
     @State private var confirmed: NotificationPreferences?
@@ -44,6 +47,11 @@ struct NotificationSettingsView: View {
     private func form(_ preferences: NotificationPreferences) -> some View {
         Form {
             Section {
+                pushRow
+            } header: {
+                Text("On this iPhone")
+            }
+            Section {
                 ForEach(Self.rows, id: \.kind) { row in
                     Toggle(isOn: Binding(
                         get: { preferences[row.kind] },
@@ -58,13 +66,48 @@ struct NotificationSettingsView: View {
                     }
                 }
             } footer: {
-                Text("These apply to emails and alerts on cap.so, and match your notification settings there.")
+                Text("These apply to push notifications on this iPhone, emails, and alerts on cap.so, and match your notification settings there.")
             }
             if let error {
                 Section { ErrorText(error) }
             }
         }
         .refreshable { await load() }
+        .task { await push.refreshStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Back from iOS Settings.
+            Task { await push.registerIfAllowed() }
+        }
+    }
+
+    @ViewBuilder
+    private var pushRow: some View {
+        switch push.status {
+        case .notDetermined:
+            Button {
+                Task { await push.requestAuthorization() }
+            } label: {
+                Label("Turn on push notifications", systemImage: "bell.badge")
+            }
+        case .denied:
+            Button {
+                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Turn on in iOS Settings")
+                        Text("Push notifications are off for Cap.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "bell.slash")
+                }
+            }
+        default:
+            Label("Push notifications are on", systemImage: "bell")
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func load() async {
