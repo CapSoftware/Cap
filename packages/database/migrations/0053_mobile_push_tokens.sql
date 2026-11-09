@@ -1,3 +1,9 @@
+CREATE TABLE `mobile_push_claims` (
+	`id` varchar(128) NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `mobile_push_claims_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `mobile_push_tokens` (
 	`id` varchar(15) NOT NULL,
 	`userId` varchar(15) NOT NULL,
@@ -10,5 +16,6 @@ CREATE TABLE `mobile_push_tokens` (
 	CONSTRAINT `token_idx` UNIQUE(`token`)
 );
 --> statement-breakpoint
+CREATE INDEX `created_at_idx` ON `mobile_push_claims` (`createdAt`);--> statement-breakpoint
 CREATE INDEX `user_id_idx` ON `mobile_push_tokens` (`userId`);--> statement-breakpoint
 CREATE INDEX `session_hash_idx` ON `mobile_push_tokens` (`sessionHash`);

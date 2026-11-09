@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "1410a150-068d-45d1-b567-bb432430bf0a",
+	"id": "f231f465-a0b5-4669-928d-444ffc2ac65a",
 	"prevId": "d62584f1-7632-4121-95d2-13a20e008f7f",
 	"tables": {
 		"accounts": {
@@ -2759,6 +2759,42 @@
 			"compositePrimaryKeys": {
 				"messenger_support_emails_id": {
 					"name": "messenger_support_emails_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"mobile_push_claims": {
+			"name": "mobile_push_claims",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(128)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"created_at_idx": {
+					"name": "created_at_idx",
+					"columns": ["createdAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"mobile_push_claims_id": {
+					"name": "mobile_push_claims_id",
 					"columns": ["id"]
 				}
 			},

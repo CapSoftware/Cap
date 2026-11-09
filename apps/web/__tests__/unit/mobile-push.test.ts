@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	config: { keyId: "k", teamId: "t", privateKey: "p" } as unknown,
-	firstViewId: "n1" as string | null,
+	claims: new Set<string>(),
+	claimAttempts: [] as string[],
 	joinedSessions: 0,
 	tokens: [] as { token: string; environment: string }[],
 	results: new Map<string, string>(),
 	sent: [] as { targets: unknown; message: unknown }[],
-	deleted: [] as unknown[],
-	firstViewQueries: 0,
+	deleted: [] as { table: unknown; condition: unknown }[],
 }));
 
 vi.mock("server-only", () => ({}));
@@ -30,7 +30,6 @@ vi.mock("@cap/database", async () => {
 		db: () => ({
 			select: () => {
 				let table: unknown;
-				let ordered = false;
 				const query = {
 					from: (value: unknown) => {
 						table = value;
@@ -41,18 +40,9 @@ vi.mock("@cap/database", async () => {
 						return query;
 					},
 					where: () => query,
-					orderBy: () => {
-						ordered = true;
-						return query;
-					},
+					orderBy: () => query,
 					limit: async () => {
 						if (table === schema.mobilePushTokens) return mocks.tokens;
-						if (table === schema.notifications) {
-							if (!ordered)
-								return [{ createdAt: new Date("2026-11-09T12:03:00Z") }];
-							mocks.firstViewQueries += 1;
-							return mocks.firstViewId ? [{ id: mocks.firstViewId }] : [];
-						}
 						if (table === schema.videos) return [{ name: "Launch demo" }];
 						if (table === schema.users) return [{ name: "Alex" }];
 						return [];
@@ -60,16 +50,34 @@ vi.mock("@cap/database", async () => {
 				};
 				return query;
 			},
-			delete: () => ({
-				where: async (condition: unknown) => {
-					mocks.deleted.push(condition);
+			insert: () => ({
+				values: async ({ id }: { id: string }) => {
+					mocks.claimAttempts.push(id);
+					if (mocks.claims.has(id)) {
+						throw Object.assign(new Error("Failed query"), {
+							cause: Object.assign(new Error("Duplicate entry"), {
+								code: "ER_DUP_ENTRY",
+								errno: 1062,
+							}),
+						});
+					}
+					mocks.claims.add(id);
+				},
+			}),
+			delete: (table: unknown) => ({
+				where: (condition: unknown) => {
+					mocks.deleted.push({ table, condition });
+					const done = Promise.resolve();
+					return Object.assign(done, { limit: async () => {} });
 				},
 			}),
 		}),
 	};
 });
 
+import * as schemaRef from "@cap/database/schema";
 import {
+	claimViewPush,
 	deliverNotificationPush,
 	pushMessageFor,
 	queueNotificationPush,
@@ -77,14 +85,17 @@ import {
 
 beforeEach(() => {
 	mocks.config = { keyId: "k", teamId: "t", privateKey: "p" };
-	mocks.firstViewId = "n1";
+	mocks.claims = new Set();
+	mocks.claimAttempts = [];
 	mocks.joinedSessions = 0;
 	mocks.tokens = [{ token: "aa11", environment: "production" }];
 	mocks.results = new Map([["aa11", "sent"]]);
 	mocks.sent = [];
 	mocks.deleted = [];
-	mocks.firstViewQueries = 0;
 });
+
+const deletedTokens = () =>
+	mocks.deleted.filter((entry) => entry.table === schemaRef.mobilePushTokens);
 
 describe("push copy", () => {
 	it("names the person and what they did", () => {
@@ -127,7 +138,6 @@ describe("push copy", () => {
 
 describe("notification push delivery", () => {
 	const comment = {
-		notificationId: "n1",
 		type: "comment" as const,
 		recipientId: "owner",
 		videoId: "cap1",
@@ -147,7 +157,7 @@ describe("notification push delivery", () => {
 				},
 			},
 		]);
-		expect(mocks.firstViewQueries).toBe(0);
+		expect(mocks.claimAttempts).toHaveLength(0);
 		expect(mocks.joinedSessions).toBe(1);
 	});
 
@@ -157,30 +167,45 @@ describe("notification push delivery", () => {
 		expect(mocks.sent).toHaveLength(0);
 	});
 
-	it("skips a view push when an earlier view in the same 10 minutes already pushed", async () => {
-		mocks.firstViewId = "earlier";
-		await deliverNotificationPush({
-			...comment,
-			type: "view",
-			content: undefined,
-		});
-		expect(mocks.firstViewQueries).toBe(1);
-		expect(mocks.sent).toHaveLength(0);
+	it("pushes one view per Cap per 10-minute window, however many viewers arrive", async () => {
+		const view = { ...comment, type: "view" as const, content: undefined };
+		await Promise.all([
+			deliverNotificationPush(view),
+			deliverNotificationPush(view),
+			deliverNotificationPush({
+				...view,
+				type: "anon_view",
+				anonName: "Otter",
+			}),
+		]);
+		expect(mocks.claimAttempts).toHaveLength(3);
+		expect(new Set(mocks.claimAttempts).size).toBe(1);
+		expect(mocks.sent).toHaveLength(1);
 	});
 
-	it("pushes the view that comes first in its 10 minutes", async () => {
+	it("claims a fresh window every 10 minutes and per Cap", async () => {
+		const start = Date.UTC(2026, 10, 9, 12, 0, 0);
+		const claim = (videoId: string, offsetMs: number) =>
+			claimViewPush({ recipientId: "owner", videoId, now: start + offsetMs });
+		expect(await claim("cap1", 0)).toBe(true);
+		expect(await claim("cap1", 9 * 60 * 1000 + 59_000)).toBe(false);
+		expect(await claim("cap1", 10 * 60 * 1000)).toBe(true);
+		expect(await claim("cap2", 60_000)).toBe(true);
+	});
+
+	it("claims nothing when the recipient has no live tokens", async () => {
+		mocks.tokens = [];
 		await deliverNotificationPush({
 			...comment,
 			type: "view",
 			content: undefined,
 		});
-		expect(mocks.firstViewQueries).toBe(1);
-		expect(mocks.sent).toHaveLength(1);
+		expect(mocks.claimAttempts).toHaveLength(0);
+		expect(mocks.sent).toHaveLength(0);
 	});
 
 	it("sends the first anonymous view with the viewer's name", async () => {
 		await deliverNotificationPush({
-			notificationId: "n1",
 			type: "anon_view",
 			recipientId: "owner",
 			videoId: "cap1",
@@ -203,14 +228,14 @@ describe("notification push delivery", () => {
 			["bb22", "failed"],
 		]);
 		await deliverNotificationPush(comment);
-		expect(mocks.deleted).toHaveLength(1);
+		expect(deletedTokens()).toHaveLength(1);
 	});
 
 	it("skips the delete when every token worked or no tokens exist", async () => {
 		await deliverNotificationPush(comment);
 		mocks.tokens = [];
 		await deliverNotificationPush(comment);
-		expect(mocks.deleted).toHaveLength(0);
+		expect(deletedTokens()).toHaveLength(0);
 		expect(mocks.sent).toHaveLength(1);
 	});
 

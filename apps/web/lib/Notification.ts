@@ -162,7 +162,6 @@ export async function createNotification(
 			});
 
 			queueNotificationPush({
-				notificationId,
 				type,
 				recipientId,
 				videoId: notification.videoId,
@@ -246,7 +245,6 @@ export async function createNotification(
 		});
 
 		queueNotificationPush({
-			notificationId,
 			type,
 			recipientId: videoResult.ownerId,
 			videoId: notification.videoId,
@@ -410,9 +408,8 @@ export async function createAnonymousViewNotification({
 		if (Number(recentNotificationCount?.count ?? 0) >= ANON_NOTIF_MAX_PER_VIDEO)
 			return;
 
-		const notificationId = nanoId();
 		await database.insert(notifications).values({
-			id: notificationId,
+			id: nanoId(),
 			orgId: videoWithOwner.activeOrganizationId,
 			recipientId: videoWithOwner.ownerId,
 			type: "anon_view",
@@ -422,7 +419,6 @@ export async function createAnonymousViewNotification({
 		});
 
 		queueNotificationPush({
-			notificationId,
 			type: "anon_view",
 			recipientId: videoWithOwner.ownerId,
 			videoId,

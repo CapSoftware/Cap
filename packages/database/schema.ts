@@ -1037,6 +1037,18 @@ export const mobilePushTokens = mysqlTable(
 	}),
 );
 
+// One row per push that must send at most once, such as a Cap's view push for a 10-minute window.
+export const mobilePushClaims = mysqlTable(
+	"mobile_push_claims",
+	{
+		id: varchar("id", { length: 128 }).notNull().primaryKey(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		createdAtIndex: index("created_at_idx").on(table.createdAt),
+	}),
+);
+
 export const agentApiKeys = mysqlTable(
 	"agent_api_keys",
 	{

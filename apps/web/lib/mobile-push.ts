@@ -2,15 +2,16 @@ import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import {
 	authApiKeys,
+	mobilePushClaims,
 	mobilePushTokens,
-	notifications,
 	users,
 	videos,
 } from "@cap/database/schema";
 import { type User, Video } from "@cap/web-domain";
-import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { after } from "next/server";
 import {
+	type ApnsConfig,
 	apnsConfig,
 	type PushMessage,
 	type PushTarget,
@@ -67,42 +68,75 @@ export const pushMessageFor = (input: {
 	};
 };
 
+const CLAIM_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+const isDuplicateKey = (error: unknown): boolean => {
+	const value = error as { code?: string; errno?: number; cause?: unknown };
+	if (value?.code === "ER_DUP_ENTRY" || value?.errno === 1062) return true;
+	return value?.cause !== undefined && isDuplicateKey(value.cause);
+};
+
 /**
- * Views push at most once per Cap per 10-minute clock window: only the window's first view notification
- * pushes, so viewers who arrive together still send exactly one. Ties on createdAt break on id.
+ * Views push at most once per Cap per 10-minute clock window. The claim row's primary key makes the
+ * first view in a window win atomically, however many viewers arrive together.
  */
-export async function isFirstViewInWindow(params: {
+export async function claimViewPush(params: {
 	recipientId: string;
 	videoId: string;
-	notificationId: string;
+	now?: number;
 }) {
-	const [own] = await db()
-		.select({ createdAt: notifications.createdAt })
-		.from(notifications)
-		.where(eq(notifications.id, params.notificationId))
-		.limit(1);
-	if (!own) return false;
-	const [first] = await db()
-		.select({ id: notifications.id })
-		.from(notifications)
-		.where(
+	const now = params.now ?? Date.now();
+	const window = Math.floor(now / VIEW_PUSH_WINDOW_MS);
+	try {
+		await db()
+			.insert(mobilePushClaims)
+			.values({ id: `view:${params.recipientId}:${params.videoId}:${window}` });
+	} catch (error) {
+		if (isDuplicateKey(error)) return false;
+		throw error;
+	}
+	await db()
+		.delete(mobilePushClaims)
+		.where(lt(mobilePushClaims.createdAt, new Date(now - CLAIM_RETENTION_MS)))
+		.limit(100);
+	return true;
+}
+
+/** Tokens whose session still exists: a phone that signed out, or lost its session, gets nothing. */
+async function liveTokens(userId: string): Promise<PushTarget[]> {
+	const rows = await db()
+		.select({
+			token: mobilePushTokens.token,
+			environment: mobilePushTokens.environment,
+		})
+		.from(mobilePushTokens)
+		.innerJoin(
+			authApiKeys,
 			and(
-				inArray(notifications.type, ["view", "anon_view"]),
-				eq(notifications.recipientId, params.recipientId as User.UserId),
-				eq(notifications.videoId, params.videoId),
-				gte(
-					notifications.createdAt,
-					new Date(
-						Math.floor(own.createdAt.getTime() / VIEW_PUSH_WINDOW_MS) *
-							VIEW_PUSH_WINDOW_MS,
-					),
-				),
-				lte(notifications.createdAt, own.createdAt),
+				eq(authApiKeys.userId, mobilePushTokens.userId),
+				sql`SHA2(${authApiKeys.id}, 256) = ${mobilePushTokens.sessionHash}`,
 			),
 		)
-		.orderBy(asc(notifications.createdAt), asc(notifications.id))
-		.limit(1);
-	return first?.id === params.notificationId;
+		.where(eq(mobilePushTokens.userId, userId as User.UserId))
+		.orderBy(sql`${mobilePushTokens.updatedAt} DESC`)
+		.limit(MAX_TOKENS_PER_PUSH);
+	return rows as PushTarget[];
+}
+
+async function send(
+	config: ApnsConfig,
+	targets: PushTarget[],
+	message: PushMessage,
+) {
+	const results = await sendPushes(config, targets, message);
+	const invalid = [...results]
+		.filter(([, result]) => result === "invalid-token")
+		.map(([token]) => token);
+	if (invalid.length > 0) {
+		await db()
+			.delete(mobilePushTokens)
+			.where(inArray(mobilePushTokens.token, invalid));
+	}
 }
 
 export async function deliverPushToUser(
@@ -112,40 +146,14 @@ export async function deliverPushToUser(
 	try {
 		const config = apnsConfig();
 		if (!config) return;
-		// Only tokens whose session still exists: a phone that signed out (or lost its session) stops getting pushes.
-		const rows = await db()
-			.select({
-				token: mobilePushTokens.token,
-				environment: mobilePushTokens.environment,
-			})
-			.from(mobilePushTokens)
-			.innerJoin(
-				authApiKeys,
-				and(
-					eq(authApiKeys.userId, mobilePushTokens.userId),
-					sql`SHA2(${authApiKeys.id}, 256) = ${mobilePushTokens.sessionHash}`,
-				),
-			)
-			.where(eq(mobilePushTokens.userId, userId as User.UserId))
-			.orderBy(sql`${mobilePushTokens.updatedAt} DESC`)
-			.limit(MAX_TOKENS_PER_PUSH);
-		if (rows.length === 0) return;
-		const results = await sendPushes(config, rows as PushTarget[], message);
-		const invalid = [...results]
-			.filter(([, result]) => result === "invalid-token")
-			.map(([token]) => token);
-		if (invalid.length > 0) {
-			await db()
-				.delete(mobilePushTokens)
-				.where(inArray(mobilePushTokens.token, invalid));
-		}
+		const targets = await liveTokens(userId);
+		if (targets.length > 0) await send(config, targets, message);
 	} catch (error) {
 		console.error("Failed to deliver push notification", error);
 	}
 }
 
 export interface NotificationPushInput {
-	notificationId: string;
 	type: PushNotificationType;
 	recipientId: string;
 	videoId: string;
@@ -158,13 +166,15 @@ export async function deliverNotificationPush(
 	input: NotificationPushInput,
 ): Promise<void> {
 	try {
-		if (!apnsConfig()) return;
+		const config = apnsConfig();
+		if (!config) return;
+		const targets = await liveTokens(input.recipientId);
+		if (targets.length === 0) return;
 		if (
 			(input.type === "view" || input.type === "anon_view") &&
-			!(await isFirstViewInWindow({
+			!(await claimViewPush({
 				recipientId: input.recipientId,
 				videoId: input.videoId,
-				notificationId: input.notificationId,
 			}))
 		) {
 			return;
@@ -183,8 +193,9 @@ export async function deliverNotificationPush(
 				.limit(1);
 			actorName = author?.name ?? null;
 		}
-		await deliverPushToUser(
-			input.recipientId,
+		await send(
+			config,
+			targets,
 			pushMessageFor({
 				type: input.type,
 				capId: input.videoId,
