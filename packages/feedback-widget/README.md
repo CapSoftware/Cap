@@ -44,6 +44,17 @@ init({
 
 The page's Content Security Policy must allow `connect-src` to your sharing server, and `img-src blob:` and `media-src blob:` for the screenshot and voice previews.
 
+### Fitting it into your app's layers
+
+Two CSS custom properties, set on the `feedback-widget` element from your own stylesheet, fit the widget under your app's chrome:
+
+```css
+/* Below your menus, sheets and popovers (default: the top of the page). */
+feedback-widget { --wf-z: 45; }
+/* No floating button, for example where a bottom tab bar owns that corner; open the panel from your own menu with the handle's open(). */
+@media (max-width: 1023px) { feedback-widget { --wf-launcher-display: none; } }
+```
+
 ## What leaves the browser
 
 Only the report, sent to your configured server: the note, the evidence JSON, an optional JPEG screenshot and an optional voice memo (WebM/Opus in Chrome and Firefox, MP4/AAC in Safari on iPhone and Mac).

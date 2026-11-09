@@ -4,10 +4,10 @@ export const STYLE = `
 *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
 button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
 button:focus-visible,textarea:focus-visible{outline:2px solid var(--wf-accent);outline-offset:2px}
-.launcher{position:fixed;z-index:2147483646;bottom:max(16px,env(safe-area-inset-bottom));min-width:48px;min-height:48px;padding:0 16px;border-radius:24px;background:var(--wf-accent);color:var(--wf-accent-ink);font-size:14px;font-weight:600;box-shadow:var(--wf-shadow);display:flex;align-items:center;gap:8px}
+.launcher{position:fixed;z-index:var(--wf-z,2147483646);bottom:max(16px,env(safe-area-inset-bottom));min-width:48px;min-height:48px;padding:0 16px;border-radius:24px;background:var(--wf-accent);color:var(--wf-accent-ink);font-size:14px;font-weight:600;box-shadow:var(--wf-shadow);display:var(--wf-launcher-display,flex);align-items:center;gap:8px}
 .launcher svg{width:20px;height:20px;flex:none}
 .right .launcher{right:max(16px,env(safe-area-inset-right))}.left .launcher{left:max(16px,env(safe-area-inset-left))}
-.panel{position:fixed;z-index:2147483647;bottom:calc(max(16px,env(safe-area-inset-bottom)) + var(--wf-kb,0px));width:360px;max-width:calc(100vw - 32px);max-height:calc(var(--wf-vh,100vh) - 32px);overflow:auto;background:var(--wf-bg);color:var(--wf-ink);border:1px solid var(--wf-line);border-radius:14px;box-shadow:var(--wf-shadow);padding:16px;display:flex;flex-direction:column;gap:12px;font-size:14px;line-height:1.4}
+.panel{position:fixed;z-index:var(--wf-z,2147483647);bottom:calc(max(16px,env(safe-area-inset-bottom)) + var(--wf-kb,0px));width:360px;max-width:calc(100vw - 32px);max-height:calc(var(--wf-vh,100vh) - 32px);overflow:auto;background:var(--wf-bg);color:var(--wf-ink);border:1px solid var(--wf-line);border-radius:14px;box-shadow:var(--wf-shadow);padding:16px;display:flex;flex-direction:column;gap:12px;font-size:14px;line-height:1.4}
 .right .panel{right:max(16px,env(safe-area-inset-right))}.left .panel{left:max(16px,env(safe-area-inset-left))}
 .panel[hidden],.launcher[hidden],[hidden]{display:none!important}
 @media (max-width:520px){.panel{left:0!important;right:0!important;bottom:var(--wf-kb,0px);width:100%;max-width:100%;border-radius:16px 16px 0 0;border-bottom:0;padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}}

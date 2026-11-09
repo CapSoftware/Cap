@@ -264,3 +264,34 @@ test("a person sends feedback with a masked screenshot, voice memo and evidence"
 		expect(serialized).not.toContain(secret);
 	expect(errors).toEqual([]);
 });
+
+test("the host page can hide the launcher and keep the widget under its own menus", async ({
+	page,
+}) => {
+	await serve(page);
+	await page.goto(`${APP}/demo/index.html`);
+	const host = page.locator("feedback-widget");
+	const launcher = host.getByRole("button", { name: "Send feedback" });
+	await expect(launcher).toBeVisible();
+	await page.addStyleTag({
+		content: "feedback-widget{--wf-z:45;--wf-launcher-display:none}",
+	});
+	await expect(launcher).toBeHidden();
+	await page.addStyleTag({ content: "feedback-widget{--wf-launcher-display:flex}" });
+	await expect(launcher).toBeVisible();
+	const z = await launcher.evaluate((el) => getComputedStyle(el).zIndex);
+	expect(z).toBe("45");
+	// A menu the page draws at z-index 50 over the launcher's corner gets the tap, not the launcher.
+	const box = await launcher.boundingBox();
+	await page.evaluate(() => {
+		const menu = document.createElement("div");
+		menu.id = "menu";
+		menu.style.cssText = "position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.1)";
+		document.body.append(menu);
+	});
+	const hit = await page.evaluate(
+		([x, y]) => document.elementFromPoint(x, y)?.id ?? "",
+		[(box?.x ?? 0) + 10, (box?.y ?? 0) + 10],
+	);
+	expect(hit).toBe("menu");
+});
