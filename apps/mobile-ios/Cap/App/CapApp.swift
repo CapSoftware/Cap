@@ -122,6 +122,7 @@ enum Route: Hashable {
     case capAnalytics(CapID, title: String)
     case profile
     case organization
+    case notifications
     case deleteAccount
 }
 
@@ -253,6 +254,8 @@ struct MainTabView: View {
             ProfileSettingsView()
         case .organization:
             OrganizationSettingsView()
+        case .notifications:
+            NotificationSettingsView()
         case .deleteAccount:
             DeleteAccountView()
         }

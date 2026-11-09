@@ -153,6 +153,10 @@ type MobileOrganizationIconInput =
 	(typeof Mobile.MobileOrganizationIconInput)["Type"];
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
+type MobileNotificationPreferences =
+	(typeof Mobile.MobileNotificationPreferences)["Type"];
+type MobileNotificationPreferencesInput =
+	(typeof Mobile.MobileNotificationPreferencesInput)["Type"];
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
@@ -715,6 +719,78 @@ const getBlockedUserIds = (preferences: unknown) => {
 		),
 	);
 };
+
+// Stored as the web's "pause" flags, so email, the web bell and the app share one setting.
+const notificationPauseKeys = {
+	comments: "pauseComments",
+	replies: "pauseReplies",
+	views: "pauseViews",
+	anonymousViews: "pauseAnonViews",
+	reactions: "pauseReactions",
+} as const satisfies Record<keyof MobileNotificationPreferences, string>;
+
+const notificationPreferenceKeys = Object.keys(
+	notificationPauseKeys,
+) as (keyof MobileNotificationPreferences)[];
+
+const toMobileNotificationPreferences = (
+	preferences: unknown,
+): MobileNotificationPreferences => {
+	const stored = getMetadataRecord(
+		getMetadataRecord(preferences).notifications,
+	);
+	return {
+		comments: stored.pauseComments !== true,
+		replies: stored.pauseReplies !== true,
+		views: stored.pauseViews !== true,
+		anonymousViews: stored.pauseAnonViews !== true,
+		reactions: stored.pauseReactions !== true,
+	};
+};
+
+const getNotificationPreferences = Effect.fn(
+	"Mobile.getNotificationPreferences",
+)(function* () {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({ preferences: Db.users.preferences })
+			.from(Db.users)
+			.where(eq(Db.users.id, user.id))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	return toMobileNotificationPreferences(row.preferences);
+});
+
+const updateNotificationPreferences = Effect.fn(
+	"Mobile.updateNotificationPreferences",
+)(function* (input: MobileNotificationPreferencesInput) {
+	const user = yield* CurrentUser;
+	const patch: Record<string, boolean> = {};
+	for (const key of notificationPreferenceKeys) {
+		const enabled = input[key];
+		if (enabled !== undefined) patch[notificationPauseKeys[key]] = !enabled;
+	}
+	if (Object.keys(patch).length > 0) {
+		const defaults = Object.fromEntries(
+			Object.values(notificationPauseKeys).map((key) => [key, false]),
+		);
+		const database = yield* Database;
+		// One statement so a concurrent web change to another flag isn't lost, and every
+		// flag stays present for the web settings schema.
+		yield* database.use((db) =>
+			db
+				.update(Db.users)
+				.set({
+					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+				})
+				.where(eq(Db.users.id, user.id)),
+		);
+	}
+	return yield* getNotificationPreferences();
+});
 
 const getCurrentBlockedUserIds = Effect.fn("Mobile.getBlockedUserIds")(
 	function* () {
@@ -3543,6 +3619,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("blockUser", ({ payload }) =>
 						withMappedErrors(blockMobileUser(payload.userId)),
+					)
+					.handle("getNotificationPreferences", () =>
+						withMappedErrors(getNotificationPreferences()),
+					)
+					.handle("updateNotificationPreferences", ({ payload }) =>
+						withMappedErrors(updateNotificationPreferences(payload)),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>

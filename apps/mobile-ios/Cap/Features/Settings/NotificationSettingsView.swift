@@ -1,0 +1,107 @@
+import CapKit
+import SwiftUI
+
+struct NotificationSettingsView: View {
+    @Environment(SessionModel.self) private var session
+    @State private var preferences: NotificationPreferences?
+    /// The last state the server confirmed, restored if a save fails and the server can't be re-read.
+    @State private var confirmed: NotificationPreferences?
+    @State private var loadError: CapAPIError?
+    @State private var error: String?
+    @State private var queue: [(NotificationPreferences.Kind, Bool)] = []
+    @State private var isSaving = false
+
+    private static let rows: [(kind: NotificationPreferences.Kind, title: String, detail: String)] = [
+        (.comments, "Comments", "When someone comments on one of your Caps."),
+        (.replies, "Replies", "When someone replies to a comment you left."),
+        (.views, "Views", "When a signed-in viewer watches one of your Caps."),
+        (.anonymousViews, "Anonymous views", "When an anonymous viewer watches one of your Caps."),
+        (.reactions, "Reactions", "When someone reacts to one of your Caps."),
+    ]
+
+    var body: some View {
+        Group {
+            if let preferences {
+                form(preferences)
+            } else if let loadError {
+                ContentUnavailableView {
+                    Label("Notifications unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(loadError.errorDescription ?? "")
+                } actions: {
+                    Button("Try again") { Task { await load() } }
+                        .buttonStyle(.glassProminent)
+                }
+            } else {
+                ProgressView()
+            }
+        }
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+    }
+
+    private func form(_ preferences: NotificationPreferences) -> some View {
+        Form {
+            Section {
+                ForEach(Self.rows, id: \.kind) { row in
+                    Toggle(isOn: Binding(
+                        get: { preferences[row.kind] },
+                        set: { enabled in Task { await set(row.kind, enabled: enabled) } }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title)
+                            Text(row.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text("These apply to emails and alerts on cap.so, and match your notification settings there.")
+            }
+            if let error {
+                Section { ErrorText(error) }
+            }
+        }
+        .refreshable { await load() }
+    }
+
+    private func load() async {
+        do {
+            let loaded = try await session.api.notificationPreferences()
+            confirmed = loaded
+            // Pull to refresh mid-save would otherwise show switches that are still being saved as reverted.
+            if !isSaving { preferences = loaded }
+            loadError = nil
+        } catch {
+            if preferences == nil { loadError = error }
+        }
+    }
+
+    private func set(_ kind: NotificationPreferences.Kind, enabled: Bool) async {
+        guard preferences != nil else { return }
+        preferences?[kind] = enabled
+        error = nil
+        queue.append((kind, enabled))
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        // One request at a time, so each response includes every earlier change.
+        while !queue.isEmpty {
+            let (kind, enabled) = queue.removeFirst()
+            do {
+                let saved = try await session.api.setNotification(kind, enabled: enabled)
+                confirmed = saved
+                if queue.isEmpty { preferences = saved }
+            } catch {
+                queue.removeAll()
+                self.error = error.errorDescription
+                if let current = try? await session.api.notificationPreferences() {
+                    confirmed = current
+                }
+                preferences = confirmed
+            }
+        }
+    }
+}
