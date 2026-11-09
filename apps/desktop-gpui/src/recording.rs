@@ -1792,9 +1792,7 @@ fn apply_auto_zoom(
     if !timeline.zoom_segments.is_empty() {
         return;
     }
-    let amount = settings
-        .default_zoom_amount
-        .map_or(crate::editor_edits::DEFAULT_AUTO_ZOOM_AMOUNT, f64::from);
+    let amount = f64::from(settings.new_zoom_amount());
     timeline.zoom_segments =
         crate::editor_edits::generate_zoom_segments_for_timeline(&load_clicks(), timeline, amount);
 }
@@ -4114,9 +4112,14 @@ mod tests {
             crate::presets::PresetsStore::default(),
             default_preset_store(serde_json::json!({ "background": { "padding": 24.0 } })),
         ] {
-            for enabled in [false, true, false] {
+            for (enabled, amount) in [
+                (false, Some(3.2_f32)),
+                (true, Some(3.2_f32)),
+                (true, None),
+                (false, None),
+            ] {
                 std::fs::write(&store_path, serde_json::to_vec(&serde_json::json!({
-                    "general_settings": { "autoZoomOnClicks": enabled, "defaultZoomAmount": 3.2 },
+                    "general_settings": { "autoZoomOnClicks": enabled, "defaultZoomAmount": amount },
                     "audio_enhancement": { "enabledByDefault": false }
                 })).unwrap()).unwrap();
                 assert!(presets.save());
@@ -4145,7 +4148,7 @@ mod tests {
                 assert_eq!(timeline.zoom_segments.len(), usize::from(enabled));
                 if enabled {
                     let zoom = &timeline.zoom_segments[0];
-                    assert_eq!(zoom.amount, 3.2_f32 as f64);
+                    assert_eq!(zoom.amount, f64::from(amount.unwrap_or(1.5)));
                     assert!((zoom.start - 11.7).abs() < 0.0001);
                     assert!((zoom.end - 14.5).abs() < 0.0001);
                 }
