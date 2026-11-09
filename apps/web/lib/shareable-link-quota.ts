@@ -54,7 +54,9 @@ export async function isVideoOverShareableLinkLimit(video: {
 	const [row] = await db()
 		.select({
 			earlier: count(),
-			imported: exists(isImported(video.id)).mapWith(Boolean),
+			imported: exists(isImported(video.id)).mapWith(
+				(value) => Number(value) > 0,
+			),
 		})
 		.from(videos)
 		.where(

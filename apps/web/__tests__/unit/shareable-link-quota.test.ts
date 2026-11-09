@@ -17,7 +17,7 @@ const VIDEO = Video.VideoId.make("video-1");
 
 let videoRow: unknown[] | undefined;
 let earlierVideos: number;
-let imported: number;
+let imported: number | string | bigint;
 
 beforeEach(() => {
 	videoRow = ["user-owner", "2026-10-20 12:00:00", 0, "canceled", null];
@@ -65,9 +65,18 @@ describe("isVideoLockedByShareableLinkLimit", () => {
 	});
 
 	it("never locks an imported video, however many came before it", async () => {
-		imported = 1;
 		earlierVideos = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH * 10;
-		expect(await isVideoLockedByShareableLinkLimit(VIDEO)).toBe(false);
+		for (const value of [1, "1", 1n]) {
+			imported = value;
+			expect(await isVideoLockedByShareableLinkLimit(VIDEO)).toBe(false);
+		}
+	});
+
+	it("still locks a non-imported video whatever type the driver returns", async () => {
+		for (const value of [0, "0", 0n]) {
+			imported = value;
+			expect(await isVideoLockedByShareableLinkLimit(VIDEO)).toBe(true);
+		}
 	});
 
 	it("leaves imported videos out of the allowance count", async () => {
