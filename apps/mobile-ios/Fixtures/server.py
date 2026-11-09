@@ -1,5 +1,5 @@
 """Fixture Cap API for the iOS UI tests: python3 server.py [port]. Debug builds only accept it on localhost."""
-import json, re, sys, os
+import json, re, sys, os, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 
@@ -271,6 +271,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/mobile/analytics": return self.send(200, analytics(q.get("range", "7d")))
         if path == "/api/mobile/user/notification-preferences":
             if self.command == "PATCH":
+                time.sleep(random.uniform(0, 0.3))  # lets concurrent saves finish out of order
                 NOTIFICATIONS.update({k: v for k, v in self.body().items() if k in NOTIFICATIONS and isinstance(v, bool)})
             return self.send(200, NOTIFICATIONS)
         if path == "/api/mobile/organization/settings": return self.send(200, {"id": "org_cap", "name": orgs[0]["name"], "role": "owner", "canManage": True, "iconUrl": None, "allowedEmailDomain": "cap.so", "customDomain": "videos.cap.so", "domainVerified": True})

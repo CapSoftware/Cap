@@ -372,22 +372,54 @@ final class CapUITests: XCTestCase {
         XCTAssertTrue(link.waitForExistence(timeout: 15))
         link.tap()
         let views = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        let reactions = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Reactions'")).firstMatch
         XCTAssertTrue(views.waitForExistence(timeout: 10))
         XCTAssertEqual(views.value as? String, "1")
+        XCTAssertEqual(reactions.value as? String, "1")
+
+        // Two quick changes both reach the server and neither flips back.
         views.switches.firstMatch.tap()
-        XCTAssertTrue(XCTNSPredicateExpectation.wait(for: views, value: "0"))
+        reactions.switches.firstMatch.tap()
+        XCTAssertTrue(waitForServerNotifications(["views": false, "reactions": false]))
+        XCTAssertEqual(views.value as? String, "0")
+        XCTAssertEqual(reactions.value as? String, "0")
         shot("66-notifications")
         app.terminate()
 
-        // The change was saved on the server.
         app = launch(route: "tab:settings")
         XCTAssertTrue(app.buttons["Notifications"].firstMatch.waitForExistence(timeout: 15))
         app.buttons["Notifications"].firstMatch.tap()
-        let saved = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
-        XCTAssertTrue(saved.waitForExistence(timeout: 10))
-        XCTAssertEqual(saved.value as? String, "0")
-        saved.switches.firstMatch.tap()
-        XCTAssertTrue(XCTNSPredicateExpectation.wait(for: saved, value: "1"))
+        let savedViews = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        let savedReactions = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Reactions'")).firstMatch
+        XCTAssertTrue(savedViews.waitForExistence(timeout: 10))
+        XCTAssertEqual(savedViews.value as? String, "0")
+        XCTAssertEqual(savedReactions.value as? String, "0")
+        savedViews.switches.firstMatch.tap()
+        savedReactions.switches.firstMatch.tap()
+        XCTAssertTrue(waitForServerNotifications(["views": true, "reactions": true]))
+    }
+
+    private func waitForServerNotifications(_ expected: [String: Bool], timeout: TimeInterval = 10) -> Bool {
+        var request = URLRequest(url: URL(string: "\(fixtureURL)/api/mobile/user/notification-preferences")!)
+        request.setValue("Bearer \(CapUITests.key)", forHTTPHeaderField: "Authorization")
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let current = fetchJSON(request)
+            if expected.allSatisfy({ current[$0.key] == $0.value }) { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    private func fetchJSON(_ request: URLRequest) -> [String: Bool] {
+        let done = DispatchSemaphore(value: 0)
+        let box = JSONBox()
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            box.value = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Bool]) ?? [:]
+            done.signal()
+        }.resume()
+        done.wait()
+        return box.value
     }
 
     func testEmptyAccount() {
@@ -410,4 +442,8 @@ private extension XCTNSPredicateExpectation {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
+}
+
+private final class JSONBox: @unchecked Sendable {
+    var value: [String: Bool] = [:]
 }
