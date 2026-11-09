@@ -4330,11 +4330,12 @@ impl EditorWindow {
                         .into_any_element()
                 }
             }
+            TrackKind::MicAudio | TrackKind::SystemAudio => {
+                self.render_source_mute_panel(selection.track, cx)
+            }
             // A clip selection never reaches here -- `sidebarSelection()`
             // filters it out.
-            TrackKind::Clip | TrackKind::MicAudio | TrackKind::SystemAudio => {
-                div().into_any_element()
-            }
+            TrackKind::Clip => div().into_any_element(),
         };
 
         div()
@@ -6101,6 +6102,61 @@ impl EditorWindow {
                                     ))),
                             ),
                     ),
+            )
+            .into_any_element()
+    }
+
+    fn render_source_mute_panel(&self, kind: TrackKind, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let (label, muted, id, is_mic) = match kind {
+            TrackKind::MicAudio => (
+                tr::editor::tabs::audio::mic_mute(),
+                self.project.audio.mic_muted,
+                "panel-mic-mute",
+                true,
+            ),
+            TrackKind::SystemAudio => (
+                tr::editor::tabs::audio::system_mute(),
+                self.project.audio.system_muted,
+                "panel-system-mute",
+                false,
+            ),
+            _ => return div().into_any_element(),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                ui::Field::section(&theme, kind.label())
+                    .child(
+                        ui::Subfield::plain(&theme, label).child(
+                            ui::Toggle::plain(&theme, id, muted).on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    let next = if is_mic {
+                                        !this.project.audio.mic_muted
+                                    } else {
+                                        !this.project.audio.system_muted
+                                    };
+                                    let reason = if is_mic {
+                                        "audio-mic-mute"
+                                    } else {
+                                        "audio-system-mute"
+                                    };
+                                    this.edit_project(reason, window, cx, move |project| {
+                                        if is_mic {
+                                            project.audio.mic_muted = next;
+                                        } else {
+                                            project.audio.system_muted = next;
+                                        }
+                                        true
+                                    });
+                                },
+                            )),
+                        ),
+                    )
+                    .into_any_element(),
             )
             .into_any_element()
     }

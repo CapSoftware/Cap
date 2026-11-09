@@ -1896,6 +1896,22 @@ impl EditorWindow {
             )
             .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
             .children(has_microphone.then(|| {
+                ui::Subfield::plain(&theme, tr::editor::tabs::audio::mic_mute())
+                    .child(ui::Toggle::plain(
+                        &theme,
+                        "audio-mic-mute",
+                        audio.mic_muted,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let next = !this.project.audio.mic_muted;
+                        this.edit_project("audio-mic-mute", window, cx, move |project| {
+                            project.audio.mic_muted = next;
+                            true
+                        });
+                    })))
+                    .into_any_element()
+            }))
+            .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     tr::editor::tabs::audio::mic_volume(),
                     SliderKey::Audio(AudioSlider::MicVolume),
@@ -1904,6 +1920,22 @@ impl EditorWindow {
                     cx,
                 )
                 .into_any_element()
+            }))
+            .children(has_system_audio.then(|| {
+                ui::Subfield::plain(&theme, tr::editor::tabs::audio::system_mute())
+                    .child(ui::Toggle::plain(
+                        &theme,
+                        "audio-system-mute",
+                        audio.system_muted,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let next = !this.project.audio.system_muted;
+                        this.edit_project("audio-system-mute", window, cx, move |project| {
+                            project.audio.system_muted = next;
+                            true
+                        });
+                    })))
+                    .into_any_element()
             }))
             .children(has_system_audio.then(|| {
                 self.slider_field_disabled(

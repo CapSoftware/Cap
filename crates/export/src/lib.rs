@@ -21,8 +21,17 @@ use std::{
 };
 
 pub(crate) fn apply_audio_source(project: &mut ProjectConfiguration, source: AudioSource) {
-    project.audio.mic_muted = !source.includes_mic();
-    project.audio.system_muted = !source.includes_system();
+    match source {
+        AudioSource::Both => {}
+        AudioSource::Mic => {
+            project.audio.mic_muted = false;
+            project.audio.system_muted = true;
+        }
+        AudioSource::System => {
+            project.audio.mic_muted = true;
+            project.audio.system_muted = false;
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -689,12 +698,34 @@ mod audio_source_tests {
     }
 
     #[test]
-    fn selecting_a_source_overrides_an_existing_mute() {
+    fn both_respects_editor_mutes() {
         let mut project = ProjectConfiguration::default();
         project.audio.mic_muted = true;
         project.audio.system_muted = true;
         apply_audio_source(&mut project, AudioSource::Both);
+        assert!(project.audio.mic_muted);
+        assert!(project.audio.system_muted);
+
+        project.audio.mic_muted = true;
+        project.audio.system_muted = false;
+        apply_audio_source(&mut project, AudioSource::Both);
+        assert!(project.audio.mic_muted);
+        assert!(!project.audio.system_muted);
+    }
+
+    #[test]
+    fn mic_and_system_override_editor_mutes() {
+        let mut project = ProjectConfiguration::default();
+        project.audio.mic_muted = true;
+        project.audio.system_muted = true;
+        apply_audio_source(&mut project, AudioSource::Mic);
         assert!(!project.audio.mic_muted);
+        assert!(project.audio.system_muted);
+
+        project.audio.mic_muted = false;
+        project.audio.system_muted = true;
+        apply_audio_source(&mut project, AudioSource::System);
+        assert!(project.audio.mic_muted);
         assert!(!project.audio.system_muted);
     }
 }
