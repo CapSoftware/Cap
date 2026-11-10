@@ -349,3 +349,32 @@ it("keeps the toolbar draft open and says so when the comment fails to post", as
 	expect(container.querySelector("input")).toBe(input);
 	expect(input.value).toBe("Worth keeping");
 });
+
+it("brings the timeline draft back and says so when the comment fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(
+		new Error("Feedback is disabled on this video"),
+	);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const { input } = await renderComposer("timeline");
+	await change(input, "Worth keeping");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	const restored = container.querySelector("input");
+	expect(restored?.value).toBe("Worth keeping");
+	expect(restored?.getAttribute("aria-label")).toBe(
+		input.getAttribute("aria-label"),
+	);
+});
