@@ -108,9 +108,19 @@ export async function updateOrganizationSettings(
 		? sanitizedSettings
 		: preserveProSettings(sanitizedSettings, organization.settings);
 
+	const allowPublicLinkOverride =
+		organization.settings?.allowPublicLinkOverride;
+
 	await db()
 		.update(organizations)
-		.set({ settings: nextSettings })
+		.set({
+			settings: {
+				...nextSettings,
+				...(allowPublicLinkOverride === undefined
+					? {}
+					: { allowPublicLinkOverride }),
+			},
+		})
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");
