@@ -7,10 +7,10 @@ import {
 	faRocket,
 	faUsers,
 } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion, type Variants } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 const fadeIn: Variants = {
 	hidden: { opacity: 0, y: 20 },

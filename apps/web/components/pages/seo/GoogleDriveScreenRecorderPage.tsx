@@ -7,7 +7,6 @@ import {
 	faPlus,
 	faTimes,
 } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {
@@ -23,6 +22,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { type JSX, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { GoogleDriveLogo } from "@/components/icons/GoogleDriveLogo";
 import { PRICING } from "@/data/pricing";
 import { googleDriveScreenRecorderFaqs } from "./google-drive-screen-recorder-faqs";

@@ -6,11 +6,11 @@ import {
 	faLock,
 	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { PublicCapCard } from "@/components/PublicCapCard";
 import {
 	GRID_COLUMN_CLASS,

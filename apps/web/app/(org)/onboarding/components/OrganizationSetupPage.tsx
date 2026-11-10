@@ -2,12 +2,12 @@
 
 import { Button, Input } from "@cap/ui";
 import { faImage } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
