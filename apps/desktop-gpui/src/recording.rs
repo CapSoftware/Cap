@@ -4689,6 +4689,31 @@ mod studio_finalization_tests {
     }
 }
 
+#[cfg(test)]
+mod finalization_storage_tests {
+    use super::*;
+
+    #[test]
+    fn finalization_storage_check_that_cannot_run_does_not_block_the_save() {
+        let directory = tempfile::tempdir().unwrap();
+        ensure_finalization_storage(&directory.path().join("missing.cap")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finalization_storage_check_accepts_a_project_past_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut project = directory.path().to_path_buf();
+        while project.as_os_str().len() < 286 {
+            project.push("p".repeat(40));
+        }
+        project.push("content");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("segment_000.m4s"), [0; 128]).unwrap();
+        ensure_finalization_storage(project.parent().unwrap()).unwrap();
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod instant_lifecycle_tests {
     use super::*;

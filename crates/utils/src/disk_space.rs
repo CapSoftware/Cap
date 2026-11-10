@@ -428,4 +428,129 @@ mod tests {
         let bytes = free_bytes_for_path(&nested).expect("should fall back to existing ancestor");
         assert!(bytes > 0);
     }
+
+    #[cfg(windows)]
+    fn utf16_len(path: &Path) -> usize {
+        use std::os::windows::ffi::OsStrExt;
+        path.as_os_str().encode_wide().count()
+    }
+
+    #[cfg(windows)]
+    fn directory_of_length(base: &Path, length: usize) -> PathBuf {
+        let mut path = base.to_path_buf();
+        while utf16_len(&path) < length {
+            let room = length - utf16_len(&path) - 1;
+            assert!(room >= 1, "{} is too long for {length}", base.display());
+            path.push("p".repeat(if room == 101 { 99 } else { room.min(100) }));
+        }
+        assert_eq!(utf16_len(&path), length);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[cfg(windows)]
+    fn failing_lengths(
+        base: &Path,
+        lengths: impl IntoIterator<Item = usize>,
+        path_for: impl Fn(PathBuf) -> PathBuf,
+    ) -> Vec<String> {
+        lengths
+            .into_iter()
+            .filter_map(|length| {
+                let path = path_for(directory_of_length(base, length));
+                match free_bytes_for_path(&path) {
+                    Ok(bytes) if bytes > 0 => None,
+                    Ok(bytes) => Some(format!("{length} characters: {bytes} bytes")),
+                    Err(error) => Some(format!("{length} characters: {error}")),
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(windows)]
+    fn administrative_share(path: &Path) -> Option<PathBuf> {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return None;
+        };
+        let Prefix::Disk(letter) = prefix.kind() else {
+            return None;
+        };
+        let mut share = PathBuf::from(format!(r"\\localhost\{}$\", letter as char));
+        share.extend(components.filter(|component| !matches!(component, Component::RootDir)));
+        share.is_dir().then_some(share)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_directories_up_to_and_past_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let failed = failing_lengths(
+            root.path(),
+            (236..=300).chain([400, 1000, 4000]),
+            |directory| directory,
+        );
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_a_missing_path_below_a_long_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let failed = failing_lengths(
+            root.path(),
+            [200, 247, 248, 259, 260, 272, 400],
+            |directory| directory.join("not-created-yet").join("recording.cap"),
+        );
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recording_storage_measures_a_project_past_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let project = directory_of_length(root.path(), 286);
+        let display = project.join("content").join("segments").join("segment-0");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("segment_000.m4s"), [0; 128]).unwrap();
+        std::fs::write(project.join("recording-meta.json"), [0; 16]).unwrap();
+
+        let storage = recording_storage(&project).unwrap();
+        assert_eq!(storage.recording_bytes, 144);
+        assert!(storage.available_bytes > 0);
+
+        let sampled = RecordingStorageMonitor::default().sample(&project).unwrap();
+        assert_eq!(sampled.recording_bytes, 144);
+        assert!(sampled.available_bytes > 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_a_drive_root() {
+        let root: PathBuf = std::env::temp_dir().components().take(2).collect();
+        assert!(root.parent().is_none(), "{}", root.display());
+        assert!(free_bytes_for_path(&root).unwrap() > 0);
+        assert!(free_bytes_for_path(&root.join("not-created-yet")).unwrap() > 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_unc_paths_up_to_and_past_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(share) = administrative_share(root.path()) else {
+            eprintln!(
+                "skipped: no administrative share for {}",
+                root.path().display()
+            );
+            return;
+        };
+        assert!(free_bytes_for_path(&share).unwrap() > 0);
+        assert!(free_bytes_for_path(&share.join("not-created-yet")).unwrap() > 0);
+        let failed = failing_lengths(&share, (236..=300).chain([400, 1000]), |directory| {
+            directory
+        });
+        assert!(failed.is_empty(), "{failed:#?}");
+        eprintln!("checked UNC paths below {}", share.display());
+    }
 }
