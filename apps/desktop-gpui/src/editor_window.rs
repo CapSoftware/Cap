@@ -13814,6 +13814,7 @@ mod tests {
                 editor.project.timeline = Some(
                     serde_json::from_value(serde_json::json!({
                         "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                        "zoomSegments": [],
                         "captionSegments": [{"id": "c", "start": 1.0, "end": 2.0, "text": "hi"}],
                         "keyboardSegments": [{"id": "k", "start": 3.0, "end": 4.0, "displayText": "A"}]
                     }))
