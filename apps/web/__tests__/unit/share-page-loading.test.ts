@@ -188,10 +188,13 @@ function arrangeRows(rows: ReturnType<typeof createVideo>[]) {
 	});
 }
 
-const renderPage = () =>
+const renderPage = (
+	videoId = "video",
+	searchParams: Record<string, string> = {},
+) =>
 	ShareVideoPage({
-		params: Promise.resolve({ videoId: "video" }),
-		searchParams: Promise.resolve({}),
+		params: Promise.resolve({ videoId }),
+		searchParams: Promise.resolve(searchParams),
 	});
 
 async function renderAuthorizedContent() {
@@ -276,6 +279,31 @@ describe("share page loading", () => {
 		);
 		expect(mocks.select).not.toHaveBeenCalled();
 		expect(mocks.playbackUrl).not.toHaveBeenCalled();
+	});
+
+	it("sends the owner landing after a recording on a custom domain to the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		mocks.restrictedRedirect.mockResolvedValue(
+			`https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		await expect(
+			renderPage(videoId, { recordingStopped: "1" }),
+		).rejects.toThrow(
+			`REDIRECT https://cap.so/s/${videoId}?recordingStopped=1`,
+		);
+		expect(mocks.restrictedRedirect).toHaveBeenCalledWith(
+			expect.any(Headers),
+			videoId,
+			{ recordingStopped: "1" },
+		);
+		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("keeps the owner landing after a recording on the main origin", async () => {
+		const videoId = "abcdefghjkmnpqr";
+		await renderPage(videoId, { recordingStopped: "1" });
+		expect(mocks.restrictedRedirect).toHaveBeenCalledOnce();
+		expect(mocks.select).toHaveBeenCalled();
 	});
 
 	it("does not look up the host for authorized videos", async () => {

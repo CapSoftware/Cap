@@ -233,15 +233,34 @@ describe("developer SDK multipart completion billing", () => {
 		expect(mocks.events).toEqual(["debit", "complete"]);
 	});
 
-	it("keeps storing the submitted duration", async () => {
+	it("stores the billed duration when the size floor is longer than the submitted duration", async () => {
 		mocks.storedParts = [
 			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
 		];
-		const response = await complete({ durationInSecs: 12 });
+		const response = await complete({ durationInSecs: 0.0001 });
 
 		expect(response.status).toBe(200);
 		expect(mocks.videoUpdates).toEqual([
-			{ duration: 12, width: 1920, height: 1080 },
+			{ duration: 40, width: 1920, height: 1080 },
+		]);
+		expect(mocks.creditTransactions).toEqual([
+			expect.objectContaining({
+				amountMicroCredits: -microCreditsFor(40),
+				metadata: { durationSeconds: 40, totalBytes: 100_000_000 },
+			}),
+		]);
+	});
+
+	it("stores the submitted duration when it is longer than the size floor", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		const response = await complete({ durationInSecs: 12.5 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.videoUpdates).toEqual([
+			{ duration: 12.5, width: 1920, height: 1080 },
+		]);
+		expect(mocks.creditTransactions).toEqual([
+			expect.objectContaining({ amountMicroCredits: -microCreditsFor(12.5) }),
 		]);
 	});
 
@@ -281,7 +300,9 @@ describe("developer SDK multipart completion billing", () => {
 				amountMicroCredits: -microCreditsFor(FOUR_HOURS_SECS),
 			}),
 		]);
-		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([1]);
+		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([
+			FOUR_HOURS_SECS,
+		]);
 
 		mocks.storedDuration = null;
 		mocks.creditTransactions = [];
@@ -384,7 +405,7 @@ describe("developer SDK multipart completion billing", () => {
 		expect(mocks.creditTransactions).toHaveLength(1);
 		expect(mocks.events).toEqual(["debit", "complete"]);
 		expect(mocks.videoUpdates).toEqual([
-			{ duration: 0.5, width: 1920, height: 1080 },
+			{ duration: 40, width: 1920, height: 1080 },
 		]);
 	});
 });
