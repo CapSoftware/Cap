@@ -7,7 +7,8 @@ use cap_project::{
 
 use super::cuts::{
     self, CutReport, LONG_GAP, ONSET_GUARD, Removing, RestoreBlocker, TAIL_GUARD,
-    apply_source_cuts, gap_cut, plan_pause_cuts, plan_word_cuts, quietest_point, restore_words,
+    apply_source_cuts, follow_refined_words, gap_cut, plan_pause_cuts, plan_word_cuts,
+    quietest_point, restore_words,
 };
 use super::energy::{EnergyEnvelope, EnvelopeTrack, HOP_SECONDS, clip_envelope};
 use super::model::{TranscriptDoc, TranscriptEdl, flatten_words};
@@ -1847,4 +1848,150 @@ fn removing_neighbouring_fillers_together_matches_removing_them_one_at_a_time() 
     assert_eq!(kept(&apart, &durations), [true, false, false, true, true]);
     assert_eq!(kept(&together, &durations), kept(&apart, &durations));
     assert_eq!(bounds(&together), bounds(&apart));
+}
+
+const FIRST_PASS: [(&str, f64, f64); 7] = [
+    ("feels", 0.24, 0.56),
+    ("the", 0.56, 0.72),
+    ("same,", 0.72, 1.12),
+    ("uh", 1.28, 1.52),
+    ("works", 1.6, 2.0),
+    ("very", 2.0, 2.24),
+    ("similar,", 2.24, 2.72),
+];
+const REFINED: [(&str, f64, f64); 7] = [
+    ("feels", 0.06, 0.3),
+    ("the", 0.36, 0.42),
+    ("same,", 0.48, 0.885),
+    ("uh", 1.62, 1.68),
+    ("works", 1.78, 1.98),
+    ("very", 2.0, 2.14),
+    ("similar,", 2.18, 2.575),
+];
+const SPOKEN_UH: Range<f64> = 1.5..1.7;
+
+fn plays(project: &ProjectConfiguration, source: &Range<f64>) -> bool {
+    bounds(project)
+        .iter()
+        .any(|(start, end)| *start < source.end && source.start < *end)
+}
+
+fn add_zoom(project: &mut ProjectConfiguration, start: f64, end: f64) {
+    timeline_mut(project).zoom_segments.push(
+        serde_json::from_value(serde_json::json!({
+            "start": start,
+            "end": end,
+            "amount": 1.5,
+            "mode": {"manual": {"x": 0.0, "y": 0.0}},
+            "glideDirection": "none",
+            "glideSpeed": 0.5,
+            "instantAnimation": false,
+            "edgeSnapRatio": 0.25
+        }))
+        .unwrap(),
+    );
+}
+
+fn follow(project: &mut ProjectConfiguration, durations: &[f64]) -> usize {
+    let before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    let after = TranscriptDoc::build(&captions(&REFINED));
+    follow_refined_words(timeline_mut(project), durations, &[], &before, &after, None)
+}
+
+#[test]
+fn a_filler_cut_on_first_pass_timings_moves_to_where_the_filler_is_spoken() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert!(
+        plays(&project, &SPOKEN_UH),
+        "the first pass places the cut in the silence before the filler: {:?}",
+        bounds(&project)
+    );
+
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+    let mut refined = self::project(&REFINED, &durations);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+    assert_eq!(bounds(&project).len(), 2);
+    for (moved, direct) in bounds(&project).iter().zip(bounds(&refined)) {
+        assert!(close(moved.0, direct.0) && close(moved.1, direct.1));
+    }
+    assert_eq!(follow(&mut project, &durations), 0);
+}
+
+#[test]
+fn a_moved_filler_cut_leaves_the_other_tracks_as_cutting_on_refined_timings_would() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_zoom(&mut project, 0.2, 0.9);
+    add_zoom(&mut project, 3.0, 4.0);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    let mut refined = self::project(&REFINED, &durations);
+    add_zoom(&mut refined, 0.2, 0.9);
+    add_zoom(&mut refined, 3.0, 4.0);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+
+    let zooms = |project: &ProjectConfiguration| -> Vec<(f64, f64)> {
+        timeline(project)
+            .zoom_segments
+            .iter()
+            .map(|zoom| (zoom.start, zoom.end))
+            .collect()
+    };
+    assert_eq!(zooms(&project).len(), 2);
+    for (moved, direct) in zooms(&project).iter().zip(zooms(&refined)) {
+        assert!(
+            close(moved.0, direct.0) && close(moved.1, direct.1),
+            "{moved:?} {direct:?}"
+        );
+    }
+}
+
+#[test]
+fn a_trim_made_on_the_timeline_stays_put_when_word_timings_are_refined() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &[1.2..1.55]);
+    let trimmed = bounds(&project);
+    assert!(
+        !kept(&project, &durations)[3],
+        "the trim covers the first pass's filler"
+    );
+
+    assert_eq!(follow(&mut project, &durations), 0);
+    assert_eq!(bounds(&project), trimmed);
+}
+
+#[test]
+fn landing_a_refinement_moves_the_cut_in_the_project_and_in_undo_entries_that_have_it() {
+    let durations = [5.16];
+    let uncut = project(&FIRST_PASS, &durations);
+    let mut cut = uncut.clone();
+    cut_words(&mut cut, &durations, &[(3, 4)]);
+    cap_project::synchronize_captions(&mut cut, &durations);
+    let input = uncut.captions.as_ref().unwrap().segments.clone();
+    let refined = crate::transcription::RefinedCaptions::new(&input, captions(&REFINED).segments);
+    let mut landing = super::RefinementLanding::new(&refined, &durations, &[], None);
+
+    let mut entry = uncut.clone();
+    assert_eq!(landing.land(&mut entry), Some(0));
+    assert_eq!(bounds(&entry), bounds(&uncut));
+
+    assert_eq!(landing.land(&mut cut), Some(1));
+    assert!(!plays(&cut, &SPOKEN_UH), "{:?}", bounds(&cut));
+    let spoken: Vec<&str> = timeline(&cut)
+        .caption_segments
+        .iter()
+        .flat_map(|segment| &segment.words)
+        .map(|word| word.text.as_str())
+        .collect();
+    assert_eq!(
+        spoken,
+        ["feels", "the", "same,", "works", "very", "similar,"]
+    );
+    assert_eq!(landing.land(&mut cut), None);
 }
