@@ -158,9 +158,9 @@ const createVideo = () => ({
 		callToAction: { label: "Book a call", url: "https://example.com/" },
 	} as {
 		callToAction: { label: string; url: string };
-		allowViewerDownloads?: boolean;
+		disableDownloads?: boolean;
 	},
-	orgSettings: null as { allowViewerDownloads?: boolean } | null,
+	orgSettings: null as { disableDownloads?: boolean } | null,
 	transcriptionStatus: "COMPLETE",
 	createdAt: new Date("2026-09-01T00:00:00.000Z"),
 	updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -460,19 +460,20 @@ describe("share page loading", () => {
 	const headerProps = async () =>
 		(await renderAuthorizedContent()).props.children.props.header.props;
 
-	it("offers no download to a signed-out viewer by default", async () => {
+	it("offers a download to a signed-out viewer by default", async () => {
 		expect(await headerProps()).toMatchObject({
-			canDownload: false,
+			canDownload: true,
 			hasEdits: false,
 		});
 	});
 
 	it.each([
-		[{ allowViewerDownloads: true }, {}, true],
-		[null, { allowViewerDownloads: true }, true],
-		[{ allowViewerDownloads: false }, {}, false],
-		[{ allowViewerDownloads: true }, { allowViewerDownloads: false }, false],
-		[{ allowViewerDownloads: false }, { allowViewerDownloads: true }, true],
+		[null, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{ disableDownloads: true }, {}, false],
+		[null, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
 	])(
 		"with organization %j and video %j, a signed-out viewer can download: %s",
 		async (orgSettings, videoSettings, canDownload) => {
@@ -498,9 +499,7 @@ describe("share page loading", () => {
 	])("offers no viewer download when %s", async (_label, state) => {
 		if ("quota" in state) mocks.quota.mockResolvedValue(true);
 		const { quota: _quota, ...row } = { quota: false, ...state };
-		arrangeRows([
-			{ ...createVideo(), ...row, orgSettings: { allowViewerDownloads: true } },
-		]);
+		arrangeRows([{ ...createVideo(), ...row }]);
 		expect(await headerProps()).toMatchObject({ canDownload: false });
 	});
 

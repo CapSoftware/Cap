@@ -1,3 +1,4 @@
+import type { VideosPolicy as VideosPolicyService } from "@cap/web-backend";
 import { CurrentUser, Organisation, User, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,11 +12,14 @@ const mocks = vi.hoisted(() => ({
 	viewer: null as { id: string; email: string } | null,
 	isMember: false,
 	shareLimited: false,
+	rateLimited: false,
+	linkOpenToAnyone: false,
 	allowedEmailDomain: null as string | null,
 	spacePasswords: [] as string[],
 	verifiedPasswords: [] as string[],
 }));
 
+vi.mock("server-only", () => ({}));
 vi.mock("@cap/database", async () => {
 	const { getTableName } = await import("drizzle-orm");
 	return {
@@ -30,7 +34,14 @@ vi.mock("@cap/database", async () => {
 	};
 });
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: () => Promise.resolve(mocks.viewer),
+	getCurrentUser: () =>
+		Promise.resolve(
+			mocks.viewer && {
+				...mocks.viewer,
+				activeOrganizationId: "viewer-organization",
+				image: null,
+			},
+		),
 }));
 vi.mock("@cap/web-backend", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@cap/web-backend")>();
@@ -45,6 +56,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 						repo: {
 							getById: () => Effect.succeedNone,
 							hasViewerGrant: () => Effect.succeed(false),
+							isLinkOpenToAnyone: () => Effect.succeed(mocks.linkOpenToAnyone),
 						},
 						orgsRepo: {
 							membershipForVideo: () =>
@@ -70,27 +82,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 	return {
 		Storage: { getAccessForVideo: mocks.access },
 		VideosPolicy,
-		provideOptionalAuth: <A, E, R>(app: Effect.Effect<A, E, R>) => {
-			const withPolicy = app.pipe(
-				Effect.provide(VideosPolicy.Default),
-				Effect.provideService(Video.VideoPasswordAttachment, {
-					passwords: mocks.verifiedPasswords,
-				}),
-			);
-			const viewer = mocks.viewer;
-			return viewer
-				? withPolicy.pipe(
-						Effect.provideService(CurrentUser, {
-							id: User.UserId.make(viewer.id),
-							email: viewer.email,
-							activeOrganizationId: Organisation.OrganisationId.make(
-								"viewer-organization",
-							),
-							iconUrlOrKey: Option.none(),
-						}),
-					)
-				: withPolicy;
-		},
+		makeCurrentUser: actual.makeCurrentUser,
 	};
 });
 vi.mock("@/lib/video-download-permissions", async (importOriginal) => ({
@@ -102,9 +94,32 @@ vi.mock("@/lib/video-download-permissions", async (importOriginal) => ({
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoLockedByShareableLinkLimit: () => Promise.resolve(mocks.shareLimited),
 }));
-vi.mock("@/lib/server", () => ({ runPromise: Effect.runPromise }));
+vi.mock("@/lib/rate-limit", () => ({
+	RATE_LIMIT_IDS: { VIEWER_DOWNLOAD: "rl_viewer_download" },
+	isRateLimited: () => Promise.resolve(mocks.rateLimited),
+}));
+vi.mock("@/lib/server", async () => {
+	const backend = await import("@cap/web-backend");
+	return {
+		runPromise: <A, E>(
+			effect: Effect.Effect<
+				A,
+				E,
+				VideosPolicyService | Video.VideoPasswordAttachment
+			>,
+		) =>
+			effect.pipe(
+				Effect.provide(backend.VideosPolicy.Default),
+				Effect.provideService(Video.VideoPasswordAttachment, {
+					passwords: mocks.verifiedPasswords,
+				}),
+				Effect.runPromise,
+			),
+	};
+});
 
 import { getVideoDownloadInfo } from "@/actions/videos/download";
+import { canDownloadCurrentVideo } from "@/lib/video-download-access";
 
 const VIDEO = Video.VideoId.make("video");
 const CURRENT_KEY = "owner/video/result.mp4";
@@ -156,6 +171,8 @@ beforeEach(() => {
 	mocks.viewer = null;
 	mocks.isMember = false;
 	mocks.shareLimited = false;
+	mocks.rateLimited = false;
+	mocks.linkOpenToAnyone = false;
 	mocks.allowedEmailDomain = null;
 	mocks.spacePasswords = [];
 	mocks.verifiedPasswords = [];
@@ -176,31 +193,51 @@ beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-describe("viewer downloads are off by default", () => {
+const OFF = { disableDownloads: true };
+const member = { id: "member", email: "member@example.com" };
+
+describe("viewer downloads are on by default", () => {
 	it.each([
 		["no settings at all", null, null],
 		["empty settings", {}, {}],
-		["the organization turned it off", null, { allowViewerDownloads: false }],
 		[
-			"a value that is not a boolean",
-			{ allowViewerDownloads: "yes" },
-			{ allowViewerDownloads: 1 },
+			"settings written before this change",
+			{ disableComments: true },
+			{ disableReactions: true },
+		],
+		[
+			"a value that is not true",
+			{ disableDownloads: "yes" },
+			{ disableDownloads: 1 },
 		],
 	])(
-		"denies a signed-out viewer with %s",
+		"lets a signed-out viewer download a public video with %s",
 		async (_label, videoSettings, organizationSettings) => {
 			setVideo({ videoSettings, organizationSettings });
-			await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(
-				ANONYMOUS_DENIAL,
-			);
-			expectNoStorageAccess();
+			expect(await getVideoDownloadInfo(VIDEO)).toEqual({
+				success: true,
+				downloadUrl: "https://media.example.com/video.mp4",
+				filename: "Recording.mp4",
+			});
+			expect(mocks.sign.mock.calls[0]?.[0]).toBe(CURRENT_KEY);
 		},
 	);
 
-	it("denies a signed-in viewer who is not a member", async () => {
+	it("lets a signed-in viewer who is not a member download", async () => {
 		mocks.viewer = stranger;
 		setVideo();
-		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(SIGNED_IN_DENIAL);
+		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
+	});
+
+	it("never gives a viewer the original video", async () => {
+		setVideo();
+		await expect(getVideoDownloadInfo(VIDEO, "original")).rejects.toThrow(
+			ANONYMOUS_DENIAL,
+		);
+		mocks.viewer = stranger;
+		await expect(getVideoDownloadInfo(VIDEO, "original")).rejects.toThrow(
+			SIGNED_IN_DENIAL,
+		);
 		expectNoStorageAccess();
 	});
 
@@ -208,13 +245,39 @@ describe("viewer downloads are off by default", () => {
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 	});
+});
+
+describe("turning downloads off", () => {
+	it.each([
+		["the organization", null, OFF],
+		["the cap", OFF, null],
+		[
+			"the organization, even when the cap says on",
+			{ disableDownloads: false },
+			OFF,
+		],
+	])(
+		"refuses viewers when %s turns it off",
+		async (_label, videoSettings, organizationSettings) => {
+			setVideo({ videoSettings, organizationSettings });
+			await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(
+				ANONYMOUS_DENIAL,
+			);
+			mocks.viewer = stranger;
+			await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(
+				SIGNED_IN_DENIAL,
+			);
+			expectNoStorageAccess();
+			expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+		},
+	);
 
 	it.each(["current", "original"] as const)(
-		"still lets a member download the %s video",
+		"keeps the %s video downloadable for members",
 		async (variant) => {
-			mocks.viewer = { id: "member", email: "member@example.com" };
+			mocks.viewer = member;
 			mocks.isMember = true;
-			setVideo();
+			setVideo({ videoSettings: OFF, organizationSettings: OFF });
 			expect(await getVideoDownloadInfo(VIDEO, variant)).toMatchObject({
 				success: true,
 			});
@@ -222,49 +285,9 @@ describe("viewer downloads are off by default", () => {
 	);
 });
 
-describe("viewer downloads turned on", () => {
-	const enabled = { allowViewerDownloads: true };
-
-	it("lets a signed-out viewer download a public video", async () => {
-		setVideo({ organizationSettings: enabled });
-		expect(await getVideoDownloadInfo(VIDEO)).toEqual({
-			success: true,
-			downloadUrl: "https://media.example.com/video.mp4",
-			filename: "Recording.mp4",
-		});
-		expect(mocks.sign.mock.calls[0]?.[0]).toBe(CURRENT_KEY);
-	});
-
-	it("lets a signed-in viewer who is not a member download", async () => {
-		mocks.viewer = stranger;
-		setVideo({ organizationSettings: enabled });
-		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
-	});
-
-	it("lets one video opt in while the organization default is off", async () => {
-		setVideo({ videoSettings: enabled });
-		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
-	});
-
-	it("lets one video opt out while the organization default is on", async () => {
-		setVideo({
-			videoSettings: { allowViewerDownloads: false },
-			organizationSettings: enabled,
-		});
-		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
-		expectNoStorageAccess();
-	});
-
-	it("never gives a viewer the original video", async () => {
-		setVideo({ organizationSettings: enabled });
-		await expect(getVideoDownloadInfo(VIDEO, "original")).rejects.toThrow(
-			ANONYMOUS_DENIAL,
-		);
-		expectNoStorageAccess();
-	});
-
+describe("the view gates still apply to viewers", () => {
 	it("denies a private video", async () => {
-		setVideo({ organizationSettings: enabled, isPublic: false });
+		setVideo({ isPublic: false });
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		mocks.viewer = stranger;
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(SIGNED_IN_DENIAL);
@@ -272,19 +295,21 @@ describe("viewer downloads turned on", () => {
 	});
 
 	it("requires the video password to be verified first", async () => {
-		setVideo({ organizationSettings: enabled, password: "video-hash" });
+		setVideo({ password: "video-hash" });
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
 		mocks.verifiedPasswords = ["another-hash"];
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 
 		mocks.verifiedPasswords = ["video-hash"];
 		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(true);
 	});
 
 	it("requires an inherited space password to be verified first", async () => {
 		mocks.spacePasswords = ["space-hash"];
-		setVideo({ organizationSettings: enabled });
+		setVideo();
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 
@@ -294,7 +319,7 @@ describe("viewer downloads turned on", () => {
 
 	it("keeps the organization email restriction in front of the download", async () => {
 		mocks.allowedEmailDomain = "example.com";
-		setVideo({ organizationSettings: enabled });
+		setVideo();
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		mocks.viewer = stranger;
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(SIGNED_IN_DENIAL);
@@ -304,21 +329,28 @@ describe("viewer downloads turned on", () => {
 		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
 	});
 
+	it("follows a cap opened to anyone with the link in a restricted organization", async () => {
+		mocks.allowedEmailDomain = "example.com";
+		mocks.linkOpenToAnyone = true;
+		setVideo();
+		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
+	});
+
 	it("denies a video locked by the free plan share limit", async () => {
 		mocks.shareLimited = true;
-		setVideo({ organizationSettings: enabled });
+		setVideo();
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 	});
 
 	it("denies a video whose organization was deleted", async () => {
-		setVideo({ videoSettings: enabled, organizationDeleted: true });
+		setVideo({ organizationDeleted: true });
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 	});
 
 	it("does not reveal processing state before the view gates pass", async () => {
-		setVideo({ organizationSettings: enabled, password: "video-hash" });
+		setVideo({ password: "video-hash" });
 		mocks.tables.set("video_uploads", [{ phase: "uploading" }]);
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 
@@ -327,5 +359,62 @@ describe("viewer downloads turned on", () => {
 			success: false,
 			error: "Video is still processing. Try again once it has finished.",
 		});
+	});
+});
+
+describe("rate limit", () => {
+	it("stops a viewer before any storage access", async () => {
+		mocks.rateLimited = true;
+		setVideo();
+		expect(await getVideoDownloadInfo(VIDEO)).toEqual({
+			success: false,
+			error: "Too many downloads. Please wait a moment and try again.",
+		});
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+		expectNoStorageAccess();
+	});
+
+	it("does not apply to members", async () => {
+		mocks.rateLimited = true;
+		mocks.viewer = member;
+		mocks.isMember = true;
+		setVideo();
+		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
+	});
+});
+
+describe("the RPC download check", () => {
+	const signedIn = (viewer: { id: string; email: string }) =>
+		Option.some(
+			CurrentUser.of({
+				id: User.UserId.make(viewer.id),
+				email: viewer.email,
+				activeOrganizationId: Organisation.OrganisationId.make("organization"),
+				iconUrlOrKey: Option.none(),
+			}),
+		);
+
+	it("allows viewers by default and members always", async () => {
+		setVideo();
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(true);
+		expect(await canDownloadCurrentVideo(VIDEO, signedIn(stranger))).toBe(true);
+
+		setVideo({ organizationSettings: OFF });
+		expect(await canDownloadCurrentVideo(VIDEO, signedIn(stranger))).toBe(
+			false,
+		);
+		mocks.isMember = true;
+		expect(await canDownloadCurrentVideo(VIDEO, signedIn(member))).toBe(true);
+	});
+
+	it("uses the identity it is given, not the session cookie", async () => {
+		mocks.viewer = { id: "colleague", email: "colleague@example.com" };
+		mocks.allowedEmailDomain = "example.com";
+		setVideo();
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+	});
+
+	it("is false for a video that does not exist", async () => {
+		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
 	});
 });

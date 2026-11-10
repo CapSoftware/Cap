@@ -31,14 +31,13 @@ interface SettingsDialogProps {
 	onSaved?: () => void;
 }
 
-type SettingKey = ViewerSettingKey | "allowViewerDownloads";
+type SettingKey = ViewerSettingKey | "disableDownloads";
 
 const options: {
 	label: string;
 	value: SettingKey;
 	description: string;
 	pro?: boolean;
-	enablesWhenTrue?: boolean;
 }[] = [
 	{
 		label: "Enable comments",
@@ -74,10 +73,9 @@ const options: {
 		pro: true,
 	},
 	{
-		label: "Allow viewer downloads",
-		value: "allowViewerDownloads",
-		description: "Let anyone who can view this cap download it",
-		enablesWhenTrue: true,
+		label: "Enable downloads",
+		value: "disableDownloads",
+		description: "Allow viewers to download this cap",
 	},
 ];
 
@@ -104,7 +102,7 @@ export const SettingsDialog = ({
 			disableChapters: data?.disableChapters,
 			disableReactions: data?.disableReactions,
 			disableTranscript: data?.disableTranscript,
-			allowViewerDownloads: data?.allowViewerDownloads,
+			disableDownloads: data?.disableDownloads,
 			defaultPlaybackSpeed: data?.defaultPlaybackSpeed,
 		}),
 		[],
@@ -167,11 +165,17 @@ export const SettingsDialog = ({
 	);
 
 	const getInheritedSources = (key: SettingKey) =>
-		key === "allowViewerDownloads" ? undefined : inheritedSpaceSettings?.[key];
+		key === "disableDownloads" ? undefined : inheritedSpaceSettings?.[key];
+
+	// Downloads turned off for the organization stay off on every cap.
+	const isLockedByOrganization = (key: SettingKey) =>
+		key === "disableDownloads" &&
+		organizationSettings?.disableDownloads === true;
 
 	const getEffectiveValue = (key: SettingKey) => {
 		const inheritedSources = getInheritedSources(key);
 		if (inheritedSources && inheritedSources.length > 0) return true;
+		if (isLockedByOrganization(key)) return true;
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
 		return videoValue !== undefined || videoValue === true
@@ -235,7 +239,7 @@ export const SettingsDialog = ({
 										{effectiveValue && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
 												{inheritedLabel ??
-													`Org ${orgValue === Boolean(option.enablesWhenTrue) ? "enabled" : "disabled"}`}
+													`Org ${orgValue ? "disabled" : "enabled"}`}
 											</p>
 										)}
 									</div>
@@ -244,16 +248,13 @@ export const SettingsDialog = ({
 								<Switch
 									disabled={
 										Boolean(inheritedLabel) ||
+										isLockedByOrganization(key) ||
 										(option.pro && !user?.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue("disableTranscript"))
 									}
 									onCheckedChange={() => toggleSettingHandler(option.value)}
-									checked={
-										option.enablesWhenTrue
-											? Boolean(effectiveValue)
-											: !effectiveValue
-									}
+									checked={!effectiveValue}
 								/>
 							</div>
 						);

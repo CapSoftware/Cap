@@ -1,13 +1,29 @@
-import { RpcAuthMiddlewareLive, RpcsLive } from "@cap/web-backend";
+import {
+	RpcAuthMiddlewareLive,
+	RpcsLive,
+	VideoDownloadGate,
+} from "@cap/web-backend";
 import { Rpcs } from "@cap/web-domain";
 import { HttpServer } from "@effect/platform";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { Dependencies } from "@/lib/server";
+import { canDownloadCurrentVideo } from "@/lib/video-download-access";
+
+const VideoDownloadGateLive = Layer.succeed(VideoDownloadGate, {
+	allows: (videoId, viewer) =>
+		Effect.tryPromise(() => canDownloadCurrentVideo(videoId, viewer)).pipe(
+			Effect.catchAll((error) =>
+				Effect.logError("Video download access check failed", error).pipe(
+					Effect.as(false),
+				),
+			),
+		),
+});
 
 const rpcLayer = Layer.mergeAll(
 	RpcAuthMiddlewareLive,
-	RpcsLive,
+	Layer.provide(RpcsLive, VideoDownloadGateLive),
 	RpcSerialization.layerJson,
 	HttpServer.layerContext,
 );

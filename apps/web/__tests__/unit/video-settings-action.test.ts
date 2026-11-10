@@ -84,23 +84,23 @@ describe("updateVideoSettings", () => {
 	});
 
 	it.each([true, false])(
-		"saves the viewer download choice %s for any owner",
-		async (allowViewerDownloads) => {
+		"saves the download choice %s for any owner",
+		async (disableDownloads) => {
 			mocks.stripeSubscriptionStatus = null;
 
 			await updateVideoSettings("video" as Video.VideoId, {
-				allowViewerDownloads,
+				disableDownloads,
 			});
 
 			const settings = (mocks.updates[0] as { settings: unknown }).settings;
-			expect(patchOf(settings)).toEqual({ allowViewerDownloads });
+			expect(patchOf(settings)).toEqual({ disableDownloads });
 		},
 	);
 
-	it("ignores a viewer download value that is not a boolean", async () => {
+	it("ignores a download value that is not a boolean", async () => {
 		await updateVideoSettings(
 			"video" as Video.VideoId,
-			{ allowViewerDownloads: "yes" } as unknown as Parameters<
+			{ disableDownloads: "yes" } as unknown as Parameters<
 				typeof updateVideoSettings
 			>[1],
 		);

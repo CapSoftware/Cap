@@ -156,14 +156,14 @@ describe("canUserDownloadVideo", () => {
 
 describe("areViewerDownloadsEnabled", () => {
 	it.each([
-		[undefined, undefined, false],
-		[null, null, false],
-		[{}, {}, false],
-		[{}, { allowViewerDownloads: false }, false],
-		[{}, { allowViewerDownloads: true }, true],
-		[{ allowViewerDownloads: true }, {}, true],
-		[{ allowViewerDownloads: true }, { allowViewerDownloads: false }, true],
-		[{ allowViewerDownloads: false }, { allowViewerDownloads: true }, false],
+		[undefined, undefined, true],
+		[null, null, true],
+		[{}, {}, true],
+		[{ disableDownloads: false }, { disableDownloads: false }, true],
+		[{}, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, {}, false],
+		[{ disableDownloads: false }, { disableDownloads: true }, false],
+		[{ disableDownloads: true }, { disableDownloads: false }, false],
 	])(
 		"video %j, organization %j => %s",
 		(videoSettings, organizationSettings, expected) => {

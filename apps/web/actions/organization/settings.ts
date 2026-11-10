@@ -23,7 +23,7 @@ type OrganizationSettingsInput = {
 	disableReactions?: boolean;
 	disableTranscript?: boolean;
 	disableComments?: boolean;
-	allowViewerDownloads?: boolean;
+	disableDownloads?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
@@ -95,10 +95,10 @@ export async function updateOrganizationSettings(
 	}
 
 	if (
-		settings.allowViewerDownloads !== undefined &&
-		typeof settings.allowViewerDownloads !== "boolean"
+		settings.disableDownloads !== undefined &&
+		typeof settings.disableDownloads !== "boolean"
 	) {
-		throw new Error("Invalid viewer download setting");
+		throw new Error("Invalid download setting");
 	}
 
 	await requireOrganizationSettingsManager(user.id, organizationId);

@@ -9,14 +9,11 @@ import {
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 
-type ViewerDownloadSettings =
-	| { allowViewerDownloads?: boolean }
-	| null
-	| undefined;
+type ViewerDownloadSettings = { disableDownloads?: boolean } | null | undefined;
 
-// Opt-in and off unless someone turns it on. The video's own value wins over
-// the organization default in both directions. This only decides whether
-// viewers may download at all: every caller still has to run the view gates
+// Viewers can download by default. The organization can turn it off for every
+// cap and the owner for a single cap, and either one being off wins. This only
+// decides whether viewers may download at all: callers still run the view gates
 // (privacy, email restriction, password, share limit) before signing a URL.
 export function areViewerDownloadsEnabled({
 	videoSettings,
@@ -25,16 +22,17 @@ export function areViewerDownloadsEnabled({
 	videoSettings: ViewerDownloadSettings;
 	organizationSettings: ViewerDownloadSettings;
 }): boolean {
-	const videoValue = videoSettings?.allowViewerDownloads;
-	if (typeof videoValue === "boolean") return videoValue;
-	return organizationSettings?.allowViewerDownloads === true;
+	return (
+		organizationSettings?.disableDownloads !== true &&
+		videoSettings?.disableDownloads !== true
+	);
 }
 
 export async function videoAllowsViewerDownloads(video: {
 	orgId: Organisation.OrganisationId;
 	settings: ViewerDownloadSettings;
 }): Promise<boolean> {
-	if (video.settings?.allowViewerDownloads === false) return false;
+	if (video.settings?.disableDownloads === true) return false;
 
 	const [organization] = await db()
 		.select({ settings: organizations.settings })

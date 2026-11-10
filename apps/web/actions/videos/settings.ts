@@ -15,7 +15,7 @@ const VIEWER_SETTING_KEYS = [
 	"disableReactions",
 	"disableTranscript",
 	"disableComments",
-	"allowViewerDownloads",
+	"disableDownloads",
 ] as const;
 
 const PRO_VIEWER_SETTING_KEYS = new Set<(typeof VIEWER_SETTING_KEYS)[number]>([
@@ -33,7 +33,7 @@ export async function updateVideoSettings(
 		disableReactions?: boolean;
 		disableTranscript?: boolean;
 		disableComments?: boolean;
-		allowViewerDownloads?: boolean;
+		disableDownloads?: boolean;
 		defaultPlaybackSpeed?: number;
 	},
 ) {

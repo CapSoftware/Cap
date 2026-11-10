@@ -1,12 +1,14 @@
-import { InternalError, Policy, Video } from "@cap/web-domain";
+import { CurrentUser, InternalError, Policy, Video } from "@cap/web-domain";
 import { Effect, Exit, type Option, Schema } from "effect";
 
 import { provideOptionalAuth } from "../Auth.ts";
 import { Videos } from "./index.ts";
+import { VideoDownloadGate } from "./VideoDownloadGate.ts";
 
 export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 	Effect.gen(function* () {
 		const videos = yield* Videos;
+		const downloadGate = yield* VideoDownloadGate;
 
 		return {
 			VideoDelete: (videoId) =>
@@ -60,7 +62,13 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					),
 
 			VideoGetDownloadInfo: (videoId) =>
-				videos.getDownloadInfo(videoId).pipe(
+				Effect.gen(function* () {
+					const viewer = yield* Effect.serviceOption(CurrentUser);
+					if (!(yield* downloadGate.allows(videoId, viewer))) {
+						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					}
+					return yield* videos.getDownloadInfo(videoId);
+				}).pipe(
 					provideOptionalAuth,
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),

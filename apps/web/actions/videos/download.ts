@@ -3,19 +3,18 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
-import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { makeCurrentUser, Storage, VideosPolicy } from "@cap/web-backend";
+import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { runPromise } from "@/lib/server";
-import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
-	canUserDownloadVideo,
-	videoAllowsViewerDownloads,
-} from "@/lib/video-download-permissions";
+	resolveVideoDownloadAccess,
+	type VideoDownloadVariant,
+} from "@/lib/video-download-access";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
-export type VideoDownloadVariant = "current" | "original";
+export type { VideoDownloadVariant };
 export type VideoDownloadInfo =
 	| {
 			success: true;
@@ -74,25 +73,6 @@ export async function downloadVideo(videoId: Video.VideoId) {
 	}
 }
 
-// The same gates the share page applies before it shows the video: privacy,
-// email restriction and password through the view policy, then the free plan
-// share limit. Run before anything about the video is returned to a viewer.
-async function viewerPassesViewGates(video: typeof videos.$inferSelect) {
-	const canView = await Effect.gen(function* () {
-		const videosPolicy = yield* VideosPolicy;
-		yield* videosPolicy.canViewLoaded(
-			decodeStorageVideo(video),
-			Option.fromNullable(video.password),
-		);
-		return true;
-	})
-		.pipe(provideOptionalAuth, runPromise)
-		.catch(() => false);
-	if (!canView) return false;
-
-	return !(await isVideoLockedByShareableLinkLimit(video.id));
-}
-
 export async function getVideoDownloadInfo(
 	videoId: Video.VideoId,
 	variant: VideoDownloadVariant = "current",
@@ -113,23 +93,17 @@ export async function getVideoDownloadInfo(
 		);
 	}
 
-	const memberAllowed = user
-		? await canUserDownloadVideo({
-				userId: user.id,
-				ownerId: video.ownerId,
-				videoId,
-			})
-		: false;
+	const viewer = Option.fromNullable(user).pipe(Option.map(makeCurrentUser));
+	const access = await resolveVideoDownloadAccess({ viewer, video, variant });
 
-	// Viewers only ever get the video as it is published. The original can hold
-	// footage the owner has since cut out.
-	const viewerAllowed =
-		!memberAllowed &&
-		variant === "current" &&
-		(await videoAllowsViewerDownloads(video)) &&
-		(await viewerPassesViewGates(video));
+	if (access === "rate_limited") {
+		return {
+			success: false,
+			error: "Too many downloads. Please wait a moment and try again.",
+		};
+	}
 
-	if (!memberAllowed && !viewerAllowed) {
+	if (access === "denied") {
 		throw new Error(
 			user
 				? "You don't have permission to download this video"
@@ -202,7 +176,13 @@ export async function getVideoDownloadInfo(
 			);
 			if (!exists) return null;
 			return yield* bucket.getSignedDownloadUrl(downloadKey, filename);
-		}).pipe(provideOptionalAuth, runPromise);
+		}).pipe(
+			(effect) =>
+				Option.isSome(viewer)
+					? Effect.provideService(effect, CurrentUser, viewer.value)
+					: effect,
+			runPromise,
+		);
 
 		if (!downloadUrl) {
 			return {

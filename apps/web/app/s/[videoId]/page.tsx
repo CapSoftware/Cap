@@ -843,7 +843,8 @@ async function AuthorizedContent({
 			: Promise.resolve(false);
 
 	// This component only renders once the view gates have passed, so the
-	// opt-in setting and the share limit are all that is left to decide.
+	// organization and cap download settings and the share limit are all that
+	// is left to decide. getVideoDownloadInfo checks everything again.
 	const viewerDownloadsEnabled =
 		isVideoDownloadReady &&
 		!video.isScreenshot &&
