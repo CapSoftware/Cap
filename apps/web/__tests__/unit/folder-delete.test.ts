@@ -64,9 +64,11 @@ function setup(parent: Folder.FolderId | null, hasChild = false) {
 	});
 }
 
-function runFolders<A, E>(
-	operation: (folders: Folders) => Effect.Effect<A, E, never>,
-) {
+type FolderOperation = (
+	folders: Folders,
+) => ReturnType<Folders["delete"]> | ReturnType<Folders["update"]>;
+
+function runFolders(operation: FolderOperation) {
 	return Effect.flatMap(Folders, operation).pipe(
 		Effect.provide(Folders.DefaultWithoutDependencies),
 		Effect.provideService(
