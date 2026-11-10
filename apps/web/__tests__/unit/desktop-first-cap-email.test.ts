@@ -356,6 +356,34 @@ describe("first Cap email", () => {
 		expect(email.sendEmail).toHaveBeenCalledTimes(1);
 	});
 
+	it("goes out for a recording made while the previous email is being cancelled", async () => {
+		const first = await record();
+		let second: string | undefined;
+		email.cancel.mockImplementationOnce(async () => {
+			second = await record();
+			return true;
+		});
+		state.now += MINUTE;
+		await remove(first);
+
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
+		expect(email.sendEmail).toHaveBeenCalledTimes(2);
+		expect(marker()).toMatchObject({ videoId: second, emailId: "email-2" });
+	});
+
+	it("keeps the newer claim when the previous email could not be cancelled", async () => {
+		const first = await record();
+		let second: string | undefined;
+		email.cancel.mockImplementationOnce(async () => {
+			second = await record();
+			return false;
+		});
+		state.now += MINUTE;
+		await remove(first);
+
+		expect(marker()).toMatchObject({ videoId: second, emailId: "email-2" });
+	});
+
 	it("is not sent twice when the cancellation fails", async () => {
 		email.cancel.mockResolvedValue(false);
 		const first = await record();

@@ -70,10 +70,27 @@ export async function cancelFirstCapEmail(
 	const marker = row?.preferences?.firstCapEmail;
 	if (marker?.videoId !== videoId || Date.now() >= marker.sendAt) return false;
 
-	if (marker.emailId && !(await cancelScheduledFirstCapEmail(marker.emailId)))
-		return false;
+	// The claim is given up before the provider is asked, so a recording made
+	// while that request is in flight can claim its own email. If the cancel
+	// does not go through, the claim is put back unless that happened.
+	let taken: FirstCapEmailMarker | undefined;
+	const released = await updateFirstCapEmailMarker(userId, (current) => {
+		if (current?.videoId !== videoId || Date.now() >= current.sendAt)
+			return undefined;
+		taken = current;
+		return null;
+	});
+	const emailId = taken?.emailId;
+	if (!released || !emailId) return released;
 
-	return updateFirstCapEmailMarker(userId, (current) =>
-		current?.videoId === videoId ? null : undefined,
-	);
+	let cancelled = false;
+	try {
+		cancelled = await cancelScheduledFirstCapEmail(emailId);
+	} finally {
+		if (!cancelled)
+			await updateFirstCapEmailMarker(userId, (current) =>
+				current ? undefined : taken,
+			);
+	}
+	return cancelled;
 }
