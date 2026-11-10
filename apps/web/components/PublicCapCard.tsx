@@ -3,10 +3,10 @@
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { faComment, faLock, faSmile } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,

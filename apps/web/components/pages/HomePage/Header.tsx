@@ -3,7 +3,6 @@
 
 import { Button } from "@cap/ui";
 import { faArrowRight, faPlay } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
@@ -13,6 +12,7 @@ import Link from "next/link";
 import { Fragment, useEffect, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
 import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { LoomMark } from "@/components/icons/LoomMark";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
 import {

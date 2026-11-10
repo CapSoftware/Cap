@@ -9,8 +9,8 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type ReactNode, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 const URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>]+/gi;
 

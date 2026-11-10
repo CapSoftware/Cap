@@ -9,11 +9,11 @@ import {
 	faPlus,
 	faTimes,
 } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { renderRichText } from "@/components/RichText";
 import { ComparisonSlider } from "@/components/seo/ComparisonSlider";
 import type { ComparisonCell, SeoPageContent } from "@/components/seo/types";

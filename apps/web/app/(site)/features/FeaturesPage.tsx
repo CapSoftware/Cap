@@ -31,8 +31,8 @@ import {
 	faVolumeUp,
 	faWandMagicSparkles,
 } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface Feature {
 	icon: any;

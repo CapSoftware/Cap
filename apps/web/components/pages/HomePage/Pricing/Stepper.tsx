@@ -1,8 +1,8 @@
 "use client";
 
 import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface StepperProps {
 	label: string;
