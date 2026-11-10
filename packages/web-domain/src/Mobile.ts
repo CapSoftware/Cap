@@ -862,6 +862,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPayload(MobileCapSharingInput)
 			.addSuccess(MobileCapSummary)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Conflict)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	)

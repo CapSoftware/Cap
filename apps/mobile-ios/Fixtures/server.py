@@ -332,7 +332,7 @@ class H(BaseHTTPRequestHandler):
             if sub == "/sharing":
                 b = self.body(); was_public = c["public"]; c["public"] = b.get("public", c["public"])
                 if c.get("_linkChoice"):
-                    if b.get("linkAccess") and not was_public: c["public"] = False
+                    if b.get("linkAccess") and not was_public: c["public"] = False; return self.send(409, {})
                     if not c["public"]: c.pop("linkAccess", None); c.pop("linkRestricted", None)
                     else:
                         c["linkAccess"] = b.get("linkAccess") or c.get("linkAccess") or "restricted"

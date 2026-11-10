@@ -15,6 +15,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
 	ownerId: "owner",
+	isPublic: true,
 	linkState: {
 		videoSettings: null as { linkAccess?: string } | null,
 		organizationSettings: null as { allowPublicLinkOverride?: boolean } | null,
@@ -47,7 +48,6 @@ vi.mock("@/lib/server", async () => {
 		ownerName: "Owner",
 		duration: 10,
 		folderId: null,
-		public: true,
 		hasPassword: false,
 		commentCount: 0,
 		reactionCount: 0,
@@ -81,7 +81,9 @@ vi.mock("@/lib/server", async () => {
 					];
 				}
 				if (table === Db.videos)
-					return [{ ...summary, ownerId: mocks.ownerId }];
+					return [
+						{ ...summary, public: mocks.isPublic, ownerId: mocks.ownerId },
+					];
 				return [];
 			};
 			const query = {
@@ -175,6 +177,7 @@ describe("mobile Cap link access", () => {
 
 	beforeEach(() => {
 		mocks.ownerId = "owner";
+		mocks.isPublic = true;
 		mocks.update.mockClear();
 		mocks.where.mockClear();
 		mocks.linkState = {
@@ -250,6 +253,19 @@ describe("mobile Cap link access", () => {
 	it("lets a plain visibility change reach a private Cap", async () => {
 		expect((await share({ public: true })).status).toBe(200);
 		expect(whereSql()).not.toContain("`videos`.`public`");
+	});
+
+	it.each(["anyone", "restricted"])(
+		"refuses %j on a Cap that is no longer public instead of reporting success",
+		async (linkAccess) => {
+			mocks.isPublic = false;
+			expect((await share({ public: true, linkAccess })).status).toBe(409);
+		},
+	);
+
+	it("still makes a private Cap public without a link access choice", async () => {
+		mocks.isPublic = false;
+		expect((await share({ public: false })).status).toBe(200);
 	});
 
 	it("rejects an unknown link access value", async () => {

@@ -3872,7 +3872,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 												eq(Db.videos.ownerId, user.id),
 												// A link access choice only exists on a public link. Without this an
 												// earlier "open to anyone" request landing after "make private" would
-												// publish the Cap again.
+												// publish the Cap again. The request is refused below instead.
 												payload.linkAccess === undefined
 													? undefined
 													: eq(Db.videos.public, true),
@@ -3880,6 +3880,13 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										),
 								);
 								const { cap } = yield* getCapById(path.id, publicOrigin);
+								if (
+									payload.linkAccess !== undefined &&
+									payload.public &&
+									!cap.public
+								) {
+									return yield* Effect.fail(new HttpApiError.Conflict());
+								}
 								return cap;
 							}),
 						),
