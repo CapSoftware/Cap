@@ -11,7 +11,6 @@ import {
 	verifyCommentMediaUploadToken,
 } from "@cap/web-backend";
 import { Comment, Policy, Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, gt, inArray } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono } from "hono";
@@ -21,6 +20,7 @@ import { commentMediaKeys } from "@/lib/comment-media";
 import { canUseMediaComments } from "@/lib/media-comments";
 import { runPromise } from "@/lib/server";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 
 export const app = new Hono().use(withAuth);
 

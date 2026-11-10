@@ -51,6 +51,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
+			organizationId: Organisation.OrganisationId;
 			parentId: Folder.FolderId | null;
 			spaceId: Space.SpaceIdOrOrganisationId | null;
 		}): Effect.Effect<void, DatabaseError, Database> =>
@@ -59,6 +60,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					db
 						.select({
 							id: Db.folders.id,
+							organizationId: Db.folders.organizationId,
 							parentId: Db.folders.parentId,
 							spaceId: Db.folders.spaceId,
 						})
@@ -70,8 +72,19 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					yield* deleteFolder(child);
 				}
 
-				// Folders can't be both in the root and in a space
-				if (folder.spaceId) {
+				if (folder.spaceId === folder.organizationId) {
+					yield* db.use((db) =>
+						db
+							.update(Db.sharedVideos)
+							.set({ folderId: folder.parentId })
+							.where(
+								Dz.and(
+									Dz.eq(Db.sharedVideos.folderId, folder.id),
+									Dz.eq(Db.sharedVideos.organizationId, folder.organizationId),
+								),
+							),
+					);
+				} else if (folder.spaceId) {
 					const { spaceId } = folder;
 					yield* db.use((db) =>
 						db
@@ -153,7 +166,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
-			 * relocated to the root of the collection (space or My Caps) they're in
+			 * relocated to its parent folder, or the collection root if it has no parent.
 			 */
 			delete: Effect.fn("Folders.delete")(function* (id: Folder.FolderId) {
 				const [folder] = yield* db

@@ -82,6 +82,7 @@ struct FragmentsInfo {
 enum RecoveryPurpose {
     Recover,
     Finalize,
+    Salvage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,16 +105,22 @@ impl RecoveryPurpose {
         }
     }
 
+    fn keeps_failed_tracks_out(self) -> bool {
+        !matches!(self, Self::Salvage)
+    }
+
     fn success_message(self) -> &'static str {
         match self {
-            Self::Recover => "Successfully recovered recording",
+            Self::Recover | Self::Salvage => "Successfully recovered recording",
             Self::Finalize => "Successfully finalized fragmented recording",
         }
     }
 
     fn timeline_message(self) -> &'static str {
         match self {
-            Self::Recover => "Created project configuration with timeline for recovered recording",
+            Self::Recover | Self::Salvage => {
+                "Created project configuration with timeline for recovered recording"
+            }
             Self::Finalize => "Created project configuration with timeline for finalized recording",
         }
     }
@@ -133,8 +140,11 @@ pub enum RecoveryError {
     Serialize(#[from] serde_json::Error),
     #[error("No recoverable segments found")]
     NoRecoverableSegments,
-    #[error("Meta save failed")]
-    MetaSave,
+    #[error("Meta save failed at {}: {source}", path.display())]
+    MetaSave {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("Requested recording track failed; partial media preserved: {0}")]
     RequiredTrackFailure(String),
     #[error("Recovery validation failed; original recording preserved: {0}")]
@@ -143,12 +153,28 @@ pub enum RecoveryError {
     UnplayableVideo(String),
 }
 
+impl RecoveryError {
+    fn meta_save(
+        project_path: &Path,
+        error: either::Either<serde_json::Error, std::io::Error>,
+    ) -> Self {
+        Self::MetaSave {
+            path: project_path.join("recording-meta.json"),
+            source: error.either_into(),
+        }
+    }
+}
+
 pub struct RecoveryManager;
 
 /// Track start times the recorder writes beside an in-progress segment
 /// (`crate::studio_recording::SegmentStartTimes`); the in-progress meta has
 /// no segments, so this is what recovery aligns the tracks with.
 pub const SEGMENT_START_TIMES_FILE: &str = "start-times.json";
+
+/// Where [`RecoveryManager::salvage`] keeps a recovered recording's track
+/// failure evidence, so it no longer blocks opening the recovered project.
+pub const RECOVERED_DIAGNOSTICS_FILE: &str = "recording-diagnostics.recovered.json";
 
 fn persisted_start_times(segment_dir: &Path) -> Option<crate::studio_recording::SegmentStartTimes> {
     let raw = std::fs::read(segment_dir.join(SEGMENT_START_TIMES_FILE)).ok()?;
@@ -842,45 +868,63 @@ impl RecoveryManager {
         );
     }
 
+    /// The pending `segment_*.m4s.tmp` files the rescue goes on to inspect.
+    /// Torn-tail validation shares it so both agree on which pending
+    /// fragments can still become media.
+    fn pending_fragment_to_rescue(
+        dir: &Path,
+        path: &Path,
+        recover_complete_prefixes: bool,
+    ) -> Option<PendingFragment> {
+        const MIN_VALID_TMP_SIZE: u64 = 100;
+
+        let name = path.file_name()?.to_str()?;
+        if !name.starts_with("segment_") || !name.ends_with(".m4s.tmp") {
+            return None;
+        }
+        let length = std::fs::metadata(path).ok()?.len();
+        if length < MIN_VALID_TMP_SIZE {
+            return None;
+        }
+        let corrupt_marker = dir.join(format!("{name}.corrupt"));
+        if corrupt_marker.exists()
+            && (!recover_complete_prefixes
+                || std::fs::read_to_string(&corrupt_marker).ok().as_deref()
+                    != Some("truncated_fragment"))
+        {
+            return None;
+        }
+        let final_path = dir.join(name.trim_end_matches(".tmp"));
+        if final_path.exists() {
+            return None;
+        }
+        Some(PendingFragment {
+            final_path,
+            corrupt_marker,
+            length,
+        })
+    }
+
     fn rescue_pending_tmp_fragments_with_copy(
         dir: &Path,
         health_tx: Option<&HealthSender>,
         recover_complete_prefixes: bool,
         copy: impl Fn(&Path, &Path, u64) -> std::io::Result<()>,
     ) {
-        const MIN_VALID_TMP_SIZE: u64 = 100;
-
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
 
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            let Some(PendingFragment {
+                final_path,
+                corrupt_marker,
+                length,
+            }) = Self::pending_fragment_to_rescue(dir, &path, recover_complete_prefixes)
+            else {
                 continue;
             };
-            if !name.starts_with("segment_") || !name.ends_with(".m4s.tmp") {
-                continue;
-            }
-            let Ok(metadata) = std::fs::metadata(&path) else {
-                continue;
-            };
-            if metadata.len() < MIN_VALID_TMP_SIZE {
-                continue;
-            }
-            let corrupt_marker = dir.join(format!("{name}.corrupt"));
-            if corrupt_marker.exists()
-                && (!recover_complete_prefixes
-                    || std::fs::read_to_string(&corrupt_marker).ok().as_deref()
-                        != Some("truncated_fragment"))
-            {
-                continue;
-            }
-            let final_name = name.trim_end_matches(".tmp");
-            let final_path = dir.join(final_name);
-            if final_path.exists() {
-                continue;
-            }
             if recover_complete_prefixes && dir.join("init.mp4").is_file() {
                 match read_fragment_prefix(&dir.join("init.mp4"), &path) {
                     Ok(prefix) => match copy(&path, &final_path, prefix.length) {
@@ -955,7 +999,7 @@ impl RecoveryManager {
                         "Rescued in-progress tmp fragment: {} -> {} ({} bytes)",
                         path.display(),
                         final_path.display(),
-                        metadata.len()
+                        length
                     );
                 }
                 Err(e) => {
@@ -1036,7 +1080,7 @@ impl RecoveryManager {
             })
             .collect();
 
-        fragments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
         fragments
     }
 
@@ -1178,6 +1222,15 @@ impl RecoveryManager {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Recover)
     }
 
+    /// Recovers every track that holds media, up to where the recording was
+    /// interrupted, even when a requested track failed or a whole segment never
+    /// wrote any media. Only the user asks for this: the originals stay in the
+    /// recovery backup, and the failure evidence moves to
+    /// [`RECOVERED_DIAGNOSTICS_FILE`] so the recovered project opens.
+    pub fn salvage(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
+        Self::finalize_with_purpose(recording, RecoveryPurpose::Salvage)
+    }
+
     pub fn finalize(recording: &IncompleteRecording) -> Result<RecoveredRecording, RecoveryError> {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Finalize)
     }
@@ -1251,9 +1304,16 @@ impl RecoveryManager {
         preparing: Option<PreparingStudioJob>,
     ) -> Result<RecoveredRecording, RecoveryError> {
         let started = Instant::now();
-        Self::require_no_track_failure(&recording.project_path)?;
+        if purpose.keeps_failed_tracks_out() {
+            Self::require_no_track_failure(&recording.project_path)?;
+        }
         let project = &recording.project_path;
         let lock = HeldRecoveryLock::new(acquire(project)?, preparing.is_some());
+        let mut retired_diagnostics = if purpose.keeps_failed_tracks_out() {
+            RetiredDiagnostics::default()
+        } else {
+            RetiredDiagnostics::retire(project)?
+        };
         let mut preparing = preparing;
         let before = recovery_snapshot(project)?;
         debug!(
@@ -1273,7 +1333,7 @@ impl RecoveryManager {
             VideoValidation::Full => RecoveryCopyDurability::Durable,
             VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
         };
-        Self::require_recoverable_tracks(recording)?;
+        Self::require_recoverable_tracks_for(recording, purpose)?;
         let preparing_source = prepare_studio_source(recording, preparing.as_mut(), &lock);
         let workspace = project.join(format!(".recovery-{}", uuid::Uuid::new_v4()));
         create_private_recovery_dir(&workspace)?;
@@ -1324,7 +1384,7 @@ impl RecoveryManager {
                     }
                 }
             }
-            validate_recovery_manifests(&staged.join("content"))?;
+            validate_recovery_manifests(&staged.join("content"), true)?;
             let segments = staged.join("content/segments");
             for entry in std::fs::read_dir(segments)? {
                 let entry = entry?;
@@ -1356,7 +1416,7 @@ impl RecoveryManager {
                 elapsed_ms = analyzing.elapsed().as_secs_f64() * 1000.0,
                 "Studio finalization staged analysis ready"
             );
-            Self::require_recoverable_tracks(&staged_recording)?;
+            Self::require_recoverable_tracks_for(&staged_recording, purpose)?;
             Self::require_local_fragments(&staged_recording)?;
             let validating = Instant::now();
             Self::validate_staged_inputs(&staged_recording, video_validation)?;
@@ -1388,7 +1448,9 @@ impl RecoveryManager {
                 "Studio finalization staging synced"
             );
             before_source_check(project, &staged)?;
-            Self::require_no_track_failure(project)?;
+            if purpose.keeps_failed_tracks_out() {
+                Self::require_no_track_failure(project)?;
+            }
             let rechecking = Instant::now();
             if recovery_snapshot(project)? != before {
                 return Err(RecoveryError::Validation(
@@ -1427,6 +1489,7 @@ impl RecoveryManager {
         {
             warn!(path = %workspace.display(), %error, "Original media backup retained");
         }
+        retired_diagnostics.keep();
         Ok(RecoveredRecording {
             project_path: project.clone(),
             meta,
@@ -1500,6 +1563,23 @@ impl RecoveryManager {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn require_recoverable_tracks_for(
+        recording: &IncompleteRecording,
+        purpose: RecoveryPurpose,
+    ) -> Result<(), RecoveryError> {
+        if purpose.keeps_failed_tracks_out() {
+            return Self::require_recoverable_tracks(recording);
+        }
+        if recording
+            .recoverable_segments
+            .iter()
+            .all(|segment| segment.display_fragments.is_empty())
+        {
+            return Err(RecoveryError::NoRecoverableSegments);
         }
         Ok(())
     }
@@ -1853,7 +1933,9 @@ impl RecoveryManager {
         purpose: RecoveryPurpose,
         video_validation: VideoValidation,
     ) -> Result<RecoveredRecording, RecoveryError> {
-        Self::require_no_track_failure(&recording.project_path)?;
+        if purpose.keeps_failed_tracks_out() {
+            Self::require_no_track_failure(&recording.project_path)?;
+        }
         if recording.recoverable_segments.is_empty() {
             return Err(RecoveryError::NoRecoverableSegments);
         }
@@ -1958,8 +2040,8 @@ impl RecoveryManager {
         let mut recording_meta = recording.meta.clone();
         recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
-            .save_for_project()
-            .map_err(|_| RecoveryError::MetaSave)?;
+            .save_for_project_with_retry()
+            .map_err(|error| RecoveryError::meta_save(&recording.project_path, error))?;
 
         Self::create_project_config(recording, &meta, purpose)?;
 
@@ -2122,7 +2204,7 @@ impl RecoveryManager {
         let staged = workspace.join("content");
         let result = (|| {
             copy_recovery_input_with_durability(content, &staged, staging_durability)?;
-            validate_recovery_manifests(&staged)?;
+            validate_recovery_manifests(&staged, false)?;
             let display = staged.join(
                 display_dir
                     .file_name()
@@ -2602,16 +2684,16 @@ impl RecoveryManager {
                 let original_segment =
                     original_segments.and_then(|segs| segs.get(segment_index as usize));
 
-                let display_path = segment_dir.join("display.mp4");
                 // Decoders number frames on this rate. The file's average rate
                 // is far lower for a mostly static screen (11 fps for a 120 fps
                 // capture), and on that coarse grid playback and export drop
                 // every picture shorter than one step.
-                let fps = original_segment
-                    .map(|s| s.display.fps)
-                    .filter(|fps| *fps > 0)
-                    .or_else(|| get_video_base_fps(&display_path))
-                    .unwrap_or(30);
+                let recorded_fps = |recorded: Option<u32>, track: &str| {
+                    recorded
+                        .filter(|fps| *fps > 0)
+                        .or_else(|| get_video_base_fps(&segment_dir.join(track)))
+                        .unwrap_or(30)
+                };
 
                 let cursor_path = segment_dir.join("cursor.json");
                 let keyboard_path = {
@@ -2635,17 +2717,19 @@ impl RecoveryManager {
                 MultipleSegment {
                     display: VideoMeta {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
-                        fps,
+                        fps: recorded_fps(original_segment.map(|s| s.display.fps), "display.mp4"),
                         start_time: display_start_time,
                         device_id: original_segment.and_then(|s| s.display.device_id.clone()),
                     },
                     camera: if seg.camera_fragments.is_some() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
-                            fps: original_segment
-                                .and_then(|s| s.camera.as_ref())
-                                .map(|c| c.fps)
-                                .unwrap_or(30),
+                            fps: recorded_fps(
+                                original_segment
+                                    .and_then(|s| s.camera.as_ref())
+                                    .map(|c| c.fps),
+                                "camera.mp4",
+                            ),
                             start_time: get_start_time_or_fallback(
                                 original_segment
                                     .and_then(|s| s.camera.as_ref())
@@ -2801,9 +2885,10 @@ impl RecoveryManager {
 
         let mut config = match ProjectConfiguration::load(&recording.project_path) {
             Ok(config) => config,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ProjectConfiguration::default()
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
+                markers: Self::recovered_markers(recording, inner, &timeline_segments),
+                ..Default::default()
+            },
             Err(error) => return Err(error.into()),
         };
 
@@ -2814,6 +2899,7 @@ impl RecoveryManager {
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -2829,6 +2915,36 @@ impl RecoveryManager {
         finalization_info!("{}", purpose.timeline_message());
 
         Ok(())
+    }
+
+    /// The markers a recording that never stopped left in its sidecar. Only a
+    /// project without a config reads them: a normal stop already saved them
+    /// into the config, and the user may have deleted them since.
+    fn recovered_markers(
+        recording: &IncompleteRecording,
+        inner: &MultipleSegments,
+        timeline_segments: &[TimelineSegment],
+    ) -> Vec<cap_project::TimelineMarker> {
+        let recorded = crate::markers::read_recorded_markers(&recording.project_path);
+        if recorded.is_empty() {
+            return Vec::new();
+        }
+        let clocks: Vec<_> = inner
+            .segments
+            .iter()
+            .zip(timeline_segments)
+            .map(|(segment, timeline)| crate::markers::MarkerSegmentClock {
+                latest_start: segment.latest_start_time(),
+                duration: timeline.end,
+            })
+            .collect();
+        crate::markers::place_recorded_markers(&recorded, &clocks, |original| {
+            recording
+                .recoverable_segments
+                .iter()
+                .position(|segment| segment.index == original)
+                .and_then(|position| u32::try_from(position).ok())
+        })
     }
 
     fn load_existing_cursors(project_path: &Path) -> Cursors {
@@ -2896,15 +3012,19 @@ impl RecoveryManager {
     }
 
     pub fn mark_needs_remux(project_path: &Path) -> Result<(), RecoveryError> {
-        let mut meta =
-            RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
+        let mut meta = RecordingMeta::load_for_project(project_path).map_err(|error| {
+            RecoveryError::meta_save(
+                project_path,
+                either::Either::Right(std::io::Error::other(error.to_string())),
+            )
+        })?;
 
         if let RecordingMetaInner::Studio(studio) = &mut meta.inner
             && let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut()
         {
             inner.status = Some(StudioRecordingStatus::NeedsRemux);
             meta.save_for_project()
-                .map_err(|_| RecoveryError::MetaSave)?;
+                .map_err(|error| RecoveryError::meta_save(project_path, error))?;
         }
 
         Ok(())
@@ -2975,11 +3095,156 @@ fn recovery_child_path(dir: &Path, name: &str) -> Option<PathBuf> {
     Some(dir.join(child))
 }
 
-fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
+struct PendingFragment {
+    final_path: PathBuf,
+    corrupt_marker: PathBuf,
+    length: u64,
+}
+
+fn invalid_declared_fragment(path: &Path) -> RecoveryError {
+    RecoveryError::Validation(format!(
+        "Invalid declared complete fragment: {}",
+        path.display()
+    ))
+}
+
+fn fragment_index_with_suffix(name: &str, suffix: &str) -> Option<u64> {
+    name.strip_prefix("segment_")?
+        .strip_suffix(suffix)?
+        .parse()
+        .ok()
+}
+
+/// Whether recovery would still use media recorded after `first_torn`: a later
+/// complete or salvageable pending fragment, a later respawned muxer
+/// directory, or a later recording segment. Skipping the torn run would then
+/// cut a hole in the middle of the recording instead of trimming its end.
+fn media_follows_torn_fragment(
+    dir: &Path,
+    first_torn: &Path,
+    recover_complete_prefixes: bool,
+) -> bool {
+    let Some(torn_index) = first_torn
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| fragment_index_with_suffix(name, ".m4s"))
+    else {
+        return true;
+    };
+    let later_fragment = fragment_entries(dir).any(|(path, name)| {
+        if let Some(index) = fragment_index_with_suffix(&name, ".m4s") {
+            index > torn_index && RecoveryManager::is_m4s_complete(&path)
+        } else {
+            fragment_index_with_suffix(&name, ".m4s.tmp").is_some_and(|index| {
+                index > torn_index && is_salvageable_pending(dir, &path, recover_complete_prefixes)
+            })
+        }
+    });
+    if later_fragment {
+        return true;
+    }
+    let track_dir = match respawn_directory_index(dir) {
+        None => {
+            if !RecoveryManager::respawn_directories(dir).is_empty() {
+                return true;
+            }
+            dir
+        }
+        Some(current) => {
+            let (Some(current), Some(track_dir)) = (current, dir.parent()) else {
+                return true;
+            };
+            if RecoveryManager::respawn_directories(track_dir)
+                .iter()
+                .any(|(index, _)| *index > current)
+            {
+                return true;
+            }
+            track_dir
+        }
+    };
+    later_recording_segment_has_media(track_dir, recover_complete_prefixes)
+}
+
+/// `Some` for a respawned muxer directory, holding its index when it parses.
+fn respawn_directory_index(dir: &Path) -> Option<Option<u32>> {
+    let index = dir.file_name()?.to_str()?.strip_prefix("respawn-")?;
+    Some(index.parse().ok())
+}
+
+fn fragment_entries(dir: &Path) -> impl Iterator<Item = (PathBuf, String)> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?.to_owned();
+            Some((path, name))
+        })
+}
+
+/// Whether `rescue_pending_tmp_fragments`, which runs after validation, turns
+/// this file into a fragment recovery uses.
+fn is_salvageable_pending(dir: &Path, path: &Path, recover_complete_prefixes: bool) -> bool {
+    let init = dir.join("init.mp4");
+    RecoveryManager::pending_fragment_to_rescue(dir, path, recover_complete_prefixes).is_some()
+        && init.is_file()
+        && read_fragment_prefix(&init, path).is_ok()
+        && (recover_complete_prefixes || tail_is_complete(path).unwrap_or(false))
+}
+
+fn has_salvageable_pending(dir: &Path, recover_complete_prefixes: bool) -> bool {
+    std::iter::once(dir.to_path_buf())
+        .chain(
+            RecoveryManager::respawn_directories(dir)
+                .into_iter()
+                .map(|(_, directory)| directory),
+        )
+        .any(|directory| {
+            fragment_entries(&directory).any(|(path, name)| {
+                fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                    && is_salvageable_pending(&directory, &path, recover_complete_prefixes)
+            })
+        })
+}
+
+/// A later segment only counts when recovery would use something from it, so
+/// the empty residue of an interrupted resume does not block trimming.
+fn later_recording_segment_has_media(track_dir: &Path, recover_complete_prefixes: bool) -> bool {
+    let segment_index = |path: &Path| {
+        path.file_name()?
+            .to_str()?
+            .strip_prefix("segment-")?
+            .parse::<u64>()
+            .ok()
+    };
+    let Some(segment) = track_dir.parent() else {
+        return false;
+    };
+    let (Some(current), Some(root)) = (segment_index(segment), segment.parent()) else {
+        return false;
+    };
+    fragment_entries(root).any(|(path, _)| {
+        segment_index(&path).is_some_and(|index| index > current)
+            && (RecoveryManager::segment_holds_recoverable_media(&path)
+                || ["display", "camera"].iter().any(|track| {
+                    has_salvageable_pending(&path.join(track), recover_complete_prefixes)
+                }))
+    })
+}
+
+/// `recover_complete_prefixes` matches the pending-fragment rescue that runs
+/// after validation, so a torn tail is only skipped when nothing it would
+/// rescue follows.
+fn validate_recovery_manifests(
+    dir: &Path,
+    recover_complete_prefixes: bool,
+) -> Result<(), RecoveryError> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
-            validate_recovery_manifests(&path)?;
+            validate_recovery_manifests(&path, recover_complete_prefixes)?;
         } else if path.file_name().is_some_and(|name| name == "manifest.json") {
             let raw = std::fs::read(&path)?;
             let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&raw) else {
@@ -3000,6 +3265,14 @@ fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
                     ));
                 }
             }
+            // A power loss can keep the fsynced manifest while dropping the
+            // unflushed bytes of the newest M4S fragments, so only a torn run
+            // at the very end of the recording is skipped; anything with
+            // recoverable media after it is still a hard failure. A respawned
+            // muxer's fragments are collected without its manifest, so there
+            // only fragments that collection skips may be torn.
+            let respawned = respawn_directory_index(parent).is_some();
+            let mut torn_tail: Option<PathBuf> = None;
             for fragment in manifest
                 .get("segments")
                 .or_else(|| manifest.get("fragments"))
@@ -3020,20 +3293,43 @@ fn validate_recovery_manifests(dir: &Path) -> Result<(), RecoveryError> {
                 {
                     continue;
                 }
-                let metadata = path.symlink_metadata()?;
-                if !metadata.is_file()
-                    || fragment
+                let is_m4s = path.extension().is_some_and(|ext| ext == "m4s");
+                let metadata = match path.symlink_metadata() {
+                    Ok(metadata) => Some(metadata),
+                    Err(error) if is_m4s && error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(error.into()),
+                };
+                if metadata
+                    .as_ref()
+                    .is_some_and(|metadata| !metadata.is_file())
+                {
+                    return Err(invalid_declared_fragment(&path));
+                }
+                let torn = metadata.is_none_or(|metadata| {
+                    fragment
                         .get("file_size")
                         .and_then(serde_json::Value::as_u64)
                         .is_some_and(|size| size != metadata.len())
-                    || (path.extension().is_some_and(|ext| ext == "m4s")
-                        && !RecoveryManager::is_m4s_complete(&path))
-                {
-                    return Err(RecoveryError::Validation(format!(
-                        "Invalid declared complete fragment: {}",
-                        path.display()
-                    )));
+                        || (is_m4s && !RecoveryManager::is_m4s_complete(&path))
+                });
+                if !torn {
+                    if let Some(earlier) = &torn_tail {
+                        return Err(invalid_declared_fragment(earlier));
+                    }
+                } else if is_m4s && !(respawned && RecoveryManager::is_m4s_complete(&path)) {
+                    torn_tail.get_or_insert(path);
+                } else {
+                    return Err(invalid_declared_fragment(&path));
                 }
+            }
+            if let Some(first) = torn_tail {
+                if media_follows_torn_fragment(parent, &first, recover_complete_prefixes) {
+                    return Err(invalid_declared_fragment(&first));
+                }
+                warn!(
+                    "Skipping torn trailing fragments from {} after an interrupted write",
+                    first.display()
+                );
             }
         }
     }
@@ -3113,6 +3409,42 @@ fn validate_recovery_track_inputs(
         }
     }
     Ok(())
+}
+
+/// Salvage moves the failure evidence aside while it holds the recovery lock,
+/// so a project published `Complete` never keeps a sidecar that would block the
+/// editor, and a salvage that fails puts it back before the lock is released.
+#[derive(Default)]
+struct RetiredDiagnostics(Option<PathBuf>);
+
+impl RetiredDiagnostics {
+    fn retire(project: &Path) -> Result<Self, RecoveryError> {
+        match std::fs::rename(
+            project.join("recording-diagnostics.json"),
+            project.join(RECOVERED_DIAGNOSTICS_FILE),
+        ) {
+            Ok(()) => Ok(Self(Some(project.to_path_buf()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self(None)),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn keep(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RetiredDiagnostics {
+    fn drop(&mut self) {
+        if let Some(project) = self.0.take()
+            && let Err(error) = std::fs::rename(
+                project.join(RECOVERED_DIAGNOSTICS_FILE),
+                project.join("recording-diagnostics.json"),
+            )
+        {
+            warn!(%error, path = %project.display(), "Could not restore recording diagnostics after a failed salvage");
+        }
+    }
 }
 
 const RECOVERY_INPUTS: [&str; 4] = [
@@ -4743,6 +5075,400 @@ mod clean_studio_snapshot_tests {
         assert!(RecoveryManager::recover(&recording).is_err());
         assert_eq!(recovery_snapshot(project).unwrap(), before);
         assert!(!project.join(OUTPUT).exists());
+    }
+
+    const TORN_FIXTURE_FRAMES: u64 = 200;
+
+    fn torn_fixture() -> (tempfile::TempDir, Vec<PathBuf>) {
+        let directory = studio_project_with_frames(
+            StudioRecordingStatus::InProgress,
+            30,
+            (0..TORN_FIXTURE_FRAMES).map(|index| index * 1_000_000 / 30),
+        );
+        let display = directory.path().join(DISPLAY);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(display.join("manifest.json")).unwrap()).unwrap();
+        let fragments: Vec<PathBuf> = manifest["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["is_complete"] == true)
+            .map(|entry| display.join(entry["path"].as_str().unwrap()))
+            .collect();
+        assert!(fragments.len() >= 2, "fixture needs at least two fragments");
+        (directory, fragments)
+    }
+
+    fn tear_fragment(path: &Path) {
+        let length = fs::metadata(path).unwrap().len() as usize;
+        fs::write(path, vec![0; length]).unwrap();
+        assert!(!RecoveryManager::is_m4s_complete(path));
+    }
+
+    fn assert_rejects_torn(project: &Path, torn: &Path) {
+        let error = validate_recovery_manifests(&project.join("content"), true)
+            .expect_err("a torn fragment with media after it must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(&torn.file_name().unwrap().to_string_lossy().to_string()),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn power_loss_torn_declared_complete_tail_recovers_the_durable_prefix() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        tear_fragment(fragments.last().unwrap());
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("A torn trailing fragment must not block recovering the frames before it");
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+        let packets = ffmpeg::format::input(&project.join(OUTPUT))
+            .unwrap()
+            .packets()
+            .count() as u64;
+        assert!(
+            (1..TORN_FIXTURE_FRAMES).contains(&packets),
+            "expected only the durable fragments, got {packets} packets"
+        );
+    }
+
+    #[test]
+    fn torn_declared_complete_fragment_before_a_valid_one_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        tear_fragment(&fragments[0]);
+        assert_rejects_torn(project, &fragments[0]);
+        let before = recovery_snapshot(project).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert!(RecoveryManager::recover(&recording).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+    }
+
+    #[test]
+    fn torn_fragment_before_valid_media_the_manifest_lags_on_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        let torn = &fragments[fragments.len() - 2];
+        tear_fragment(torn);
+        let manifest = project.join(format!("{DISPLAY}/manifest.json"));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        let last = fragments
+            .last()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        for entry in value["segments"].as_array_mut().unwrap() {
+            if entry["path"] == last.as_ref() {
+                entry["is_complete"] = false.into();
+            }
+        }
+        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_rejects_torn(project, torn);
+        let before = recovery_snapshot(project).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert!(RecoveryManager::recover(&recording).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+    }
+
+    #[test]
+    fn torn_tail_followed_by_salvageable_pending_fragment_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        let torn = fragments.last().unwrap();
+        let salvageable = fs::read(&fragments[0]).unwrap();
+        tear_fragment(torn);
+        fs::write(
+            project.join(format!("{DISPLAY}/segment_999.m4s.tmp")),
+            salvageable,
+        )
+        .unwrap();
+        assert_rejects_torn(project, torn);
+    }
+
+    #[test]
+    fn torn_tail_before_a_later_recording_segment_with_media_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        let torn = fragments.last().unwrap();
+        tear_fragment(torn);
+        let later = project.join("content/segments/segment-1/display");
+        fs::create_dir_all(&later).unwrap();
+        fs::copy(
+            project.join(format!("{DISPLAY}/init.mp4")),
+            later.join("init.mp4"),
+        )
+        .unwrap();
+        fs::copy(&fragments[0], later.join("segment_001.m4s")).unwrap();
+        assert_rejects_torn(project, torn);
+        fs::rename(
+            later.join("segment_001.m4s"),
+            later.join("segment_001.m4s.tmp"),
+        )
+        .unwrap();
+        assert_rejects_torn(project, torn);
+    }
+
+    #[test]
+    fn torn_tail_before_an_empty_later_recording_segment_recovers() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        tear_fragment(fragments.last().unwrap());
+        let later = project.join("content/segments/segment-1/display");
+        fs::create_dir_all(&later).unwrap();
+        validate_recovery_manifests(&project.join("content"), true)
+            .expect("an empty later track directory holds no media to cut around");
+        fs::write(later.join("init.mp4"), b"init without any fragment").unwrap();
+        validate_recovery_manifests(&project.join("content"), true)
+            .expect("an init segment alone holds no recoverable media");
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("an interrupted resume must not block recovering the earlier footage");
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+    }
+
+    fn assert_names_fragment(error: &RecoveryError, fragment: &Path) {
+        let named = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
+        let expected = format!(
+            "{}{}{}",
+            named(fragment.parent().unwrap()),
+            std::path::MAIN_SEPARATOR,
+            named(fragment)
+        );
+        assert!(error.to_string().ends_with(&expected), "{error}");
+    }
+
+    fn recovered_packets(project: &Path) -> u64 {
+        validate_recovered_track(&project.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+        ffmpeg::format::input(&project.join(OUTPUT))
+            .unwrap()
+            .packets()
+            .count() as u64
+    }
+
+    fn complete_fragments(directory: &Path) -> Vec<PathBuf> {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
+        manifest["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["is_complete"] == true)
+            .map(|entry| directory.join(entry["path"].as_str().unwrap()))
+            .collect()
+    }
+
+    fn respawned_torn_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (directory, _) = torn_fixture();
+        let project = directory.path();
+        let display = project.join(DISPLAY);
+        let successful = project.join("successful-muxer");
+        fs::rename(&display, &successful).unwrap();
+        fs::create_dir(&display).unwrap();
+        fs::copy(successful.join("init.mp4"), display.join("init.mp4")).unwrap();
+        fs::write(
+            display.join("manifest.json"),
+            br#"{"version":5,"type":"m4s_segments","init_segment":"init.mp4","segments":[{"path":"segment_001.m4s","is_complete":false}]}"#,
+        )
+        .unwrap();
+        let respawn = display.join("respawn-1");
+        fs::rename(successful, &respawn).unwrap();
+        (directory, respawn)
+    }
+
+    #[test]
+    fn torn_tail_in_the_last_respawned_muxer_recovers_the_durable_prefix() {
+        let (directory, respawn) = respawned_torn_fixture();
+        let project = directory.path();
+        tear_fragment(complete_fragments(&respawn).last().unwrap());
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("a torn tail in the newest respawned muxer must not block recovery");
+        assert!((1..TORN_FIXTURE_FRAMES).contains(&recovered_packets(project)));
+    }
+
+    #[test]
+    fn torn_tail_in_a_respawned_muxer_before_a_later_one_still_fails() {
+        let (directory, respawn) = respawned_torn_fixture();
+        let project = directory.path();
+        copy_recovery_input(&respawn, &respawn.with_file_name("respawn-2")).unwrap();
+        let torn = complete_fragments(&respawn).last().unwrap().clone();
+        tear_fragment(&torn);
+        let error = validate_recovery_manifests(&project.join("content"), true)
+            .expect_err("a torn fragment before a later respawned muxer must be rejected");
+        assert_names_fragment(&error, &torn);
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert!(RecoveryManager::recover(&recording).is_err());
+    }
+
+    #[test]
+    fn torn_tail_in_the_last_respawned_muxer_before_a_later_recording_segment_still_fails() {
+        let (directory, respawn) = respawned_torn_fixture();
+        let project = directory.path();
+        let fragments = complete_fragments(&respawn);
+        let torn = fragments.last().unwrap();
+        tear_fragment(torn);
+        let later = project.join("content/segments/segment-1/display");
+        fs::create_dir_all(&later).unwrap();
+        fs::copy(respawn.join("init.mp4"), later.join("init.mp4")).unwrap();
+        fs::copy(&fragments[0], later.join("segment_001.m4s")).unwrap();
+        assert_rejects_torn(project, torn);
+    }
+
+    #[test]
+    fn torn_tail_of_a_track_with_respawned_muxers_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        let torn = fragments.last().unwrap();
+        tear_fragment(torn);
+        fs::create_dir(project.join(DISPLAY).join("respawn-1")).unwrap();
+        assert_rejects_torn(project, torn);
+    }
+
+    #[test]
+    fn short_respawned_fragment_that_still_parses_is_not_skipped() {
+        let (directory, respawn) = respawned_torn_fixture();
+        let project = directory.path();
+        let manifest = respawn.join("manifest.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        let last = value["segments"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .rfind(|entry| entry["is_complete"] == true)
+            .unwrap();
+        let size = last["file_size"].as_u64().unwrap();
+        last["file_size"] = (size + 1).into();
+        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+        let torn = complete_fragments(&respawn).last().unwrap().clone();
+        assert!(RecoveryManager::is_m4s_complete(&torn));
+        assert_rejects_torn(project, &torn);
+    }
+
+    #[test]
+    fn missing_declared_complete_tail_recovers_the_durable_prefix() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        fs::remove_file(fragments.last().unwrap()).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("a lost trailing fragment must not block recovering the frames before it");
+        assert!((1..TORN_FIXTURE_FRAMES).contains(&recovered_packets(project)));
+    }
+
+    #[test]
+    fn missing_declared_complete_fragment_before_a_valid_one_still_fails() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        fs::remove_file(&fragments[0]).unwrap();
+        assert!(validate_recovery_manifests(&project.join("content"), true).is_err());
+        let before = recovery_snapshot(project).unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        assert!(RecoveryManager::recover(&recording).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+    }
+
+    fn pending_after_torn_tail(marker: Option<&str>) -> (tempfile::TempDir, PathBuf) {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        let torn = fragments.last().unwrap().clone();
+        let readable = fs::read(&fragments[0]).unwrap();
+        tear_fragment(&torn);
+        let pending = project.join(format!("{DISPLAY}/segment_999.m4s.tmp"));
+        fs::write(&pending, readable).unwrap();
+        if let Some(reason) = marker {
+            fs::write(pending.with_extension("tmp.corrupt"), reason).unwrap();
+        }
+        (directory, torn)
+    }
+
+    #[test]
+    fn torn_tail_before_a_pending_fragment_the_rescue_skips_is_trimmed() {
+        let (directory, _) = pending_after_torn_tail(Some("Input/output error"));
+        validate_recovery_manifests(&directory.path().join("content"), true)
+            .expect("a pending fragment the rescue never converts holds no media to cut around");
+    }
+
+    #[test]
+    fn torn_tail_before_a_pending_fragment_beside_its_final_name_recovers() {
+        let (directory, _) = pending_after_torn_tail(None);
+        let project = directory.path();
+        fs::write(
+            project.join(format!("{DISPLAY}/segment_999.m4s")),
+            vec![0; 512],
+        )
+        .unwrap();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        RecoveryManager::recover(&recording)
+            .expect("a pending fragment the rescue skips must not block recovery");
+        assert!((1..TORN_FIXTURE_FRAMES).contains(&recovered_packets(project)));
+    }
+
+    #[test]
+    fn torn_tail_before_a_truncated_pending_fragment_with_a_prefix_still_fails() {
+        let (directory, torn) = pending_after_torn_tail(Some("truncated_fragment"));
+        assert_rejects_torn(directory.path(), &torn);
+    }
+
+    fn validate_instant_manifests(content: &Path) -> Result<(), RecoveryError> {
+        validate_recovery_manifests(content, false)
+    }
+
+    #[test]
+    fn instant_torn_tail_before_pending_fragments_its_rescue_skips_is_trimmed() {
+        let (directory, _) = pending_after_torn_tail(Some("truncated_fragment"));
+        validate_instant_manifests(&directory.path().join("content"))
+            .expect("the Instant rescue never converts a marked pending fragment");
+
+        let (directory, _) = pending_after_torn_tail(None);
+        let pending = directory
+            .path()
+            .join(format!("{DISPLAY}/segment_999.m4s.tmp"));
+        let mut bytes = fs::read(&pending).unwrap();
+        bytes.extend_from_slice(b"\0\0\0\x20moof\0\0");
+        fs::write(&pending, bytes).unwrap();
+        validate_instant_manifests(&directory.path().join("content"))
+            .expect("the Instant rescue never converts a pending fragment with a torn end");
+    }
+
+    #[test]
+    fn instant_torn_tail_before_a_pending_fragment_its_rescue_converts_still_fails() {
+        let (directory, torn) = pending_after_torn_tail(None);
+        let error = validate_instant_manifests(&directory.path().join("content"))
+            .expect_err("a pending fragment the Instant rescue converts follows the torn tail");
+        assert_names_fragment(&error, &torn);
+    }
+
+    #[test]
+    fn torn_display_tail_keeps_longer_tracks_on_the_display_timeline() {
+        let (directory, fragments) = torn_fixture();
+        let project = directory.path();
+        add_fragmented_audio(project, "audio-input", 320);
+        tear_fragment(fragments.last().unwrap());
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let recovered = RecoveryManager::recover(&recording).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = recovered.meta else {
+            panic!("Expected segmented Studio metadata");
+        };
+        let mic = inner.segments[0].mic.as_ref().expect("mic track kept");
+        let mic_duration = get_media_duration(&project.join(mic.path.as_str()))
+            .unwrap()
+            .as_secs_f64();
+        let display_duration = get_media_duration(&project.join(OUTPUT))
+            .unwrap()
+            .as_secs_f64();
+        assert!(display_duration + 0.3 < mic_duration);
+        let config = ProjectConfiguration::load(project).unwrap();
+        config.validate().unwrap();
+        let timeline = config.timeline.unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        assert_eq!(timeline.segments[0].start, 0.0);
+        assert!((timeline.segments[0].end - display_duration).abs() < 0.001);
     }
 
     #[test]
@@ -7638,15 +8364,15 @@ mod transactional_recovery_tests {
             br#"{"fragments":[{"path":"missing.mp4","is_complete":true,"file_size":10}]}"#,
         )
         .unwrap();
-        assert!(validate_recovery_manifests(dir.path()).is_err());
+        assert!(validate_recovery_manifests(dir.path(), true).is_err());
         std::fs::write(dir.path().join("missing.mp4"), b"short").unwrap();
-        assert!(validate_recovery_manifests(dir.path()).is_err());
+        assert!(validate_recovery_manifests(dir.path(), true).is_err());
         std::fs::write(
             &manifest,
             br#"{"init_segment":"../outside.mp4","fragments":[]}"#,
         )
         .unwrap();
-        assert!(validate_recovery_manifests(dir.path()).is_err());
+        assert!(validate_recovery_manifests(dir.path(), true).is_err());
     }
 
     #[test]

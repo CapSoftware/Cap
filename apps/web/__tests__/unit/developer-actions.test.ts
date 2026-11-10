@@ -599,6 +599,10 @@ describe("addCreditsToAccount", () => {
 			txDb.limit = vi.fn(() =>
 				Promise.resolve([{ balanceMicroCredits: 500000 }]),
 			) as unknown as ReturnType<typeof vi.fn>;
+			txDb.limit.mockReturnValueOnce({
+				for: vi.fn().mockResolvedValue([{ balanceMicroCredits: 0 }]),
+			});
+			txDb.limit.mockResolvedValueOnce([]);
 			return fn(txDb);
 		});
 

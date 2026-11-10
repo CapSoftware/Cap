@@ -12,6 +12,13 @@ type UploadProgress = {
 	total: number;
 };
 
+export class UploadRejectedError extends Error {
+	constructor(status: number) {
+		super(`Upload failed with status ${status}`);
+		this.name = "UploadRejectedError";
+	}
+}
+
 const isPostTarget = (
 	target: UploadTarget,
 ): target is { url: string; fields: Record<string, string> } =>
@@ -52,7 +59,7 @@ export function uploadWithTarget({
 				if (xhr.status >= 200 && xhr.status < 300) {
 					resolve();
 				} else {
-					reject(new Error(`Upload failed with status ${xhr.status}`));
+					reject(new UploadRejectedError(xhr.status));
 				}
 			};
 			xhr.onerror = () => reject(new Error("Upload failed"));
@@ -79,7 +86,7 @@ export function uploadWithTarget({
 			if (xhr.status >= 200 && xhr.status < 300) {
 				resolve();
 			} else {
-				reject(new Error(`Upload failed with status ${xhr.status}`));
+				reject(new UploadRejectedError(xhr.status));
 			}
 		};
 		xhr.onerror = () => reject(new Error("Upload failed"));

@@ -768,6 +768,15 @@ impl SettingsWindow {
     pub fn new(page: Page, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, true);
+        Self::new_with_theme(page, theme, window, cx)
+    }
+
+    fn new_with_theme(
+        page: Page,
+        theme: Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let settings = GeneralSettings::load();
         let user_profile = signed_in_profile_session().and_then(|(user_id, _, _)| {
             cached_user_profile(user_id.as_deref(), &store::store_section("user_profile"))
@@ -2207,9 +2216,10 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn clear_local_auth(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn clear_local_auth(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !crate::auth::sign_out() {
             tracing::error!("failed to clear the auth session");
+            return false;
         }
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.instant_quality_notice = None;
@@ -2222,6 +2232,7 @@ impl SettingsWindow {
         }
         cx.notify();
         window.refresh();
+        true
     }
 
     fn refresh_user_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2881,7 +2892,8 @@ impl SettingsWindow {
         let theme = self.theme;
         let item = &row.item;
         // `studioCompleteCheck()`: the only rows whose body is a button.
-        let opens_editor = item.opens_editor();
+        let active = crate::session::RecordingSession::active_project_dir_in(cx);
+        let opens_editor = item.opens_editor(active.as_deref());
         let path = item.path.clone();
 
         let thumbnail = match row.thumbnail.clone() {
@@ -3068,7 +3080,8 @@ impl SettingsWindow {
         let path = item.path.clone();
         let sharing = item.sharing.clone();
         let failed = item.status.error().is_some();
-        let in_progress = item.status.is_in_progress();
+        let active = crate::session::RecordingSession::active_project_dir_in(cx);
+        let in_progress = !item.opens_editor(active.as_deref());
 
         let mut actions = div().flex().flex_row().items_center().gap(px(8.));
 
@@ -3155,7 +3168,8 @@ impl SettingsWindow {
             "recording-delete",
             "icons/trash.svg",
             tr::settings::recordings::delete(),
-            false,
+            // The recording being captured or finalized owns its folder.
+            library::is_recording_in_progress(&path),
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
         ))
@@ -3685,7 +3699,7 @@ impl SettingsWindow {
             .find(|(value, _)| *value == settings.max_fps)
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
-        let zoom = settings.default_zoom_amount.unwrap_or(1.5);
+        let zoom = settings.new_zoom_amount();
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3881,6 +3895,23 @@ impl SettingsWindow {
                                     !this.settings.capture_keyboard_events;
                                 let value = this.settings.capture_keyboard_events;
                                 this.write_bool("captureKeyboardEvents", value, cx);
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
+                        tr::settings::general::recording::marker_sound::label(),
+                        Some(tr::settings::general::recording::marker_sound::description()),
+                        self.toggle(
+                            "marker-sound",
+                            tr::settings::general::recording::marker_sound::label(),
+                            settings.recording_marker_sound,
+                            cx,
+                            |this, cx| {
+                                this.settings.recording_marker_sound =
+                                    !this.settings.recording_marker_sound;
+                                let value = this.settings.recording_marker_sound;
+                                this.write_bool(store::RECORDING_MARKER_SOUND_KEY, value, cx);
                             },
                         )
                         .into_any_element(),
@@ -4617,8 +4648,6 @@ impl SettingsWindow {
         )
     }
 
-    /// The `confirm()` the Tauri handler puts in front of a server change. It
-    /// also signs the user out; there is no auth store here to clear.
     fn confirm_server_url(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(origin) = origin_of(&value) else {
             return;
@@ -4633,11 +4662,15 @@ impl SettingsWindow {
             ],
             cx,
         );
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             if answer.await.ok() != Some(0) {
                 return;
             }
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
+                if !this.clear_local_auth(window, cx) {
+                    return;
+                }
+                SignIn::global(cx).update(cx, |sign_in, cx| sign_in.cancel(cx));
                 this.settings.server_url = origin.clone();
                 this.server_url = origin.clone();
                 let input = this.server_url_input.clone();
@@ -4954,7 +4987,7 @@ impl SettingsWindow {
                     this.slider_dragging = false;
                     // `onChangeEnd` -- the store write happens once, at the
                     // end of the drag.
-                    let value = this.settings.default_zoom_amount.unwrap_or(1.5);
+                    let value = this.settings.new_zoom_amount();
                     this.write(
                         "defaultZoomAmount",
                         Value::from(f64::from(ui::snap_to_step(value, ZOOM_MIN, ZOOM_MAX, 0.1))),
@@ -5036,6 +5069,9 @@ fn format_project_name(template: &str) -> String {
         .replace("{date}", &date)
         .replace("{time}", "09:41 AM")
 }
+
+#[cfg(test)]
+mod server_change_tests;
 
 #[cfg(test)]
 mod tests {

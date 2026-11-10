@@ -1,3 +1,4 @@
+import { openRequestedRecorder } from "./recorder-host";
 import { loadSettings } from "./storage";
 
 export const PAGE_NAV_LINKS = [
@@ -18,6 +19,7 @@ const CAP_LOGO_SVG = `<svg class="page-nav-logo" xmlns="http://www.w3.org/2000/s
 
 export const mountPageNav = (active: PageNavId) => {
 	if (document.querySelector(".page-nav")) return;
+	openRequestedRecorder();
 
 	const nav = document.createElement("nav");
 	nav.className = "page-nav";

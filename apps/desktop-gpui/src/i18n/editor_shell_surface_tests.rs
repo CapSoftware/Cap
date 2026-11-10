@@ -5,10 +5,13 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.canvas.",
         "editor.clips.",
         "editor.export.",
+        "editor.markers.",
         "editor.modal.",
         "editor.preparing.",
+        "editor.side_panel.",
         "editor.tabs.",
         "editor.timeline.",
+        "editor.transcript.",
         "editor.window.",
         "ui.",
     ]
@@ -17,9 +20,24 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.transcript.fillers.remove_all",
+    "editor.transcript.pauses.summary",
+    "editor.transcript.restore_hint",
+    "editor.transcript.search_count",
+    "editor.transcript.seconds",
+    "editor.transcript.selection",
+    "editor.transcript.selection_cut",
+    "editor.transcript.skipped_hold",
+    "editor.transcript.skipped_transition",
+    "editor.transcript.words",
     "editor.window.clip_menu.transition_seconds",
+    "editor.markers.button",
+    "editor.markers.default_name",
+    "editor.markers.hidden",
+    "editor.markers.stack",
     "editor.clips.append_error",
     "editor.clips.clip",
+    "editor.clips.count",
     "editor.clips.error.cannot_decode",
     "editor.clips.error.in_use",
     "editor.clips.error.missing_video",
@@ -71,6 +89,7 @@ const FORMATTED: &[&str] = &[
     "ui.selection.image",
     "ui.selection.keyboard",
     "ui.selection.mask",
+    "ui.selection.shape",
     "ui.selection.scene",
     "ui.selection.segments",
     "ui.selection.style",
@@ -89,6 +108,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::canvas::camera_follows_zoom(),
             "Camera size follows the zoom — drag to move",
         ),
+        (tr::editor::canvas::captions(), "Captions"),
         (tr::editor::canvas::edit_zoom(), "Edit zoom"),
         (tr::editor::canvas::image(), "Image"),
         (tr::editor::canvas::mask(), "Mask"),
@@ -99,7 +119,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::canvas::text_item(), "Text"),
         (tr::editor::clips::append_error_title(), "Recording Error"),
-        (tr::editor::clips::back(), "Back to editor"),
         (tr::editor::clips::cap_filter(), "Cap Recording"),
         (
             tr::editor::clips::empty_description(),
@@ -149,7 +168,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::clips::import_mp4(), "MP4 Video…"),
         (tr::editor::clips::importing(), "Importing…"),
         (tr::editor::clips::mp4_filter(), "MP4 Video"),
+        (tr::editor::clips::record(), "Record"),
         (tr::editor::clips::record_new(), "Record a new clip"),
+        (tr::editor::side_panel::style(), "Style"),
         (tr::editor::clips::title(), "Clips"),
         (
             tr::editor::export::advanced::bits_per_pixel(),
@@ -576,8 +597,20 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Playful caps that pop in with a vibrant accent.",
         ),
         (
+            tr::editor::tabs::captions::refining_word_timings(),
+            "Refining word timings…",
+        ),
+        (
             tr::editor::tabs::captions::regenerate(),
             "Regenerate Captions",
+        ),
+        (
+            tr::editor::tabs::captions::reset_position(),
+            "Reset Position",
+        ),
+        (
+            tr::editor::tabs::captions::show_filler_words(),
+            "Show Filler Words",
         ),
         (tr::editor::tabs::captions::size_label(), "Size"),
         (tr::editor::tabs::captions::style(), "Style"),
@@ -1015,7 +1048,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::frame::windows_description(),
             "Title bar with window controls",
         ),
-        (tr::editor::window::header::captions(), "Captions"),
         (
             tr::editor::window::header::delete_recording(),
             "Delete recording",
@@ -1026,6 +1058,100 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Open recording bundle",
         ),
         (tr::editor::window::header::presets(), "Presets"),
+        (tr::editor::transcript::cleanup(), "Clean up"),
+        (
+            tr::editor::transcript::cleanup_tooltip(),
+            "Remove filler words and shorten pauses",
+        ),
+        (tr::editor::transcript::delete_matches(), "Delete all"),
+        (
+            tr::editor::transcript::delete_matches_tooltip(),
+            "Cut every match from the video",
+        ),
+        (
+            tr::editor::transcript::empty_description(),
+            "Transcribe this recording on this computer, then edit the video by editing its text.",
+        ),
+        (tr::editor::transcript::empty_title(), "No transcript yet"),
+        (
+            tr::editor::transcript::fillers::discourse(),
+            "Filler phrases",
+        ),
+        (
+            tr::editor::transcript::fillers::discourse_hint(),
+            "like, you know, so",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start(),
+            "False starts",
+        ),
+        (
+            tr::editor::transcript::fillers::false_start_hint(),
+            "we should, we need",
+        ),
+        (tr::editor::transcript::fillers::hesitation(), "Hesitations"),
+        (
+            tr::editor::transcript::fillers::hesitation_hint(),
+            "um, uh, hmm",
+        ),
+        (tr::editor::transcript::fillers::keep(), "Keep this one"),
+        (tr::editor::transcript::fillers::listen(), "Listen"),
+        (
+            tr::editor::transcript::fillers::none(),
+            "No filler words left in these categories",
+        ),
+        (tr::editor::transcript::fillers::remove(), "Remove this one"),
+        (
+            tr::editor::transcript::fillers::repetition(),
+            "Repeated words",
+        ),
+        (
+            tr::editor::transcript::fillers::repetition_hint(),
+            "the the, I I",
+        ),
+        (tr::editor::transcript::fillers::title(), "Filler words"),
+        (
+            tr::editor::transcript::hint(),
+            "Click a word to jump to it. Select words and press Delete to cut them from the video.",
+        ),
+        (tr::editor::transcript::next_match(), "Next match"),
+        (
+            tr::editor::transcript::no_audio(),
+            "This recording has no audio to transcribe.",
+        ),
+        (tr::editor::transcript::pauses::apply(), "Shorten"),
+        (tr::editor::transcript::pauses::keep(), "Shorten to"),
+        (
+            tr::editor::transcript::pauses::longer_than(),
+            "Pauses longer than",
+        ),
+        (
+            tr::editor::transcript::pauses::none(),
+            "No pauses that long",
+        ),
+        (tr::editor::transcript::pauses::title(), "Pauses"),
+        (tr::editor::transcript::previous_match(), "Previous match"),
+        (
+            tr::editor::transcript::restore_blocked(),
+            "This part was cut on the timeline. Use Undo or drag the clip edge to bring it back.",
+        ),
+        (
+            tr::editor::transcript::restore_transition(),
+            "Remove the transition next to this cut to restore it.",
+        ),
+        (tr::editor::transcript::search(), "Find"),
+        (tr::editor::transcript::search_none(), "No matches"),
+        (
+            tr::editor::transcript::search_placeholder(),
+            "Find in transcript",
+        ),
+        (
+            tr::editor::transcript::skipped_last_clip(),
+            "The last clip cannot be cut away.",
+        ),
+        (tr::editor::transcript::title(), "Transcript"),
+        (tr::editor::transcript::transcribe(), "Transcribe"),
+        (tr::editor::transcript::transcribing(), "Transcribing…"),
         (
             tr::editor::window::image::changed(),
             "This image changed while choosing a replacement. Select it and try again.",
@@ -1116,7 +1242,20 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::play_pause(),
             "Play/Pause video",
         ),
+        (tr::editor::window::transport::speed(), "Preview speed"),
         (tr::editor::window::transport::split(), "Split"),
+        (tr::editor::markers::title(), "Markers"),
+        (tr::editor::markers::add(), "Add marker"),
+        (tr::editor::markers::previous(), "Previous marker"),
+        (tr::editor::markers::next(), "Next marker"),
+        (tr::editor::markers::edit(), "Edit marker"),
+        (tr::editor::markers::delete(), "Delete marker"),
+        (tr::editor::markers::done(), "Done"),
+        (tr::editor::markers::split(), "Split clips at markers"),
+        (
+            tr::editor::markers::empty(),
+            "No markers yet. Press M to mark the playhead, or add markers while you record.",
+        ),
         (
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
@@ -1148,11 +1287,35 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::window::clip_menu::transition(), "TRANSITION"),
         (tr::editor::window::clip_menu::transition_none(), "None"),
+        (tr::editor::window::transition::title(), "Transition"),
+        (tr::editor::window::transition::add(), "Add transition"),
+        (tr::editor::window::transition::duration(), "Duration"),
+        (tr::editor::window::transition::seconds_unit(), "s"),
         (
-            tr::editor::window::clip_menu::transition_crossfade(),
-            "Crossfade",
+            tr::editor::window::transition::remove(),
+            "Remove transition",
         ),
-        (tr::editor::window::clip_menu::transition_fade(), "Fade"),
+        (
+            tr::editor::window::transition::cross_fade(),
+            "Cross dissolve",
+        ),
+        (
+            tr::editor::window::transition::fade_through_black(),
+            "Dip to black",
+        ),
+        (
+            tr::editor::window::transition::fade_through_white(),
+            "Dip to white",
+        ),
+        (tr::editor::window::transition::push_left(), "Push left"),
+        (tr::editor::window::transition::push_right(), "Push right"),
+        (tr::editor::window::transition::push_up(), "Push up"),
+        (tr::editor::window::transition::push_down(), "Push down"),
+        (tr::editor::window::transition::wipe_left(), "Wipe left"),
+        (tr::editor::window::transition::wipe_right(), "Wipe right"),
+        (tr::editor::window::transition::wipe_up(), "Wipe up"),
+        (tr::editor::window::transition::wipe_down(), "Wipe down"),
+        (tr::editor::window::transition::zoom(), "Zoom"),
         (tr::editor::timeline::title(), "Timeline"),
         (
             tr::editor::window::clip_menu::merge_blocker::edge(),
@@ -1254,6 +1417,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
         (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
         (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
+        (tr::editor::canvas::shape(), "Shape"),
+        (tr::editor::timeline::track::shape(), "Shape"),
+        (
+            tr::editor::timeline::remove::shape(),
+            "Remove the Shape track.",
+        ),
+        (
+            tr::editor::timeline::picker::shape(),
+            "Draw arrows, boxes, circles and highlights over your recording.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -1271,6 +1444,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+    assert_eq!(tr::editor::clips::count(1), "1 clip");
+    assert_eq!(tr::editor::clips::count(3), "3 clips");
+    assert_eq!(tr::editor::markers::button(1), "1 marker");
+    assert_eq!(tr::editor::markers::button(12), "12 markers");
+    assert_eq!(tr::editor::markers::default_name(3), "Marker 3");
+    assert_eq!(
+        tr::editor::markers::hidden(2),
+        "2 markers are in parts you cut out."
+    );
+    assert_eq!(
+        tr::editor::markers::stack(4),
+        "4 markers close together. Click to see them."
+    );
 }
 
 #[test]

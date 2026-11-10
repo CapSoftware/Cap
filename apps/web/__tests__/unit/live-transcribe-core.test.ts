@@ -7,6 +7,7 @@ import {
 	applyChunkToLiveTranscript,
 	canPromoteLiveTranscript,
 	createEmptyLiveTranscript,
+	describeLiveChunk,
 	isNoSpokenAudioError,
 	liveTranscriptToEditTranscript,
 	offsetChunkWords,
@@ -755,5 +756,81 @@ describe("live chunks with context", () => {
 			).toBeLessThanOrEqual(150);
 		}
 		expect(run(0).some((word) => word.text === "garbled")).toBe(true);
+	});
+});
+
+describe("describeLiveChunk", () => {
+	it("rebuilds exactly what planNextLiveChunk planned", () => {
+		let seed = 7;
+		const random = () => {
+			seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+			return seed / 2_147_483_648;
+		};
+		let compared = 0;
+		for (let round = 0; round < 400; round++) {
+			const first = random() < 0.5 ? 0 : 1;
+			const manifest = {
+				...baseManifest,
+				is_complete: random() < 0.3,
+				audio_segments: Array.from(
+					{ length: 1 + Math.floor(random() * 40) },
+					(_, i) =>
+						seg(first + i, Math.round((0.4 + random() * 4) * 1000) / 1000),
+				),
+			};
+			const lastProcessedIndex =
+				random() < 0.2 ? -1 : first + Math.floor(random() * 30) - 1;
+			const contextSeconds = random() < 0.3 ? 0 : random() * 25;
+			const plan = planNextLiveChunk({
+				manifest,
+				lastProcessedIndex,
+				targetSeconds: 5,
+				contextSeconds,
+			});
+			if (plan.action !== "chunk") continue;
+			compared++;
+			const described = describeLiveChunk({
+				manifest,
+				lastProcessedIndex,
+				lastIndex: plan.entries[plan.entries.length - 1]?.index ?? -1,
+				contextFromIndex: plan.context[0]?.index ?? null,
+			});
+			expect(described).toEqual(plan);
+		}
+		expect(compared).toBeGreaterThan(100);
+	});
+
+	it("rejects ranges that don't continue the cursor or aren't contiguous", () => {
+		const manifest = {
+			...baseManifest,
+			audio_segments: [1, 2, 3, 4, 6, 7].map((index) => seg(index)),
+		};
+		const describe = (
+			lastProcessedIndex: number,
+			lastIndex: number,
+			contextFromIndex: number | null = null,
+		) =>
+			describeLiveChunk({
+				manifest,
+				lastProcessedIndex,
+				lastIndex,
+				contextFromIndex,
+			});
+
+		expect(describe(-1, 2)).toMatchObject({ startMs: 0, durationMs: 4000 });
+		expect(describe(2, 4, 1)).toMatchObject({
+			startMs: 4000,
+			durationMs: 4000,
+			contextMs: 4000,
+		});
+		// Past the gap at index 5.
+		expect(describe(4, 6)).toBeNull();
+		expect(describe(2, 7)).toBeNull();
+		// Cursor beyond the contiguous audio, or behind the chunk start.
+		expect(describe(5, 6)).toBeNull();
+		expect(describe(2, 2)).toBeNull();
+		// Context must be audio before the cursor that exists.
+		expect(describe(2, 4, 3)).toBeNull();
+		expect(describe(2, 4, 0)).toBeNull();
 	});
 });

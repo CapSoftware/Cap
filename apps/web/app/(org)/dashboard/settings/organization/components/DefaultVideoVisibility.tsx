@@ -20,10 +20,14 @@ export const DefaultVideoVisibility = () => {
 	}, [savedPrivate]);
 
 	const handleChange = async (checked: boolean) => {
+		if (!activeOrganization) return;
 		setPrivateByDefault(checked);
 		setSaving(true);
 		try {
-			await updateDefaultVideoVisibility(checked);
+			await updateDefaultVideoVisibility(
+				checked,
+				activeOrganization.organization.id,
+			);
 			router.refresh();
 			toast.success(
 				checked

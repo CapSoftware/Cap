@@ -98,13 +98,13 @@ export function SeatManagementCard() {
 	});
 
 	const updateMutation = useMutation({
-		mutationFn: () => {
+		mutationFn: (quantity: number) => {
 			if (!organizationId) throw new Error("No organization");
-			return updateSeatQuantity(organizationId, desiredQuantity);
+			return updateSeatQuantity(organizationId, quantity);
 		},
-		onSuccess: (result) => {
+		onSuccess: (result, quantity) => {
 			setCancelDialogOpen(false);
-			if (result.cancelAtPeriodEnd) {
+			if (quantity === 0) {
 				toast.success("Cap Pro will cancel at the end of the billing period");
 				setDesiredQuantity(proSeatsTotal);
 				setDebouncedQuantity(proSeatsTotal);
@@ -216,7 +216,7 @@ export function SeatManagementCard() {
 								variant={isCancelRequest ? "destructive" : "primary"}
 								onClick={() => {
 									if (isCancelRequest) setCancelDialogOpen(true);
-									else updateMutation.mutate();
+									else updateMutation.mutate(desiredQuantity);
 								}}
 								disabled={
 									updateMutation.isPending ||
@@ -258,7 +258,7 @@ export function SeatManagementCard() {
 				cancelLabel="Keep Cap Pro"
 				confirmVariant="destructive"
 				loading={updateMutation.isPending}
-				onConfirm={() => updateMutation.mutate()}
+				onConfirm={() => updateMutation.mutate(desiredQuantity)}
 				onCancel={() => {
 					if (!updateMutation.isPending) setCancelDialogOpen(false);
 				}}

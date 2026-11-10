@@ -37,11 +37,14 @@ mod editor_hover_bench;
 mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
+mod editor_shapes;
+mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
+mod encoder_recovery;
 mod feeds;
 mod focus_border;
 mod hotkeys;
@@ -78,7 +81,9 @@ mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
+mod power;
 mod presets;
+mod style_presets;
 mod project_save;
 mod recording;
 mod screenshot;
@@ -99,6 +104,7 @@ mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
+mod transcript;
 mod transcription;
 mod tray;
 mod ui;
@@ -342,7 +348,8 @@ fn main() {
 
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
-    blur_recovery::configure(previous_session);
+    encoder_recovery::configure(previous_session.as_ref());
+    blur_recovery::configure(previous_session.as_ref());
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
@@ -482,6 +489,7 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        power::install(cx);
         #[cfg(target_os = "macos")]
         match platform::install_native_quit_handler() {
             Ok(requests) => {

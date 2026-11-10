@@ -3,12 +3,26 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const mcpCoreDir = dirname(
+	Bun.resolveSync("@modelcontextprotocol/core/package.json", root),
+);
+// Each MCP package carries its own nested zod copy; bundling one of them keeps
+// the card from shipping the same library three times.
+const singleZod = {
+	name: "single-zod",
+	setup(build) {
+		build.onResolve({ filter: /^zod(\/.*)?$/ }, (args) => ({
+			path: Bun.resolveSync(args.path, mcpCoreDir),
+		}));
+	},
+};
 const built = await Bun.build({
 	entrypoints: [resolve(root, "lib/mcp-card-client.ts")],
 	target: "browser",
 	format: "iife",
 	minify: true,
 	define: { "process.env.NODE_ENV": JSON.stringify("production") },
+	plugins: [singleZod],
 });
 if (!built.success || !built.outputs[0])
 	throw new Error("Could not build MCP card");

@@ -240,6 +240,7 @@ impl Muxer for FragmentedAudioMuxer {
             Ok(result) => Ok(result.map_err(Into::into)),
             Err(FragmentedAudioFinishError::AlreadyFinished) => Ok(Ok(())),
             Err(FragmentedAudioFinishError::WriteTrailerFailed(error)) => Ok(Err(anyhow!(error))),
+            Err(error @ FragmentedAudioFinishError::StorageStalled(_)) => Ok(Err(error.into())),
         }
     }
 }

@@ -164,7 +164,7 @@ Current desktop app version: 0.5.3.
 ## Pricing
 
 - **Free** — Personal use. Studio Mode with the full local editor, 4K/60fps export, export to any format, team workspaces, community support. Free recordings are limited to 5 minutes; a paid plan is required for commercial use.
-- **Desktop License** — Commercial license for the desktop app: $29/license billed yearly, or $58/license one-time (lifetime). Unlimited local recording & editing, Studio Mode, 20 cloud shareable links/month (up to 5 min each), export to any format, community support.
+- **Desktop License** — Commercial license for the desktop app: $29/license billed yearly, or $58/license one-time (lifetime). Unlimited local recording & editing, Studio Mode, 25 cloud shareable links/month (up to 5 min each), export to any format, community support.
 - **Cap Pro** — $12/user/month, or $8.16/user/month billed annually (save 32%). Everything in Desktop License plus: unlimited cloud storage & bandwidth; auto-generated titles, summaries, clickable chapters, and transcriptions; custom domain; password-protected shares; viewer analytics & engagement; team workspaces; Loom video importer; custom S3 bucket & Google Drive support; priority support & early features.
 - **Enterprise** — Custom. SLAs & priority support, SAML SSO & SCIM provisioning, managed self-hosting, volume discounts, advanced security controls, dedicated onboarding.
 - **Discounts** — STUDENT50 (30% off, students), MIGRATE20 (20% off first year, Loom switchers); volume discounts for teams over 10 users.
@@ -198,7 +198,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 ## Technology Stack
 
 - Desktop: Rust with GPUI (native UI, no web view); WGPU rendering; FFmpeg; ScreenCaptureKit (macOS), Direct3D / Media Foundation (Windows) and PipeWire (Linux); whisper-rs and Parakeet for local captions.
-- Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
+- Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi, no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
 - Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
 - Runtime: Node 24, Bun 1.4.4, Rust 1.88+, Turborepo monorepo.

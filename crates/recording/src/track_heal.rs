@@ -645,6 +645,10 @@ fn rescale_project_config(project_path: &Path, scales: &HashMap<u32, f64>) {
             s.start *= scale;
             s.end *= scale;
         }
+        for s in &mut timeline.shape_segments {
+            s.start *= scale;
+            s.end *= scale;
+        }
         for s in &mut timeline.text_segments {
             s.start *= scale;
             s.end *= scale;
@@ -1232,6 +1236,7 @@ mod tests {
             scene_segments: vec![],
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
@@ -1282,6 +1287,7 @@ mod tests {
             scene_segments: vec![],
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
@@ -1382,6 +1388,7 @@ mod tests {
             scene_segments: vec![],
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],

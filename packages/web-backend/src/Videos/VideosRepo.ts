@@ -10,7 +10,11 @@ import { Database } from "../Database.ts";
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
 	"id" | "createdAt" | "updatedAt"
-> & { password?: string; importSource?: Video.ImportSource };
+> &
+	Pick<typeof Db.videos.$inferInsert, "isScreenshot" | "settings"> & {
+		password?: string;
+		importSource?: Video.ImportSource;
+	};
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {

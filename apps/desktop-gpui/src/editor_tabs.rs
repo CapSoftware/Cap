@@ -563,6 +563,36 @@ pub fn caption_manual_center(settings: &CaptionSettings) -> (f32, f32) {
     )
 }
 
+pub fn caption_percent_text(fraction: f32) -> String {
+    ui::format_number((f64::from(fraction) * 1000.).round() / 10.)
+}
+
+pub fn reset_caption_manual_center(settings: &mut CaptionSettings) {
+    let (x, y) = crate::editor_canvas::CAPTION_DEFAULT_CENTER;
+    settings.position = "manual".to_string();
+    settings.manual_position = Some(cap_project::XY::new(x as f32, y as f32));
+}
+
+pub fn caption_at_default_center(settings: &CaptionSettings) -> bool {
+    let (x, y) = crate::editor_canvas::CAPTION_DEFAULT_CENTER;
+    caption_manual_center(settings) == (x as f32, y as f32)
+}
+
+/// `STYLE_PRESET_KEYS` knocks the style preset to "custom"
+/// (`CaptionsTab.tsx:157-172, 326-336`). Turning captions on, the export
+/// toggle, placement and showing filler words are not style, so they keep
+/// the preset.
+fn caption_reason_customises_style(reason: &str) -> bool {
+    !matches!(
+        reason,
+        "caption-enabled"
+            | "caption-export"
+            | "caption-position"
+            | "caption-placement"
+            | "caption-filler-words"
+    )
+}
+
 pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>, y: Option<f32>) {
     let (current_x, current_y) = caption_manual_center(settings);
     let fraction = |value: f32| (value / 100.).clamp(0., 1.);
@@ -576,14 +606,24 @@ pub fn set_caption_manual_center(settings: &mut CaptionSettings, x: Option<f32>,
 /// Switching the caption position. Entering Manual from a preset seeds the
 /// manual centre from that preset (`updateCaptionPosition`,
 /// `CaptionsTab.tsx:380-394`); without it Manual drew bottom-centre and had
-/// nothing to adjust.
-pub fn set_caption_position(settings: &mut CaptionSettings, position: &str) {
-    set_caption_position_from(settings, position, cap_rendering::last_caption_center);
+/// nothing to adjust. `on_screen` is the caption on the preview frame and
+/// its centre; the renderer's last drawn caption is the fallback.
+pub fn set_caption_position(
+    settings: &mut CaptionSettings,
+    position: &str,
+    on_screen: Option<(cap_rendering::CaptionFrameBox, (f32, f32))>,
+) {
+    set_caption_position_from(settings, position, |preset| {
+        on_screen
+            .filter(|(caption, _)| caption.is_at(preset))
+            .map(|(_, center)| center)
+            .or_else(|| cap_rendering::last_caption_center(preset))
+    });
 }
 
-/// [`set_caption_position`] with the renderer's last drawn caption centre
-/// supplied: left and right presets align the box's edge to a margin, so
-/// only the drawn box says where its centre is.
+/// [`set_caption_position`] with the drawn caption centre supplied: left and
+/// right presets align the box's edge to a margin, so only the drawn box
+/// says where its centre is.
 fn set_caption_position_from(
     settings: &mut CaptionSettings,
     position: &str,
@@ -1067,8 +1107,16 @@ impl EditorWindow {
                 let Some((value, _)) = CAPTION_POSITIONS.get(index) else {
                     return;
                 };
+                let on_screen = self.frame_layout.and_then(|layout| {
+                    let caption = layout.caption?;
+                    let rect = crate::editor_canvas::norm_rect(caption.bounds, &layout);
+                    Some((
+                        caption,
+                        ((rect.x + rect.w / 2.) as f32, (rect.y + rect.h / 2.) as f32),
+                    ))
+                });
                 self.set_caption_setting("caption-position", window, cx, move |settings| {
-                    set_caption_position(settings, value)
+                    set_caption_position(settings, value, on_screen)
                 });
             }
             SidebarMenu::CaptionAnimation => {
@@ -1145,11 +1193,7 @@ impl EditorWindow {
         let apply = |project: &mut ProjectConfiguration| {
             with_caption_settings(project, |settings| {
                 change(settings);
-                // `STYLE_PRESET_KEYS` knocks the grade to "custom"
-                // (`CaptionsTab.tsx:326-336`). Every setter routed through here
-                // is one of those keys except the two `enabled`-style ones,
-                // which are handled by their own call sites.
-                if reason != "caption-enabled" && reason != "caption-export" {
+                if caption_reason_customises_style(reason) {
                     settings.preset = "custom".to_string();
                 }
             })
@@ -1159,6 +1203,15 @@ impl EditorWindow {
         } else {
             self.edit_project_without_timeline(reason, window, cx, apply);
         }
+    }
+
+    pub(crate) fn set_caption_placement(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut CaptionSettings),
+    ) {
+        self.set_caption_setting_inner(false, "caption-placement", window, cx, change);
     }
 
     pub(crate) fn set_keyboard_setting(
@@ -1304,9 +1357,15 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let reason = match slider {
+            CaptionSlider::ManualX | CaptionSlider::ManualY => "caption-placement",
+            CaptionSlider::Size
+            | CaptionSlider::BackgroundOpacity
+            | CaptionSlider::FadeDuration => "caption-slider",
+        };
         self.set_caption_setting_inner(
             slider.changes_timeline_model(),
-            "caption-slider",
+            reason,
             window,
             cx,
             move |settings| match slider {
@@ -2850,7 +2909,7 @@ impl EditorWindow {
                     .full_width()
                     .disabled(generating || any_deleting)
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.generate_captions_clicked(window, cx);
+                        this.generate_transcript(true, window, cx);
                     })),
                 );
             }
@@ -2912,6 +2971,16 @@ impl EditorWindow {
                         .text_size(px(12.))
                         .text_color(error_color)
                         .child(error),
+                );
+            } else if snapshot.refining {
+                column = column.child(
+                    div()
+                        .id("caption-refining")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(
+                            tr::editor::tabs::captions::refining_word_timings(),
+                        )),
                 );
             }
             column
@@ -3014,8 +3083,18 @@ impl EditorWindow {
             .gap(px(16.))
             .when(!has_captions, |this| this.opacity(0.5))
             .child(
-                ui::Field::section(&theme, tr::editor::tabs::captions::style())
-                    .child(self.render_caption_presets(&settings, cx)),
+                ui::Field::section(&theme, tr::editor::tabs::captions::style()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(self.render_style_presets_bar(
+                            crate::style_presets::PresetKind::Captions,
+                            &[0],
+                            cx,
+                        ))
+                        .child(self.render_caption_presets(&settings, cx)),
+                ),
             )
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::captions::font_settings()).child(
@@ -3061,6 +3140,33 @@ impl EditorWindow {
                                         },
                                     )),
                                 ),
+                        )
+                        .children(
+                            (settings.filler_language.as_deref() == Some("en")).then(|| {
+                                ui::Subfield::plain(
+                                    &theme,
+                                    tr::editor::tabs::captions::show_filler_words(),
+                                )
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "caption-filler-words",
+                                        settings.show_filler_words,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !caption_settings(&this.project).show_filler_words;
+                                            this.set_caption_setting(
+                                                "caption-filler-words",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_filler_words = next,
+                                            );
+                                        },
+                                    )),
+                                )
+                            }),
                         )
                         .child(
                             div()
@@ -3163,23 +3269,38 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
+                    .child(self.caption_position_row(
+                        tr::editor::tabs::captions::horizontal_position(),
+                        CaptionSlider::ManualX,
+                        crate::editor_panels::FieldKey::CaptionManualX,
+                        cx,
+                    ))
+                    .child(self.caption_position_row(
+                        tr::editor::tabs::captions::vertical_position(),
+                        CaptionSlider::ManualY,
+                        crate::editor_panels::FieldKey::CaptionManualY,
+                        cx,
+                    ))
                     .child(
-                        self.slider_field(
-                            tr::editor::tabs::captions::horizontal_position(),
-                            SliderKey::Caption(CaptionSlider::ManualX),
-                            "%",
-                            cx,
-                        )
-                        .into_any_element(),
-                    )
-                    .child(
-                        self.slider_field(
-                            tr::editor::tabs::captions::vertical_position(),
-                            SliderKey::Caption(CaptionSlider::ManualY),
-                            "%",
-                            cx,
-                        )
-                        .into_any_element(),
+                        div().flex().flex_row().justify_end().child(
+                            ui::Button::plain(
+                                &theme,
+                                "caption-reset-position",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Sm,
+                            )
+                            .label(tr::editor::tabs::captions::reset_position())
+                            .disabled(caption_at_default_center(&settings))
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.set_caption_placement(
+                                        window,
+                                        cx,
+                                        reset_caption_manual_center,
+                                    );
+                                },
+                            )),
+                        ),
                     )
             }))
             .child(
@@ -3229,6 +3350,19 @@ impl EditorWindow {
             .badge(tr::editor::tabs::captions::beta())
             .child(transcription)
             .child(style.mt(px(8.)))
+            .into_any_element()
+    }
+
+    fn caption_position_row(
+        &self,
+        name: impl Into<SharedString>,
+        slider: CaptionSlider,
+        field: crate::editor_panels::FieldKey,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        ui::Field::inline(&self.theme, name)
+            .child(self.slider_flex(SliderKey::Caption(slider), "%", cx))
+            .value(self.render_number_field(field, "%", 56.))
             .into_any_element()
     }
 
@@ -3410,7 +3544,7 @@ impl EditorWindow {
     /// -- reattach the progress poller. Deferred out of render because it
     /// mutates the sidebar state, and keyed by entity so it runs once per
     /// window.
-    fn ensure_captions_init(&self, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_captions_init(&self, cx: &mut Context<Self>) {
         static INITIALISED: LazyLock<Mutex<HashSet<EntityId>>> =
             LazyLock::new(|| Mutex::new(HashSet::new()));
         if !INITIALISED
@@ -3481,11 +3615,14 @@ impl EditorWindow {
     /// tab reads the download, so only the sidebar is rebuilt.
     pub(crate) fn repaint_caption_download(&mut self, cx: &mut Context<Self>) {
         self.invalidate_sidebar(cx);
+        if self.transcript.open {
+            self.invalidate_transcript(cx);
+        }
     }
 
     /// `downloadModel` (`CaptionsTab.tsx:643-690`). The download runs on the
     /// tokio runtime and survives this window; the poll task repaints.
-    fn start_caption_model_download(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_caption_model_download(&mut self, cx: &mut Context<Self>) {
         let model = self.selected_caption_model().name;
         if !transcription::begin_download(model) {
             return;
@@ -3513,8 +3650,15 @@ impl EditorWindow {
 
     /// `generateCaptions` (`CaptionsTab.tsx:715-757`): transcribe on the
     /// tokio blocking pool, then apply the result through one `edit_project`
-    /// write so a regenerate is a single undo entry.
-    fn generate_captions_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// write so a regenerate is a single undo entry. The transcript panel
+    /// passes `show_captions: false`: transcribing to edit by text must not
+    /// switch subtitles on.
+    pub(crate) fn generate_transcript(
+        &mut self,
+        show_captions: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(summary) = self.summary() else {
             return;
         };
@@ -3554,7 +3698,7 @@ impl EditorWindow {
             };
 
             let result = match result {
-                Ok(segments) => this
+                Ok(transcript) => this
                     .update_in(cx, |this, window, cx| {
                         let current_ranges = transcription_source_ranges(
                             this.project.timeline.as_ref(),
@@ -3567,9 +3711,10 @@ impl EditorWindow {
                             );
                         }
                         this.apply_generated_captions(
-                            segments,
+                            transcript,
                             &recording_durations,
                             recording_duration,
+                            show_captions,
                             window,
                             cx,
                         );
@@ -3582,6 +3727,9 @@ impl EditorWindow {
             match result {
                 Ok(()) => {
                     transcription::finish_generation(&project_path, None);
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.refine_caption_timings(window, cx);
+                    });
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");
@@ -3598,29 +3746,143 @@ impl EditorWindow {
         .detach();
     }
 
+    /// Runs a pending word-timing refinement for this project in the
+    /// background, then swaps the refined times in. Started after a
+    /// transcript is shown and again whenever the project opens, so an
+    /// interrupted refinement resumes; a finished one leaves no request.
+    pub(crate) fn refine_caption_timings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
+        let project_path = self.project_path.clone();
+        let Some(request) = transcription::refinement_request(&project_path) else {
+            return;
+        };
+        let Some(input) = self
+            .project
+            .captions
+            .as_ref()
+            .filter(|captions| captions.source_timed && !captions.segments.is_empty())
+            .map(|captions| captions.segments.clone())
+        else {
+            transcription::clear_refinement_request(&project_path);
+            return;
+        };
+        let recording_durations = self.clip_display_durations.clone();
+        let Some(stop) = transcription::begin_refinement(&project_path) else {
+            return;
+        };
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let task_path = project_path.clone();
+            let task_request = request.clone();
+            let task_stop = stop.clone();
+            let task = gpui_tokio::Tokio::spawn(cx, async move {
+                let runtime = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    std::thread::Builder::new()
+                        .name("caption-refinement".to_string())
+                        .spawn(move || {
+                            transcription::lower_thread_priority();
+                            transcription::refine_blocking(
+                                &task_path,
+                                &task_request,
+                                &input,
+                                &recording_durations,
+                                Some(runtime),
+                                &task_stop,
+                            )
+                        })
+                        .map_err(|error| format!("Failed to start caption refinement: {error}"))?
+                        .join()
+                        .map_err(|_| "Caption refinement panicked".to_string())?
+                })
+                .await
+                .map_err(|error| format!("Caption refinement task failed: {error}"))?
+            });
+            let result = match task.await {
+                Ok(result) => result,
+                Err(error) => Err(format!("Caption refinement failed: {error}")),
+            };
+            let stopped = stop.load(std::sync::atomic::Ordering::Relaxed);
+            match result {
+                Ok(Some(refined)) if !stopped => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if transcription::refinement_request(&project_path).as_ref()
+                            == Some(&request)
+                        {
+                            this.land_caption_refinement(&refined, window, cx);
+                            match this.flush_pending_saves(cx) {
+                                Ok(()) => transcription::clear_refinement_request(&project_path),
+                                Err(error) => tracing::warn!(
+                                    "Keeping the caption refinement request until the project saves: {error}"
+                                ),
+                            }
+                        }
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!("{error}");
+                    if !stopped
+                        && transcription::refinement_request(&project_path).as_ref()
+                            == Some(&request)
+                    {
+                        transcription::clear_refinement_request(&project_path);
+                    }
+                }
+            }
+            transcription::finish_refinement(&project_path, &stop);
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
     /// The success half of `generateCaptions` (`CaptionsTab.tsx:730-744`):
     /// `applyCaptionResultToProject` inside the project-write fan-out, then
     /// the caption track lane switched on.
     fn apply_generated_captions(
         &mut self,
-        segments: Vec<CaptionSegment>,
+        transcript: transcription::Transcript,
         recording_durations: &[f64],
         recording_duration: f64,
+        show_captions: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let recording_durations = recording_durations.to_vec();
+        let transcription::Transcript {
+            segments,
+            refinement,
+        } = transcript;
+        if let Err(error) = transcription::save_refinement_request(&self.project_path, &refinement)
+        {
+            tracing::warn!("{error}");
+        }
+        let language = refinement.language;
         self.edit_project("caption-generate", window, cx, move |project| {
+            let shown = project
+                .captions
+                .as_ref()
+                .is_some_and(|captions| captions.settings.enabled);
+            crate::style_presets::seed_default_captions(project);
             transcription::apply_caption_result(
                 project,
                 segments,
+                &language,
                 &recording_durations,
                 recording_duration,
             );
+            if !show_captions && let Some(captions) = project.captions.as_mut() {
+                captions.settings.enabled = shown;
+            }
             true
         });
-        // `setEditorState("timeline", "tracks", "caption", true)`.
-        self.tracks.caption = true;
+        if show_captions {
+            // `setEditorState("timeline", "tracks", "caption", true)`.
+            self.tracks.caption = true;
+        }
         cx.notify();
     }
 
@@ -3862,6 +4124,22 @@ mod tests {
         );
     }
 
+    /// The caption on the preview frame wins over the renderer's last drawn
+    /// one when it was drawn for the preset being left.
+    #[test]
+    fn manual_caption_position_starts_at_the_caption_on_screen() {
+        let mut settings = CaptionSettings {
+            position: "bottom-left".into(),
+            ..CaptionSettings::default()
+        };
+        let on_screen = cap_rendering::CaptionFrameBox::new([0.; 4], "bottom-left");
+        set_caption_position(&mut settings, "manual", Some((on_screen, (0.21, 0.84))));
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.21, 0.84))
+        );
+    }
+
     /// A 0.6.1 report: with the caption position set to Manual, the captions
     /// stayed bottom-centre and nothing could move them. Manual now starts
     /// where the preset drew them and the sliders move it.
@@ -3893,7 +4171,7 @@ mod tests {
         assert_eq!(CaptionSlider::ManualY.read(&project), 100.);
 
         // Picking Manual again keeps the adjusted spot.
-        set_caption_position(&mut settings, "manual");
+        set_caption_position(&mut settings, "manual", None);
         assert_eq!(
             settings.manual_position.map(|xy| (xy.x, xy.y)),
             Some((0.2, 1.0))
@@ -3909,6 +4187,64 @@ mod tests {
         assert_eq!(
             preset.manual_position.map(|xy| (xy.x, xy.y)),
             Some((0.95, 0.5))
+        );
+    }
+
+    #[test]
+    fn moving_the_captions_keeps_the_style_preset() {
+        for reason in ["caption-position", "caption-placement"] {
+            assert!(!caption_reason_customises_style(reason));
+        }
+        for reason in ["caption-slider", "caption-font", "caption-animation"] {
+            assert!(caption_reason_customises_style(reason));
+        }
+    }
+
+    #[test]
+    fn reset_position_returns_manual_captions_to_bottom_centre() {
+        let mut settings = CaptionSettings {
+            position: "manual".into(),
+            manual_position: Some(cap_project::XY::new(0.2, 0.3)),
+            ..CaptionSettings::default()
+        };
+        assert!(!caption_at_default_center(&settings));
+        reset_caption_manual_center(&mut settings);
+        assert_eq!(settings.position, "manual");
+        assert_eq!(
+            settings.manual_position.map(|xy| (xy.x, xy.y)),
+            Some((0.5, 0.85))
+        );
+        assert!(caption_at_default_center(&settings));
+
+        let unset = CaptionSettings {
+            position: "manual".into(),
+            ..CaptionSettings::default()
+        };
+        assert!(caption_at_default_center(&unset));
+    }
+
+    /// The typed X and Y read back the way they were stored, to a tenth of
+    /// a percent, including centres a drag left between whole numbers.
+    #[test]
+    fn manual_position_fields_read_a_tenth_of_a_percent() {
+        assert_eq!(caption_percent_text(0.5), "50");
+        assert_eq!(caption_percent_text(0.423_7), "42.4");
+        assert_eq!(caption_percent_text(0.0), "0");
+        assert_eq!(caption_percent_text(1.0), "100");
+        assert_eq!(caption_percent_text(0.333_333_34), "33.3");
+
+        let mut settings = CaptionSettings {
+            position: "manual".into(),
+            ..CaptionSettings::default()
+        };
+        set_caption_manual_center(&mut settings, Some(33.3), Some(150.));
+        assert_eq!(
+            caption_percent_text(caption_manual_center(&settings).0),
+            "33.3"
+        );
+        assert_eq!(
+            caption_percent_text(caption_manual_center(&settings).1),
+            "100"
         );
     }
 

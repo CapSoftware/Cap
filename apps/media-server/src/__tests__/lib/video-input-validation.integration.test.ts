@@ -23,7 +23,11 @@ import * as jobManager from "../../lib/job-manager";
 import { deleteJob, getJob } from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
-import { validateVideoInput } from "../../lib/video-input-validation";
+import * as videoInputValidation from "../../lib/video-input-validation";
+import {
+	NO_VIDEO_INPUT_MESSAGE,
+	validateVideoInput,
+} from "../../lib/video-input-validation";
 
 describe("raw recording input validation", () => {
 	const directory = mkdtempSync(join(tmpdir(), "cap-input-validation-"));
@@ -396,6 +400,80 @@ describe("raw recording input validation", () => {
 			}
 		}, 15_000);
 	}
+
+	test("processing route stops the transcode when the source check rejects the recording", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
+		const downloaded = join(directory, "rejected-mid-transcode.webm");
+		copyFileSync(clean, downloaded);
+		spyOn(mediaVideo, "downloadVideoToTemp").mockResolvedValue({
+			path: downloaded,
+			cleanup: async () => rmSync(downloaded, { force: true }),
+		});
+		let rejectCheck: (error: Error) => void = () => {};
+		spyOn(videoInputValidation, "validateVideoInput").mockImplementation(
+			() =>
+				new Promise((_, reject) => {
+					rejectCheck = reject;
+				}),
+		);
+		let transcodeSignal: AbortSignal | undefined;
+		const process = spyOn(mediaVideo, "processVideo").mockImplementation(
+			(_input, _metadata, _options, _onProgress, abortSignal) => {
+				if (abortSignal?.aborted)
+					return Promise.reject(new Error("Video processing was cancelled"));
+				transcodeSignal = abortSignal;
+				rejectCheck(new Error(NO_VIDEO_INPUT_MESSAGE));
+				return new Promise((_, reject) =>
+					abortSignal?.addEventListener(
+						"abort",
+						() => reject(new Error("Video processing was cancelled")),
+						{ once: true },
+					),
+				);
+			},
+		);
+		const upload = spyOn(mediaVideo, "uploadFileToS3").mockResolvedValue({});
+		const secret =
+			globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET ?? "test-secret";
+		const previousSecret = globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+		globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET = secret;
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				new Request("http://localhost/video/process", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": secret,
+					},
+					body: JSON.stringify({
+						videoId: "validate-rejected-mid-transcode",
+						userId: "validation-test",
+						videoUrl: "https://example.com/raw.webm",
+						outputPresignedUrl: "https://example.com/result.mp4",
+						inputExtension: ".webm",
+						preset: "ultrafast",
+					}),
+				}),
+			);
+			expect(response.status).toBe(200);
+			jobId = (await response.json()).jobId;
+			if (!jobId) throw new Error("Missing processing job");
+			const deadline = Date.now() + 10_000;
+			while (Date.now() < deadline && getJob(jobId)?.phase !== "error")
+				await Bun.sleep(10);
+			expect(getJob(jobId)?.phase).toBe("error");
+			expect(getJob(jobId)?.error).toContain("has no video");
+			expect(process).toHaveBeenCalled();
+			expect(transcodeSignal?.aborted).toBe(true);
+			expect(upload).not.toHaveBeenCalled();
+		} finally {
+			if (jobId) deleteJob(jobId);
+			if (previousSecret === undefined)
+				delete globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+			else globalThis.process.env.MEDIA_SERVER_WEBHOOK_SECRET = previousSecret;
+		}
+	}, 15_000);
 
 	test("rejects missing input", async () => {
 		await expect(

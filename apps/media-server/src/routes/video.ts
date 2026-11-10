@@ -506,18 +506,20 @@ video.get("/status", async (c) => {
 		resources,
 		activeDirectVideoProcesses: getActiveDirectVideoProcessCount(),
 		jobCount: jobs.length,
-		jobs: jobs.map((j) => ({
-			jobId: j.jobId,
-			videoId: j.videoId,
-			phase: j.phase,
-			progress: j.progress,
-			createdAt: j.createdAt,
-			updatedAt: j.updatedAt,
-			ageMinutes: Math.round((now - j.createdAt) / 60000),
-			stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
-			error: j.error,
-		})),
-		...(hasMediaServerSecret(c) && { runtime: await getRuntimeReport() }),
+		...(hasMediaServerSecret(c) && {
+			jobs: jobs.map((j) => ({
+				jobId: j.jobId,
+				videoId: j.videoId,
+				phase: j.phase,
+				progress: j.progress,
+				createdAt: j.createdAt,
+				updatedAt: j.updatedAt,
+				ageMinutes: Math.round((now - j.createdAt) / 60000),
+				stalenessMinutes: Math.round((now - j.updatedAt) / 60000),
+				error: j.error,
+			})),
+			runtime: await getRuntimeReport(),
+		}),
 	});
 });
 
@@ -1535,6 +1537,9 @@ async function processVideoAsync(
 	let lastResortRepairFile: TempFileHandle | null = null;
 	let sourceUploaded = false;
 	let outputUploaded = false;
+	let sourceValidation: Promise<boolean> = Promise.resolve(false);
+	const validationStopped = new AbortController();
+	const sourceRejected = new AbortController();
 	const abortPendingUploads = async () => {
 		const targets = [
 			!sourceUploaded ? options.sourceUpload : undefined,
@@ -1609,21 +1614,37 @@ async function processVideoAsync(
 		}
 
 		const isWebm = isWebmInput(options.inputExtension);
-		let recoveringDamagedSource = false;
+		// The strict decode only decides how a failure is reported and whether the output gets the recovery checks,
+		// so it runs beside the probe and transcode instead of in front of them. A source it rejects outright (no
+		// video, unreadable) stops the transcode and still fails the job with its own message.
+		const workSignal = AbortSignal.any([signal, sourceRejected.signal]);
 		if (isWebm && !options.importedOriginal) {
-			updateJob(jobId, { message: "Checking the original recording..." });
-			recoveringDamagedSource =
-				(await withJobHeartbeat(jobId, () =>
-					validateVideoInput(input.path, signal),
-				)) === "damaged";
-			if (recoveringDamagedSource) {
-				console.warn("[video/process] Recovering damaged source frames", {
-					jobId,
-					videoId: options.videoId,
-				});
-			}
+			sourceValidation = withJobHeartbeat(jobId, () =>
+				validateVideoInput(
+					input.path,
+					AbortSignal.any([signal, validationStopped.signal]),
+				),
+			).then(
+				(condition) => {
+					if (condition === "damaged")
+						console.warn("[video/process] Recovering damaged source frames", {
+							jobId,
+							videoId: options.videoId,
+						});
+					return condition === "damaged";
+				},
+				(error) => {
+					sourceRejected.abort();
+					throw error;
+				},
+			);
+			sourceValidation.catch(() => {});
 		}
-		const rejectUnrecoverableSource = (error: unknown): never => {
+		let recoveringDamagedSource = false;
+		const rejectUnrecoverableSource = async (
+			error: unknown,
+		): Promise<never> => {
+			recoveringDamagedSource = await sourceValidation;
 			if (recoveringDamagedSource && !signal.aborted && !isBusyError(error))
 				throw new Error(DAMAGED_INPUT_MESSAGE);
 			throw error;
@@ -1642,7 +1663,7 @@ async function processVideoAsync(
 						metadata,
 						repairedFile: null,
 					}))
-				: probeWithRepairFallback(input.path, isWebm, signal),
+				: probeWithRepairFallback(input.path, isWebm, workSignal),
 		).catch(rejectUnrecoverableSource);
 		repairedTempFile = repairedFile;
 		signal.throwIfAborted();
@@ -1673,12 +1694,13 @@ async function processVideoAsync(
 					options,
 					isWebm,
 					jobId,
-					signal,
+					workSignal,
 				).catch(rejectUnrecoverableSource);
 		outputTempFile = processed.outputFile;
 		lastResortRepairFile = processed.lastResortRepairFile;
 		const outputPath = processed.outputFile.path;
 		updateJob(jobId, { outputTempFile: processed.outputFile });
+		recoveringDamagedSource = await sourceValidation;
 		if (options.importedOriginal || recoveringDamagedSource) {
 			const recovered = await withJobHeartbeat(jobId, () =>
 				probeVideoFile(outputPath),
@@ -1869,6 +1891,8 @@ async function processVideoAsync(
 			}
 		}
 	} finally {
+		validationStopped.abort();
+		await sourceValidation.catch(() => {});
 		await cleanupTempFiles([
 			inputTempFile,
 			outputTempFile,
@@ -1885,6 +1909,12 @@ video.get("/process/:jobId/status", async (c) => {
 	const jobId = c.req.param("jobId");
 	const job = getJob(jobId);
 	const accept = c.req.header("Accept");
+	const progressFor = hasMediaServerSecret(c)
+		? getJobProgress
+		: (current: NonNullable<ReturnType<typeof getJob>>) => {
+				const { jobId, phase, progress } = getJobProgress(current);
+				return { jobId, phase, progress };
+			};
 
 	if (!job) {
 		if (
@@ -1926,7 +1956,7 @@ video.get("/process/:jobId/status", async (c) => {
 						return false;
 					}
 
-					const progress = getJobProgress(currentJob);
+					const progress = progressFor(currentJob);
 					controller.enqueue(
 						encoder.encode(`data: ${JSON.stringify(progress)}\n\n`),
 					);
@@ -1967,7 +1997,7 @@ video.get("/process/:jobId/status", async (c) => {
 		});
 	}
 
-	return c.json(getJobProgress(job));
+	return c.json(progressFor(job));
 });
 
 video.post("/process/:jobId/cancel", async (c) => {

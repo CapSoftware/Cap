@@ -66,7 +66,6 @@ import { union } from "drizzle-orm/mysql-core";
 import { Effect, Layer, Option, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
-import { downloadLoomVideo } from "@/actions/loom";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import {
 	createAgentAccessGrant,
@@ -111,13 +110,28 @@ import {
 } from "@/lib/agent-upload-entitlement";
 import {
 	createAgentFeedback,
+	deleteAgentFeedback,
 	isAgentIdempotencyKey,
 	runAgentExternalMutation,
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
+import { withJsonNotFound } from "@/lib/api-errors";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
+import { getClientIp } from "@/lib/client-ip";
+import {
+	type CustomStorageAttemptAction,
+	CustomStorageRateLimitedError,
+	customStorageHttpsRequiredMessage,
+	customStorageUnavailableMessage,
+	getCustomStorageSaveRejection,
+	isInsecureS3Endpoint,
+	logCustomStorageAttempt,
+	reserveCustomStorageSave,
+} from "@/lib/custom-storage-policy";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
@@ -129,6 +143,7 @@ import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
+	isDisallowedCustomStorageEndpoint,
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
@@ -312,6 +327,9 @@ const agentUploadVerifiedRawFileKey = (
 		videoId,
 		verificationId,
 	)}.mp4`;
+
+const agentStorageProRequiredMessage =
+	"Cap Pro is required to manage storage integrations";
 
 const badRequest = (requestId: string, message: string) =>
 	new Agent.AgentBadRequestError({
@@ -679,9 +697,12 @@ const getViewableCap = Effect.fn("Agent.getViewableCap")(function* (
 ) {
 	const principal = yield* Agent.AgentPrincipal;
 	const video = yield* getViewableVideo(videoId, verifiedPasswordHashes);
-	const [row] = yield* getCapRows(videoId);
+	const [[row], spaceRulesResult] = yield* Effect.all(
+		[getCapRows(videoId), getSpaceRules([videoId]).pipe(Effect.exit)],
+		{ concurrency: 2 },
+	);
 	if (!row) return yield* Effect.fail(new Video.NotFoundError());
-	const spaces = yield* getSpaceRules([videoId]);
+	const spaces = yield* spaceRulesResult;
 	const rules = rulesForRow(row, spaces);
 	return {
 		video,
@@ -1402,6 +1423,57 @@ const resolveAgentS3Config = Effect.fn("Agent.resolveS3Config")(function* (
 	};
 });
 
+const agentS3RejectionReason = (error: unknown) => {
+	if (error instanceof Agent.AgentRateLimitedError) return "rate_limited";
+	if (error instanceof Agent.AgentForbiddenError) {
+		if (error.message === agentStorageProRequiredMessage) return "pro_required";
+		if (error.message === customStorageUnavailableMessage) return "unavailable";
+		return "not_permitted";
+	}
+	if (error instanceof Agent.AgentBadRequestError) {
+		if (error.message === blockedS3EndpointMessage)
+			return "endpoint_not_allowed";
+		if (error.message === customStorageHttpsRequiredMessage)
+			return "https_required";
+		return "invalid_request";
+	}
+	return "failed";
+};
+
+const logAgentS3Attempt = (
+	input: {
+		action: CustomStorageAttemptAction;
+		organizationId: Organisation.OrganisationId;
+		endpoint: string;
+	},
+	rejection: string | null,
+) =>
+	Effect.gen(function* () {
+		const principal = yield* Agent.AgentPrincipal;
+		const request = yield* HttpServerRequest.HttpServerRequest;
+		logCustomStorageAttempt({
+			userId: principal.id,
+			action: input.action,
+			organizationId: input.organizationId,
+			rejection,
+			endpoint: input.endpoint,
+			clientIp: getClientIp((name) => request.headers[name]),
+		});
+	});
+
+const tapAgentS3Attempt =
+	(input: {
+		action: CustomStorageAttemptAction;
+		organizationId: Organisation.OrganisationId;
+		endpoint: string;
+	}) =>
+	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
+		Effect.tapBoth(effect, {
+			onSuccess: () => logAgentS3Attempt(input, null),
+			onFailure: (error) =>
+				logAgentS3Attempt(input, agentS3RejectionReason(error)),
+		});
+
 const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 	config: {
 		provider: string;
@@ -1523,7 +1595,13 @@ const toAgentOperationResponse = (
 	result: operation.result ?? null,
 	error:
 		operation.errorCode && operation.errorMessage
-			? { code: operation.errorCode, message: operation.errorMessage }
+			? {
+					code: operation.errorCode,
+					message:
+						operation.errorCode === "LOOM_IMPORT_FAILED"
+							? "The Loom import could not be processed"
+							: operation.errorMessage,
+				}
 			: null,
 	createdAt: operation.createdAt.toISOString(),
 	updatedAt: operation.updatedAt.toISOString(),
@@ -1601,10 +1679,7 @@ const requireAgentStorageManager = Effect.fn("Agent.requireStorageManager")(
 				.limit(1),
 		);
 		if (!account || !userIsPro(account)) {
-			return yield* forbidden(
-				requestId,
-				"Cap Pro is required to manage storage integrations",
-			);
+			return yield* forbidden(requestId, agentStorageProRequiredMessage);
 		}
 	},
 );
@@ -2315,7 +2390,7 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 						return yield* rateLimited(input.requestId);
 					}
 					const download = yield* Effect.tryPromise({
-						try: () => downloadLoomVideo(loomUrl),
+						try: () => resolveLoomDownload(loomUrl),
 						catch: () =>
 							temporarilyUnavailable(
 								input.requestId,
@@ -4417,6 +4492,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										providerIdempotencyKey,
 										requestId,
 									);
+									if (
+										yield* Effect.tryPromise(() =>
+											hasLiveProSubscription(customerId),
+										)
+									) {
+										return yield* badRequest(
+											requestId,
+											"The organization owner already has Cap Pro",
+										);
+									}
 									const environment =
 										serverEnv().VERCEL_ENV === "production"
 											? "production"
@@ -4440,6 +4525,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													platform: "agent",
 													organizationId: path.organizationId,
 													userId: principal.id,
+													// Lets Dub credit the sale to a partner referral.
+													dubCustomerId: principal.id,
 												},
 											},
 											{
@@ -4922,37 +5009,54 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								Agent.AgentOrganizationInviteResponse,
 							),
 							execute: (providerIdempotencyKey) =>
-								Effect.tryPromise({
-									try: async () => {
-										const delivery = await sendEmail({
-											email,
-											subject: `Invitation to join ${organization.name} on Cap`,
-											react: OrganizationInvite({
-												email,
-												url: invitation.inviteUrl,
-												organizationName: organization.name,
-											}),
-											idempotencyKey: providerIdempotencyKey,
-										});
-										if (delivery?.error) {
-											if (delivery.error.name === "email_not_configured") {
-												return {
-													...invitation,
-													emailDelivery: "not_configured" as const,
-												};
-											}
-											throw new Error(delivery.error.message);
-										}
-										return {
-											...invitation,
-											emailDelivery: "accepted" as const,
-										};
-									},
-									catch: () =>
-										temporarilyUnavailable(
-											requestId,
-											"The organization invite email could not be delivered",
+								Effect.gen(function* () {
+									const inviteLimits = yield* Effect.promise(() =>
+										Promise.all(
+											[
+												`organization-invite:organization:${path.organizationId}`,
+												`organization-invite:user:${principal.id}`,
+											].map((key) =>
+												isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
+													key,
+												}),
+											),
 										),
+									);
+									if (inviteLimits.some(Boolean)) {
+										return yield* rateLimited(requestId);
+									}
+									return yield* Effect.tryPromise({
+										try: async () => {
+											const delivery = await sendEmail({
+												email,
+												subject: `Invitation to join ${organization.name} on Cap`,
+												react: OrganizationInvite({
+													email,
+													url: invitation.inviteUrl,
+													organizationName: organization.name,
+												}),
+												idempotencyKey: providerIdempotencyKey,
+											});
+											if (delivery?.error) {
+												if (delivery.error.name === "email_not_configured") {
+													return {
+														...invitation,
+														emailDelivery: "not_configured" as const,
+													};
+												}
+												throw new Error(delivery.error.message);
+											}
+											return {
+												...invitation,
+												emailDelivery: "accepted" as const,
+											};
+										},
+										catch: () =>
+											temporarilyUnavailable(
+												requestId,
+												"The organization invite email could not be delivered",
+											),
+									});
 								}),
 						});
 					}),
@@ -5814,6 +5918,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							payload,
 							requestId,
 						);
+						if (isDisallowedCustomStorageEndpoint(config.endpoint)) {
+							return yield* badRequest(requestId, blockedS3EndpointMessage);
+						}
+						if (isInsecureS3Endpoint(config.endpoint)) {
+							return yield* badRequest(
+								requestId,
+								customStorageHttpsRequiredMessage,
+							);
+						}
 						return yield* runAgentExternalMutation({
 							principal,
 							operation: "update_organization_s3",
@@ -5835,6 +5948,25 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							decodeReplay: decodeMutationResponse,
 							execute: () =>
 								Effect.gen(function* () {
+									const rejection = yield* Effect.promise(() =>
+										getCustomStorageSaveRejection({
+											user: { id: principal.id },
+											endpoint: config.endpoint,
+											checkPro: false,
+										}),
+									);
+									if (rejection?.reason === "rate_limited") {
+										return yield* rateLimited(requestId);
+									}
+									if (
+										rejection?.reason === "https_required" ||
+										rejection?.reason === "endpoint_not_allowed"
+									) {
+										return yield* badRequest(requestId, rejection.message);
+									}
+									if (rejection) {
+										return yield* forbidden(requestId, rejection.message);
+									}
 									yield* testAgentS3Config(config, requestId);
 									const database = yield* Database;
 									const encrypted = yield* Effect.tryPromise(async () => {
@@ -5860,24 +5992,36 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										};
 									});
 									const id = S3Bucket.S3BucketId.make(nanoId());
-									yield* database.use((db) =>
-										db.transaction(async (tx) => {
-											await tx
-												.update(Db.s3Buckets)
-												.set({ active: false })
-												.where(
-													eq(Db.s3Buckets.organizationId, path.organizationId),
-												);
-											await tx.insert(Db.s3Buckets).values({
-												id,
-												ownerId: principal.id,
-												organizationId: path.organizationId,
-												provider: config.provider,
-												...encrypted,
-												active: true,
-											});
-										}),
-									);
+									yield* database
+										.use((db) =>
+											db.transaction(async (tx) => {
+												await reserveCustomStorageSave(tx, principal.id);
+												await tx
+													.update(Db.s3Buckets)
+													.set({ active: false })
+													.where(
+														eq(
+															Db.s3Buckets.organizationId,
+															path.organizationId,
+														),
+													);
+												await tx.insert(Db.s3Buckets).values({
+													id,
+													ownerId: principal.id,
+													organizationId: path.organizationId,
+													provider: config.provider,
+													...encrypted,
+													active: true,
+												});
+											}),
+										)
+										.pipe(
+											Effect.mapError((error) =>
+												error.cause instanceof CustomStorageRateLimitedError
+													? rateLimited(requestId)
+													: error,
+											),
+										);
 									return mutationResponse(
 										"storage_s3",
 										id,
@@ -5887,7 +6031,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									);
 								}),
 						});
-					}),
+					}).pipe(
+						tapAgentS3Attempt({
+							action: "save_organization",
+							organizationId: path.organizationId,
+							endpoint: payload.endpoint,
+						}),
+					),
 					requestId,
 				);
 			})
@@ -5937,7 +6087,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									),
 								),
 						});
-					}),
+					}).pipe(
+						tapAgentS3Attempt({
+							action: "test_organization",
+							organizationId: path.organizationId,
+							endpoint: payload.endpoint,
+						}),
+					),
 					requestId,
 				);
 			})
@@ -7641,28 +7797,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							requestId,
 							decodeReplay: decodeMutationResponse,
 							execute: async (tx) => {
-								const [comment] = await tx
-									.select({ id: Db.comments.id })
-									.from(Db.comments)
-									.where(
-										and(
-											eq(Db.comments.id, path.commentId),
-											eq(Db.comments.videoId, path.id),
-											eq(Db.comments.authorId, principal.id),
-										),
-									)
-									.limit(1)
-									.for("update");
-								if (!comment) return { state: "not_found" };
-								await tx
-									.delete(Db.comments)
-									.where(
-										and(
-											eq(Db.comments.id, path.commentId),
-											eq(Db.comments.videoId, path.id),
-											eq(Db.comments.authorId, principal.id),
-										),
-									);
+								const deleted = await deleteAgentFeedback(tx, {
+									videoId: path.id,
+									commentId: path.commentId,
+									authorId: principal.id,
+								});
+								if (!deleted) return { state: "not_found" };
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -8164,15 +8304,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
-						const folderId = Folder.FolderId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_folder",
 							idempotencyKey: yield* requestIdempotencyKey,
-							request: { path, payload: { ...payload, name }, folderId },
+							request: { path, payload: { ...payload, name } },
 							requestId,
 							decodeReplay: decodeMutationResponse,
 							execute: async (tx) => {
+								const folderId = Folder.FolderId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.folders).values({
 									id: folderId,
@@ -8501,7 +8641,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"Cap Pro is required for these space settings",
 							);
 						}
-						const spaceId = Space.SpaceId.make(nanoId());
 						return yield* runAgentMutation({
 							principal,
 							operation: "create_space",
@@ -8509,7 +8648,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							request: {
 								path,
 								payload: { ...payload, name, description },
-								spaceId,
 							},
 							requestId,
 							decodeReplay: decodeMutationResponse,
@@ -8526,6 +8664,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (existing) return { state: "conflict" };
+								const spaceId = Space.SpaceId.make(nanoId());
 								const now = new Date();
 								await tx.insert(Db.spaces).values({
 									id: spaceId,
@@ -9020,7 +9159,7 @@ const ApiLive = HttpApiBuilder.api(Agent.AgentApiContract).pipe(
 	),
 );
 
-const handler = agentApiToHandler(ApiLive);
+const handler = withJsonNotFound(agentApiToHandler(ApiLive));
 
 export const GET = handler;
 export const OPTIONS = handler;

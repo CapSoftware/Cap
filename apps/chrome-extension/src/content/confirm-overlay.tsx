@@ -85,8 +85,15 @@ export function ConfirmOverlay() {
 				respond(request, false);
 			}
 		};
+		// A tab that closes or navigates away never answers, and the worker
+		// holds every later start until the prompt's timeout.
+		const handlePageHide = () => respond(request, false);
 		window.addEventListener("keydown", handleKey, true);
-		return () => window.removeEventListener("keydown", handleKey, true);
+		window.addEventListener("pagehide", handlePageHide);
+		return () => {
+			window.removeEventListener("keydown", handleKey, true);
+			window.removeEventListener("pagehide", handlePageHide);
+		};
 	}, [request, respond]);
 
 	if (!request) return null;

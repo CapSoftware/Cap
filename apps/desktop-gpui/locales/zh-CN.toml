@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS（推荐）"
 label = "最大捕获帧率"
 
+[settings.general.recording.marker_sound]
+description = "在 Studio 录制中添加标记时播放一段简短提示音。麦克风或系统音频可能会录入这段声音。"
+label = "添加标记时播放提示音"
+
 [settings.general.storage]
 choose_folder = "选择文件夹"
 default_location = "默认（Application Support）"
@@ -382,6 +386,8 @@ quarter = "1/4"
 
 [settings.shortcuts]
 blocked_while_recording = "当前录制占用了停止键，无法更改快捷键。请先停止录制。"
+cancelling_description = "适用于通过快捷键或 Cap 图标开始的截图和录制。"
+cancelling_title = "取消"
 needs_modifier_macos = "请包含 ⌘、⌃ 或 ⌥，以免快捷键干扰输入。"
 needs_modifier_other = "请包含 Ctrl、Alt 或 Win，以免快捷键干扰输入。"
 record_shortcut = "录制快捷键"
@@ -409,7 +415,15 @@ title = "Studio 录制之后"
 hint = "始终会复制分享链接"
 title = "Instant 录制之后"
 
+[settings.shortcuts.on_cancel]
+hint = "按 Esc 或关闭选择器"
+title = "取消时"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "显示 Cap"
+cancel_show_cap_hint = "回到录制器"
+cancel_stay_hidden = "保持隐藏"
+cancel_stay_hidden_hint = "除非 Cap 原本已打开"
 instant_copy_link = "仅复制链接"
 instant_copy_link_hint = "不打开任何内容"
 instant_open_link = "打开链接"
@@ -431,6 +445,7 @@ studio_show_cap = "显示 Cap"
 studio_show_cap_hint = "回到录制器"
 
 [settings.shortcuts.label]
+add_marker = "添加标记"
 cycle_mode = "切换录制模式"
 fallback = "快捷键"
 open_picker = "打开录制选择器"
@@ -447,6 +462,7 @@ start_studio = "开始 Studio 录制"
 stop = "停止录制"
 
 [settings.shortcuts.effect]
+add_marker = "在 Studio 录制中标记此刻"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接"
@@ -479,6 +495,7 @@ studio = "以 Studio 模式录制所选屏幕或窗口"
 studio_open_editor = "以 Studio 模式录制所选屏幕或窗口，停止后打开编辑器"
 
 [settings.shortcuts.sentence]
+add_marker = "在 Studio 录制中标记此刻。"
 cycle_mode = "在 Studio、Instant 和截图模式之间切换。"
 instant_copy = "以 Instant 模式录制所选屏幕或窗口，停止后复制分享链接。"
 instant_copy_and_open = "以 Instant 模式录制所选屏幕或窗口，停止后复制并打开分享链接。"
@@ -1084,6 +1101,11 @@ segments = { other = "{count} 个分段" }
 segments_with_duration = { other = "{count} 个分段 · {duration}" }
 title = "未完成的录制"
 
+[main.recovery.error]
+nothing_saved = "此录制停止前没有保存任何视频，因此没有可恢复的内容。其文件仍在 {path} 中。"
+rebuild_failed = "Cap 无法重建此录制 ({error})。没有删除任何内容，原始文件位于 {path}。"
+storage = "可用空间不足，无法恢复此录制 ({error})。请释放一些空间后再次点击“恢复”。没有删除任何内容，文件位于 {path}。"
+
 [main.sign_in]
 message = "Instant 模式会边录边上传，停止的那一刻分享链接就已就绪。"
 not_now = "以后再说"
@@ -1118,6 +1140,7 @@ window = "窗口"
 [controls]
 disk_full_resume = "磁盘空间不足，无法继续。请释放空间后重试，或按“停止”保存。"
 low_storage = "存储空间不足。Cap 即将停止以保存你的录制。"
+paused_for_sleep = "由于你的 Mac 进入睡眠，录制已暂停。准备好后继续录制，或点击“停止”保存。"
 
 [controls.confirm]
 delete = "删除"
@@ -1141,6 +1164,9 @@ pausing = "暂停中…"
 resuming = "恢复中…"
 saving = "保存中…"
 starting = "正在开始"
+
+[controls.marker]
+add = "添加标记"
 
 [camera]
 waiting_title = "正在等待摄像头权限"
@@ -1986,6 +2012,62 @@ edit_cursor = "编辑光标"
 help = "覆盖设置仅在此分段期间生效。启用一个分组即可复制其全局设置。"
 reset_crop = "重置裁剪"
 
+[editor.panel.style_presets]
+apply = "应用"
+create = "保存"
+create_title = "保存样式预设"
+custom = "自定义样式"
+default_badge = "默认"
+delete = "删除"
+delete_confirm = "删除“{name}”？已使用此样式的项目会保留它。"
+delete_title = "删除样式预设"
+empty = "还没有已保存的预设"
+empty_help = "保存样式后可在任何项目中重复使用。"
+font_missing = "此电脑未安装 {font}，因此改用{fallback}。"
+move_down = "下移"
+move_up = "上移"
+remove_default = "取消默认"
+rename = "重命名"
+rename_title = "重命名样式预设"
+save = "将样式保存为预设"
+save_failed = "无法保存预设。Cap 无法写入其设置文件。"
+set_default = "设为默认"
+tooltip = "样式预设"
+update = "用当前样式更新"
+
+[editor.panel.style_presets.captions]
+default_name = "我的字幕样式"
+use_for_new = "用于新字幕"
+used_for_new = "新字幕使用此样式"
+
+[editor.panel.style_presets.mask]
+applied_all = "已应用到所有遮罩（{number}）"
+apply_all = "应用到所有遮罩（{number}）"
+default_name = "我的遮罩样式"
+use_for_new = "用于新遮罩"
+used_for_new = "新遮罩使用此样式"
+
+[editor.panel.style_presets.shape]
+applied_all = "已应用到所有形状（{number}）"
+apply_all = "应用到所有形状（{number}）"
+default_name = "我的形状样式"
+use_for_new = "用于新形状"
+used_for_new = "新形状使用此样式"
+
+[editor.panel.style_presets.style]
+applied_all = "已应用到所有样式分段（{number}）"
+apply_all = "应用到所有样式分段（{number}）"
+default_name = "我的样式"
+use_for_new = "用于新样式分段"
+used_for_new = "新样式分段使用此样式"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "已应用到所有文字分段（{number}）"
+apply_all = "应用到所有文字分段（{number}）"
+default_name = "我的文字样式"
+use_for_new = "用于新文字"
+used_for_new = "新文字使用此样式"
+
 [editor.panel.text_animation]
 bounce = "弹跳"
 fade = "淡入淡出"
@@ -2090,6 +2172,9 @@ mixed = "不一致"
 mode = "缩放模式"
 positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
 title = "缩放 {number}"
+
+[editor.side_panel]
+style = "样式"
 
 [editor.sidebar]
 desktop_import_failed = "无法导入桌面壁纸"
@@ -2242,19 +2327,21 @@ purple = "紫色"
 [editor.canvas]
 camera = "摄像头"
 camera_follows_zoom = "摄像头大小随缩放变化；拖动即可移动"
+captions = "字幕"
 edit_zoom = "编辑缩放"
 image = "图片"
 mask = "遮罩"
 screen = "屏幕"
 screen_locked = "缩放生效期间屏幕已锁定"
+shape = "形状"
 text_item = "文字"
 
 [editor.clips]
 append_error = "无法添加片段：{message}"
 append_error_title = "录制错误"
-back = "返回编辑器"
 cap_filter = "Cap 录制"
 clip = "片段 {number}"
+count = { other = "{count} 个片段" }
 empty_description = "录制或导入一个片段后，它会显示在这里。"
 empty_title = "还没有片段"
 import = "导入"
@@ -2265,6 +2352,7 @@ import_mp4 = "MP4 视频…"
 importing = "正在导入…"
 mp4_filter = "MP4 视频"
 prepare_controls_failed = "无法准备录制控件：{error}"
+record = "录制"
 record_new = "录制新片段"
 save_before_recording_failed = "录制前无法保存当前项目：{error}"
 split = "拆分 {number}"
@@ -2531,7 +2619,10 @@ language_label = "语言"
 model_downloaded = "已下载“{model}”模型"
 model_label = "模型"
 position = "位置"
+refining_word_timings = "正在优化单词时间…"
 regenerate = "重新生成字幕"
+reset_position = "重置位置"
+show_filler_words = "显示语气词"
 size_label = "大小"
 style = "样式"
 text_color = "文字颜色"
@@ -2686,6 +2777,43 @@ system_sans_serif = "系统无衬线"
 system_serif = "系统衬线"
 system_monospace = "系统等宽"
 
+[editor.shape]
+title = "形状 {number}"
+stroke = "描边"
+width = "粗细"
+fill = "填充"
+fill_opacity = "填充不透明度"
+corner_radius = "圆角"
+arrowhead = "箭头"
+number = "编号"
+look = "外观"
+shadow = "阴影"
+animation = "动画"
+draw = "绘制形状"
+toolbar = "形状"
+draw_hint = "在预览上拖动以绘制，点击即可放置。"
+decrease = "减少"
+increase = "增加"
+
+[editor.shape.kinds]
+arrow = "箭头"
+line = "直线"
+rectangle = "矩形"
+ellipse = "椭圆"
+highlight = "高亮"
+badge = "步骤"
+
+[editor.shape.heads]
+filled = "实心"
+open = "空心"
+double = "双向"
+
+[editor.shape.animations]
+none = "无"
+fade = "淡入淡出"
+scale = "缩放"
+draw = "描绘"
+
 [editor.timeline]
 add_shot = "添加镜头"
 add_shot_with_look = "添加镜头 · {look} · {seconds} 秒"
@@ -2709,6 +2837,7 @@ keyboard = "输入时在屏幕上显示按键。"
 mask = "模糊或涂黑屏幕上的隐私区域。"
 scene = "在屏幕和摄像头之间切换布局。"
 scene_unavailable = "使用摄像头录制后才能使用场景。"
+shape = "在录制内容上绘制箭头、方框、圆圈和高亮。"
 style = "随时间改变背景、摄像头和光标设置。"
 text_overlay = "在画布上添加自定义文字叠加和标题。"
 three_d = "以 3D 透视倾斜场景。"
@@ -2722,6 +2851,7 @@ image = "移除图片轨道。"
 keyboard = "移除键盘轨道。"
 mask = "移除遮罩轨道。"
 scene = "移除场景轨道。"
+shape = "移除形状轨道。"
 style = "移除样式轨道。"
 text_track = "移除文字轨道。"
 three_d = "移除 3D 轨道。"
@@ -2756,10 +2886,64 @@ image = "图片"
 keyboard = "键盘"
 mask = "遮罩"
 scene = "场景"
+shape = "形状"
 style = "样式"
 text_track = "文字"
 video = "视频"
 zoom = "缩放"
+
+[editor.transcript]
+cleanup = "清理"
+cleanup_tooltip = "移除填充词并缩短停顿"
+delete_matches = "全部删除"
+delete_matches_tooltip = "从视频中剪掉所有匹配项"
+empty_description = "在这台电脑上转写此录制内容，然后通过编辑文字来编辑视频。"
+empty_title = "还没有转写内容"
+hint = "点击单词即可跳转。选中单词后按删除键，即可从视频中剪掉。"
+next_match = "下一个匹配项"
+no_audio = "此录制内容没有可转写的音频。"
+previous_match = "上一个匹配项"
+restore_blocked = "这部分已在时间线上剪掉。请使用撤销，或拖动片段边缘将其恢复。"
+restore_hint = { other = "点击恢复 {count} 个词" }
+restore_transition = "请先移除此剪切旁的转场，再进行恢复。"
+search = "查找"
+search_count = "{current}/{total}"
+search_none = "无匹配项"
+search_placeholder = "在转写中查找"
+seconds = "{value} 秒"
+selection = { other = "已选中 {count} 个词，{seconds} 秒" }
+selection_cut = { other = "已选中 {count} 个已剪掉的词。按删除键可恢复。" }
+skipped_hold = { other = "已跳过 {count} 处剪切，因为全屏文字卡定格了这些画面" }
+skipped_last_clip = "无法剪掉最后一个片段。"
+skipped_transition = { other = "已跳过 {count} 处剪切，因为它们与转场重叠" }
+title = "转写"
+transcribe = "转写"
+transcribing = "正在转写…"
+words = { other = "{count} 个词" }
+
+[editor.transcript.fillers]
+discourse = "填充短语"
+discourse_hint = "like, you know, so"
+false_start = "说错重来"
+false_start_hint = "we should, we need"
+hesitation = "迟疑词"
+hesitation_hint = "um, uh, hmm"
+keep = "保留此项"
+listen = "试听"
+none = "这些类别中没有填充词"
+remove = "移除此项"
+remove_all = { other = "移除 {count} 个" }
+repetition = "重复词"
+repetition_hint = "the the, I I"
+title = "填充词"
+
+[editor.transcript.pauses]
+apply = "缩短"
+keep = "缩短到"
+longer_than = "停顿长于"
+none = "没有这么长的停顿"
+summary = { other = "{count} 处停顿，节省 {seconds} 秒" }
+title = "停顿"
 
 [editor.window]
 audio_filter = "音频"
@@ -2830,8 +3014,6 @@ split_hint = "将播放头移到此片段内"
 volume = "音量"
 transition = "转场"
 transition_none = "无"
-transition_crossfade = "交叉淡化"
-transition_fade = "淡入淡出"
 transition_seconds = "{seconds} 秒"
 voice_eq = "人声 EQ"
 
@@ -2864,7 +3046,6 @@ window_title_placeholder = "窗口标题"
 windows_description = "带窗口控制按钮的标题栏"
 
 [editor.window.header]
-captions = "字幕"
 delete_recording = "删除录制"
 export = "导出"
 open_bundle = "打开录制包"
@@ -2927,9 +3108,29 @@ save_failed = "无法保存 {path} 的录制标题：{error}"
 clear_all = "全部清除"
 delete = "删除"
 
+[editor.window.transition]
+title = "转场"
+add = "添加转场"
+duration = "时长"
+seconds_unit = "秒"
+remove = "移除转场"
+cross_fade = "交叉溶解"
+fade_through_black = "黑场过渡"
+fade_through_white = "白场过渡"
+push_left = "向左推入"
+push_right = "向右推入"
+push_up = "向上推入"
+push_down = "向下推入"
+wipe_left = "向左擦除"
+wipe_right = "向右擦除"
+wipe_up = "向上擦除"
+wipe_down = "向下擦除"
+zoom = "缩放"
+
 [editor.window.transport]
 done_splitting = "完成拆分"
 play_pause = "播放/暂停视频"
+speed = "预览播放速度"
 split = "拆分"
 split_tooltip = "点击一个分段进行拆分。按 Esc 结束。"
 zoom_in = "放大"
@@ -2940,6 +3141,21 @@ generate = "生成"
 generating = "正在生成…"
 no_clicks = "未找到可缩放的点击。在轨道上拖动即可添加。"
 prompt = "自动添加缩放"
+
+[editor.markers]
+add = "添加标记"
+button = { other = "{count} 个标记" }
+default_name = "标记 {number}"
+delete = "删除标记"
+done = "完成"
+edit = "编辑标记"
+empty = "还没有标记。按 M 标记播放头位置，或在录制时添加标记。"
+hidden = { other = "{count} 个标记位于已剪掉的部分。" }
+next = "下一个标记"
+previous = "上一个标记"
+split = "在标记处拆分片段"
+stack = { other = "{count} 个标记距离很近。点击查看。" }
+title = "标记"
 
 [ui]
 coming_soon = "即将推出"
@@ -2955,6 +3171,7 @@ mask = { other = "已选择 {count} 个遮罩分段" }
 scene = { other = "已选择 {count} 个场景分段" }
 segments = { other = "已选择 {count} 个分段" }
 select_all = "全选"
+shape = { other = "已选择 {count} 个形状" }
 style = { other = "已选择 {count} 个样式分段" }
 text_segments = { other = "已选择 {count} 个文字分段" }
 three_d = { other = "已选择 {count} 个 3D 分段" }
@@ -2964,7 +3181,10 @@ zoom_some = { other = "已选择 {count}/{total} 个" }
 
 [dialog.quit]
 canceled = "已取消退出：{error}。Cap 将保持打开，以便你完成或恢复录制。"
+files_kept = "目前为止录制的所有内容都会保留在该录制的文件夹中。"
+keep_open = "保持 Cap 打开"
 pending = "录制仍在停止中，已取消退出。Cap 将保持打开。请在可用时点击“停止”，然后再次尝试退出。"
+quit_anyway = "仍然退出"
 still_open = "Cap 仍在运行"
 unconfirmed = "无法确认录制已停止，已取消退出。Cap 将保持打开。请点击“停止”，然后再次尝试退出。"
 

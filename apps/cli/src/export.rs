@@ -3,11 +3,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
-use cap_export::{ExporterBase, make_cursor_only_project};
+use cap_export::{ExporterBase, ExporterBuilder, Mp4ExporterBase, make_cursor_only_project};
 use cap_project::{RecordingMeta, RecordingMetaInner, XY};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -121,11 +121,37 @@ pub enum CliExportSettings {
 }
 
 impl CliExportSettings {
+    async fn prepare(self, builder: ExporterBuilder) -> Result<PreparedExport, String> {
+        match self {
+            Self::Mp4(settings) => builder
+                .build_for_mp4(Arc::new(AtomicBool::new(false)))
+                .await
+                .map(|base| PreparedExport::Mp4(settings, base)),
+            Self::Gif(settings) => builder
+                .build()
+                .await
+                .map(|base| PreparedExport::Gif(settings, base)),
+            Self::Mov(settings) => builder
+                .build()
+                .await
+                .map(|base| PreparedExport::Mov(settings, base)),
+        }
+        .map_err(|error| format!("Exporter build error: {error}"))
+    }
+
     fn fps(&self) -> u32 {
         match self {
             Self::Mp4(settings) => settings.fps,
             Self::Gif(settings) => settings.fps,
             Self::Mov(settings) => settings.fps,
+        }
+    }
+
+    fn resolution_base(&self) -> XY<u32> {
+        match self {
+            Self::Mp4(settings) => settings.resolution_base,
+            Self::Gif(settings) => settings.resolution_base,
+            Self::Mov(settings) => settings.resolution_base,
         }
     }
 
@@ -152,6 +178,33 @@ impl CliExportSettings {
     }
 }
 
+enum PreparedExport {
+    Mp4(cap_export::mp4::Mp4ExportSettings, Mp4ExporterBase),
+    Gif(cap_export::gif::GifExportSettings, ExporterBase),
+    Mov(cap_export::mov::MovExportSettings, ExporterBase),
+}
+
+impl PreparedExport {
+    fn total_frames(&self, fps: u32) -> u32 {
+        match self {
+            Self::Mp4(_, base) => base.total_frames(fps),
+            Self::Gif(_, base) | Self::Mov(_, base) => base.total_frames(fps),
+        }
+    }
+
+    async fn export(
+        self,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        match self {
+            Self::Mp4(settings, base) => settings.export_prepared(base, on_progress).await,
+            Self::Gif(settings, base) => settings.export(base, on_progress).await,
+            Self::Mov(settings, base) => settings.export(base, on_progress).await,
+        }
+        .map_err(|error| format!("Exporter error: {error}"))
+    }
+}
+
 fn default_fps(format: ExportFormat) -> u32 {
     match format {
         ExportFormat::Mp4 | ExportFormat::Mov => 60,
@@ -175,6 +228,19 @@ fn parse_resolution(value: &str) -> Result<XY<u32>, String> {
         return Err(format!("Resolution '{value}' must be greater than zero"));
     }
     Ok(XY::new(width, height))
+}
+
+fn settings_from_json(json: &str) -> Result<CliExportSettings, String> {
+    let settings: CliExportSettings =
+        serde_json::from_str(json).map_err(|e| format!("Invalid export settings JSON: {e}"))?;
+    if settings.fps() == 0 {
+        return Err("--settings-json fps must be greater than zero".to_string());
+    }
+    let resolution = settings.resolution_base();
+    if resolution.x == 0 || resolution.y == 0 {
+        return Err("--settings-json resolution_base must be greater than zero".to_string());
+    }
+    Ok(settings)
 }
 
 pub fn settings_from_flags(flags: &ExportFlags) -> Result<CliExportSettings, String> {
@@ -348,7 +414,7 @@ impl Export {
                             .to_string(),
                     );
                 }
-                serde_json::from_str(json).map_err(|e| format!("Invalid export settings JSON: {e}"))
+                settings_from_json(json)
             }
             None => settings_from_flags(&flags),
         }
@@ -530,12 +596,8 @@ impl Export {
             builder = builder.with_config(make_cursor_only_project(meta.project_config()));
         }
 
-        let exporter_base = builder
-            .build()
-            .await
-            .map_err(|v| format!("Exporter build error: {v}"))?;
-
-        let total_frames = exporter_base.total_frames(settings.fps());
+        let exporter = settings.prepare(builder).await?;
+        let total_frames = exporter.total_frames(settings.fps());
 
         if progress_json {
             emit_export_message(
@@ -568,12 +630,7 @@ impl Export {
             true
         };
 
-        let output_path = match settings {
-            CliExportSettings::Mp4(settings) => settings.export(exporter_base, on_progress).await,
-            CliExportSettings::Gif(settings) => settings.export(exporter_base, on_progress).await,
-            CliExportSettings::Mov(settings) => settings.export(exporter_base, on_progress).await,
-        }
-        .map_err(|v| format!("Exporter error: {v}"))?;
+        let output_path = exporter.export(on_progress).await?;
 
         // Defense in depth: an export that renders no frames writes an empty (~few hundred byte) file
         // but otherwise "succeeds". An agent must never silently get/upload that, so fail loudly and
@@ -783,8 +840,8 @@ fn copy_instant_output(source_path: &Path, output_path: PathBuf) -> Result<PathB
     }
 
     if output_path.exists()
-        && let (Ok(source), Ok(output)) = (source_path.canonicalize(), output_path.canonicalize())
-        && source == output
+        && crate::file_identity::is_same_file(source_path, &output_path)
+            .map_err(|e| format!("Failed to compare source and destination: {e}"))?
     {
         return Ok(output_path);
     }
@@ -874,13 +931,14 @@ pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, St
         return prepare_instant_output(project_path).await;
     }
 
-    let exporter_base = ExporterBase::builder(project_path)
-        .with_force_ffmpeg_decoder(settings.force_ffmpeg_decoder())
-        .build()
-        .await
-        .map_err(|v| format!("Exporter build error: {v}"))?;
+    let exporter = settings
+        .prepare(
+            ExporterBase::builder(project_path)
+                .with_force_ffmpeg_decoder(settings.force_ffmpeg_decoder()),
+        )
+        .await?;
 
-    let total_frames = exporter_base.total_frames(settings.fps());
+    let total_frames = exporter.total_frames(settings.fps());
     let rendered = Arc::new(AtomicU32::new(0));
     let progress_rendered = Arc::clone(&rendered);
     let on_progress = move |frame_index: u32| {
@@ -888,12 +946,7 @@ pub async fn export_project_default(project_path: PathBuf) -> Result<PathBuf, St
         true
     };
 
-    let output_path = match settings {
-        CliExportSettings::Mp4(settings) => settings.export(exporter_base, on_progress).await,
-        CliExportSettings::Gif(settings) => settings.export(exporter_base, on_progress).await,
-        CliExportSettings::Mov(settings) => settings.export(exporter_base, on_progress).await,
-    }
-    .map_err(|v| format!("Exporter error: {v}"))?;
+    let output_path = exporter.export(on_progress).await?;
 
     // Same 0-frame guard as Export::run_inner: a recording with missing media renders an empty,
     // unplayable file that otherwise "succeeds", and `cap upload --export` would sign + upload it and
@@ -1036,6 +1089,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn instant_export_preserves_a_hard_link_to_the_recording() {
+        let project = playable_instant_project();
+        let source = project.path().join("content/output.mp4");
+        let before = std::fs::read(&source).unwrap();
+        let destination = project.path().join("export.mp4");
+        std::fs::hard_link(&source, &destination).unwrap();
+
+        Export::export_project(
+            project.path(),
+            Some(destination.clone()),
+            settings_from_flags(&ExportFlags::default()).unwrap(),
+            false,
+            false,
+            false,
+            &Arc::new(Mutex::new(stdout())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert_eq!(std::fs::read(&destination).unwrap(), before);
+    }
+
+    #[tokio::test]
     async fn completed_instant_export_is_read_only_while_upload_owns_the_project() {
         let project = playable_instant_project();
         std::fs::create_dir(project.path().join("content/audio")).unwrap();
@@ -1056,6 +1133,153 @@ mod tests {
         assert_eq!(std::fs::read(&output).unwrap(), before);
         assert_eq!(std::fs::read(&exported).unwrap(), before);
         assert!(!project.path().join(".recovery.lock").exists());
+    }
+
+    fn playable_studio_project() -> tempfile::TempDir {
+        let project = playable_instant_project();
+        std::fs::rename(
+            project.path().join("content/output.mp4"),
+            project.path().join("display.mp4"),
+        )
+        .unwrap();
+        let audio = std::process::Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=2",
+                "-ac",
+                "2",
+                "-c:a",
+                "aac",
+            ])
+            .arg(project.path().join("mic.m4a"))
+            .output()
+            .unwrap();
+        assert!(audio.status.success(), "{audio:?}");
+        std::fs::write(
+            project.path().join("recording-meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "CLI streaming test",
+                "segments": [{
+                    "display": {"path": "display.mp4", "fps": 30, "start_time": 0.0},
+                    "mic": {"path": "mic.m4a", "start_time": 0.0}
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        cap_project::ProjectConfiguration {
+            timeline: Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{
+                        "recordingSegment": 0, "start": 0.0, "end": 1.0, "timescale": 1.0
+                    }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            ),
+            ..Default::default()
+        }
+        .write(project.path())
+        .unwrap();
+        project
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg and a wgpu adapter"]
+    async fn studio_mp4_streams_and_existing_destinations_keep_eager_preparation() {
+        let project = playable_studio_project();
+        let output = project.path().join("render.mp4");
+        let settings = settings_from_flags(&ExportFlags {
+            fps: Some(30),
+            resolution: Some("64x64".into()),
+            force_ffmpeg_decoder: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let builder = || {
+            ExporterBase::builder(project.path().to_path_buf())
+                .with_force_ffmpeg_decoder(true)
+                .with_output_path(output.clone())
+        };
+        let prepared = settings.prepare(builder()).await.unwrap();
+        assert!(matches!(&prepared, PreparedExport::Mp4(_, base) if base.uses_streaming_audio()));
+        assert_eq!(prepared.total_frames(30), 30);
+        assert_eq!(prepared.export(|_| true).await.unwrap(), output);
+        let original = std::fs::read(&output).unwrap();
+        let prepared = settings.prepare(builder()).await.unwrap();
+        assert!(matches!(&prepared, PreparedExport::Mp4(_, base) if !base.uses_streaming_audio()));
+        drop(prepared);
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+
+        for format in [ExportFormat::Gif, ExportFormat::Mov] {
+            let settings = settings_from_flags(&ExportFlags {
+                format: Some(format),
+                ..Default::default()
+            })
+            .unwrap();
+            let prepared = settings.prepare(builder()).await.unwrap();
+            assert!(matches!(
+                prepared,
+                PreparedExport::Gif(_, _) | PreparedExport::Mov(_, _)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ffmpeg, ffprobe and a wgpu adapter"]
+    async fn studio_mp4_rejects_damaged_audio_after_the_selected_video() {
+        let project = playable_studio_project();
+        let audio = project.path().join("mic.m4a");
+        let packets = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_packets",
+                "-show_entries",
+                "packet=pts_time,pos,size",
+                "-of",
+                "json",
+            ])
+            .arg(&audio)
+            .output()
+            .unwrap();
+        assert!(packets.status.success());
+        let packets: serde_json::Value = serde_json::from_slice(&packets.stdout).unwrap();
+        let packet = packets["packets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|packet| packet["pts_time"].as_str().unwrap().parse::<f64>().unwrap() > 1.5)
+            .unwrap();
+        let position: usize = packet["pos"].as_str().unwrap().parse().unwrap();
+        let size: usize = packet["size"].as_str().unwrap().parse().unwrap();
+        let mut bytes = std::fs::read(&audio).unwrap();
+        bytes[position..position + size].fill(0xff);
+        std::fs::write(audio, bytes).unwrap();
+
+        let output = project.path().join("render.mp4");
+        let prepared = settings_from_flags(&ExportFlags {
+            fps: Some(30),
+            resolution: Some("64x64".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .prepare(
+            ExporterBase::builder(project.path().to_path_buf())
+                .with_force_ffmpeg_decoder(true)
+                .with_output_path(output.clone()),
+        )
+        .await
+        .unwrap();
+        let error = prepared.export(|_| true).await.unwrap_err();
+        assert!(error.contains("mic.m4a"), "{error}");
+        assert!(error.contains("send-packet"), "{error}");
+        assert!(!output.exists());
     }
 
     #[tokio::test]
@@ -1178,6 +1402,33 @@ mod tests {
             ..Default::default()
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn settings_json_rejects_zero_fps_and_resolution_like_the_flags() {
+        let json = |format: &str, fps: u32, x: u32, y: u32| {
+            format!(
+                r#"{{"format":"{format}","fps":{fps},"resolution_base":{{"x":{x},"y":{y}}},"compression":"Maximum","custom_bpp":null,"quality":null,"cursor_only":false}}"#
+            )
+        };
+        for format in ["Mp4", "Gif", "Mov"] {
+            assert!(
+                settings_from_json(&json(format, 30, 1280, 720)).is_ok(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 0, 1280, 720)).is_err(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 30, 0, 0)).is_err(),
+                "{format}"
+            );
+            assert!(
+                settings_from_json(&json(format, 30, 1280, 0)).is_err(),
+                "{format}"
+            );
+        }
     }
 
     #[test]
