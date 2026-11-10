@@ -516,21 +516,75 @@ pub fn restore_words(
 
 /// Each word of `before` in `after`, the same transcript once its timings are
 /// refined: the same words in the same order, with any the refinement
-/// recovered in between.
+/// recovered in between. A word that could be either of two equal words in
+/// `after`, because one was recovered beside it, follows neither.
 fn follow_words(before: &TranscriptDoc, after: &TranscriptDoc) -> Vec<Option<usize>> {
     let mut next = 0;
-    before
-        .words
-        .iter()
-        .map(|word| {
-            let found = next
-                + after.words[next..]
-                    .iter()
-                    .position(|candidate| candidate.text == word.text)?;
-            next = found + 1;
-            Some(found)
-        })
+    let earliest = before.words.iter().map(|word| {
+        let found = next
+            + after.words[next..]
+                .iter()
+                .position(|candidate| candidate.text == word.text)?;
+        next = found + 1;
+        Some(found)
+    });
+    let earliest: Vec<Option<usize>> = earliest.collect();
+    let mut limit = after.words.len();
+    let latest = before.words.iter().rev().map(|word| {
+        let found = after.words[..limit]
+            .iter()
+            .rposition(|candidate| candidate.text == word.text)?;
+        limit = found;
+        Some(found)
+    });
+    let mut latest: Vec<Option<usize>> = latest.collect();
+    latest.reverse();
+    earliest
+        .into_iter()
+        .zip(latest)
+        .map(|(earliest, latest)| earliest.filter(|_| earliest == latest))
         .collect()
+}
+
+/// A cut splits an audio segment that plays across it, and restoring the hole
+/// only moves the second piece away, leaving silence where the first used to
+/// carry on. Rejoins the pieces the restore pulled apart, so the cut that
+/// replaces it splits a whole segment again.
+fn rejoin_split_audio(
+    before: &[cap_project::AudioTrackSegment],
+    restored: &mut Vec<cap_project::AudioTrackSegment>,
+) {
+    if before.len() != restored.len() {
+        return;
+    }
+    let mut joins: Vec<(usize, usize)> = Vec::new();
+    for (first, head) in restored.iter().enumerate() {
+        let tail = restored.iter().enumerate().position(|(second, tail)| {
+            second != first
+                && (before[first].end - before[second].start).abs() < TOUCH_EPSILON
+                && tail.start > head.end + TOUCH_EPSILON
+                && tail.track == head.track
+                && tail.path == head.path
+                && tail.name == head.name
+                && tail.enabled == head.enabled
+                && tail.volume_db == head.volume_db
+                && ((tail.trim_start - head.trim_start) - (tail.start - head.start)).abs()
+                    < TOUCH_EPSILON
+        });
+        if let Some(second) = tail {
+            joins.push((first, second));
+        }
+    }
+    for (first, second) in &joins {
+        restored[*first].end = restored[*second].end;
+        restored[*first].fade_out = restored[*second].fade_out;
+    }
+    let mut joined: Vec<usize> = joins.into_iter().map(|(_, second)| second).collect();
+    joined.sort_unstable();
+    joined.dedup();
+    for second in joined.into_iter().rev() {
+        restored.remove(second);
+    }
 }
 
 /// Moves word cuts made on the first pass's timings to where the refined
@@ -549,12 +603,45 @@ pub fn follow_refined_words(
     after: &TranscriptDoc,
     energy: Option<&EnergyEnvelope>,
 ) -> usize {
+    let followed = follow_words(before, after);
+    let mut moved = follow_planned_cuts(
+        timeline,
+        recording_durations,
+        removed_takes,
+        (before, energy),
+        (after, energy),
+        &followed,
+    );
+    if energy.is_some() {
+        // A cut made while the loudness envelope was still loading was planned
+        // without it, on the words' unrefined spans.
+        let mut unheard = before.clone();
+        unheard.refine_voiced(None);
+        moved += follow_planned_cuts(
+            timeline,
+            recording_durations,
+            removed_takes,
+            (&unheard, None),
+            (after, energy),
+            &followed,
+        );
+    }
+    moved
+}
+
+fn follow_planned_cuts(
+    timeline: &mut TimelineConfiguration,
+    recording_durations: &[f64],
+    removed_takes: &[cap_project::TimelineSegment],
+    (before, planned_with): (&TranscriptDoc, Option<&EnergyEnvelope>),
+    (after, energy): (&TranscriptDoc, Option<&EnergyEnvelope>),
+    followed: &[Option<usize>],
+) -> usize {
     let total: f64 = recording_durations.iter().sum();
     let within = |range: &Range<f64>| range.start.clamp(0.0, total)..range.end.clamp(0.0, total);
     let same = |a: &Range<f64>, b: &Range<f64>| {
         (a.start - b.start).abs() < TOUCH_EPSILON && (a.end - b.end).abs() < TOUCH_EPSILON
     };
-    let followed = follow_words(before, after);
     let runs = TranscriptEdl::build(before, timeline, recording_durations).cut_runs;
     let mut moved = 0;
     for run in runs {
@@ -563,7 +650,7 @@ pub fn follow_refined_words(
         };
         let followed_run = first..last + 1;
         let (Some(planned), Some(refined)) = (
-            plan_word_cuts(before, energy, None, std::slice::from_ref(&run)).pop(),
+            plan_word_cuts(before, planned_with, None, std::slice::from_ref(&run)).pop(),
             plan_word_cuts(after, energy, None, std::slice::from_ref(&followed_run)).pop(),
         ) else {
             continue;
@@ -582,6 +669,7 @@ pub fn follow_refined_words(
         if restore_hole(&mut next, recording_durations, removed_takes, hole, inside).is_err() {
             continue;
         }
+        rejoin_split_audio(&timeline.audio_segments, &mut next.audio_segments);
         let report = apply_source_cuts(
             &mut next,
             recording_durations,
