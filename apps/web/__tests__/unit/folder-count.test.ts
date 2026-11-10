@@ -29,13 +29,16 @@ vi.mock("@cap/web-backend", async () => {
 const orgId = Organisation.OrganisationId.make("org-1");
 const parentId = Folder.FolderId.make("parent-folder");
 
-const getChildren = (root: Parameters<typeof getChildFolders>[1]) =>
+const getChildren = (
+	root: Parameters<typeof getChildFolders>[1],
+	activeOrganizationId = orgId,
+) =>
 	getChildFolders(parentId, root).pipe(
 		Effect.provide(Database.Default),
 		Effect.provideService(CurrentUser, {
 			id: User.UserId.make("user-1"),
 			email: "user@example.com",
-			activeOrganizationId: orgId,
+			activeOrganizationId,
 			iconUrlOrKey: Option.none(),
 		}),
 		Effect.runPromise,
@@ -46,6 +49,15 @@ beforeEach(() => {
 });
 
 describe("subfolder video counts", () => {
+	it("loads personal subfolders without an active organization", async () => {
+		await expect(
+			getChildren({ variant: "user" }, Organisation.OrganisationId.make("")),
+		).resolves.toEqual([]);
+		const [query, params] = mocks.query.mock.calls[0] ?? [];
+		expect(query).toContain("`folders`.`spaceId` is null");
+		expect(params).toEqual([parentId]);
+	});
+
 	it.each([
 		{ root: { variant: "user" } as const, table: "videos", scope: null },
 		{

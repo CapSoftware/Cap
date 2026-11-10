@@ -121,6 +121,7 @@ jobs:
           __tests__/unit/embed-page-round-trips.test.ts
           __tests__/unit/embed-video-playback-chrome.test.ts
           __tests__/unit/first-view-email.test.ts
+          __tests__/unit/folder-count.test.ts
           __tests__/unit/folder-delete.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/generate-ai-duration.test.ts
@@ -145,6 +146,7 @@ jobs:
           __tests__/unit/organization-preferences-switch.test.ts
           __tests__/unit/organization-preferences-target.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
+          __tests__/unit/personal-folder-page-access.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts

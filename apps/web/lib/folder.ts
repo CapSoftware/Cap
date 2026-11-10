@@ -17,7 +17,7 @@ import {
 	resolveEffectiveVideoRules,
 } from "@cap/web-backend";
 import type { ImageUpload, Organisation, Space, Video } from "@cap/web-domain";
-import { CurrentUser, Folder } from "@cap/web-domain";
+import { Folder } from "@cap/web-domain";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
@@ -401,8 +401,6 @@ export const getChildFolders = Effect.fn(function* (
 ) {
 	const db = yield* Database;
 
-	const user = yield* CurrentUser;
-	if (!user.activeOrganizationId) throw new Error("No active organization");
 	const videoCount =
 		root.variant === "space"
 			? sql<number>`(
