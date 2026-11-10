@@ -78,7 +78,7 @@ jobs:
         shell: bash
         env:
           PYTHONPATH: .github/rc-063
-          RC_DELETE_OFFSET: ""
+          RC_DELETE_OFFSET: "735,256"
         run: python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2"
 
       # Hosted Windows runners have no audio endpoint, and without one the

@@ -20,7 +20,10 @@ offset = os.environ.get("RC_DELETE_OFFSET", "").strip()
 offset = tuple(int(part) for part in offset.split(",")) if offset else None
 RECORD_SECONDS = 40
 
-profile = rclib.make_profile(os.path.join(out, "profile"))
+# Cap hides its own windows from screen captures while it records, which also
+# hides them from this scenario's screenshots. The excluded windows list is a
+# setting; it is emptied here so the Settings window shows in the evidence.
+profile = rclib.make_profile(os.path.join(out, "profile"), general={"excludedWindows": []})
 recordings = os.path.join(out, "rec")
 os.makedirs(recordings, exist_ok=True)
 app = App(

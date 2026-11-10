@@ -99,6 +99,9 @@ def record(name, recordings, hold=False):
         holder = threading.Thread(target=hold_meta_during_stop, args=(app, recordings, state))
         holder.start()
     started = app.wait_log(r"recording started", 90)
+    if not started:
+        # Whatever the app says instead of recording is on its main window.
+        rclib.screenshot(os.path.join(out, f"{name}-did-not-start.png"))
     finished = app.wait_log(r"recording finished", 150) if started else None
     time.sleep(3)
     alive = app.alive()
@@ -110,7 +113,7 @@ def record(name, recordings, hold=False):
     project = projects[0] if projects else None
     results.add(f"{name}: recording started and finished", bool(started and finished and alive))
     if not project:
-        results.add(f"{name}: project folder exists", False, f"nothing in {recordings}")
+        results.add(f"{name}: project folder exists", False, f"nothing in a recordings folder of {len(recordings)} characters")
         log(text[-4000:])
         return None, state
     plain_project = project[4:] if project.startswith("\\\\?\\") else project
@@ -180,6 +183,17 @@ if staged:
         "long-staged: project under 260 and staged temporary over 260",
         len(staged["project"]) + 20 < 260 and staged["staged_temporary"] > 260,
         f"project={len(staged['project'])} staged temporary={staged['staged_temporary']}",
+    )
+
+# The recordings folder is under MAX_PATH and the project folder, with the
+# metadata file itself, is past it.
+project_dir = padded_dir(base, 232)
+long_project, _ = record("long-project", project_dir)
+if long_project:
+    results.add(
+        "long-project: recordings folder under 260 and metadata file over 260",
+        len(project_dir) < 260 and len(long_project["project"]) + 20 > 260,
+        f"recordings={len(project_dir)} project={len(long_project['project'])}",
     )
 
 root_dir = padded_dir(base, 272)
