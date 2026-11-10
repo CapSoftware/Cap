@@ -24,7 +24,7 @@ struct RecordView: View {
             Color.black.ignoresSafeArea()
 
             if mode == .camera {
-                CameraPreview(session: model.capture.session, position: model.position)
+                CameraPreview(session: model.capture.session, position: model.position, isLive: model.phase == .ready)
                     .ignoresSafeArea()
                     .opacity(model.phase == .ready || model.isRecording || model.phase == .finishing ? 1 : 0)
                     .animation(.easeOut(duration: 0.25), value: model.phase)
@@ -383,13 +383,15 @@ private struct RecordPressStyle: ButtonStyle {
 
 private struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    /// Switching cameras replaces the layer's connection, which then needs turning upright again.
+    /// Switching cameras or restarting the camera gives the layer a new connection, which then needs turning upright again.
     let position: AVCaptureDevice.Position
+    let isLive: Bool
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        NotificationCenter.default.addObserver(view, selector: #selector(PreviewView.sessionStarted), name: AVCaptureSession.didStartRunningNotification, object: session)
         return view
     }
 
@@ -411,6 +413,10 @@ private struct CameraPreview: UIViewRepresentable {
         override func layoutSubviews() {
             super.layoutSubviews()
             keepUpright()
+        }
+
+        @objc nonisolated func sessionStarted() {
+            Task { @MainActor in keepUpright() }
         }
 
         func keepUpright() {
