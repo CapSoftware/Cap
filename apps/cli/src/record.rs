@@ -752,19 +752,13 @@ async fn start_recording(
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
-    let upload_lock = prepare_recording_project(
-        &path,
-        params.mode,
-        params.mic.is_some() || params.system_audio,
-    )?;
-
     #[cfg(target_os = "macos")]
     let target_for_shareable_content = target.clone();
     let camera_only_target = matches!(target, ScreenCaptureTarget::CameraOnly);
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
         .with_system_audio(params.system_audio);
-    let mut instant_builder =
-        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+    let mut instant_builder = instant_recording::Actor::builder(path.clone(), target)
+        .with_system_audio(params.system_audio);
     let mut camera_active = false;
     let camera_recorded =
         !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
@@ -840,6 +834,12 @@ async fn start_recording(
         studio_builder = studio_builder.with_mic_feed(lock.clone());
         instant_builder = instant_builder.with_mic_feed(lock);
     }
+
+    let upload_lock = prepare_recording_project(
+        &path,
+        params.mode,
+        params.mic.is_some() || params.system_audio,
+    )?;
 
     match params.mode {
         RecordMode::Studio => {
@@ -1375,6 +1375,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("No target specified"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn invalid_microphone_does_not_reserve_recording_path() {
+        let root = tempfile::tempdir().unwrap();
+        for mode in [RecordMode::Studio, RecordMode::Instant] {
+            let path = root.path().join(format!("{mode}.cap"));
+            let params = RecordParams {
+                target: RecordTargets {
+                    screen: None,
+                    window: None,
+                },
+                mode,
+                camera: None,
+                mic: Some(format!("missing-microphone-{}", Uuid::new_v4())),
+                system_audio: false,
+                path: Some(path.clone()),
+                fps: None,
+                duration: Some(1.0),
+            };
+
+            for _ in 0..2 {
+                let error = start_recording(&params, ScreenCaptureTarget::CameraOnly, path.clone())
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(error.contains("Microphone 'missing-microphone-"), "{error}");
+                assert!(
+                    !path.exists(),
+                    "failed {mode} startup reserved {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]

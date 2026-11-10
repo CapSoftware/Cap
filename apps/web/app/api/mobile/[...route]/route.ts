@@ -75,6 +75,12 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import {
+	describeLinkAccessChoice,
+	isLinkRestricted,
+	linkAccessSettingsPatch,
+	resolveLinkAccessWrite,
+} from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
@@ -2412,6 +2418,25 @@ const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
 	return { success: true as const };
 });
 
+const getLinkAccessState = Effect.fn("Mobile.getLinkAccessState")(function* (
+	videoId: Video.VideoId,
+) {
+	const database = yield* Database;
+	const [state] = yield* database.use((db) =>
+		db
+			.select({
+				videoSettings: Db.videos.settings,
+				organizationSettings: Db.organizations.settings,
+				allowedEmailDomain: Db.organizations.allowedEmailDomain,
+			})
+			.from(Db.videos)
+			.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	return state;
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -2489,9 +2514,24 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		Effect.catchAll(() => Effect.succeed(0)),
 	);
 
+	const linkAccessState =
+		capRow.ownerId === user.id && capRow.public
+			? yield* getLinkAccessState(capRow.id)
+			: undefined;
+	const linkAccess = linkAccessState
+		? describeLinkAccessChoice({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+	const linkRestricted = linkAccessState
+		? isLinkRestricted({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+
 	return {
 		row: capRow,
-		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+		cap: {
+			...toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+			...(linkAccess ? { linkAccess } : {}),
+			...(linkRestricted === undefined ? {} : { linkRestricted }),
+		},
 	};
 });
 
@@ -3802,18 +3842,51 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const publicOrigin = getMobilePublicOrigin(request);
 								const user = yield* CurrentUser;
 								yield* assertMobileVideoOwner(path.id);
+								if (payload.linkAccess === "anyone") {
+									const state = yield* getLinkAccessState(path.id);
+									if (
+										state?.organizationSettings?.allowPublicLinkOverride !==
+										true
+									) {
+										return yield* Effect.fail(new HttpApiError.Forbidden());
+									}
+								}
+								const nextLinkAccess = resolveLinkAccessWrite(
+									payload.public,
+									payload.linkAccess,
+								);
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ public: payload.public })
+										.set({
+											public: payload.public,
+											...(nextLinkAccess === undefined
+												? {}
+												: {
+														settings: linkAccessSettingsPatch(nextLinkAccess),
+													}),
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												// A link access choice only exists on a public link. Without this an
+												// earlier "open to anyone" request landing after "make private" would
+												// publish the Cap again. The request is refused below instead.
+												payload.linkAccess === undefined
+													? undefined
+													: eq(Db.videos.public, true),
 											),
 										),
 								);
 								const { cap } = yield* getCapById(path.id, publicOrigin);
+								if (
+									payload.linkAccess !== undefined &&
+									payload.public &&
+									!cap.public
+								) {
+									return yield* Effect.fail(new HttpApiError.Conflict());
+								}
 								return cap;
 							}),
 						),

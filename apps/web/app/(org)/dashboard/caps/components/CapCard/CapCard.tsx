@@ -119,6 +119,7 @@ export interface CapCardProps extends PropsWithChildren {
 			disableChapters?: boolean;
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
+			linkAccess?: "anyone";
 		} | null;
 	};
 	analytics: number;
@@ -382,6 +383,7 @@ export const CapCard = ({
 				sharedSpaces={cap.sharedSpaces || []}
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
+				linkOpenToAnyone={cap.settings?.linkAccess === "anyone"}
 				hasPassword={passwordProtected}
 				inheritedPasswordSources={cap.inheritedPasswordSources}
 				onPasswordUpdated={handlePasswordUpdated}

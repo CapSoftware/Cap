@@ -64,6 +64,7 @@ stress = [
     extra("cap_stress", LONG_TITLE, "santorini", 180, commentCount=180, reactionCount=300),
     extra("cap_locked", "Board update (password protected)", "monaco", 300, protected=True),
     extra("cap_restricted", "Restricted to acme.com", "nyc", 120),
+    extra("cap_link", "Team update for the organization", "nyc", 120, owner_me=True, linkAccess="restricted", linkRestricted=True, _linkChoice=True),
     extra("cap_quiet", "Comments and reactions turned off", "rome", 95),
     extra("cap_shot", "Screenshot of the pricing page", "sf", 0, durationSeconds=None),
     extra("cap_limit", "Over the free plan limit", "liverpool", 61),
@@ -328,7 +329,15 @@ class H(BaseHTTPRequestHandler):
                 c["upload"] = {"uploaded": 0, "total": 0, "phase": "processing", "processingProgress": 10, "processingMessage": "Applying your edit", "processingError": None}
                 return self.send(200, {"success": True})
             if sub == "/analytics": return self.send(200, analytics(q.get("range", "7d"), True))
-            if sub == "/sharing": c["public"] = self.body().get("public", c["public"]); return self.send(200, c)
+            if sub == "/sharing":
+                b = self.body(); was_public = c["public"]; c["public"] = b.get("public", c["public"])
+                if c.get("_linkChoice"):
+                    if b.get("linkAccess") and not was_public: c["public"] = False; return self.send(409, {})
+                    if not c["public"]: c.pop("linkAccess", None); c.pop("linkRestricted", None)
+                    else:
+                        c["linkAccess"] = b.get("linkAccess") or c.get("linkAccess") or "restricted"
+                        c["linkRestricted"] = c["linkAccess"] != "anyone"
+                return self.send(200, c)
             if sub == "/title": c["title"] = self.body().get("title", c["title"]); return self.send(200, c)
             if sub == "":
                 v = viewer(cid); lst = comments_for(cid)
