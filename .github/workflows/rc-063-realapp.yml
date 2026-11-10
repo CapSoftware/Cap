@@ -1,0 +1,219 @@
+name: RC 0.6.3 real app (scratch)
+
+# Temporary, lives only on scratch/rc-063-realapp. Runs the real GPUI app on
+# CI runners against fixes merged for 0.6.3. `.github/rc-063/plan.txt` names
+# the jobs a push runs. The app is built once per runner type and source
+# revision and kept in the cache, so later pushes only run scenarios.
+on:
+  push:
+    branches:
+      - scratch/rc-063-realapp
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc-063-realapp
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  MAIN_REVISION: 79bf7dd032fab4aed8c438935cfe5c16416a1f22
+  PACKAGE_VERSION: v1
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+      pr_revision: ${{ steps.plan.outputs.pr_revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/rc-063
+      - name: Plan
+        id: plan
+        run: |
+          set -euo pipefail
+          jobs=$(sed -n 's/^jobs=//p' .github/rc-063/plan.txt)
+          echo "jobs=,$jobs," >> "$GITHUB_OUTPUT"
+          revision=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/fix/parakeet-q8-encoder | cut -f1)
+          test -n "$revision"
+          echo "pr_revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "jobs: $jobs; #3908 head: $revision" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  win-main:
+    name: Windows, main (items 1, 2, 3)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',win-main,')
+    runs-on: windows-2022
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: ./.github/rc-063/build
+        with:
+          target: x86_64-pc-windows-msvc
+          key: rc063-windows-2022-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
+
+      - name: Python packages
+        shell: bash
+        run: python -m pip install --quiet pillow
+
+      - name: Item 1, recording metadata save (#3975)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONPATH: .github/rc-063
+          RC_REC_BASE: ${{ runner.temp }}\rc1
+        run: python .github/rc-063/win_meta.py rc-pkg "$RUNNER_TEMP/rc-out/item1"
+
+      - name: Item 2, deleting the recording in progress (#3969)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONPATH: .github/rc-063
+        run: python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-win-main
+          path: ${{ runner.temp }}/rc-out
+          retention-days: 7
+
+  linux-main:
+    name: Linux, main (item 4)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',linux-main,')
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: ./.github/rc-063/build
+        with:
+          target: x86_64-unknown-linux-gnu
+          key: rc063-blacksmith-ubuntu-2404-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
+
+  mac-main:
+    name: macOS, main (item 2 library card)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',mac-main,')
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: ./.github/rc-063/build
+        with:
+          target: aarch64-apple-darwin
+          key: rc063-blacksmith-macos-15-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
+
+  clippy:
+    name: Linux, clippy on the patched gpui (item 5)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',clippy,')
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy
+
+      - name: Prepare GPUI dependency
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      # The device-lost patch changes gpui_wgpu and gpui_linux. Clippy runs on
+      # them with every Cap patch applied, then again with only the device-lost
+      # patch taken back out, so what it adds is told apart from what the
+      # pinned upstream revision already carries.
+      - name: Clippy on the patched gpui
+        working-directory: ../zed-cap
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/clippy"
+          mkdir -p "$out"
+          cargo +1.95.0 --version | tee "$out/toolchain.txt"
+          cargo +1.95.0 clippy --version | tee -a "$out/toolchain.txt"
+          git rev-parse HEAD | tee -a "$out/toolchain.txt"
+          git status --short | tee "$out/patched-files.txt"
+          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets --message-format=json > "$out/patched.json" 2> "$out/patched.stderr"
+          echo "patched clippy exit: $?" | tee -a "$out/summary.txt"
+          tail -n 5 "$out/patched.stderr"
+          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets -- -D warnings > "$out/patched-deny.txt" 2>&1
+          deny=$?
+          echo "patched clippy with -D warnings exit: $deny" | tee -a "$out/summary.txt"
+          tail -n 40 "$out/patched-deny.txt"
+          git apply --reverse --unidiff-zero "$GITHUB_WORKSPACE/apps/desktop-gpui/patches/zed-device-lost.patch"
+          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets --message-format=json > "$out/base.json" 2> "$out/base.stderr"
+          echo "clippy without the device-lost patch exit: $?" | tee -a "$out/summary.txt"
+          git apply --unidiff-zero "$GITHUB_WORKSPACE/apps/desktop-gpui/patches/zed-device-lost.patch"
+          python3 "$GITHUB_WORKSPACE/.github/rc-063/clippy_diff.py" "$out/patched.json" "$out/base.json" | tee -a "$out/summary.txt"
+          new=${PIPESTATUS[0]}
+          { echo '### Item 5: clippy on the patched gpui (#3979)'; echo '```'; cat "$out/toolchain.txt" "$out/summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$new"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-clippy
+          path: ${{ runner.temp }}/clippy
+          retention-days: 7
+
+  win-pr:
+    name: Windows, #3908 head (item 6)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',win-pr,')
+    runs-on: windows-2022
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.pr_revision }}
+
+      - uses: actions/checkout@v4
+        with:
+          path: rc
+          sparse-checkout: .github/rc-063
+
+      - name: Build
+        uses: ./rc/.github/rc-063/build
+        with:
+          target: x86_64-pc-windows-msvc
+          key: rc063-windows-2022-pr3908-${{ needs.plan.outputs.pr_revision }}-${{ env.PACKAGE_VERSION }}
+
+  linux-pr:
+    name: Linux, #3908 head (item 6)
+    needs: plan
+    if: contains(needs.plan.outputs.jobs, ',linux-pr,')
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.pr_revision }}
+
+      - uses: actions/checkout@v4
+        with:
+          path: rc
+          sparse-checkout: .github/rc-063
+
+      - name: Build
+        uses: ./rc/.github/rc-063/build
+        with:
+          target: x86_64-unknown-linux-gnu
+          key: rc063-blacksmith-ubuntu-2404-pr3908-${{ needs.plan.outputs.pr_revision }}-${{ env.PACKAGE_VERSION }}

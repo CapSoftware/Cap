@@ -1,0 +1,1 @@
+jobs=win-main,linux-main,mac-main,clippy,win-pr,linux-pr
