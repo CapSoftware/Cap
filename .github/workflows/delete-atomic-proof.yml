@@ -1,11 +1,11 @@
 name: Delete all or nothing proof (scratch)
 
-# Temporary, lives only on scratch/delete-atomic-proof. `plan.txt` names the
+# Temporary, lives only on scratch/delete-close-editor-proof. `plan.txt` names the
 # jobs a push runs and the source revisions the real app is built from.
 on:
   push:
     branches:
-      - scratch/delete-atomic-proof
+      - scratch/delete-close-editor-proof
 
 permissions:
   contents: read
