@@ -2650,50 +2650,40 @@ impl EditorWindow {
                 this.select_sidebar_tab(*index, window, cx);
             }));
 
-        div()
-            .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .h_full()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(self.card_line())
-                    .shadow(theme.editor.card_shadow())
-                    .child(rail)
-                    .children(self.sidebar.image_import_error.as_ref().map(|error| {
-                        div()
-                            .p(px(12.))
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child(error.clone())
-                    }))
-                    .children(self.sidebar.picking_image.then(|| {
-                        div()
-                            .p(px(12.))
-                            .child(tr::editor::sidebar::importing_image())
-                    }))
-                    .child(if let Some((index, group)) = self.sidebar.style_target {
-                        self.render_style_group(index, group, cx)
-                    } else if self.audio_picker.is_some() {
-                        self.render_audio_library(cx)
-                    } else {
-                        match selection {
-                            Some(selection) => self.render_selection_panel(&selection, cx),
-                            None => self.render_tab_body(cx),
-                        }
-                    }),
-            )
+        // The panel card around it, and the switcher above the rail, are the
+        // root's (`crate::editor_side_panel`).
+        div().size_full().flex().flex_col().min_h_0().child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .overflow_hidden()
+                .child(rail)
+                .children(self.sidebar.image_import_error.as_ref().map(|error| {
+                    div()
+                        .p(px(12.))
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(error.clone())
+                }))
+                .children(self.sidebar.picking_image.then(|| {
+                    div()
+                        .p(px(12.))
+                        .child(tr::editor::sidebar::importing_image())
+                }))
+                .child(if let Some((index, group)) = self.sidebar.style_target {
+                    self.render_style_group(index, group, cx)
+                } else if self.audio_picker.is_some() {
+                    self.render_audio_library(cx)
+                } else {
+                    match selection {
+                        Some(selection) => self.render_selection_panel(&selection, cx),
+                        None => self.render_tab_body(cx),
+                    }
+                }),
+        )
     }
 
     /// The scroll region (`:679-692`): `custom-scroll overflow-x-hidden

@@ -2,7 +2,6 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV } from "@cap/env";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -12,7 +11,6 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { HttpClient } from "@effect/platform";
 import {
 	faChartSimple,
 	faCheck,
@@ -49,10 +47,12 @@ import {
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { startBrowserDownload } from "@/lib/start-browser-download";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
@@ -158,8 +158,6 @@ export const CapCard = ({
 	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
-	const customDomain = activeOrganization?.organization.customDomain;
-	const domainVerified = activeOrganization?.organization.domainVerified;
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -187,21 +185,8 @@ export const CapCard = ({
 		mutationFn: () =>
 			Effect.gen(function* () {
 				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
-				const httpClient = yield* HttpClient.HttpClient;
 				if (Option.isSome(result)) {
-					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
-					const blob = yield* fetchResponse.arrayBuffer;
-
-					const blobUrl = window.URL.createObjectURL(new Blob([blob]));
-					const link = document.createElement("a");
-					link.href = blobUrl;
-					link.download = result.value.fileName;
-					link.style.display = "none";
-					document.body.appendChild(link);
-					link.click();
-					document.body.removeChild(link);
-
-					window.URL.revokeObjectURL(blobUrl);
+					startBrowserDownload(result.value.downloadUrl);
 				} else {
 					throw new Error("Failed to get download URL");
 				}
@@ -365,13 +350,7 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(
-			NODE_ENV === "development"
-				? `${webUrl}/s/${cap.id}`
-				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
-					? `https://${customDomain}/s/${cap.id}`
-					: `${webUrl}/s/${cap.id}`,
-		);
+		handleCopy(videoShareUrl(webUrl, cap.id, activeOrganization?.organization));
 	};
 	const canEditVideo =
 		isOwner &&

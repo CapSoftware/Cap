@@ -2173,6 +2173,9 @@ mode = "缩放模式"
 positions_mixed = "这些片段缩放到不同位置。拖动可将它们全部移到同一位置。"
 title = "缩放 {number}"
 
+[editor.side_panel]
+style = "样式"
+
 [editor.sidebar]
 desktop_import_failed = "无法导入桌面壁纸"
 importing_image = "正在导入图片…"
@@ -2336,9 +2339,9 @@ text_item = "文字"
 [editor.clips]
 append_error = "无法添加片段：{message}"
 append_error_title = "录制错误"
-back = "返回编辑器"
 cap_filter = "Cap 录制"
 clip = "片段 {number}"
+count = { other = "{count} 个片段" }
 empty_description = "录制或导入一个片段后，它会显示在这里。"
 empty_title = "还没有片段"
 import = "导入"
@@ -2349,6 +2352,7 @@ import_mp4 = "MP4 视频…"
 importing = "正在导入…"
 mp4_filter = "MP4 视频"
 prepare_controls_failed = "无法准备录制控件：{error}"
+record = "录制"
 record_new = "录制新片段"
 save_before_recording_failed = "录制前无法保存当前项目：{error}"
 split = "拆分 {number}"
@@ -3012,8 +3016,6 @@ delete_recording = "删除录制"
 export = "导出"
 open_bundle = "打开录制包"
 presets = "预设"
-transcript = "转写"
-transcript_tooltip = "通过转写编辑"
 
 [editor.window.image]
 changed = "选择替换图片时此图片已更改。请选中它后重试。"

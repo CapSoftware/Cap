@@ -69,6 +69,13 @@ describe("formatClockWithHundredths", () => {
 		expect(formatClockWithHundredths(3600)).toBe("1:00:00.00");
 		expect(formatClockWithHundredths(3905.5)).toBe("1:05:05.50");
 	});
+
+	it("carries a rounded-up minute instead of printing :60.00", () => {
+		expect(formatClockWithHundredths(59.994)).toBe("00:59.99");
+		expect(formatClockWithHundredths(59.996)).toBe("01:00.00");
+		expect(formatClockWithHundredths(119.999)).toBe("02:00.00");
+		expect(formatClockWithHundredths(3599.999)).toBe("1:00:00.00");
+	});
 });
 
 describe("Slack previews", () => {

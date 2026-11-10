@@ -80,9 +80,65 @@ struct UpdateScheduler {
     staged: Option<StagedUpdate>,
     download: Option<gpui::Task<()>>,
     download_epoch: u64,
+    restart_prompt: RestartPromptState,
 }
 
 impl Global for UpdateScheduler {}
+
+/// The ready update's restart prompt: one wait for busy work or one dialog at
+/// a time, however many times a restart is asked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RestartPrompt {
+    #[default]
+    None,
+    Waiting(u64),
+    Showing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestartStep {
+    Ignore,
+    Wait(u64),
+    Show,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RestartPromptState {
+    prompt: RestartPrompt,
+    wait_epoch: u64,
+}
+
+impl RestartPromptState {
+    /// A request while a wait is pending joins it; once Cap is idle it shows
+    /// the dialog straight away and the pending wait is dropped.
+    fn request(&mut self, busy: bool) -> RestartStep {
+        match (self.prompt, busy) {
+            (RestartPrompt::Showing, _) | (RestartPrompt::Waiting(_), true) => RestartStep::Ignore,
+            (RestartPrompt::None, true) => {
+                self.wait_epoch += 1;
+                self.prompt = RestartPrompt::Waiting(self.wait_epoch);
+                RestartStep::Wait(self.wait_epoch)
+            }
+            (RestartPrompt::None | RestartPrompt::Waiting(_), false) => {
+                self.prompt = RestartPrompt::Showing;
+                RestartStep::Show
+            }
+        }
+    }
+
+    /// Whether the wait that armed this timer is still the pending one.
+    fn wait_elapsed(&mut self, epoch: u64) -> bool {
+        if self.prompt != RestartPrompt::Waiting(epoch) {
+            return false;
+        }
+        self.prompt = RestartPrompt::None;
+        true
+    }
+
+    fn dialog_closed(&mut self) {
+        self.prompt = RestartPrompt::None;
+    }
+}
 
 fn qualifies(
     current: &Version,
@@ -372,6 +428,7 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
         staged: None,
         download: None,
         download_epoch: 0,
+        restart_prompt: RestartPromptState::default(),
     });
 
     #[cfg(debug_assertions)]
@@ -695,29 +752,51 @@ fn prompt_restart(cx: &mut App) {
     else {
         return;
     };
-    if work_in_flight(cx) {
-        tracing::info!(%version, "update ready; waiting for in-flight work before prompting");
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(BUSY_RETRY_DELAY).await;
-            cx.update(prompt_restart);
-        })
-        .detach();
-        return;
-    }
-
-    cx.spawn(async move |cx| {
-        crate::platform::activate_app();
-        if crate::platform::confirm_dialog(
-            tr::dialog::update::title(),
-            &tr::dialog::update::ready(&version),
-            tr::dialog::update::restart_now(),
-            tr::dialog::update::later(),
-            false,
-        ) {
-            cx.update(install_and_relaunch);
+    let busy = work_in_flight(cx);
+    match cx
+        .global_mut::<UpdateScheduler>()
+        .restart_prompt
+        .request(busy)
+    {
+        RestartStep::Ignore => {}
+        RestartStep::Wait(epoch) => {
+            tracing::info!(%version, "update ready; waiting for in-flight work before prompting");
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(BUSY_RETRY_DELAY).await;
+                cx.update(|cx| {
+                    if cx
+                        .global_mut::<UpdateScheduler>()
+                        .restart_prompt
+                        .wait_elapsed(epoch)
+                    {
+                        prompt_restart(cx);
+                    }
+                });
+            })
+            .detach();
         }
-    })
-    .detach();
+        RestartStep::Show => {
+            cx.spawn(async move |cx| {
+                crate::platform::activate_app();
+                let accepted = crate::platform::confirm_dialog(
+                    tr::dialog::update::title(),
+                    &tr::dialog::update::ready(&version),
+                    tr::dialog::update::restart_now(),
+                    tr::dialog::update::later(),
+                    false,
+                );
+                cx.update(|cx| {
+                    cx.global_mut::<UpdateScheduler>()
+                        .restart_prompt
+                        .dialog_closed();
+                    if accepted {
+                        install_and_relaunch(cx);
+                    }
+                });
+            })
+            .detach();
+        }
+    }
 }
 
 pub(crate) fn install_and_relaunch(cx: &mut App) {
@@ -896,6 +975,30 @@ mod tests {
             signature: "c2ln".to_string(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn restart_requests_share_one_wait_and_one_dialog() {
+        let mut state = RestartPromptState::default();
+        assert_eq!(state.request(true), RestartStep::Wait(1));
+        assert_eq!(state.request(true), RestartStep::Ignore);
+        assert_eq!(state.request(true), RestartStep::Ignore);
+
+        assert_eq!(state.request(false), RestartStep::Show);
+        assert_eq!(state.request(false), RestartStep::Ignore);
+        assert_eq!(state.request(true), RestartStep::Ignore);
+        state.dialog_closed();
+
+        // The first wait's timer fires after its prompt was already shown.
+        assert!(!state.wait_elapsed(1));
+        assert_eq!(state.prompt, RestartPrompt::None);
+
+        assert_eq!(state.request(true), RestartStep::Wait(2));
+        assert!(!state.wait_elapsed(1));
+        assert_eq!(state.prompt, RestartPrompt::Waiting(2));
+        assert!(state.wait_elapsed(2));
+        assert_eq!(state.prompt, RestartPrompt::None);
+        assert!(!state.wait_elapsed(2));
     }
 
     #[test]
