@@ -48,6 +48,10 @@ func fixture(_ name: String) throws -> Data {
         #expect(try cap(#","linkAccess":"anyone""#).linkAccess == .anyone)
         #expect(try cap(#","linkAccess":"something-new""#).linkAccess == nil)
         #expect(try cap(#","linkAccess":null"#).linkAccess == nil)
+        #expect(try cap("").linkRestricted == nil)
+        #expect(try cap(#","linkRestricted":true"#).linkRestricted == true)
+        #expect(try cap(#","linkRestricted":false,"linkAccess":"anyone""#).linkRestricted == false)
+        #expect(try cap(#","linkRestricted":"yes""#).linkRestricted == nil)
         let page = try CapJSON.decoder().decode(CapsPage.self, from: fixture("caps"))
         #expect(page.caps.allSatisfy { $0.linkAccess == nil })
     }

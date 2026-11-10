@@ -274,6 +274,7 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
     public var upload: UploadProgress?
     public let ownedByCurrentUser: Bool?
     public var linkAccess: LinkAccess?
+    public var linkRestricted: Bool?
 
     public init(
         id: String,
@@ -294,7 +295,8 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         reactionCount: Int,
         upload: UploadProgress?,
         ownedByCurrentUser: Bool?,
-        linkAccess: LinkAccess? = nil
+        linkAccess: LinkAccess? = nil,
+        linkRestricted: Bool? = nil
     ) {
         self.id = id
         self.shareUrl = shareUrl
@@ -315,6 +317,7 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         self.upload = upload
         self.ownedByCurrentUser = ownedByCurrentUser
         self.linkAccess = linkAccess
+        self.linkRestricted = linkRestricted
     }
 
     enum CodingKeys: String, CodingKey {
@@ -322,7 +325,7 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         case thumbnailUrl, thumbnailCacheKey, folderId
         case isPublic = "public"
         case isProtected = "protected"
-        case viewCount, commentCount, reactionCount, upload, ownedByCurrentUser, linkAccess
+        case viewCount, commentCount, reactionCount, upload, ownedByCurrentUser, linkAccess, linkRestricted
     }
 
     public init(from decoder: any Decoder) throws {
@@ -346,6 +349,7 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         upload = try? container.decodeIfPresent(UploadProgress.self, forKey: .upload)
         ownedByCurrentUser = try container.decodeIfPresent(Bool.self, forKey: .ownedByCurrentUser)
         linkAccess = try? container.decodeIfPresent(LinkAccess.self, forKey: .linkAccess)
+        linkRestricted = try? container.decodeIfPresent(Bool.self, forKey: .linkRestricted)
     }
 
     public func isOwned(by userId: String?) -> Bool {

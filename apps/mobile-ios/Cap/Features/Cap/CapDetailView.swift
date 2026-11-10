@@ -346,6 +346,7 @@ struct CapDetailView: View {
                     Button(cap.isPublic ? "Make private" : "Make public", systemImage: cap.isPublic ? "lock" : "globe") {
                         Task { await model.setPublic(!cap.isPublic) }
                     }
+                    .disabled(model.updatingSharing)
                     if cap.isPublic, let linkAccess = cap.linkAccess {
                         Button(
                             linkAccess == .anyone ? "Limit to your organization" : "Open to anyone with the link",
@@ -353,6 +354,7 @@ struct CapDetailView: View {
                         ) {
                             Task { await model.setLinkAccess(linkAccess == .anyone ? .restricted : .anyone) }
                         }
+                        .disabled(model.updatingSharing)
                     }
                     Button("Rename", systemImage: "pencil") {
                         renameText = cap.title

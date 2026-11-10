@@ -19,7 +19,7 @@ enum CapActions {
         do {
             let updated = try await session.api.updateSharing(id, isPublic: isPublic)
             session.capChanged(updated)
-            let restricted = isPublic && updated.linkAccess == .restricted
+            let restricted = updated.isPublic && updated.linkRestricted == true
             session.toasts.show(
                 restricted ? "Only your organization's emails can view" : isPublic ? "Anyone with the link can view" : "Only you and your team can view",
                 systemImage: isPublic ? "globe" : "lock.fill"
@@ -41,10 +41,12 @@ enum CapActions {
         do {
             let updated = try await session.api.updateSharing(id, isPublic: true, linkAccess: linkAccess)
             session.capChanged(updated)
-            session.toasts.show(
-                updated.linkAccess == .anyone ? "Anyone with the link can view" : "Only your organization's emails can view",
-                systemImage: updated.linkAccess == .anyone ? "globe" : "person.2"
-            )
+            if updated.isPublic {
+                session.toasts.show(
+                    updated.linkRestricted == true ? "Only your organization's emails can view" : "Anyone with the link can view",
+                    systemImage: updated.linkRestricted == true ? "person.2" : "globe"
+                )
+            }
             return updated
         } catch {
             session.capChanged(cap)

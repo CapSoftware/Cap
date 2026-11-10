@@ -701,20 +701,23 @@ final class CapDetailModel {
         }
     }
 
+    private(set) var updatingSharing = false
+
     func setPublic(_ isPublic: Bool) async {
-        guard let session, case var .loaded(detail) = content else { return }
-        if let updated = await CapActions.setPublic(detail.cap, isPublic: isPublic, session: session) {
-            detail.cap = updated
-            content = .loaded(detail)
-        }
+        await updateSharing { cap, session in await CapActions.setPublic(cap, isPublic: isPublic, session: session) }
     }
 
     func setLinkAccess(_ linkAccess: LinkAccess) async {
-        guard let session, case var .loaded(detail) = content else { return }
-        if let updated = await CapActions.setLinkAccess(detail.cap, linkAccess: linkAccess, session: session) {
-            detail.cap = updated
-            content = .loaded(detail)
-        }
+        await updateSharing { cap, session in await CapActions.setLinkAccess(cap, linkAccess: linkAccess, session: session) }
+    }
+
+    private func updateSharing(_ change: (CapSummary, SessionModel) async -> CapSummary?) async {
+        guard !updatingSharing, let session, case let .loaded(detail) = content else { return }
+        updatingSharing = true
+        defer { updatingSharing = false }
+        guard let updated = await change(detail.cap, session), case var .loaded(current) = content else { return }
+        current.cap = updated
+        content = .loaded(current)
     }
 
     func report(_ reason: ContentReportReason) async -> Bool {

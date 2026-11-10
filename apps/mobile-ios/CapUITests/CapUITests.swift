@@ -271,6 +271,11 @@ final class CapUITests: XCTestCase {
         XCTAssertFalse(open.exists)
         XCTAssertFalse(limit.exists)
         shot("92-link-private-menu")
+        app.buttons["Make public"].firstMatch.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(open)
+        XCTAssertFalse(limit.exists)
     }
 
     func testScopeBar() {
