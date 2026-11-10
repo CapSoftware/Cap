@@ -229,9 +229,9 @@ fn mode_picker_icon(mode: Mode) -> Option<Vec<u8>> {
 #[cfg(target_os = "macos")]
 fn row_symbol(item: &TrayItem) -> Option<&'static str> {
     let window_symbol = if objc2::available!(macos = 26.0) {
-        "interface.window"
+        NEW_WINDOW_SYMBOL
     } else {
-        "macwindow"
+        WINDOW_SYMBOL
     };
     match item {
         TrayItem::RecordDisplay | TrayItem::ScreenshotDisplay => Some("display"),
@@ -242,6 +242,19 @@ fn row_symbol(item: &TrayItem) -> Option<&'static str> {
         TrayItem::OpenSettings => Some("gear"),
         _ => None,
     }
+}
+
+#[cfg(target_os = "macos")]
+const WINDOW_SYMBOL: &str = "macwindow";
+
+// macOS 26 does not know this name (checked on 26.7.2) although 27 does, so a
+// row that asks for it falls back to `WINDOW_SYMBOL`.
+#[cfg(target_os = "macos")]
+const NEW_WINDOW_SYMBOL: &str = "interface.window";
+
+#[cfg(target_os = "macos")]
+fn fallback_symbol(symbol: &str) -> Option<&'static str> {
+    (symbol == NEW_WINDOW_SYMBOL).then_some(WINDOW_SYMBOL)
 }
 
 /// The Previous submenu's header glyph, macOS side.
@@ -978,8 +991,8 @@ mod mac {
     };
     use super::{
         Accelerator, Entry, PREVIOUS_SYMBOL, PreviousItem, STOP_ICON, TrayItem,
-        current_menu_entries, handle_item, mode_icon, mode_submenu, row_symbol, scan_previous,
-        stop_recording,
+        current_menu_entries, fallback_symbol, handle_item, mode_icon, mode_submenu, row_symbol,
+        scan_previous, stop_recording,
     };
     use crate::main_window::{Mode, TargetType};
 
@@ -1277,6 +1290,10 @@ mod mac {
         NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
     }
 
+    pub(super) fn row_image(symbol: &str) -> Option<Retained<NSImage>> {
+        symbol_image(symbol).or_else(|| symbol_image(fallback_symbol(symbol)?))
+    }
+
     /// Rebuild the menu from the current mode and Previous cache, and attach it
     /// (unless a recording is running, in which case the *button* owns the
     /// click -- see [`set_recording`]). While the menu is open the rows are
@@ -1470,7 +1487,7 @@ mod mac {
         let Some(symbol) = row_symbol(tray_item) else {
             return;
         };
-        let Some(image) = symbol_image(symbol) else {
+        let Some(image) = row_image(symbol) else {
             tracing::warn!(symbol, "SF Symbol not resolved");
             return;
         };
@@ -1593,7 +1610,7 @@ mod mac {
                     }
                     image
                 } else if let Some(symbol) = item.as_ref().and_then(row_symbol) {
-                    let image = symbol_image(symbol);
+                    let image = row_image(symbol);
                     if image.is_none() {
                         tracing::warn!(%title, symbol, "SF Symbol not resolved");
                     }
@@ -2450,5 +2467,35 @@ mod tests {
         assert_eq!(mac::key_equivalent(Code::KeyS).as_deref(), Some("s"));
         assert_eq!(mac::key_equivalent(Code::F1).as_deref(), Some("\u{f704}"));
         assert_eq!(mac::key_equivalent(Code::MetaLeft), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_action_row_has_an_image_on_this_macos() {
+        for item in [
+            TrayItem::RecordDisplay,
+            TrayItem::RecordWindow,
+            TrayItem::RecordArea,
+            TrayItem::ScreenshotDisplay,
+            TrayItem::ScreenshotWindow,
+            TrayItem::ScreenshotArea,
+            TrayItem::TakeScreenshot,
+            TrayItem::ImportMedia,
+            TrayItem::OpenSettings,
+        ] {
+            let symbol = row_symbol(&item).unwrap();
+            assert!(mac::row_image(symbol).is_some(), "{symbol} has no image");
+        }
+        assert!(mac::symbol_image(PREVIOUS_SYMBOL).is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_row_symbol_this_macos_lacks_draws_its_fallback() {
+        assert!(mac::symbol_image("cap.no.such.symbol").is_none());
+        assert!(mac::row_image("cap.no.such.symbol").is_none());
+        assert_eq!(fallback_symbol(NEW_WINDOW_SYMBOL), Some(WINDOW_SYMBOL));
+        assert_eq!(fallback_symbol(WINDOW_SYMBOL), None);
+        assert!(mac::symbol_image(WINDOW_SYMBOL).is_some());
     }
 }
