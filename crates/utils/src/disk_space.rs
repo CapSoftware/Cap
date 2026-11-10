@@ -198,7 +198,7 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
 
-    let probe_path = resolve_existing_ancestor(path);
+    let probe_path = extended_length_path(resolve_existing_ancestor(path));
     let mut wide: Vec<u16> = probe_path.as_os_str().encode_wide().collect();
     if wide.last().copied() != Some(0) {
         wide.push(0);
@@ -219,6 +219,44 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
     }
 
     Ok(free_bytes_available_to_caller)
+}
+
+// GetDiskFreeSpaceExW takes the string as written and fails with
+// ERROR_PATH_NOT_FOUND once it reaches 260 UTF-16 units (259 when it ends in
+// a separator), where std::fs has already switched to the extended-length
+// form by itself. A recordings folder that long could not start a recording
+// and a project folder that long failed the stop. The switch happens at the
+// length std uses, and shorter paths are passed through as written.
+#[cfg(windows)]
+fn extended_length_path(path: PathBuf) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Component, Prefix};
+
+    const LEGACY_MAX_PATH: usize = 248;
+
+    let Ok(absolute) = std::path::absolute(&path) else {
+        return path;
+    };
+    let units: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+    if units.len() + 1 < LEGACY_MAX_PATH {
+        return path;
+    }
+    let (prefix, rest) = match absolute.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(_) => (r"\\?\", &units[..]),
+            Prefix::UNC(..) => (r"\\?\UNC\", &units[2..]),
+            _ => return path,
+        },
+        _ => return path,
+    };
+    let end = rest
+        .iter()
+        .rposition(|unit| *unit != u16::from(b'\\'))
+        .map_or(0, |last| last + 1);
+    let mut extended = OsString::from(prefix);
+    extended.push(OsString::from_wide(&rest[..end]));
+    PathBuf::from(extended)
 }
 
 fn resolve_existing_ancestor(path: &Path) -> std::path::PathBuf {
@@ -480,6 +518,67 @@ mod tests {
         let mut share = PathBuf::from(format!(r"\\localhost\{}$\", letter as char));
         share.extend(components.filter(|component| !matches!(component, Component::RootDir)));
         share.is_dir().then_some(share)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paths_below_the_legacy_limit_reach_the_query_as_written() {
+        let longest_unchanged = format!(r"C:\{}", "p".repeat(243));
+        for path in [
+            r"C:\",
+            r"C:\Users\someone\Videos\Cap",
+            r"C:/Users/someone/Videos/Cap",
+            r"C:\Users\someone\Videos\Cap\",
+            r"E:\",
+            r"E:\DCIM\clip",
+            r"\\server\share\",
+            r"\\server\share\recordings",
+            r"\\?\C:\Users\someone",
+            longest_unchanged.as_str(),
+        ] {
+            assert_eq!(
+                extended_length_path(PathBuf::from(path)).as_os_str(),
+                std::ffi::OsStr::new(path)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paths_at_the_legacy_limit_use_the_extended_length_form() {
+        let name = "p".repeat(244);
+        for (path, expected) in [
+            (format!(r"C:\{name}"), format!(r"\\?\C:\{name}")),
+            (format!(r"C:\{name}\"), format!(r"\\?\C:\{name}")),
+            (format!(r"C:/a/../{name}/b"), format!(r"\\?\C:\{name}\b")),
+            (
+                format!(r"\\server\share\{name}"),
+                format!(r"\\?\UNC\server\share\{name}"),
+            ),
+            (format!(r"\\?\C:\{name}"), format!(r"\\?\C:\{name}")),
+            (
+                format!(r"\\?\UNC\server\share\{name}"),
+                format!(r"\\?\UNC\server\share\{name}"),
+            ),
+        ] {
+            assert_eq!(
+                extended_length_path(PathBuf::from(&path)).as_os_str(),
+                std::ffi::OsStr::new(&expected),
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_a_long_directory_written_with_a_trailing_separator() {
+        let root = tempfile::tempdir().unwrap();
+        let failed = failing_lengths(root.path(), [246, 247, 258, 259, 260, 272], |directory| {
+            let mut written = directory.into_os_string();
+            written.push("\\");
+            PathBuf::from(written)
+        });
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 
     #[cfg(windows)]
