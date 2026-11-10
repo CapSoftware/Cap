@@ -15,11 +15,17 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
+import { renameTranscriptSpeaker } from "@/actions/videos/rename-transcript-speaker";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
 } from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import {
+	escapeVttText,
+	parseTranscriptSpeakerNames,
+	transcriptSpeakerLabel,
+} from "@/lib/transcript-speakers";
 import { formatTranscriptAsParagraphs } from "@/lib/transcript-text";
 import { normalizeTranscriptCueText } from "@/lib/transcript-vtt";
 import type { VideoData } from "../../types";
@@ -28,6 +34,7 @@ import type { TranscriptEntry } from "../utils/parse-transcript-vtt";
 import { parseTranscriptVTT } from "../utils/parse-transcript-vtt";
 import { formatTime } from "../utils/transcript-utils";
 import { TranscriptEditor, TranscriptRow } from "./transcript-row";
+import { TranscriptSpeakerEditor } from "./transcript-speaker-editor";
 
 interface TranscriptProps {
 	data: VideoData;
@@ -47,6 +54,30 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const queryClient = useQueryClient();
 	const captionContext = useCaptionContext();
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
+	const [speakerNames, setSpeakerNames] = useState(() =>
+		parseTranscriptSpeakerNames(data.metadata?.transcriptSpeakerNames),
+	);
+	useEffect(() => {
+		setSpeakerNames(
+			parseTranscriptSpeakerNames(data.metadata?.transcriptSpeakerNames),
+		);
+	}, [data]);
+	const hasSpeakers = transcriptData.some((entry) => entry.speaker);
+	const speakers = [
+		...new Set(
+			transcriptData.flatMap((entry) => (entry.speaker ? [entry.speaker] : [])),
+		),
+	];
+	const saveSpeakerName = async (speaker: string, name: string) => {
+		try {
+			const result = await renameTranscriptSpeaker(data.id, speaker, name);
+			if (!result.success || !result.names) return result.message;
+			setSpeakerNames(result.names);
+			return null;
+		} catch {
+			return "Failed to save speaker name";
+		}
+	};
 	const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
 	const [retryTriggered, setRetryTriggered] = useState(false);
 	const [editingEntry, setEditingEntry] = useState<number | null>(null);
@@ -316,7 +347,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const formatTranscriptForClipboard = (entries: TranscriptEntry[]): string => {
 		return entries
-			.map((entry) => `[${entry.timestamp}] ${entry.text}`)
+			.map(
+				(entry) =>
+					`[${entry.timestamp}] ${hasSpeakers ? `${transcriptSpeakerLabel(entry.speaker, speakerNames)}: ` : ""}${entry.text}`,
+			)
 			.join("\n\n");
 	};
 
@@ -326,7 +360,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		const vttEntries = entries.map((entry) => {
 			return `${entry.id}\n${formatTime(entry.startTime)} --> ${formatTime(
 				entry.endTime,
-			)}\n${entry.text}\n`;
+			)}\n${entry.speaker ? `<v ${escapeVttText(transcriptSpeakerLabel(entry.speaker, speakerNames) ?? "Unknown speaker")}>${escapeVttText(entry.text)}</v>` : entry.text}\n`;
 		});
 
 		return vttHeader + vttEntries.join("\n");
@@ -351,7 +385,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const copyFormattedTranscript = () => {
 		if (transcriptData.length === 0) return;
-		void copyTranscriptText(formatTranscriptAsParagraphs(transcriptData));
+		void copyTranscriptText(
+			hasSpeakers
+				? formatTranscriptForClipboard(transcriptData)
+				: formatTranscriptAsParagraphs(transcriptData),
+		);
 	};
 
 	const copyTimestampedTranscript = () => {
@@ -395,7 +433,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	const downloadFormattedTranscript = () => {
 		if (transcriptData.length === 0) return;
-		const content = formatTranscriptAsParagraphs(transcriptData);
+		const content = hasSpeakers
+			? formatTranscriptForClipboard(transcriptData)
+			: formatTranscriptAsParagraphs(transcriptData);
 		if (!content) return;
 		triggerTranscriptDownload("txt", `${content}\n`, "text/plain");
 	};
@@ -763,6 +803,23 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			</div>
 
 			<div className="overflow-y-auto flex-1 relative">
+				{canEdit && speakers.length > 0 && (
+					<details className="px-4 py-2">
+						<summary className="text-xs">Speaker names</summary>
+						<p className="text-xs text-gray-9">
+							Names apply only to this recording. Meeting participant names are
+							not detected automatically.
+						</p>
+						{speakers.map((speaker) => (
+							<TranscriptSpeakerEditor
+								key={`${data.id}-${speaker}`}
+								speaker={speaker}
+								name={speakerNames[speaker] ?? ""}
+								onSave={saveSpeakerName}
+							/>
+						))}
+					</details>
+				)}
 				{isTranslating && (
 					<div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-1/80 backdrop-blur-[2px]">
 						<div className="text-center">
@@ -792,6 +849,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								key={entry.id}
 								entry={entry}
 								selected={selectedEntry === entry.id}
+								speakerLabel={
+									hasSpeakers
+										? transcriptSpeakerLabel(entry.speaker, speakerNames)
+										: undefined
+								}
 								canEdit={canEdit}
 								isSaving={isSaving}
 								onSelect={handleTranscriptClick}

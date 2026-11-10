@@ -9,6 +9,7 @@ export const TranscriptRow = memo(function TranscriptRow({
 	isSaving,
 	onSelect,
 	onEdit,
+	speakerLabel,
 }: {
 	entry: TranscriptEntry;
 	selected: boolean;
@@ -16,6 +17,7 @@ export const TranscriptRow = memo(function TranscriptRow({
 	isSaving: boolean;
 	onSelect: (entry: TranscriptEntry) => void;
 	onEdit: (entry: TranscriptEntry) => void;
+	speakerLabel?: string;
 }) {
 	return (
 		<div
@@ -32,6 +34,9 @@ export const TranscriptRow = memo(function TranscriptRow({
 					{entry.timestamp}
 				</span>
 				<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
+					{speakerLabel && (
+						<span className="block text-xs font-medium">{speakerLabel}</span>
+					)}
 					{entry.text}
 				</span>
 			</button>

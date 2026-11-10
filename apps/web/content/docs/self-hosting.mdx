@@ -166,6 +166,35 @@ OPENAI_API_KEY=your-key      # AI features
 ANTHROPIC_API_KEY=your-key   # AI features
 ```
 
+Speaker diarization is off by default. To request recording-local speaker
+labels on newly completed recordings, explicitly set the server-only variable
+`ASSEMBLY_SPEAKER_LABELS=true`. This enables AssemblyAI's paid speaker
+diarization; check your provider pricing before enabling it. It applies to
+completed recordings across the instance, not individual users, and does not
+identify real people or meeting participants. Existing transcripts are not
+automatically regenerated. Leave it unset or set it to `false` to keep the
+existing transcription behavior and cost profile.
+
+Live transcription chunks remain unlabeled because provider speaker IDs are
+local to each request. With diarization enabled, completed live recordings
+require a separate full-recording transcription pass instead of promoting the
+live transcript; this also increases billed transcription audio. Editable
+transcript backfills do not request diarization.
+
+On a completed recording's share page, transcript rows show recording-local
+speaker labels and retain their original seek timestamps. Only the recording
+owner can rename speakers under **Speaker names**. Leave a name blank and save
+to reset its label. Names are stored in the recording's existing metadata and
+are visible to anyone authorized to view that recording; they are not private
+notes. Text/clipboard exports include labels, and VTT downloads include voice
+annotations. Renaming does not change the stored transcript text or timings.
+Legacy unlabeled transcripts remain usable, with unknown turns identified only
+when mixed with labeled turns.
+
+Speaker labels are not verified identities. Automatic Zoom, Meet, and Teams
+participant-name resolution is not implemented. No cross-recording voiceprints
+or participant-directory integration is used.
+
 When `AI_PROVIDER` is not set, AI providers are auto-detected from whichever
 keys are present. Generation features (titles, summaries, chapters,
 translation) prefer Groq → OpenAI → Anthropic; chat features (the support
