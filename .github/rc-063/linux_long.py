@@ -18,7 +18,7 @@ import rclib
 from rclib import App, Results, log
 
 package, out, phase = sys.argv[1], os.path.abspath(sys.argv[2]), sys.argv[3]
-seconds = int(sys.argv[4]) if len(sys.argv) > 4 else (30 if phase == "short" else 2100)
+seconds = int(sys.argv[4]) if len(sys.argv) > 4 else (30 if phase == "short" else 3200)
 results = Results(out, f"Item 4: recording past 1000 fragments in the editor (#3974), {phase}")
 TITLE = "rc063 counter"
 COUNTER = re.compile(r"(?<!\d)(\d{4})[.,](\d)(?!\d)")
@@ -44,16 +44,32 @@ def start_counter():
     return process, started
 
 
+PREVIEW = (10, 120, 845, 500)
+
+
 def read_counter(path):
-    """The counter values OCR finds in a screenshot, largest text first."""
-    values = []
-    for invert in (False, True):
-        for word in rclib.ocr(path, scale=2, invert=invert):
-            match = COUNTER.search(word["text"])
-            if match:
-                values.append((word["h"], float(f"{match.group(1)}.{match.group(2)}"), word["x"], word["y"]))
-    values.sort(reverse=True)
-    return values
+    """The counter shown in the editor's preview, read at three sizes; a value
+    counts only when two of the three readings agree."""
+    from PIL import Image, ImageOps
+
+    preview = Image.open(path).convert("L").crop(PREVIEW)
+    seen = {}
+    for scale in (0.5, 0.33, 0.25):
+        sized = preview.resize((int(preview.width * scale), int(preview.height * scale)), Image.LANCZOS)
+        sized = ImageOps.expand(sized, border=20, fill=255)
+        scaled = f"{path}.{scale}.ocr.png"
+        sized.save(scaled)
+        done = subprocess.run(
+            ["tesseract", scaled, "stdout", "--psm", "7", "-c", "tessedit_char_whitelist=0123456789."],
+            capture_output=True,
+        )
+        os.remove(scaled)
+        match = COUNTER.search(done.stdout.decode("utf-8", "replace").replace(" ", ""))
+        if match:
+            value = float(f"{match.group(1)}.{match.group(2)}")
+            seen[value] = seen.get(value, 0) + 1
+    agreed = [value for value, count in seen.items() if count >= 2]
+    return agreed[0] if agreed else None
 
 
 def segment_listing(project):
@@ -95,6 +111,7 @@ def record():
     rclib.screenshot(os.path.join(out, "record-start.png"))
     crash_copy = os.path.join(out, "crash-state.cap")
     copied = False
+    copied_at = 0
     deadline = recording_started + seconds + 600
     last_report = 0
     while time.time() < deadline:
@@ -106,6 +123,7 @@ def record():
             if projects:
                 shutil.copytree(projects[0], crash_copy, dirs_exist_ok=True)
                 copied = True
+                copied_at = elapsed
                 with open(os.path.join(out, "crash-state.fragments.txt"), "w") as handle:
                     handle.write("\n".join(segment_listing(crash_copy)) + "\n")
                 log("copied the recording as it is on disk while still recording")
@@ -131,6 +149,7 @@ def record():
         with open(os.path.join(out, "recording-meta.json"), "w") as handle:
             json.dump(meta, handle, indent=1)
         results.note("meta status after stop", rclib.meta_status(meta))
+    most = 0
     if copied:
         listing = segment_listing(crash_copy)
         most = max((int(re.search(r": (\d+) fragments", line).group(1)) for line in listing), default=0)
@@ -142,7 +161,14 @@ def record():
     interesting = rclib.grep(text, r"segmented|preparing|remux|finaliz|editor opened|open_editor|panicked")
     with open(os.path.join(out, "record.interesting.log"), "w") as handle:
         handle.write("\n".join(interesting) + "\n")
-    state = {"project": project, "offset": offset, "seconds": seconds, "crash_copy": crash_copy if copied else None}
+    state = {
+        "project": project,
+        "offset": offset,
+        "seconds": seconds,
+        "crash_copy": crash_copy if copied else None,
+        "fragments": most,
+        "copied_at": copied_at,
+    }
     with open(state_path, "w") as handle:
         json.dump(state, handle)
     results.note("recording offset", f"the counter read {offset:.1f}s when the recording started")
@@ -201,9 +227,9 @@ def open_in_editor(name, project, offset, seek_to, second_seek, expect_recovery=
     for taken, path in shots:
         if taken < seek_at + 1:
             continue
-        values = read_counter(path)
-        readings.append((taken, values[0][1] if values else None, path))
-        log(f"{os.path.basename(path)} t={taken - seek_at:+.1f}s counter={values[:3]}")
+        value = read_counter(path)
+        readings.append((taken, value, path))
+        log(f"{os.path.basename(path)} t={taken - seek_at:+.1f}s counter={value}")
     with open(os.path.join(out, f"{name}.readings.txt"), "w") as handle:
         for taken, value, path in readings:
             handle.write(f"{taken - seek_at:+7.1f}s {value} {os.path.basename(path)}\n")
@@ -232,8 +258,23 @@ def open_in_editor(name, project, offset, seek_to, second_seek, expect_recovery=
         bool(after_second) and abs(after_second[-1] - expected) <= 4,
         f"counter on screen {after_second[-3:]}, expected about {expected:.1f}",
     )
-    segmented = rclib.grep(text, r"segmented")
-    results.note(f"{name}: decoder inputs", " / ".join(line[-180:] for line in segmented[:4]) or "no decoder line")
+    recovered = rclib.grep(text, r"recovering an interrupted recording|Concatenating \d+ M4S")
+    results.note(f"{name}: recovery before editing", " / ".join(line[-160:] for line in recovered[:2]) or "none")
+    meta = rclib.read_meta(project)
+    display = meta["segments"][0]["display"]["path"]
+    kind = "directory of fragments" if os.path.isdir(os.path.join(project, display)) else "file"
+    results.note(f"{name}: display track the editor opened", f"{display} ({kind}); status {rclib.meta_status(meta)}")
+    return bool(recovered), kind
+
+
+def copy_of_interrupted(state, name):
+    directory = os.path.join(out, f"{name}-rec")
+    target = os.path.join(directory, os.path.basename(state["project"]))
+    if os.path.exists(target):
+        shutil.rmtree(target)
+    os.makedirs(directory, exist_ok=True)
+    shutil.copytree(state["crash_copy"], target)
+    return target
 
 
 if phase in ("short", "long"):
@@ -243,18 +284,46 @@ else:
         state = json.load(handle)
 
 if state and state["project"]:
-    if phase == "long":
-        first, second = 2040, min(seconds - 25, 2075)
+    recorded = state["seconds"]
+    fragments = state.get("fragments") or 0
+    per_fragment = state["copied_at"] / fragments if fragments else 3.0
+    if fragments > 1030:
+        # Fragment 1001 is the first one a name sort misplaces; land inside
+        # fragments 1010 and 1025, and also right after the 33 minute mark.
+        past_1000, later = int(1010 * per_fragment), int(1025 * per_fragment)
     else:
-        first, second = max(seconds // 2 - 5, 2), max(seconds - 12, 3)
-    open_in_editor("finalized", state["project"], state["offset"], first, second)
+        span = state["copied_at"] or recorded
+        past_1000, later = max(int(span * 0.3), 2), max(int(span * 0.6), 3)
+    results.note(
+        "fragments",
+        f"{fragments} on disk {state['copied_at']:.0f}s into the recording, {per_fragment:.2f}s each; "
+        f"seeking to {past_1000}s (fragment {past_1000 / per_fragment + 1:.0f}) and {later}s (fragment {later / per_fragment + 1:.0f})",
+    )
+    if phase != "short" and recorded > 2100:
+        open_in_editor("finalized-33min", state["project"], state["offset"], 2040, 2100)
+    open_in_editor("finalized", state["project"], state["offset"], past_1000, later)
     if state.get("crash_copy"):
-        crash_dir = os.path.join(out, "crash-rec")
-        os.makedirs(crash_dir, exist_ok=True)
-        target = os.path.join(crash_dir, os.path.basename(state["project"]))
-        if not os.path.exists(target):
-            shutil.copytree(state["crash_copy"], target)
-        crash_second = min(second, state["seconds"] - 45) if phase == "long" else max(seconds - 28, 2)
-        open_in_editor("interrupted", target, state["offset"], min(first, crash_second), crash_second)
+        # The recording as it was on disk while still recording, which is what
+        # a crash or a power cut leaves: the editor recovers it first.
+        open_in_editor("interrupted", copy_of_interrupted(state, "interrupted"), state["offset"], past_1000, later)
+        # The same fragments with the metadata marked Complete by this
+        # harness, so the editor reads the fragment directory itself instead
+        # of a remuxed file. That is the state GitHub #3961 describes and the
+        # only one in which the editor lists the fragments by name.
+        target = copy_of_interrupted(state, "fragments")
+        meta_path = os.path.join(target, "recording-meta.json")
+        with open(meta_path) as handle:
+            meta = json.load(handle)
+        results.note("fragments: status as recorded", rclib.meta_status(meta))
+        meta["status"] = {"status": "Complete"}
+        with open(meta_path, "w") as handle:
+            json.dump(meta, handle)
+        outcome = open_in_editor("fragments", target, state["offset"], past_1000, later)
+        if outcome:
+            results.add(
+                "fragments: the editor read the fragment directory, with no remux first",
+                not outcome[0] and outcome[1] == "directory of fragments",
+                f"recovery ran: {outcome[0]}, display track is a {outcome[1]}",
+            )
 
 sys.exit(results.finish())

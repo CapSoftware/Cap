@@ -119,7 +119,7 @@ jobs:
           PYTHONPATH: .github/rc-063
         run: bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-short" short 30
 
-      - name: Restore the 35 minute recording
+      - name: Restore the long recording
         id: long
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') }}
         uses: actions/cache/restore@v4
@@ -127,7 +127,7 @@ jobs:
           path: ${{ runner.temp }}/rc-out/item4-long
           key: rc063-item4-long-${{ env.MAIN_REVISION }}-v1
 
-      - name: Item 4, a 35 minute recording past 1000 fragments (#3974)
+      - name: Item 4, a 53 minute recording past 1000 fragments (#3974)
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') }}
         env:
           PYTHONPATH: .github/rc-063
@@ -135,9 +135,9 @@ jobs:
         run: |
           phase=long
           if [[ "$HAVE_RECORDING" == true && -s "$RUNNER_TEMP/rc-out/item4-long/state.json" ]]; then phase=open; fi
-          bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-long" "$phase" 2100
+          bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-long" "$phase" 3200
 
-      - name: Keep the 35 minute recording
+      - name: Keep the long recording
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') && steps.long.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-out/item4-long/state.json', runner.temp)) != '' }}
         uses: actions/cache/save@v4
         with:
@@ -169,7 +169,7 @@ jobs:
         uses: ./.github/rc-063/build
         with:
           target: aarch64-apple-darwin
-          key: rc063-blacksmith-macos-15-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
+          key: rc063-blacksmith-macos-15-main-${{ env.MAIN_REVISION }}-v2
 
       # As in instant-reliability.yml: wake the display, add an audio device
       # for the start cue, and grant Screen Recording to the app and to the

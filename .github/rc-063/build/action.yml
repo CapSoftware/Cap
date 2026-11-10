@@ -82,7 +82,9 @@ runs:
           macOS)
             cp "$out/cap-gpui" rc-pkg/bin/
             mkdir -p rc-pkg/Frameworks
-            cp -a target/Frameworks/. rc-pkg/Frameworks/
+            cp -RL target/Frameworks/. rc-pkg/Frameworks/
+            DYLD_PRINT_LIBRARIES=0 otool -L rc-pkg/bin/cap-gpui | grep -i spacedrive | head -3
+            ls rc-pkg/Frameworks/Spacedrive.framework/Libraries | head -5
             ;;
         esac
         ls -la rc-pkg rc-pkg/bin | head -80

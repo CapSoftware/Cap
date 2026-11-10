@@ -238,18 +238,37 @@ def ocr_text(words):
 
 def find_phrase(words, phrase):
     """Box of the first run of consecutive words spelling `phrase`."""
-    wanted = phrase.lower().split()
-    for index in range(len(words) - len(wanted) + 1):
-        run = words[index : index + len(wanted)]
-        if [re.sub(r"[^\w]", "", word["text"].lower()) for word in run] == [
-            re.sub(r"[^\w]", "", part) for part in wanted
-        ]:
+    def plain(text):
+        return re.sub(r"[^\w]", "", text.lower())
+
+    wanted = [plain(part) for part in phrase.split()]
+    for first in words:
+        if plain(first["text"]) != wanted[0]:
+            continue
+        run = [first]
+        for part in wanted[1:]:
+            last = run[-1]
+            following = [
+                word
+                for word in words
+                if plain(word["text"]) == part
+                and abs(word["y"] - last["y"]) <= max(last["h"], 6)
+                and 0 <= word["x"] - (last["x"] + last["w"]) <= 6 * max(last["h"], 8)
+            ]
+            if not following:
+                break
+            run.append(min(following, key=lambda word: word["x"]))
+        if len(run) == len(wanted):
             left = min(word["x"] for word in run)
             top = min(word["y"] for word in run)
             right = max(word["x"] + word["w"] for word in run)
             bottom = max(word["y"] + word["h"] for word in run)
             return {"x": left, "y": top, "w": right - left, "h": bottom - top}
     return None
+
+
+def center(box):
+    return box["x"] + box["w"] // 2, box["y"] + box["h"] // 2
 
 
 def click(x, y):

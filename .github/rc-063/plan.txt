@@ -1,1 +1,1 @@
-jobs=linux-main,item4-short,mac-main,clippy
+jobs=linux-main,item4-short,item4-long,mac-main
