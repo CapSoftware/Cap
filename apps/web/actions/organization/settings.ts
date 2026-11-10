@@ -12,6 +12,7 @@ import {
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -22,6 +23,7 @@ type OrganizationSettingsInput = {
 	disableReactions?: boolean;
 	disableTranscript?: boolean;
 	disableComments?: boolean;
+	disableDownloads?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
@@ -92,6 +94,13 @@ export async function updateOrganizationSettings(
 		throw new Error("Organization not found");
 	}
 
+	if (
+		settings.disableDownloads !== undefined &&
+		typeof settings.disableDownloads !== "boolean"
+	) {
+		throw new Error("Invalid download setting");
+	}
+
 	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	const sanitizedSettings =
@@ -110,7 +119,7 @@ export async function updateOrganizationSettings(
 
 	await db()
 		.update(organizations)
-		.set({ settings: nextSettings })
+		.set({ settings: organizationSettingsKeepingLinkOverride(nextSettings) })
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");

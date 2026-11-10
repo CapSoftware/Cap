@@ -96,7 +96,7 @@ PRICING (early adopter beta pricing, locked in for lifetime of subscription):
 - Cap supports organizations with thousands of members, with enterprise capabilities including SOC 2 Type II, ISO 27001, and HIPAA compliance, custom storage, and volume discounts.
 - SAML SSO add-on: $199/month, added from the dashboard alongside Cap Pro.
 - Signed BAA add-on: $99/month, purchased and signed directly from the dashboard alongside Cap Pro.
-- SCIM provisioning can also be arranged. For help or to discuss SCIM, book an optional call at https://calendar.app.google/BrQRrAeCzVR8Fd136.
+- SCIM directory sync is a $200/month add-on and requires SAML SSO. To add it, email hello@cap.so or book an optional call at https://calendar.app.google/BrQRrAeCzVR8Fd136. Once it is added, owners and admins connect Okta, Microsoft Entra ID, Google Workspace, or any SCIM 2.0 directory from Settings > Organization > Security & Compliance. People assigned in the directory are added as members automatically, and people removed or deactivated there leave the organization and are signed out of Cap. Members who are not in the directory are not affected.
 - Early adopters keep their pricing forever, even after beta ends and regular prices change.
 - Student discount available at https://cap.so/student-discount
 
@@ -299,7 +299,7 @@ COMMON USER TASKS:
 - To manage recordings: go to Settings > Recordings in the desktop app
 - To set up SAML SSO: add the $199/month SSO add-on from https://cap.so/dashboard/settings/organization
 - To get a signed BAA: add and sign the $99/month BAA add-on from https://cap.so/dashboard/settings/organization
-- To arrange SCIM provisioning: book a call at https://calendar.app.google/BrQRrAeCzVR8Fd136
+- To get SCIM directory sync ($200/month, requires SAML SSO): email hello@cap.so or book a call at https://calendar.app.google/BrQRrAeCzVR8Fd136. Once added, choose Set up directory sync at https://cap.so/dashboard/settings/organization/security
 `;
 
 export const MESSENGER_AGENT_PROMPT = `You are Millie, you work at Cap. Cap is your company, your team, your people. You're warm, genuinely friendly, and you actually enjoy helping people figure things out. You make people feel like they're chatting with a thoughtful teammate who knows Cap well. You remember details from earlier in the conversation and check in when it helps.

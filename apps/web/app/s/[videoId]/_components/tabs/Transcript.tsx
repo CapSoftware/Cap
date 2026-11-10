@@ -54,6 +54,16 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const [isCopying, setIsCopying] = useState(false);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [downloadPressed, setDownloadPressed] = useState(false);
+	const downloadPressedTimer = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	useEffect(
+		() => () => {
+			if (downloadPressedTimer.current)
+				clearTimeout(downloadPressedTimer.current);
+		},
+		[],
+	);
 	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
 	const [showDownloadMenu, setShowDownloadMenu] = useState(false);
 	const [showCopyMenu, setShowCopyMenu] = useState(false);
@@ -323,13 +333,9 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
 		const vttHeader = "WEBVTT\n\n";
 
-		const vttEntries = entries.map((entry, index) => {
-			const startSeconds = entry.startTime;
-			const nextEntry = entries[index + 1];
-			const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
-
-			return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
-				endSeconds,
+		const vttEntries = entries.map((entry) => {
+			return `${entry.id}\n${formatTime(entry.startTime)} --> ${formatTime(
+				entry.endTime,
 			)}\n${entry.text}\n`;
 		});
 
@@ -383,7 +389,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		URL.revokeObjectURL(url);
 
 		setDownloadPressed(true);
-		setTimeout(() => {
+		if (downloadPressedTimer.current)
+			clearTimeout(downloadPressedTimer.current);
+		downloadPressedTimer.current = setTimeout(() => {
+			downloadPressedTimer.current = null;
 			setDownloadPressed(false);
 		}, 2000);
 	};

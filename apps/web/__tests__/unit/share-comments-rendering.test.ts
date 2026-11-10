@@ -6,6 +6,8 @@ import {
 	Profiler,
 	type ProfilerOnRenderCallback,
 	type ReactNode,
+	useOptimistic,
+	useState,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	params: new URLSearchParams(),
 	post: vi.fn(),
 	remove: vi.fn(),
+	showError: vi.fn(),
 }));
 
 vi.mock("@/actions/videos/new-comment", () => ({ newComment: mocks.post }));
@@ -32,6 +35,7 @@ vi.mock("next/navigation", () => ({
 	useSearchParams: () => mocks.params,
 }));
 vi.mock("next/dynamic", () => ({ default: () => () => null }));
+vi.mock("sonner", () => ({ toast: { error: mocks.showError } }));
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_WEB_URL: "http://localhost:3000" },
 }));
@@ -360,6 +364,104 @@ describe("share comments rendering", () => {
 		await render();
 		expect(container.querySelector("#comment-saved")).toBeNull();
 	});
+
+	it.each(["comment", "reply"] as const)(
+		"keeps a failed %s draft for retry and clears it only after saving",
+		async (kind) => {
+			comments = discussion(1);
+			const firstSave = Promise.withResolvers<ReturnType<typeof comment>>();
+			mocks.post.mockReturnValueOnce(firstSave.promise);
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			await render();
+			if (kind === "reply") await reply("root-0");
+			const input = container.querySelector("textarea");
+			if (!input) throw new Error("Missing comment editor");
+			const label = kind === "reply" ? "Reply" : "Comment";
+			await type(input, "Please check the last frame.");
+			await click(button(label));
+			expect(mocks.post).toHaveBeenCalledOnce();
+			expect(input.value).toBe("Please check the last frame.");
+			expect(input.disabled).toBe(true);
+			await act(async () => {
+				input.dispatchEvent(
+					new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+				);
+			});
+			expect(mocks.post).toHaveBeenCalledOnce();
+			await act(async () => {
+				firstSave.reject(new Error("Offline"));
+			});
+			expect(input.isConnected).toBe(true);
+			expect(input.value).toBe("Please check the last frame.");
+			expect(input.disabled).toBe(false);
+			expect(mocks.showError).toHaveBeenCalledWith(
+				"Couldn't post your comment. Please try again.",
+			);
+			expect(success).not.toHaveBeenCalled();
+			const retry = Promise.withResolvers<ReturnType<typeof comment>>();
+			mocks.post.mockReturnValueOnce(retry.promise);
+			await click(button(label));
+			expect(mocks.post).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					content: "Please check the last frame.",
+					parentCommentId: kind === "reply" ? "root-0" : "",
+					timestamp: 42,
+				}),
+			);
+			const saved = comment("saved", kind === "reply" ? "root-0" : "");
+			await act(async () => retry.resolve(saved));
+			expect(success).toHaveBeenCalledExactlyOnceWith(saved);
+			if (kind === "comment") expect(input.value).toBe("");
+			else expect(input.isConnected).toBe(false);
+		},
+	);
+
+	it.each(["success", "failure"])(
+		"keeps the optimistic comment visible until save %s",
+		async (outcome) => {
+			const save = Promise.withResolvers<ReturnType<typeof comment>>();
+			mocks.post.mockReturnValueOnce(save.promise);
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			function LiveComments() {
+				const [saved, setSaved] = useState([comment("root")]);
+				const [pending, addPending] = useOptimistic(
+					saved,
+					(state, entry: CommentType) => [...state, entry],
+				);
+				return createElement(Comments, {
+					videoId: "video" as CommentType["videoId"],
+					optimisticComments: pending,
+					setOptimisticComments: addPending,
+					handleCommentSuccess: (entry) => setSaved((prev) => [...prev, entry]),
+					setComments: setSaved,
+					setShowAuthOverlay: showAuth,
+					commentsDisabled: false,
+				});
+			}
+			await act(async () => root.render(createElement(LiveComments)));
+			const input = container.querySelector("textarea");
+			if (!input) throw new Error("Missing comment editor");
+			await type(input, "Unsent draft");
+			await click(button("Comment"));
+			expect(contents().map((entry) => entry.text)).toContain("Unsent draft");
+			if (outcome === "success") {
+				await act(async () =>
+					save.resolve({ ...comment("saved"), content: "Unsent draft" }),
+				);
+				expect(contents()).toEqual([
+					{ id: "comment-root", text: comment("root").content },
+					{ id: "comment-saved", text: "Unsent draft" },
+				]);
+				expect(input.value).toBe("");
+			} else {
+				await act(async () => save.reject(new Error("Offline")));
+				expect(contents().map((entry) => entry.text)).not.toContain(
+					"Unsent draft",
+				);
+				expect(input.value).toBe("Unsent draft");
+			}
+		},
+	);
 
 	it("keeps failed replies open and handles empty and disabled discussions", async () => {
 		comments = discussion(1);
