@@ -549,29 +549,37 @@ fn follow_words(before: &TranscriptDoc, after: &TranscriptDoc) -> Vec<Option<usi
 /// A cut splits an audio segment that plays across it, and restoring the hole
 /// only moves the second piece away, leaving silence where the first used to
 /// carry on. Rejoins the pieces the restore pulled apart, so the cut that
-/// replaces it splits a whole segment again.
+/// replaces it splits a whole segment again. `false` when it pulled apart
+/// pieces that cannot be rejoined as they were: different audio, or halves
+/// whose fades at the split were edited since.
 fn rejoin_split_audio(
     before: &[cap_project::AudioTrackSegment],
     restored: &mut Vec<cap_project::AudioTrackSegment>,
-) {
+) -> bool {
     if before.len() != restored.len() {
-        return;
+        return false;
     }
     let mut joins: Vec<(usize, usize)> = Vec::new();
     for (first, head) in restored.iter().enumerate() {
-        let tail = restored.iter().enumerate().position(|(second, tail)| {
-            second != first
-                && (before[first].end - before[second].start).abs() < TOUCH_EPSILON
-                && tail.start > head.end + TOUCH_EPSILON
+        for (second, tail) in restored.iter().enumerate() {
+            let pulled_apart = second != first
                 && tail.track == head.track
-                && tail.path == head.path
+                && (before[first].end - before[second].start).abs() < TOUCH_EPSILON
+                && tail.start > head.end + TOUCH_EPSILON;
+            if !pulled_apart {
+                continue;
+            }
+            let one_segment = tail.path == head.path
                 && tail.name == head.name
                 && tail.enabled == head.enabled
                 && tail.volume_db == head.volume_db
+                && head.fade_out == 0.0
+                && tail.fade_in == 0.0
                 && ((tail.trim_start - head.trim_start) - (tail.start - head.start)).abs()
-                    < TOUCH_EPSILON
-        });
-        if let Some(second) = tail {
+                    < TOUCH_EPSILON;
+            if !one_segment {
+                return false;
+            }
             joins.push((first, second));
         }
     }
@@ -585,6 +593,7 @@ fn rejoin_split_audio(
     for second in joined.into_iter().rev() {
         restored.remove(second);
     }
+    true
 }
 
 /// Moves word cuts made on the first pass's timings to where the refined
@@ -669,7 +678,9 @@ fn follow_planned_cuts(
         if restore_hole(&mut next, recording_durations, removed_takes, hole, inside).is_err() {
             continue;
         }
-        rejoin_split_audio(&timeline.audio_segments, &mut next.audio_segments);
+        if !rejoin_split_audio(&timeline.audio_segments, &mut next.audio_segments) {
+            continue;
+        }
         let report = apply_source_cuts(
             &mut next,
             recording_durations,
