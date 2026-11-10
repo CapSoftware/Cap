@@ -2,9 +2,9 @@
 
 import { Button } from "@cap/ui";
 import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCapChromeExtension } from "hooks/useCapChromeExtension";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useRive } from "@/lib/rive";
 import { useTheme } from "../../Contexts";

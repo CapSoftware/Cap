@@ -8,11 +8,11 @@ import {
 	Input,
 } from "@cap/ui";
 import { faTrashCan } from "@fortawesome/free-solid-svg-icons/faTrashCan";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
 import { signOut } from "next-auth/react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../../Contexts";
 

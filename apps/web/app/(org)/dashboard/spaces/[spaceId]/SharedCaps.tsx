@@ -14,9 +14,9 @@ import type {
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,

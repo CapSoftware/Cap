@@ -12,6 +12,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/developer-pricing";
 
 import { CreditTransactionTable } from "../_components/CreditTransactionTable";
 import { StatBox } from "../_components/StatBox";
@@ -90,7 +91,10 @@ export function CreditsClient({
 			<div className="grid gap-3 sm:grid-cols-3">
 				<StatBox label="Balance" value={`$${(balance / 100_000).toFixed(2)}`} />
 				<StatBox label="Recording Rate" value="$0.05/min" />
-				<StatBox label="Storage Rate" value="$0.001/min/mo" />
+				<StatBox
+					label="Storage Rate"
+					value={`$${STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH.toFixed(2)} per 1,000 min/mo`}
+				/>
 			</div>
 
 			<div className="grid gap-3 sm:grid-cols-2">
