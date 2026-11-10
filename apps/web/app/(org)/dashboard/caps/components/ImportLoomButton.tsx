@@ -10,12 +10,12 @@ import {
 	Input,
 } from "@cap/ui";
 import { faFileImport } from "@fortawesome/free-solid-svg-icons/faFileImport";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { importFromLoom } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 
 export const ImportLoomButton = ({

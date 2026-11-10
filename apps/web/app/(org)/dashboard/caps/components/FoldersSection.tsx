@@ -14,9 +14,9 @@ import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import { faGrip } from "@fortawesome/free-solid-svg-icons/faGrip";
 import { faList } from "@fortawesome/free-solid-svg-icons/faList";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useEffect, useMemo, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	DEFAULT_FOLDER_SORT,
 	FOLDER_SORT_OPTIONS,
