@@ -38,10 +38,20 @@ public static class Win {
   }
   public static List<string> ChildTexts(IntPtr hwnd) {
     var found = new List<string>();
-    EnumChildWindows(hwnd, (child, lparam) => { found.Add(Class(child) + ": " + Title(child)); return true; }, IntPtr.Zero);
+    EnumChildWindows(hwnd, (child, lparam) => { found.Add(Class(child) + " #" + GetDlgCtrlID(child) + ": " + Title(child)); return true; }, IntPtr.Zero);
     return found;
   }
   public static void Raise(IntPtr hwnd) { SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0043); }
+  [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr hwnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wparam, string lparam, uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeout")] static extern IntPtr SendMessageTimeoutText(IntPtr hwnd, uint message, IntPtr wparam, StringBuilder lparam, uint flags, uint timeout, out IntPtr result);
+  public static bool SetText(IntPtr hwnd, string text) { IntPtr result; return SendMessageTimeout(hwnd, 0x000C, IntPtr.Zero, text, 0x0002, 10000, out result) != IntPtr.Zero; }
+  public static string GetText(IntPtr hwnd) { var text = new StringBuilder(2048); IntPtr result; SendMessageTimeoutText(hwnd, 0x000D, new IntPtr(2048), text, 0x0002, 10000, out result); return text.ToString(); }
+  public static List<IntPtr> Children(IntPtr hwnd) {
+    var found = new List<IntPtr>();
+    EnumChildWindows(hwnd, (child, lparam) => { found.Add(child); return true; }, IntPtr.Zero);
+    return found;
+  }
 }
 "@
 
@@ -158,40 +168,52 @@ function Dump([IntPtr]$handle, [string]$file) {
   Set-Content -Path (Join-Path $Out $file) -Value $lines
 }
 function Address([IntPtr]$handle) {
-  foreach ($bar in (Element $handle).FindAll($Scope::Descendants, (Cond "type" ([System.Windows.Automation.ControlType]::ToolBar)))) {
-    if ($bar.Current.Name -like "Address:*") { return ($bar.Current.Name -replace "^Address:\s*", "") }
+  foreach ($child in [Win]::Children($handle)) {
+    $text = [Win]::Title($child)
+    if ([Win]::Class($child) -eq "ToolbarWindow32" -and $text -like "Address: *") { return ($text -replace "^Address:\s*", "") }
   }
   return ""
 }
 function Items([IntPtr]$handle) {
   $names = @()
-  $condition = Both (Cond "type" ([System.Windows.Automation.ControlType]::ListItem)) (Cond "class" "UIItem")
-  foreach ($item in (Element $handle).FindAll($Scope::Descendants, $condition)) { $names += $item.Current.Name }
+  try {
+    $condition = Both (Cond "type" ([System.Windows.Automation.ControlType]::ListItem)) (Cond "class" "UIItem")
+    foreach ($item in (Element $handle).FindAll($Scope::Descendants, $condition)) { $names += $item.Current.Name }
+  } catch { Write-Host "items failed: $_" }
   return $names
 }
-function Path-Field([IntPtr]$handle) {
-  foreach ($id in @("1152", "1148")) {
-    $edit = (Element $handle).FindFirst($Scope::Descendants, (Both (Cond "type" ([System.Windows.Automation.ControlType]::Edit)) (Cond "id" $id)))
-    if ($edit) { return $edit }
+function Child([IntPtr]$handle, [string]$class, [int]$id) {
+  foreach ($child in [Win]::Children($handle)) {
+    if ([Win]::Class($child) -eq $class -and [Win]::GetDlgCtrlID($child) -eq $id) { return $child }
   }
-  return $null
+  return [IntPtr]::Zero
+}
+# The folder dialog's "Folder:" field is edit 1152; the file dialog's "File name:"
+# field is the edit inside combo box 1148.
+function Path-Field([IntPtr]$handle) {
+  $edit = Child $handle "Edit" 1152
+  if ($edit -ne [IntPtr]::Zero) { return $edit }
+  $combo = Child $handle "ComboBoxEx32" 1148
+  if ($combo -ne [IntPtr]::Zero) {
+    foreach ($child in [Win]::Children($combo)) { if ([Win]::Class($child) -eq "Edit") { return $child } }
+  }
+  return [IntPtr]::Zero
 }
 function Type-Path([IntPtr]$handle, [string]$path) {
   $edit = Path-Field $handle
-  if (-not $edit) { return $false }
-  try { $edit.SetFocus() } catch {}
-  $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($path)
-  return $true
+  if ($edit -eq [IntPtr]::Zero) { return $false }
+  [Win]::SetText($edit, $path) | Out-Null
+  return ([Win]::GetText($edit) -eq $path)
 }
-function Button([IntPtr]$handle, [string]$id) {
-  return (Element $handle).FindFirst($Scope::Descendants, (Both (Cond "type" ([System.Windows.Automation.ControlType]::Button)) (Cond "id" $id)))
+function Button-Name([IntPtr]$handle, [int]$id) {
+  $button = Child $handle "Button" $id
+  if ($button -eq [IntPtr]::Zero) { return "" }
+  return ([Win]::Title($button) -replace "&", "")
 }
-function Press([IntPtr]$handle, [string]$id) {
-  $button = Button $handle $id
-  if (-not $button) { return "" }
-  $name = $button.Current.Name
-  try { $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { Write-Host "press $id failed: $_" }
-  return $name
+function Press([IntPtr]$handle, [int]$id) {
+  $button = Child $handle "Button" $id
+  [Win]::PostMessage($handle, 0x0111, [IntPtr]$id, $button) | Out-Null
+  return (Button-Name $handle $id)
 }
 
 function Stop-App($process) {
@@ -233,14 +255,12 @@ if ($round) {
   Result "dialog_address" $address
   Result "dialog_rooted_at_recordings" ($address.TrimEnd('\') -ieq $recordings.TrimEnd('\'))
   Result "dialog_items_at_root" ((Items $dialog) -join ";")
-  $accept = Button $dialog "1"
-  Result "dialog_accept_button" $(if ($accept) { $accept.Current.Name } else { "" })
-  $field = Path-Field $dialog
-  Result "dialog_path_field" $(if ($field) { $field.Current.Name } else { "" })
+  Result "dialog_accept_button" (Button-Name $dialog 1)
+  Result "dialog_has_folder_field" ((Child $dialog "Edit" 1152) -ne [IntPtr]::Zero)
   Result "path_typed" (Type-Path $dialog $source)
   Start-Sleep -Seconds 1
   Shot "pick-2-typed"
-  Result "accept_pressed" (Press $dialog "1")
+  Result "accept_pressed" (Press $dialog 1)
   Start-Sleep -Seconds 3
   $still = @(Dialog-Handles $process.Id ([Win]::Title($dialog)))
   Result "dialog_still_open_after_accept" ($still.Count -gt 0)
@@ -256,7 +276,7 @@ if ($round) {
   Start-Sleep -Seconds 5
   Shot "pick-4-end"
   Result "app_alive_after_pick" (-not $process.HasExited)
-  foreach ($open in @(Dialog-Handles $process.Id "")) { Press $open "2" | Out-Null }
+  foreach ($open in @(Dialog-Handles $process.Id "")) { Press $open 2 | Out-Null }
   Stop-App $process
 }
 Result "target_segments" (Segments $target)
@@ -272,7 +292,7 @@ if ($Variant -eq "fix") {
     Start-Sleep -Seconds 2
     Result "reject_path_typed" (Type-Path $dialog $plain)
     Start-Sleep -Seconds 1
-    Press $dialog "1" | Out-Null
+    Press $dialog 1 | Out-Null
     Result "reject_logged" (Wait-Log $process $name "failed to import clip: Select a Cap project folder" 60)
     $error_dialog = $null
     $deadline = (Get-Date).AddSeconds(30)
@@ -307,7 +327,7 @@ if ($Variant -eq "fix") {
   if ($round) {
     $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
     Start-Sleep -Seconds 2
-    Press $dialog "2" | Out-Null
+    Press $dialog 2 | Out-Null
     Result "cancel_logged" (Wait-Log $process $name "existing recording picker returned nothing" 30)
     Start-Sleep -Seconds 2
     Result "cancel_no_dialog_left" (@(Dialog-Handles $process.Id "").Count -eq 0)
