@@ -12,8 +12,10 @@ on:
 permissions:
   contents: read
 
+# Superseded runs are cancelled by hand, so a push that only changes a
+# scenario does not kill a build another job is still doing.
 concurrency:
-  group: rc-063-realapp
+  group: rc-063-realapp-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -101,6 +103,59 @@ jobs:
           target: x86_64-unknown-linux-gnu
           key: rc063-blacksmith-ubuntu-2404-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
 
+      - name: Runtime libraries
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Scenario tools
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb x11-utils xdotool xterm openbox imagemagick tesseract-ocr python3-pil fonts-dejavu-core \
+            dbus pulseaudio pulseaudio-utils mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri >/dev/null
+          LD_LIBRARY_PATH="$PWD/rc-pkg/libs" ldd rc-pkg/bin/cap-gpui | grep 'not found' || true
+
+      - name: Item 4, a short recording through the same steps
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-short,') }}
+        env:
+          PYTHONPATH: .github/rc-063
+        run: bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-short" short 30
+
+      - name: Restore the 35 minute recording
+        id: long
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc-out/item4-long
+          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v1
+
+      - name: Item 4, a 35 minute recording past 1000 fragments (#3974)
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') }}
+        env:
+          PYTHONPATH: .github/rc-063
+          HAVE_RECORDING: ${{ steps.long.outputs.cache-hit }}
+        run: |
+          phase=long
+          if [[ "$HAVE_RECORDING" == true && -s "$RUNNER_TEMP/rc-out/item4-long/state.json" ]]; then phase=open; fi
+          bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-long" "$phase" 2100
+
+      - name: Keep the 35 minute recording
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') && steps.long.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-out/item4-long/state.json', runner.temp)) != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/rc-out/item4-long
+          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v1
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-linux-main
+          path: |
+            ${{ runner.temp }}/rc-out/**/*.log
+            ${{ runner.temp }}/rc-out/**/*.txt
+            ${{ runner.temp }}/rc-out/**/*.json
+            ${{ runner.temp }}/rc-out/**/*.png
+          retention-days: 7
+
   mac-main:
     name: macOS, main (item 2 library card)
     needs: plan
@@ -115,6 +170,29 @@ jobs:
         with:
           target: aarch64-apple-darwin
           key: rc063-blacksmith-macos-15-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
+
+      # As in instant-reliability.yml: wake the display, add an audio device
+      # for the start cue, and grant Screen Recording to the app and to the
+      # runner processes the scenario's screenshots are taken under.
+      - name: Capture permissions, display and audio device
+        run: bash .github/rc-063/mac_permissions.sh "$GITHUB_WORKSPACE/rc-pkg/bin/cap-gpui"
+
+      - name: Item 2, main window library card during a recording (#3969)
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: .github/rc-063
+        run: python3 .github/rc-063/mac_library.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item2-mac"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-mac-main
+          path: |
+            ${{ runner.temp }}/rc-out/**/*.log
+            ${{ runner.temp }}/rc-out/**/*.txt
+            ${{ runner.temp }}/rc-out/**/*.png
+          retention-days: 7
 
   clippy:
     name: Linux, clippy on the patched gpui (item 5)
@@ -143,28 +221,34 @@ jobs:
       - name: Clippy on the patched gpui
         working-directory: ../zed-cap
         run: |
-          set -uo pipefail
+          set +e
           out="$RUNNER_TEMP/clippy"
+          patch="$GITHUB_WORKSPACE/apps/desktop-gpui/patches/zed-device-lost.patch"
           mkdir -p "$out"
           cargo +1.95.0 --version | tee "$out/toolchain.txt"
           cargo +1.95.0 clippy --version | tee -a "$out/toolchain.txt"
-          git rev-parse HEAD | tee -a "$out/toolchain.txt"
-          git status --short | tee "$out/patched-files.txt"
-          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets --message-format=json > "$out/patched.json" 2> "$out/patched.stderr"
-          echo "patched clippy exit: $?" | tee -a "$out/summary.txt"
-          tail -n 5 "$out/patched.stderr"
-          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets -- -D warnings > "$out/patched-deny.txt" 2>&1
-          deny=$?
-          echo "patched clippy with -D warnings exit: $deny" | tee -a "$out/summary.txt"
-          tail -n 40 "$out/patched-deny.txt"
-          git apply --reverse --unidiff-zero "$GITHUB_WORKSPACE/apps/desktop-gpui/patches/zed-device-lost.patch"
-          cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets --message-format=json > "$out/base.json" 2> "$out/base.stderr"
-          echo "clippy without the device-lost patch exit: $?" | tee -a "$out/summary.txt"
-          git apply --unidiff-zero "$GITHUB_WORKSPACE/apps/desktop-gpui/patches/zed-device-lost.patch"
+          echo "gpui base $(git rev-parse HEAD)" | tee -a "$out/toolchain.txt"
+          git status --short > "$out/patched-files.txt"
+          run_clippy() {
+            cargo +1.95.0 clippy -p gpui_wgpu -p gpui_linux --all-targets --message-format=json "${@:2}" > "$out/$1.json" 2> "$out/$1.stderr"
+            echo "$1: clippy exit $?" | tee -a "$out/summary.txt"
+          }
+          run_clippy strict
+          # gpui itself stops clippy on a deny-by-default lint in a file an
+          # earlier Cap patch changed. Allowing that one lint lets clippy
+          # reach the two crates the device-lost patch changes.
+          run_clippy patched -- -A clippy::eq_op
+          run_clippy patched-deny -- -A clippy::eq_op -D warnings
+          git apply --reverse --unidiff-zero "$patch"
+          run_clippy base -- -A clippy::eq_op
+          git apply --unidiff-zero "$patch"
+          : > "$out/empty.json"
+          python3 "$GITHUB_WORKSPACE/.github/rc-063/clippy_diff.py" "$out/strict.json" "$out/empty.json" | sed 's/^/strict: /' | tee -a "$out/summary.txt"
           python3 "$GITHUB_WORKSPACE/.github/rc-063/clippy_diff.py" "$out/patched.json" "$out/base.json" | tee -a "$out/summary.txt"
           new=${PIPESTATUS[0]}
           { echo '### Item 5: clippy on the patched gpui (#3979)'; echo '```'; cat "$out/toolchain.txt" "$out/summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          exit "$new"
+          strict=$(sed -n 's/^strict: clippy exit //p' "$out/summary.txt")
+          [[ "$new" == 0 && "$strict" == 0 ]]
 
       - name: Upload evidence
         if: always()
@@ -175,7 +259,7 @@ jobs:
           retention-days: 7
 
   win-pr:
-    name: Windows, #3908 head (item 6)
+    name: "Windows, PR 3908 head (item 6)"
     needs: plan
     if: contains(needs.plan.outputs.jobs, ',win-pr,')
     runs-on: windows-2022
@@ -197,7 +281,7 @@ jobs:
           key: rc063-windows-2022-pr3908-${{ needs.plan.outputs.pr_revision }}-${{ env.PACKAGE_VERSION }}
 
   linux-pr:
-    name: Linux, #3908 head (item 6)
+    name: "Linux, PR 3908 head (item 6)"
     needs: plan
     if: contains(needs.plan.outputs.jobs, ',linux-pr,')
     runs-on: blacksmith-8vcpu-ubuntu-2404
