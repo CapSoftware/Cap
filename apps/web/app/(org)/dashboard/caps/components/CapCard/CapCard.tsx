@@ -613,16 +613,18 @@ export const CapCard = ({
 											{passwordProtected ? "Edit password" : "Add password"}
 										</p>
 									</DropdownMenuItem>
-									<DropdownMenuItem
-										onClick={(e) => {
-											e.stopPropagation();
-											setConfirmOpen(true);
-										}}
-										className="flex gap-2 items-center rounded-lg"
-									>
-										<FontAwesomeIcon className="size-3" icon={faTrash} />
-										<p className="text-sm text-gray-12">Delete Cap</p>
-									</DropdownMenuItem>
+									{onDelete && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												setConfirmOpen(true);
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faTrash} />
+											<p className="text-sm text-gray-12">Delete Cap</p>
+										</DropdownMenuItem>
+									)}
 								</>
 							)}
 						</DropdownMenuContent>
