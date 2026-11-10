@@ -1,13 +1,11 @@
 "use client";
 
-import {
-	faAndroid,
-	faApple,
-	faEdge,
-	faLinux,
-	faUbuntu,
-	faWindows,
-} from "@fortawesome/free-brands-svg-icons";
+import { faAndroid } from "@fortawesome/free-brands-svg-icons/faAndroid";
+import { faApple } from "@fortawesome/free-brands-svg-icons/faApple";
+import { faEdge } from "@fortawesome/free-brands-svg-icons/faEdge";
+import { faLinux } from "@fortawesome/free-brands-svg-icons/faLinux";
+import { faUbuntu } from "@fortawesome/free-brands-svg-icons/faUbuntu";
+import { faWindows } from "@fortawesome/free-brands-svg-icons/faWindows";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import getUnicodeFlagIcon from "country-flag-icons/unicode";

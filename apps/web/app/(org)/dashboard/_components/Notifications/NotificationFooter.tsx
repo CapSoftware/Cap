@@ -1,8 +1,6 @@
-import {
-	faArrowDown,
-	faArrowUp,
-	faCog,
-} from "@fortawesome/free-solid-svg-icons";
+import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
+import { faArrowUp } from "@fortawesome/free-solid-svg-icons/faArrowUp";
+import { faCog } from "@fortawesome/free-solid-svg-icons/faCog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 

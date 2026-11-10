@@ -11,7 +11,7 @@ import {
 	Select,
 	Switch,
 } from "@cap/ui";
-import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";

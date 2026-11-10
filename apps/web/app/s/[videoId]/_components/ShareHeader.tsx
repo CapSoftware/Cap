@@ -11,17 +11,14 @@ import {
 	Logo,
 } from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
-import {
-	faChartSimple,
-	faChevronDown,
-	faEllipsis,
-	faGear,
-	faLock,
-	faShare,
-	faTrash,
-	faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -52,6 +49,7 @@ import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";

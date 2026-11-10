@@ -12,7 +12,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import { faFileSignature } from "@fortawesome/free-solid-svg-icons";
+import { faFileSignature } from "@fortawesome/free-solid-svg-icons/faFileSignature";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";

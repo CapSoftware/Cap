@@ -7,7 +7,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import { faTrashCan } from "@fortawesome/free-solid-svg-icons";
+import { faTrashCan } from "@fortawesome/free-solid-svg-icons/faTrashCan";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
 import { signOut } from "next-auth/react";

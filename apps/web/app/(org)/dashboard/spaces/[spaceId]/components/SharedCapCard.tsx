@@ -3,7 +3,8 @@
 import type { VideoMetadata } from "@cap/database/types";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { MoveLocation } from "@/lib/move-items";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
