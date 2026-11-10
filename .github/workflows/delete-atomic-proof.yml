@@ -25,6 +25,7 @@ jobs:
     outputs:
       probe: ${{ steps.plan.outputs.probe }}
       revisions: ${{ steps.plan.outputs.revisions }}
+      tests: ${{ steps.plan.outputs.tests }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +38,8 @@ jobs:
           echo "probe=$(sed -n 's/^probe=//p' "$plan")" >> "$GITHUB_OUTPUT"
           revisions=$(sed -n 's/^build \([a-z0-9-]*\) \([0-9a-f]*\)$/{"name":"\1","ref":"\2"}/p' "$plan" | paste -sd, -)
           echo "revisions=[$revisions]" >> "$GITHUB_OUTPUT"
+          tests=$(sed -n 's/^test \([a-z0-9-]*\) \([0-9a-f]*\)$/{"name":"\1","ref":"\2"}/p' "$plan" | paste -sd, -)
+          echo "tests=[$tests]" >> "$GITHUB_OUTPUT"
           cat "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
 
   probe:
@@ -61,6 +64,57 @@ jobs:
           rustc +1.95.0 --version
           rustc +1.95.0 --edition 2024 -O -o "$RUNNER_TEMP/probe" .github/delete-proof/probe.rs
           { echo "### ${{ matrix.runner }}, $(rustc +1.95.0 --version)"; echo; "$RUNNER_TEMP/probe"; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  tests:
+    name: Delete tests on windows-2022, ${{ matrix.revision.name }}
+    needs: plan
+    if: needs.plan.outputs.tests != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: ${{ fromJSON(needs.plan.outputs.tests) }}
+    runs-on: windows-2022
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision.ref }}
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Delete tests
+        shell: bash
+        run: |
+          debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+          export PATH="$debug_path:$PATH"
+          git log -1 --format='source %H %s'
+          status=0
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-pc-windows-msvc --bin cap-gpui -- \
+            delete_ open_in_the_editor 2>&1 | tee "$RUNNER_TEMP/tests.log" || status=$?
+          { echo "### Delete tests, ${{ matrix.revision.name }} ($(git rev-parse --short HEAD))"; echo '```'; grep -E '^test |^test result|panicked|left:|right:|os error' "$RUNNER_TEMP/tests.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
   realapp:
     name: Real app on windows-2022, ${{ matrix.revision.name }}
