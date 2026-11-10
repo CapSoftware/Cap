@@ -133,7 +133,9 @@ const setVideo = ({
 	isPublic = true,
 	password = null,
 	organizationDeleted = false,
+	sourceType = "desktopMP4",
 }: {
+	sourceType?: string;
 	videoSettings?: Settings;
 	organizationSettings?: Settings;
 	isPublic?: boolean;
@@ -149,7 +151,7 @@ const setVideo = ({
 			public: isPublic,
 			password,
 			settings: videoSettings,
-			source: { type: "desktopMP4" },
+			source: { type: sourceType },
 			createdAt: new Date(),
 			updatedAt: new Date(),
 		},
@@ -240,6 +242,29 @@ describe("viewer downloads are on by default", () => {
 		);
 		expectNoStorageAccess();
 	});
+
+	it.each(["MediaConvert", "local"])(
+		"gives viewers no file for a %s cap, which has no published MP4",
+		async (sourceType) => {
+			setVideo({ sourceType });
+			expect(await getVideoDownloadInfo(VIDEO)).toEqual({
+				success: false,
+				error: "Video file is not available for download yet.",
+			});
+			mocks.viewer = stranger;
+			expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({
+				success: false,
+			});
+			expectNoStorageAccess();
+
+			mocks.viewer = member;
+			mocks.isMember = true;
+			expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({
+				success: true,
+			});
+			expect(mocks.sign.mock.calls[0]?.[0]).toBe(CURRENT_KEY);
+		},
+	);
 
 	it("denies a signed-out viewer when the video does not exist", async () => {
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);

@@ -135,6 +135,22 @@ export async function getVideoDownloadInfo(
 		}
 	}
 
+	// Viewers who are not members only get the published MP4, the same rule the
+	// dashboard download applies. Older HLS caps have no published MP4, and their
+	// result.mp4 is not what the share page plays.
+	if (
+		access === "viewer" &&
+		!(
+			Video.Video.getSource(decodeStorageVideo(video)) instanceof
+			Video.Mp4Source
+		)
+	) {
+		return {
+			success: false,
+			error: "Video file is not available for download yet.",
+		};
+	}
+
 	let downloadKey = `${video.ownerId}/${videoId}/result.mp4`;
 	let filename = `${video.name}.mp4`;
 
