@@ -1,6 +1,4 @@
 import { db } from "@cap/database";
-import { sendEmail } from "@cap/database/emails/config";
-import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
 	organizationMembers,
@@ -22,6 +20,10 @@ import { after } from "next/server";
 import { z } from "zod";
 import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { getDesktopShareUrl } from "@/lib/desktop-share-url";
+import {
+	cancelFirstCapEmail,
+	scheduleFirstCapEmail,
+} from "@/lib/first-cap-email";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -363,29 +365,14 @@ app.get(
 					.from(videos)
 					.where(eq(videos.ownerId, user.id));
 
-				if (videoCount?.[0] && videoCount[0].count === 1 && user.email) {
-					console.log(
-						"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay",
-					);
-
-					const videoUrl = `${serverEnv().WEB_URL}/s/${idToUse}`;
-
-					await sendEmail({
+				if (videoCount?.[0] && videoCount[0].count === 1 && user.email)
+					await scheduleFirstCapEmail({
+						userId: user.id,
 						email: user.email,
-						subject: "You created your first Cap! 🥳",
-						react: FirstShareableLink({
-							email: user.email,
-							url: videoUrl,
-							videoName: videoName,
-						}),
-						marketing: true,
-						scheduledAt: "in 5 min",
+						videoId: idToUse,
+						videoName,
+						url: `${serverEnv().WEB_URL}/s/${idToUse}`,
 					});
-
-					console.log(
-						"[SendFirstShareableLinkEmail] First shareable link email scheduled to be sent in 5 minutes",
-					);
-				}
 			} catch (error) {
 				console.error(
 					"Error checking for first video or sending email:",
@@ -447,6 +434,11 @@ app.delete(
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);
+
+			if (user.preferences?.firstCapEmail?.videoId === videoId)
+				await cancelFirstCapEmail(user.id, videoId).catch((error) =>
+					console.error("Error cancelling first Cap email:", error),
+				);
 
 			const cleanup = readInstantCleanupReport(
 				c.req.query("reason"),

@@ -116,6 +116,7 @@ jobs:
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/desktop-first-cap-email.test.ts
           __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts

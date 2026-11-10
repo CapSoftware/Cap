@@ -135,3 +135,19 @@ export const sendEmail = async ({
 
 	return { data: result.data, error: null };
 };
+
+export const cancelScheduledEmail = async (id: string): Promise<boolean> => {
+	const r = resend();
+	if (!r) return false;
+
+	const result = await r.emails.cancel(id);
+	if (result.error) {
+		console.error(
+			`[email] Resend could not cancel scheduled email ${id}:`,
+			result.error.message,
+		);
+		return false;
+	}
+
+	return true;
+};

@@ -113,6 +113,11 @@ export const users = mysqlTable(
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
+				firstCapEmail?: {
+					videoId: string;
+					sendAt: number;
+					emailId?: string;
+				};
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
