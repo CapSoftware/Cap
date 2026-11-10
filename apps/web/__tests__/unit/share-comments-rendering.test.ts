@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlaybackProvider } from "@/app/s/[videoId]/_components/playback/PlaybackContext";
 import { Comments } from "@/app/s/[videoId]/_components/tabs/Activity/Comments";
 import type { CommentType } from "@/app/s/[videoId]/Share";
+import { PublicEnvContext } from "@/utils/public-env";
 
 const mocks = vi.hoisted(() => ({
 	user: { id: "viewer", name: "Viewer", imageUrl: null },
@@ -139,6 +140,14 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
+const publicEnv = {
+	webUrl: "https://cap.so",
+	googleAuthAvailable: false,
+	workosAuthAvailable: false,
+	oidcAuthAvailable: false,
+	oidcName: "SSO",
+};
+
 async function render(onSeek = seek, disabled = false) {
 	await act(async () => {
 		const props = {
@@ -159,7 +168,13 @@ async function render(onSeek = seek, disabled = false) {
 				}),
 			),
 		};
-		root.render(createElement(PlaybackProvider, props));
+		root.render(
+			createElement(
+				PublicEnvContext,
+				{ value: publicEnv },
+				createElement(PlaybackProvider, props),
+			),
+		);
 	});
 }
 

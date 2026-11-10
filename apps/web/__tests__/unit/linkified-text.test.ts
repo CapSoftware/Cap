@@ -2,6 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { LinkifiedText } from "@/components/LinkifiedText";
+import { PublicEnvContext } from "@/utils/public-env";
 
 vi.mock("@cap/env", () => ({
 	buildEnv: {
@@ -11,8 +12,22 @@ vi.mock("@cap/env", () => ({
 
 vi.stubGlobal("React", React);
 
-const renderLinkifiedText = (text: string) =>
-	renderToStaticMarkup(React.createElement(LinkifiedText, { text }));
+const publicEnv = {
+	webUrl: "https://cap.so",
+	googleAuthAvailable: false,
+	workosAuthAvailable: false,
+	oidcAuthAvailable: false,
+	oidcName: "SSO",
+};
+
+const renderLinkifiedText = (text: string, webUrl = publicEnv.webUrl) =>
+	renderToStaticMarkup(
+		React.createElement(
+			PublicEnvContext,
+			{ value: { ...publicEnv, webUrl } },
+			React.createElement(LinkifiedText, { text }),
+		),
+	);
 
 describe("LinkifiedText", () => {
 	it("does not link unsafe protocols", () => {
@@ -71,6 +86,26 @@ describe("LinkifiedText", () => {
 		expect(html).not.toContain("<a");
 		expect(html).not.toContain("<button");
 		expect(html).toContain("https://user:pass@cap.so/s/demo");
+	});
+
+	it("trusts the runtime web url, not the build-time one", () => {
+		const html = renderLinkifiedText(
+			"https://cap.example.com/s/demo",
+			"https://cap.example.com",
+		);
+
+		expect(html).toContain('href="https://cap.example.com/s/demo"');
+		expect(html).not.toContain("<button");
+	});
+
+	it("still warns on hosts outside the runtime web url", () => {
+		const html = renderLinkifiedText(
+			"https://evil.test/path",
+			"https://cap.example.com",
+		);
+
+		expect(html).toContain("<button");
+		expect(html).not.toContain('href="https://evil.test/path"');
 	});
 
 	it("escapes non-link markup in comment text", () => {

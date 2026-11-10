@@ -1,10 +1,10 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import { Button, Logo } from "@cap/ui";
 import { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { BarChart3, Infinity as InfinityIcon, Share2 } from "lucide-react";
+import { usePublicEnv } from "@/utils/public-env";
 
 const LIMIT = Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH;
 
@@ -25,6 +25,8 @@ export function ShareableLinkLimitOverlay({
 	onUpgradeHover?: () => void;
 	className?: string;
 }) {
+	const { webUrl } = usePublicEnv();
+
 	return (
 		<div
 			className={clsx(
@@ -67,7 +69,7 @@ export function ShareableLinkLimitOverlay({
 						variant="white"
 						size="sm"
 						className="mt-6"
-						href={buildEnv.NEXT_PUBLIC_WEB_URL}
+						href={webUrl}
 						target="_blank"
 					>
 						Record with Cap for free
