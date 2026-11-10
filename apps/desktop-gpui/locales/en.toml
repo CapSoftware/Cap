@@ -1419,6 +1419,7 @@ failed_title = "Could not delete recording"
 finishing_body = "Cap is waiting for recording cleanup to finish before completing this deletion."
 finishing_title = "Deletion is still finishing"
 in_use = { text = "This recording is still in use. Finish or cancel its upload and try again: {error}", context = "{error} is a technical error message, usually in English." }
+open_in_editor = "This recording is open in the editor. Close the editor and try again."
 outside_library = "This recording is outside the recordings library. Its files were not changed."
 recording_active = "Finish or cancel the recording before deleting this project."
 retained_title = "Recording retained"
