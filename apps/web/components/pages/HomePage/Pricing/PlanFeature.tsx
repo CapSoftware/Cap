@@ -2,8 +2,8 @@
 
 import { classNames } from "@cap/utils";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { ReactNode } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface PlanFeatureProps {
 	children: ReactNode;

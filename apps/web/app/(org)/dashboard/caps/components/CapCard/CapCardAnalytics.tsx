@@ -1,8 +1,9 @@
-import { faComment, faEye, faSmile } from "@fortawesome/free-solid-svg-icons";
 import {
-	FontAwesomeIcon,
-	type FontAwesomeIconProps,
-} from "@fortawesome/react-fontawesome";
+	faComment,
+	faEye,
+	faSmile,
+	type IconDefinition,
+} from "@fortawesome/free-solid-svg-icons";
 import Link from "next/link";
 import {
 	type ComponentProps,
@@ -10,6 +11,7 @@ import {
 	forwardRef,
 	type PropsWithChildren,
 } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardAnalyticsProps {
@@ -109,10 +111,7 @@ const Shell = (props: PropsWithChildren) => (
 
 const IconItem = forwardRef(
 	(
-		props: { icon: FontAwesomeIconProps["icon"] } & Pick<
-			ComponentProps<"div">,
-			"children"
-		>,
+		props: { icon: IconDefinition } & Pick<ComponentProps<"div">, "children">,
 		ref: ForwardedRef<HTMLDivElement>,
 	) => (
 		<div ref={ref} className="flex gap-2 items-center">
@@ -122,7 +121,7 @@ const IconItem = forwardRef(
 	),
 );
 
-const SkeletonItem = ({ icon }: { icon: FontAwesomeIconProps["icon"] }) => (
+const SkeletonItem = ({ icon }: { icon: IconDefinition }) => (
 	<IconItem icon={icon}>
 		<div className="h-1.5 w-3 -mx-0.5 bg-gray-5 rounded-full animate-pulse" />
 	</IconItem>
