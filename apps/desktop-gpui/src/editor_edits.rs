@@ -712,6 +712,13 @@ impl TrackSegmentOps for CaptionTrackSegment {
 }
 
 impl TrackSegmentOps for KeyboardTrackSegment {
+    fn trim_start_to(&mut self, value: f64) {
+        let shift = (self.start - value) * 1000.0;
+        for key in &mut self.keys {
+            key.time_offset += shift;
+        }
+        self.start = value;
+    }
     fn start(&self) -> f64 {
         self.start
     }
@@ -4010,6 +4017,42 @@ mod tests {
             (timeline.segments[2].start, timeline.segments[2].end),
             (0., 8.)
         );
+    }
+
+    #[test]
+    fn trimming_keyboard_start_preserves_keypress_times() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "keyboardSegments": [{
+                    "id": "typed", "start": 2.0, "end": 6.0, "displayText": "ab",
+                    "keys": [
+                        { "key": "a", "timeOffset": 0.0 },
+                        { "key": "b", "timeOffset": 2000.0 }
+                    ]
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        let original = serde_json::to_value(&timeline.keyboard_segments[0]).unwrap();
+        for start in [3.0, 1.0, 2.0] {
+            assert!(set_segment_start(timeline, TrackKind::Keyboard, 0, start));
+            let segment = &timeline.keyboard_segments[0];
+            assert_eq!(segment.start + segment.keys[0].time_offset / 1000.0, 2.0);
+            assert_eq!(segment.start + segment.keys[1].time_offset / 1000.0, 4.0);
+            assert_eq!(segment.end, 6.0);
+            assert_eq!(segment.display_text, "ab");
+        }
+        assert_eq!(
+            serde_json::to_value(&timeline.keyboard_segments[0]).unwrap(),
+            original
+        );
+        assert!(!set_segment_start(timeline, TrackKind::Keyboard, 0, 2.0));
+        assert!(move_segment(timeline, TrackKind::Keyboard, 0, 5.0, 9.0));
+        let segment = &timeline.keyboard_segments[0];
+        assert_eq!(segment.keys[0].time_offset, 0.0);
+        assert_eq!(segment.keys[1].time_offset, 2000.0);
     }
 
     #[test]
