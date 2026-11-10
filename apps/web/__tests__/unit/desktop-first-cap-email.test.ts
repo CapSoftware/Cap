@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
 	videos: new Map<string, Record<string, unknown>>(),
 	preferences: null as Record<string, unknown> | null,
 	now: 0,
+	afterUnlockedUserRead: undefined as (() => void) | undefined,
 }));
 
 const email = vi.hoisted(() => ({
@@ -64,7 +65,14 @@ const fakeDb = vi.hoisted(() => {
 				const query = (rows: unknown[]) =>
 					Object.assign(Promise.resolve(rows), {
 						for: async () => rows,
-						limit: async () => rows,
+						limit: async () => {
+							if (table === schema.users) {
+								const afterRead = state.afterUnlockedUserRead;
+								state.afterUnlockedUserRead = undefined;
+								afterRead?.();
+							}
+							return rows;
+						},
 					});
 				return {
 					innerJoin: () => ({ where: async () => [] }),
@@ -197,6 +205,7 @@ beforeEach(() => {
 	state.videos.clear();
 	state.preferences = null as Preferences;
 	state.now = Date.UTC(2026, 0, 1);
+	state.afterUnlockedUserRead = undefined;
 	vi.spyOn(Date, "now").mockImplementation(() => state.now);
 	let sent = 0;
 	email.sendEmail.mockImplementation(async () => {
@@ -382,6 +391,22 @@ describe("first Cap email", () => {
 		await remove(first);
 
 		expect(marker()).toMatchObject({ videoId: second, emailId: "email-2" });
+	});
+
+	it("cancels the email whose id was stored after the delete first looked", async () => {
+		const first = await record();
+		const stored = marker();
+		state.preferences = {
+			firstCapEmail: { videoId: first, sendAt: stored?.sendAt },
+		};
+		state.afterUnlockedUserRead = () => {
+			state.preferences = { firstCapEmail: stored };
+		};
+		state.now += MINUTE;
+		await remove(first);
+
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
+		expect(marker()).toBeUndefined();
 	});
 
 	it("is not sent twice when the cancellation fails", async () => {
