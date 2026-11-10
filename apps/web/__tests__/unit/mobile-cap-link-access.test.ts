@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 	},
 	revalidatePath: vi.fn(),
 	update: vi.fn(),
+	where: vi.fn(),
 	dispose: async () => {},
 }));
 
@@ -99,7 +100,8 @@ vi.mock("@/lib/server", async () => {
 		},
 		update: () => ({
 			set: (value: unknown) => ({
-				where: async () => {
+				where: async (condition: unknown) => {
+					mocks.where(condition);
 					mocks.update(value);
 				},
 			}),
@@ -174,6 +176,7 @@ describe("mobile Cap link access", () => {
 	beforeEach(() => {
 		mocks.ownerId = "owner";
 		mocks.update.mockClear();
+		mocks.where.mockClear();
 		mocks.linkState = {
 			videoSettings: null,
 			organizationSettings: { allowPublicLinkOverride: true },
@@ -233,6 +236,22 @@ describe("mobile Cap link access", () => {
 		expect(mocks.update).toHaveBeenCalledWith({ public: true });
 	});
 
+	const whereSql = () =>
+		new MySqlDialect().sqlToQuery(mocks.where.mock.calls[0]?.[0] as SQL).sql;
+
+	it.each(["anyone", "restricted"])(
+		"only applies %j to a Cap that is still public",
+		async (linkAccess) => {
+			expect((await share({ public: true, linkAccess })).status).toBe(200);
+			expect(whereSql()).toContain("`videos`.`public` = ?");
+		},
+	);
+
+	it("lets a plain visibility change reach a private Cap", async () => {
+		expect((await share({ public: true })).status).toBe(200);
+		expect(whereSql()).not.toContain("`videos`.`public`");
+	});
+
 	it("rejects an unknown link access value", async () => {
 		expect((await share({ public: true, linkAccess: "open" })).status).toBe(
 			400,
@@ -249,14 +268,20 @@ describe("mobile Cap link access", () => {
 	});
 
 	it.each([
-		[{ linkAccess: "anyone" }, "company.com", true, "anyone"],
-		[null, "company.com", true, "restricted"],
-		[{ linkAccess: "anyone" }, "company.com", false, undefined],
-		[{ linkAccess: "anyone" }, null, true, undefined],
-		[{ linkAccess: "anyone" }, "  ", true, undefined],
+		[{ linkAccess: "anyone" }, "company.com", true, "anyone", false],
+		[null, "company.com", true, "restricted", true],
+		[{ linkAccess: "anyone" }, "company.com", false, undefined, true],
+		[{ linkAccess: "anyone" }, null, true, undefined, false],
+		[{ linkAccess: "anyone" }, "  ", true, undefined, false],
 	])(
-		"reports video %j, restriction %j, allowed %j as %j",
-		async (videoSettings, allowedEmailDomain, allowed, expected) => {
+		"reports video %j, restriction %j, allowed %j as %j, restricted %j",
+		async (
+			videoSettings,
+			allowedEmailDomain,
+			allowed,
+			expected,
+			restricted,
+		) => {
 			mocks.linkState = {
 				videoSettings,
 				organizationSettings: { allowPublicLinkOverride: allowed },
@@ -264,7 +289,9 @@ describe("mobile Cap link access", () => {
 			};
 			const response = await share({ public: true });
 			expect(response.status).toBe(200);
-			expect((await response.json()).linkAccess).toBe(expected);
+			const cap = await response.json();
+			expect(cap.linkAccess).toBe(expected);
+			expect(cap.linkRestricted).toBe(restricted);
 		},
 	);
 });

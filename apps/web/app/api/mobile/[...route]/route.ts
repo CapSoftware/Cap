@@ -77,6 +77,7 @@ import {
 } from "@/lib/email-code-rate-limit";
 import {
 	describeLinkAccessChoice,
+	isLinkRestricted,
 	linkAccessSettingsPatch,
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
@@ -2520,12 +2521,16 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	const linkAccess = linkAccessState
 		? describeLinkAccessChoice({ isPublic: capRow.public, ...linkAccessState })
 		: undefined;
+	const linkRestricted = linkAccessState
+		? isLinkRestricted({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
 
 	return {
 		row: capRow,
 		cap: {
 			...toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
 			...(linkAccess ? { linkAccess } : {}),
+			...(linkRestricted === undefined ? {} : { linkRestricted }),
 		},
 	};
 });
@@ -3865,6 +3870,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												// A link access choice only exists on a public link. Without this an
+												// earlier "open to anyone" request landing after "make private" would
+												// publish the Cap again.
+												payload.linkAccess === undefined
+													? undefined
+													: eq(Db.videos.public, true),
 											),
 										),
 								);

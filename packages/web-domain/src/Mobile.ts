@@ -288,6 +288,7 @@ export const MobileCapSummary = Schema.Struct({
 	upload: Schema.NullOr(MobileUploadProgress),
 	ownedByCurrentUser: Schema.optional(Schema.Boolean),
 	linkAccess: Schema.optional(MobileLinkAccess),
+	linkRestricted: Schema.optional(Schema.Boolean),
 });
 
 export const MobileComment = Schema.Struct({

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	describeLinkAccessChoice,
+	isLinkRestricted,
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 
@@ -45,5 +46,32 @@ describe("describeLinkAccessChoice", () => {
 		{ organizationSettings: { allowPublicLinkOverride: false } },
 	])("offers no choice for %j", (override) => {
 		expect(describeLinkAccessChoice({ ...base, ...override })).toBeUndefined();
+	});
+});
+
+describe("isLinkRestricted", () => {
+	const base = {
+		isPublic: true,
+		allowedEmailDomain: "company.com" as string | null,
+		videoSettings: null as { linkAccess?: string } | null,
+		organizationSettings: null as { allowPublicLinkOverride?: boolean } | null,
+	};
+
+	it.each([
+		[{}, true],
+		[{ organizationSettings: { allowPublicLinkOverride: true } }, true],
+		[{ videoSettings: { linkAccess: "anyone" } }, true],
+		[
+			{
+				videoSettings: { linkAccess: "anyone" },
+				organizationSettings: { allowPublicLinkOverride: true },
+			},
+			false,
+		],
+		[{ allowedEmailDomain: null }, false],
+		[{ allowedEmailDomain: " " }, false],
+		[{ isPublic: false }, false],
+	])("%j is restricted: %j", (override, expected) => {
+		expect(isLinkRestricted({ ...base, ...override })).toBe(expected);
 	});
 });

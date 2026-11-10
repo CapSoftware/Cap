@@ -1,4 +1,5 @@
 import { videos } from "@cap/database/schema";
+import { Video } from "@cap/web-domain";
 import { sql } from "drizzle-orm";
 
 export type LinkAccessChoice = "anyone" | "restricted";
@@ -18,12 +19,7 @@ export const resolveLinkAccessWrite = (
 export const linkAccessSettingsPatch = (linkAccess: "anyone" | null) =>
 	sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST(${JSON.stringify({ linkAccess })} AS JSON))`;
 
-export const describeLinkAccessChoice = ({
-	isPublic,
-	allowedEmailDomain,
-	videoSettings,
-	organizationSettings,
-}: {
+type LinkAccessState = {
 	isPublic: boolean;
 	allowedEmailDomain: string | null | undefined;
 	videoSettings: { linkAccess?: string } | null | undefined;
@@ -31,7 +27,24 @@ export const describeLinkAccessChoice = ({
 		| { allowPublicLinkOverride?: boolean }
 		| null
 		| undefined;
-}): LinkAccessChoice | undefined => {
+};
+
+export const isLinkRestricted = ({
+	isPublic,
+	allowedEmailDomain,
+	videoSettings,
+	organizationSettings,
+}: LinkAccessState) =>
+	isPublic &&
+	Boolean(allowedEmailDomain?.trim()) &&
+	!Video.isLinkOpenToAnyone(videoSettings, organizationSettings);
+
+export const describeLinkAccessChoice = ({
+	isPublic,
+	allowedEmailDomain,
+	videoSettings,
+	organizationSettings,
+}: LinkAccessState): LinkAccessChoice | undefined => {
 	if (!isPublic) return undefined;
 	if (!allowedEmailDomain?.trim()) return undefined;
 	if (organizationSettings?.allowPublicLinkOverride !== true) return undefined;
