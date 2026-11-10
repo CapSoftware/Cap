@@ -14,7 +14,10 @@ from rclib import App, Results
 
 package, out = sys.argv[1], os.path.abspath(sys.argv[2])
 results = Results(out, "Item 2: main window library card during a recording, macOS (#3969)")
-profile = rclib.make_profile(os.path.join(out, "profile"))
+# Cap keeps its own windows out of screen captures by default, which also
+# hides them from the screenshots this scenario is judged by. The excluded
+# windows list is a setting; it is emptied here so the main window can be seen.
+profile = rclib.make_profile(os.path.join(out, "profile"), general={"excludedWindows": []})
 recordings = os.path.join(out, "rec")
 os.makedirs(recordings, exist_ok=True)
 
