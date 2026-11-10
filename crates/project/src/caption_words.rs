@@ -173,6 +173,11 @@ pub fn caption_word_chunks_skipping_fillers_with(
     words: &[CaptionWord],
     words_per_segment: usize,
 ) -> Vec<&[CaptionWord]> {
+    // One word on screen at a time: a filler is its own caption, never
+    // grouped with the word after it.
+    if words_per_segment <= 1 {
+        return caption_word_chunks_with(words, 1);
+    }
     let spoken: Vec<usize> = words
         .iter()
         .enumerate()
@@ -675,5 +680,19 @@ mod tests {
         assert_eq!(caption_text_from_words(chunks[0]), "one two of four");
         assert_eq!(caption_text_from_words(chunks[1]), "five six seven");
         assert_eq!(caption_text_from_words(chunks[2]), "eight nine");
+    }
+
+    #[test]
+    fn one_word_per_segment_keeps_fillers_out_of_the_next_word() {
+        let words = ["I", "um", "think", "so"]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
+
+        let chunks = caption_word_chunks_skipping_fillers_with(&words, 1);
+
+        assert_eq!(chunks.len(), words.len());
+        assert!(chunks.iter().all(|chunk| chunk.len() == 1));
     }
 }

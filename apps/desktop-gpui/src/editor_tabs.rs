@@ -1201,7 +1201,10 @@ impl EditorWindow {
             if seed_when_missing {
                 // The segment size is picked before the first transcription,
                 // so that write seeds the captions block instead of no-oping
-                // like the style settings do.
+                // like the style settings do. The saved default style goes in
+                // first, because generation only seeds it into a project that
+                // has no captions block yet.
+                crate::style_presets::seed_default_captions(project);
                 let captions = project
                     .captions
                     .get_or_insert_with(cap_project::CaptionsData::default);
