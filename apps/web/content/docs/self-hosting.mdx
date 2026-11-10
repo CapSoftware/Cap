@@ -105,7 +105,7 @@ The Chrome Web Store extension signs in through your server. Outside of localhos
 CAP_CHROME_EXTENSION_ID=fefjaffcodfiogbbngmjkcjpbpclbdcp
 ```
 
-Without it, extension sign-in fails with a bad request. Then open the extension's options and set the Cap URL to your deployment URL.
+Set this variable in your Compose environment or Coolify environment settings and recreate the web container. Without it, extension sign-in fails with a bad request. Then open the extension's options and set the Cap URL to your deployment URL.
 
 > **Note:** The compose files only pass a service the variables listed under its `environment`. If a variable from this page isn't listed there for the right service (`cap-web` or `media-server`), add it, not just to `.env`.
 

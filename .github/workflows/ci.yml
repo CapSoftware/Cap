@@ -116,6 +116,7 @@ jobs:
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/dashboard-search-item-values.test.ts
           __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
@@ -145,6 +146,7 @@ jobs:
           __tests__/unit/organization-preferences-switch.test.ts
           __tests__/unit/organization-preferences-target.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
+          __tests__/unit/organization-switcher-item-values.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
@@ -156,6 +158,7 @@ jobs:
           __tests__/unit/share-page-round-trips.test.ts
           __tests__/unit/share-transcript-rendering.test.ts
           __tests__/unit/share-video-quota-loading.test.ts
+          __tests__/unit/shared-cap-card-delete.test.ts
           __tests__/unit/sdk-recorder-hook.test.ts
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/sonner-theme.test.ts

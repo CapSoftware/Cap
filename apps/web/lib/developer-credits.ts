@@ -6,8 +6,7 @@ import {
 	developerCreditTransactions,
 } from "@cap/database/schema";
 import { and, eq, sql } from "drizzle-orm";
-
-const MICRO_CREDITS_PER_DOLLAR = 100_000;
+import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 
 export async function addCreditsToAccount({
 	accountId,

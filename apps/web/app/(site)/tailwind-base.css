@@ -1,0 +1,6 @@
+/* Marketing pages used to load a second complete Tailwind build after
+   globals.css (through @cap/ui/style). Its base layer therefore came last and
+   won over the element rules in globals.css (h1 to h5, button, input, label),
+   and these pages are designed against that. Only that base layer is loaded
+   again here, so the order is kept without shipping every utility twice. */
+@tailwind base;

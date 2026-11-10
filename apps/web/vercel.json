@@ -18,6 +18,10 @@
 		{
 			"path": "/api/cron/developer-upload-cleanup",
 			"schedule": "29 * * * *"
+		},
+		{
+			"path": "/api/cron/developer-storage",
+			"schedule": "41 */6 * * *"
 		}
 	],
 	"functions": {
