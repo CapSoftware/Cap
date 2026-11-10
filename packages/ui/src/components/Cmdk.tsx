@@ -3,6 +3,7 @@
 import { classNames } from "@cap/utils";
 import type { DialogProps } from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
+import { commandScore } from "cmdk/dist/command-score";
 import { Search } from "lucide-react";
 import * as React from "react";
 import { Dialog, DialogContent } from "./Dialog";
@@ -196,4 +197,5 @@ export {
 	CommandList,
 	CommandSeparator,
 	CommandShortcut,
+	commandScore,
 };
