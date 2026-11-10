@@ -2106,9 +2106,26 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
 /// `toast.error(\`Failed to import clip: ...\`)` (`:520`), as the blocking
 /// dialog this app uses where the webview has toasts.
 fn show_import_error(message: &str) {
+    let title = tr::editor::clips::import_error_title();
+    let description = tr::editor::clips::import_error(message);
+    // rfd shows Linux message dialogs through zenity and shows nothing
+    // without it, so a folder that is not a recording would import nothing
+    // and say nothing.
+    #[cfg(target_os = "linux")]
+    if !crate::linux_dialog::zenity_available()
+        && crate::linux_dialog::show(&crate::linux_dialog::Request {
+            title: title.to_string(),
+            message: description.to_string(),
+            accept: tr::common::ok().to_string(),
+            cancel: None,
+        })
+        .is_some()
+    {
+        return;
+    }
     let _ = rfd::MessageDialog::new()
-        .set_title(tr::editor::clips::import_error_title())
-        .set_description(tr::editor::clips::import_error(message))
+        .set_title(title)
+        .set_description(description)
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
