@@ -12,7 +12,7 @@ import {
 	videos,
 } from "@cap/database/schema";
 import type { Organisation, Space, Video } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
@@ -20,12 +20,14 @@ interface ShareCapParams {
 	capId: Video.VideoId;
 	spaceIds: Space.SpaceIdOrOrganisationId[];
 	public?: boolean;
+	linkAccess?: "anyone" | "restricted";
 }
 
 export async function shareCap({
 	capId,
 	spaceIds,
 	public: isPublic,
+	linkAccess,
 }: ShareCapParams) {
 	try {
 		const user = await getCurrentUser();
@@ -36,6 +38,20 @@ export async function shareCap({
 		const [cap] = await db().select().from(videos).where(eq(videos.id, capId));
 		if (!cap || cap.ownerId !== user.id) {
 			return { success: false, error: "Unauthorized" };
+		}
+
+		if (linkAccess === "anyone") {
+			const [organization] = await db()
+				.select({ settings: organizations.settings })
+				.from(organizations)
+				.where(eq(organizations.id, cap.orgId));
+			if (organization?.settings?.allowPublicLinkOverride !== true) {
+				return {
+					success: false,
+					error:
+						"Your organization doesn't allow opening individual links to anyone",
+				};
+			}
 		}
 
 		const userOrganizations = await db()
@@ -149,11 +165,30 @@ export async function shareCap({
 			await db().insert(spaceVideos).values(newSpaceEntries);
 		}
 
-		// Update public status if provided
+		const nextLinkAccess =
+			isPublic === false
+				? null
+				: linkAccess === "anyone"
+					? "anyone"
+					: linkAccess === "restricted"
+						? null
+						: undefined;
+		const linkAccessPatch =
+			nextLinkAccess === undefined
+				? {}
+				: {
+						settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST(${JSON.stringify({ linkAccess: nextLinkAccess })} AS JSON))`,
+					};
+
 		if (typeof isPublic === "boolean") {
 			await db()
 				.update(videos)
-				.set({ public: isPublic })
+				.set({ public: isPublic, ...linkAccessPatch })
+				.where(eq(videos.id, capId));
+		} else if (nextLinkAccess !== undefined) {
+			await db()
+				.update(videos)
+				.set(linkAccessPatch)
 				.where(eq(videos.id, capId));
 		}
 
