@@ -1,7 +1,8 @@
 "use client";
 
 import { Button, Switch } from "@cap/ui";
-import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";

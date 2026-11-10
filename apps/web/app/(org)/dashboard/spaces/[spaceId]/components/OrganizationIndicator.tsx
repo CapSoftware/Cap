@@ -10,7 +10,8 @@ import {
 	DialogTrigger,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useState } from "react";

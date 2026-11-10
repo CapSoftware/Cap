@@ -1,4 +1,4 @@
-import { faCheckDouble } from "@fortawesome/free-solid-svg-icons";
+import { faCheckDouble } from "@fortawesome/free-solid-svg-icons/faCheckDouble";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";

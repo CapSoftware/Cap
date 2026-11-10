@@ -2,7 +2,7 @@
 // effect runtime (~250 KB gz) into the share page's entry chunk. The branded
 // ids carry no constraints, so plain casts replace `.make()` losslessly.
 import type { Comment, User, Video } from "@cap/web-domain";
-import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
+import { faCommentSlash } from "@fortawesome/free-solid-svg-icons/faCommentSlash";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {

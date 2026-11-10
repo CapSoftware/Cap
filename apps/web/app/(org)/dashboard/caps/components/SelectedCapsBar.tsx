@@ -2,7 +2,8 @@
 
 import { Button } from "@cap/ui";
 import type { Folder, Video } from "@cap/web-domain";
-import { faFilm, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faFilm } from "@fortawesome/free-solid-svg-icons/faFilm";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";

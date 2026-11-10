@@ -1,9 +1,7 @@
-import {
-	faComment,
-	faEye,
-	faSmile,
-	type IconDefinition,
-} from "@fortawesome/free-solid-svg-icons";
+import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
+import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
+import { faEye } from "@fortawesome/free-solid-svg-icons/faEye";
+import { faSmile } from "@fortawesome/free-solid-svg-icons/faSmile";
 import Link from "next/link";
 import {
 	type ComponentProps,

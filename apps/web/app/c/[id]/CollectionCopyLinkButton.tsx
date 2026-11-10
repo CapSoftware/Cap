@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faLink } from "@fortawesome/free-solid-svg-icons";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 

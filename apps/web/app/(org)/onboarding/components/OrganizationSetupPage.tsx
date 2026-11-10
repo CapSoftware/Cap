@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
-import { faImage } from "@fortawesome/free-solid-svg-icons";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
 import { Effect } from "effect";
 import Image from "next/image";
 import { useRouter } from "next/navigation";

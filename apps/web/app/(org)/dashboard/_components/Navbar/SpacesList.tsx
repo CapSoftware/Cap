@@ -2,12 +2,10 @@
 
 import { Button } from "@cap/ui";
 import type { Space } from "@cap/web-domain";
-import {
-	faLayerGroup,
-	faLock,
-	faPlus,
-	faXmark,
-} from "@fortawesome/free-solid-svg-icons";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faXmark } from "@fortawesome/free-solid-svg-icons/faXmark";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";

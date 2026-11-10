@@ -2,7 +2,8 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faArrowRight, faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
+import { faPlay } from "@fortawesome/free-solid-svg-icons/faPlay";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";

@@ -7,7 +7,8 @@ import {
 	DialogTitle,
 } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
-import { faGlobe, faRefresh } from "@fortawesome/free-solid-svg-icons";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faRefresh } from "@fortawesome/free-solid-svg-icons/faRefresh";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";

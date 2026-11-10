@@ -10,7 +10,7 @@ import {
 	LoadingSpinner,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { faVideo } from "@fortawesome/free-solid-svg-icons";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

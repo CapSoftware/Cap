@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";

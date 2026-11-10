@@ -1,12 +1,10 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
-import {
-	faEdit,
-	faLayerGroup,
-	faPlus,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
+import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Search } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";

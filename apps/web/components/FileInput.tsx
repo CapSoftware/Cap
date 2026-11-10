@@ -2,11 +2,9 @@
 
 import { Button, Input, LoadingSpinner } from "@cap/ui";
 import { ImageUpload } from "@cap/web-domain";
-import {
-	faCloudUpload,
-	faSpinner,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCloudUpload } from "@fortawesome/free-solid-svg-icons/faCloudUpload";
+import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";

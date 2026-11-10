@@ -10,7 +10,7 @@ import {
 	Input,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { faLock } from "@fortawesome/free-solid-svg-icons";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";

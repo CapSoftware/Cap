@@ -1,6 +1,6 @@
 "use client";
 
-import { faBellSlash } from "@fortawesome/free-solid-svg-icons";
+import { faBellSlash } from "@fortawesome/free-solid-svg-icons/faBellSlash";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";

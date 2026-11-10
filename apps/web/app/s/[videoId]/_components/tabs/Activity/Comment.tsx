@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
-import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";

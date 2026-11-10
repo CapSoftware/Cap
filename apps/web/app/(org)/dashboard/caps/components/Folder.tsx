@@ -1,6 +1,7 @@
 "use client";
 import type { Folder, Space } from "@cap/web-domain";
-import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";

@@ -9,7 +9,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import { faFileImport } from "@fortawesome/free-solid-svg-icons";
+import { faFileImport } from "@fortawesome/free-solid-svg-icons/faFileImport";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
