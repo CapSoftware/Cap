@@ -2146,3 +2146,21 @@ fn a_cut_made_before_the_loudness_envelope_loaded_still_moves() {
     );
     assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
 }
+
+#[test]
+fn a_cut_stays_put_when_the_music_split_by_it_was_given_a_fade_since() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_music(&mut project, 0.0, 5.16);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    timeline_mut(&mut project).audio_segments[1].fade_in = 0.3;
+    let cut = bounds(&project);
+
+    assert_eq!(follow(&mut project, &durations), 0);
+
+    assert_eq!(bounds(&project), cut);
+    let music = &timeline(&project).audio_segments;
+    assert_eq!(music.len(), 2);
+    assert_eq!(music[1].fade_in, 0.3);
+    assert!(close(music[0].end, music[1].start));
+}
