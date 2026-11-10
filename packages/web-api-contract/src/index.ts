@@ -1,6 +1,5 @@
 import { z } from "zod";
 import desktop from "./desktop";
-import { c } from "./util";
 
 export {
 	DesktopOrganization,
@@ -73,9 +72,9 @@ export const Notification = z
 	.and(NotificationBase);
 export type Notification = z.infer<typeof Notification>;
 
-export const contract = c.router({
+export const contract = {
 	desktop,
-	video: c.router({
+	video: {
 		getTranscribeStatus: {
 			method: "GET",
 			path: "/video/transcribe/status",
@@ -102,8 +101,8 @@ export const contract = c.router({
 				200: z.object({ count: z.number() }),
 			},
 		},
-	}),
-	notifications: c.router({
+	},
+	notifications: {
 		get: {
 			method: "GET",
 			path: "/notifications",
@@ -114,10 +113,10 @@ export const contract = c.router({
 				}),
 			},
 		},
-	}),
-});
+	},
+};
 
-export const orgCustomDomainContract = c.router({
+export const orgCustomDomainContract = {
 	getOrgCustomDomain: {
 		method: "GET",
 		path: "/org-custom-domain",
@@ -132,9 +131,9 @@ export const orgCustomDomainContract = c.router({
 			}),
 		},
 	},
-});
+};
 
-export const licenseContract = c.router({
+export const licenseContract = {
 	activateCommercialLicense: {
 		method: "POST",
 		path: "/commercial/activate",
@@ -161,4 +160,4 @@ export const licenseContract = c.router({
 			500: z.object({ message: z.string() }),
 		},
 	},
-});
+};

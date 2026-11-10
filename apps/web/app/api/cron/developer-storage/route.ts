@@ -10,9 +10,7 @@ import {
 } from "@cap/database/schema";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-
-const MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR = 333;
-const MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR = 100;
+import { dailyStorageMicroCredits } from "@/lib/developer-pricing";
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -94,10 +92,7 @@ export async function GET(request: Request) {
 		const totalMinutes = stats?.totalDurationMinutes ?? 0;
 		if (totalMinutes <= 0) return false;
 
-		const microCreditsToCharge = Math.floor(
-			(totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR) /
-				MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR,
-		);
+		const microCreditsToCharge = dailyStorageMicroCredits(totalMinutes);
 		if (microCreditsToCharge <= 0) return false;
 
 		const account = accountsByApp.get(app.id);
@@ -115,10 +110,7 @@ export async function GET(request: Request) {
 				const stats = statsByApp.get(app.id);
 				const totalMinutes = stats?.totalDurationMinutes ?? 0;
 				const videoCount = Number(stats?.videoCount ?? 0);
-				const microCreditsToCharge = Math.floor(
-					(totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY_NUMERATOR) /
-						MICRO_CREDITS_PER_MINUTE_PER_DAY_DENOMINATOR,
-				);
+				const microCreditsToCharge = dailyStorageMicroCredits(totalMinutes);
 				const account = accountsByApp.get(app.id);
 				if (!account) return false;
 

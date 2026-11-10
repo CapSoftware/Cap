@@ -8,6 +8,8 @@ use crate::{
     target_overlay::AreaRect,
 };
 
+mod area_recording;
+
 pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
     let Some(output) = std::env::var_os("CAP_PICKER_PROBE_OUTPUT") else {
         return;
@@ -18,6 +20,18 @@ pub fn run(main: WindowHandle<MainWindow>, cx: &mut App) {
             .and_then(|delay| delay.parse().ok())
             .unwrap_or(2000);
         sleep(cx, delay).await;
+        if std::env::var("CAP_PICKER_PROBE_AREA_RECORDING").is_ok_and(|value| value == "1") {
+            let report = area_recording::run(&output, main, cx).await;
+            let passed = report["passed"].as_bool() == Some(true);
+            if let Err(error) = std::fs::write(
+                &output,
+                format!("{{\"passed\":{passed},\"areaRecording\":{report}}}"),
+            ) {
+                tracing::error!(%error, "Could not write area recording probe results");
+            }
+            cx.update(|cx| cx.quit());
+            return;
+        }
         // `CAP_PICKER_PROBE_HOLD=window` (or `display`, `area`) arms that
         // picker and leaves it up, for a script to drive the pointer over it.
         if let Ok(hold) = std::env::var("CAP_PICKER_PROBE_HOLD") {

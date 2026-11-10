@@ -16,8 +16,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@cap/ui";
-import { faUser } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
 import { useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -29,6 +28,7 @@ import { toggleProSeat } from "@/actions/organization/toggle-pro-seat";
 import { updateOrganizationMemberRole } from "@/actions/organization/update-member-role";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type AssignableOrganizationRole,
 	canChangeOrganizationMemberRole,

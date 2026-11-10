@@ -2,9 +2,9 @@
 
 import { Button } from "@cap/ui";
 import type { Folder } from "@cap/web-domain";
-import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SubfolderDialog } from "./SubfolderDialog";
 
 interface NewSubfolderButtonProps {

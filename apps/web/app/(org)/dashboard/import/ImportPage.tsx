@@ -1,8 +1,8 @@
 "use client";
 
-import { faUpload } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import Link from "next/link";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type LoomImportDestination,
 	loomImportPageHref,

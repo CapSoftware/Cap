@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { dailyStorageMicroCredits } from "@/lib/developer-pricing";
 
 const mockDb = vi.fn();
 
@@ -296,7 +297,7 @@ describe("developer-storage cron job", () => {
 			if (!isTransactionValues(insertValues))
 				throw new Error("Expected storage transaction");
 			expect(insertValues.type).toBe("storage_daily");
-			expect(insertValues.amountMicroCredits).toBe(-33);
+			expect(insertValues.amountMicroCredits).toBe(-26);
 		});
 
 		it("transaction amount is negative (debit)", async () => {
@@ -347,26 +348,31 @@ describe("developer-storage cron job", () => {
 	});
 
 	describe("storage rate calculations", () => {
-		const MICRO_CREDITS_PER_MINUTE_PER_DAY = 3.33;
-
-		it("1 minute -> 3 credits", () => {
-			expect(Math.floor(1 * MICRO_CREDITS_PER_MINUTE_PER_DAY)).toBe(3);
+		it("1 minute -> 2 credits", () => {
+			expect(dailyStorageMicroCredits(1)).toBe(2);
 		});
 
-		it("10 minutes -> 33 credits", () => {
-			expect(Math.floor(10 * MICRO_CREDITS_PER_MINUTE_PER_DAY)).toBe(33);
+		it("10 minutes -> 26 credits", () => {
+			expect(dailyStorageMicroCredits(10)).toBe(26);
 		});
 
-		it("100 minutes -> 333 credits", () => {
-			expect(Math.floor(100 * MICRO_CREDITS_PER_MINUTE_PER_DAY)).toBe(333);
+		it("100 minutes -> 266 credits", () => {
+			expect(dailyStorageMicroCredits(100)).toBe(266);
 		});
 
-		it("1000 minutes -> 3330 credits", () => {
-			expect(Math.floor(1000 * MICRO_CREDITS_PER_MINUTE_PER_DAY)).toBe(3330);
+		it("1000 minutes -> 2666 credits", () => {
+			expect(dailyStorageMicroCredits(1000)).toBe(2666);
 		});
 
 		it("0.5 minutes -> 1 credit", () => {
-			expect(Math.floor(0.5 * MICRO_CREDITS_PER_MINUTE_PER_DAY)).toBe(1);
+			expect(dailyStorageMicroCredits(0.5)).toBe(1);
+		});
+
+		it("1,000 minutes for 30 days costs $0.80", () => {
+			expect((dailyStorageMicroCredits(1000) * 30) / 100_000).toBeCloseTo(
+				0.8,
+				3,
+			);
 		});
 	});
 });
