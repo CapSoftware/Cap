@@ -201,7 +201,7 @@ export async function getVideoDownloadInfo(
 				Effect.catchAll(() => Effect.succeed(false)),
 			);
 			if (!exists) return null;
-			return yield* bucket.getSignedObjectUrl(downloadKey);
+			return yield* bucket.getSignedDownloadUrl(downloadKey, filename);
 		}).pipe(provideOptionalAuth, runPromise);
 
 		if (!downloadUrl) {

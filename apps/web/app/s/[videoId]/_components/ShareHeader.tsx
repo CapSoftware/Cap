@@ -156,6 +156,8 @@ export const ShareHeader = ({
 	customDomain,
 	domainVerified,
 	allowedEmailDomain,
+	allowLinkOverride = false,
+	linkOpenToAnyone = false,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	viewerCount = 0,
@@ -172,6 +174,8 @@ export const ShareHeader = ({
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	allowedEmailDomain?: string | null;
+	allowLinkOverride?: boolean;
+	linkOpenToAnyone?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
@@ -523,7 +527,8 @@ export const ShareHeader = ({
 	 */
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
-		allowedEmailDomain,
+		allowedEmailDomain:
+			allowLinkOverride && linkOpenToAnyone ? null : allowedEmailDomain,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
@@ -854,6 +859,8 @@ export const ShareHeader = ({
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
 					allowedEmailDomain={allowedEmailDomain}
+					allowLinkOverride={allowLinkOverride}
+					linkOpenToAnyone={linkOpenToAnyone}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}

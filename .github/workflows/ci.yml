@@ -116,6 +116,7 @@ jobs:
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/dashboard-search-item-values.test.ts
           __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
@@ -145,6 +146,7 @@ jobs:
           __tests__/unit/organization-preferences-switch.test.ts
           __tests__/unit/organization-preferences-target.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
+          __tests__/unit/organization-switcher-item-values.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
@@ -492,6 +494,7 @@ jobs:
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            cargo +1.95.0 test -p gpui_linux --lib -- unmapped_frame retained_visibility
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             # Run under lldb: a SIGSEGV in these tests (1 run in about 36 so

@@ -30,6 +30,11 @@ function createServerEnv() {
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
 
+			// Push notifications for the iOS app. Push is off when any of these are unset.
+			APNS_KEY_ID: z.string().optional(),
+			APNS_TEAM_ID: z.string().optional(),
+			APNS_PRIVATE_KEY: z.string().optional(),
+
 			// Cap uses Resend for email sending, including sending login code emails
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),

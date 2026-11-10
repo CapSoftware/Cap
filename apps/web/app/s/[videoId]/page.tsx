@@ -508,7 +508,7 @@ async function AuthorizedContent({
 		activeUploadRawFileKey: string | null;
 		orgSettings?: OrganizationSettings | null;
 		allowedEmailDomain?: string | null;
-		videoSettings?: OrganizationSettings | null;
+		videoSettings?: (typeof videos.$inferSelect)["settings"];
 		organizationName?: string | null;
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
 		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
@@ -1059,6 +1059,10 @@ async function AuthorizedContent({
 						customDomain={customDomain}
 						domainVerified={domainVerified}
 						allowedEmailDomain={video.allowedEmailDomain}
+						allowLinkOverride={
+							video.orgSettings?.allowPublicLinkOverride === true
+						}
+						linkOpenToAnyone={video.videoSettings?.linkAccess === "anyone"}
 						sharedOrganizations={
 							videoWithOrganizationInfo.sharedOrganizations || []
 						}

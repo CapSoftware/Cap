@@ -39,6 +39,7 @@ export default defineConfig({
 						"react-remove-scroll",
 						"react-hook-form",
 						"@virtual-grid/react",
+						"cmdk",
 					],
 					esbuildOptions: {
 						banner: {

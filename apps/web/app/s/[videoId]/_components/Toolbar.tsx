@@ -6,6 +6,7 @@ import type { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import dynamic from "next/dynamic";
 import { startTransition, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
@@ -177,11 +178,11 @@ export const Toolbar = ({
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);
 			});
-		} catch (error) {
-			console.error("Error posting comment:", error);
-		} finally {
 			setCommentBoxOpen(false);
 			setComment("");
+		} catch (error) {
+			console.error("Error posting comment:", error);
+			toast.error("Couldn't post your comment. Please try again.");
 		}
 	};
 
