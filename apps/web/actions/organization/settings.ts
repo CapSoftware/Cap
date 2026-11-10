@@ -23,6 +23,7 @@ type OrganizationSettingsInput = {
 	disableReactions?: boolean;
 	disableTranscript?: boolean;
 	disableComments?: boolean;
+	disableDownloads?: boolean;
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
@@ -91,6 +92,13 @@ export async function updateOrganizationSettings(
 
 	if (!organization) {
 		throw new Error("Organization not found");
+	}
+
+	if (
+		settings.disableDownloads !== undefined &&
+		typeof settings.disableDownloads !== "boolean"
+	) {
+		throw new Error("Invalid download setting");
 	}
 
 	await requireOrganizationSettingsManager(user.id, organizationId);
