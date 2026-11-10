@@ -1,1 +1,1 @@
-jobs=win-main,item1,item2,item3
+jobs=win-pr,item6-old,item6-fresh
