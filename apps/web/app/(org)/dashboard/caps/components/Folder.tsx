@@ -137,6 +137,7 @@ const FolderCard = ({
 			setUpdateName(name);
 			return;
 		}
+		setUpdateName(nextName);
 		if (nextName !== name) updateFolder.mutate({ id, name: nextName });
 	};
 
