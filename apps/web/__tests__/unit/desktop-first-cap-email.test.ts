@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
 
 const email = vi.hoisted(() => ({
 	sendEmail: vi.fn(),
-	cancelScheduledEmail: vi.fn(),
+	cancel: vi.fn(),
 }));
 
 const fakeDb = vi.hoisted(() => {
@@ -102,22 +102,33 @@ vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
 vi.mock("@cap/database/auth/auth-options", () => ({
 	getServerSession: vi.fn(),
 }));
-vi.mock("@cap/database/emails/config", () => email);
+vi.mock("@cap/database/emails/config", () => ({
+	sendEmail: email.sendEmail,
+}));
 vi.mock("@cap/database/emails/first-shareable-link", () => ({
 	FirstShareableLink: (props: Row) => props,
 }));
 vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
+	serverEnv: () => ({
+		WEB_URL: "https://cap.test",
+		RESEND_API_KEY: "test-key",
+	}),
 	buildEnv: { NEXT_PUBLIC_IS_CAP: true },
 }));
 vi.mock("@cap/utils", () => ({ userIsPro: vi.fn(() => true) }));
 vi.mock("@cap/web-backend", async () => {
 	const { Effect } = await import("effect");
+	const { cancelFirstCapEmail } = await import("@cap/database/first-cap-email");
+	// Stands in for the shared delete service: remove the row, then cancel the
+	// owner's pending email without letting a failure fail the delete.
 	class Videos extends Effect.Service<Videos>()("Videos", {
 		sync: () => ({
 			delete: (videoId: string) =>
-				Effect.sync(() => {
+				Effect.promise(async () => {
 					state.videos.delete(videoId);
+					await cancelFirstCapEmail("user-1" as never, videoId).catch(
+						() => false,
+					);
 				}),
 		}),
 	}) {}
@@ -192,7 +203,20 @@ beforeEach(() => {
 		sent += 1;
 		return { data: { id: `email-${sent}` }, error: null };
 	});
-	email.cancelScheduledEmail.mockResolvedValue(true);
+	email.cancel.mockResolvedValue(true);
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: string, init?: RequestInit) => {
+			const emailId = /^https:\/\/api\.resend\.com\/emails\/(.+)\/cancel$/.exec(
+				url,
+			)?.[1];
+			if (!emailId || init?.method !== "POST")
+				throw new Error(`Unexpected request: ${url}`);
+			return new Response(null, {
+				status: (await email.cancel(emailId)) ? 200 : 409,
+			});
+		}),
+	);
 	(getCurrentUser as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
 		id: "user-1",
 		email: "someone@cap.test",
@@ -236,7 +260,7 @@ describe("first Cap email", () => {
 		await record();
 
 		expect(email.sendEmail).toHaveBeenCalledTimes(1);
-		expect(email.cancelScheduledEmail).not.toHaveBeenCalled();
+		expect(email.cancel).not.toHaveBeenCalled();
 	});
 
 	it("is not sent again however many times the library is emptied", async () => {
@@ -254,9 +278,7 @@ describe("first Cap email", () => {
 		state.now += MINUTE;
 		await remove(first);
 
-		expect(email.cancelScheduledEmail).toHaveBeenCalledExactlyOnceWith(
-			"email-1",
-		);
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
 		expect(marker()).toBeUndefined();
 	});
 
@@ -274,9 +296,7 @@ describe("first Cap email", () => {
 				}),
 			}),
 		);
-		expect(email.cancelScheduledEmail).toHaveBeenCalledExactlyOnceWith(
-			"email-1",
-		);
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
 	});
 
 	it("is cancelled when its recording is deleted while it is being scheduled", async () => {
@@ -286,10 +306,61 @@ describe("first Cap email", () => {
 		});
 		await record();
 
-		expect(email.cancelScheduledEmail).toHaveBeenCalledExactlyOnceWith(
-			"email-1",
-		);
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
 		expect(marker()).toBeUndefined();
+	});
+
+	it("is cancelled when its recording is gone by the time it is scheduled", async () => {
+		email.sendEmail.mockImplementationOnce(async () => {
+			state.videos.clear();
+			return { data: { id: "email-1" }, error: null };
+		});
+		await record();
+
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
+		expect(marker()).toBeUndefined();
+	});
+
+	it("is not sent twice when a recording deleted mid-schedule cannot be cancelled", async () => {
+		email.cancel.mockResolvedValue(false);
+		email.sendEmail.mockImplementationOnce(async () => {
+			state.preferences = {};
+			state.videos.clear();
+			return { data: { id: "email-1" }, error: null };
+		});
+		await record();
+		expect(marker()).toMatchObject({ emailId: "email-1" });
+
+		state.videos.clear();
+		await record();
+		expect(email.sendEmail).toHaveBeenCalledTimes(1);
+	});
+
+	it("is not sent twice when the cancellation fails", async () => {
+		email.cancel.mockResolvedValue(false);
+		const first = await record();
+		state.now += MINUTE;
+		await remove(first);
+		await record();
+
+		expect(state.videos.has(first)).toBe(false);
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
+		expect(email.sendEmail).toHaveBeenCalledTimes(1);
+	});
+
+	it("is tried again for the next first recording when the provider rejects it", async () => {
+		email.sendEmail.mockResolvedValueOnce({
+			data: null,
+			error: { name: "rate_limit_exceeded", message: "Too many requests" },
+		});
+		const first = await record();
+		expect(marker()).toBeUndefined();
+
+		state.now += 6 * MINUTE;
+		await remove(first);
+		await record();
+		expect(email.sendEmail).toHaveBeenCalledTimes(2);
+		expect(marker()).toMatchObject({ emailId: "email-1" });
 	});
 
 	it("is left alone when a different recording is deleted", async () => {
@@ -299,7 +370,7 @@ describe("first Cap email", () => {
 		await remove(second);
 
 		expect(email.sendEmail).toHaveBeenCalledTimes(1);
-		expect(email.cancelScheduledEmail).not.toHaveBeenCalled();
+		expect(email.cancel).not.toHaveBeenCalled();
 		expect(marker()).toMatchObject({ emailId: "email-1" });
 	});
 
@@ -317,12 +388,13 @@ describe("first Cap email", () => {
 		expect(state.preferences).toEqual({ notifications: { pauseViews: true } });
 	});
 
-	it("still deletes the recording when the cancellation fails", async () => {
+	it("still deletes the recording when the cancellation throws", async () => {
 		const first = await record();
-		email.cancelScheduledEmail.mockRejectedValue(new Error("Resend is down"));
+		email.cancel.mockRejectedValue(new Error("Provider is down"));
 		state.now += MINUTE;
 		await remove(first);
 
 		expect(state.videos.size).toBe(0);
+		expect(marker()).toMatchObject({ emailId: "email-1" });
 	});
 });

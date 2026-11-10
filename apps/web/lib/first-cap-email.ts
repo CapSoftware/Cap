@@ -1,48 +1,15 @@
 import { db } from "@cap/database";
-import { cancelScheduledEmail, sendEmail } from "@cap/database/emails/config";
+import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
-import { users } from "@cap/database/schema";
-import type { User } from "@cap/web-domain";
-import { eq, sql } from "drizzle-orm";
+import {
+	cancelScheduledFirstCapEmail,
+	updateFirstCapEmailMarker,
+} from "@cap/database/first-cap-email";
+import { videos } from "@cap/database/schema";
+import type { User, Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 
 const FIRST_CAP_EMAIL_DELAY_MS = 5 * 60 * 1000;
-
-type FirstCapEmailMarker = NonNullable<
-	NonNullable<(typeof users.$inferSelect)["preferences"]>["firstCapEmail"]
->;
-
-// Recordings are hard-deleted, so "is this the owner's only recording" says
-// nothing about whether the email already went out. The marker on the user row
-// is the only record that survives a deletion.
-async function updateMarker(
-	userId: User.UserId,
-	next: (
-		current: FirstCapEmailMarker | undefined,
-	) => FirstCapEmailMarker | null | undefined,
-) {
-	return db().transaction(async (tx) => {
-		const [row] = await tx
-			.select({ preferences: users.preferences })
-			.from(users)
-			.where(eq(users.id, userId))
-			.for("update");
-		if (!row) return false;
-
-		const marker = next(row.preferences?.firstCapEmail);
-		if (marker === undefined) return false;
-
-		await tx
-			.update(users)
-			.set({
-				preferences:
-					marker === null
-						? sql`JSON_REMOVE(COALESCE(${users.preferences}, JSON_OBJECT()), '$.firstCapEmail')`
-						: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.firstCapEmail', CAST(${JSON.stringify(marker)} AS JSON))`,
-			})
-			.where(eq(users.id, userId));
-		return true;
-	});
-}
 
 export async function scheduleFirstCapEmail({
 	userId,
@@ -53,16 +20,20 @@ export async function scheduleFirstCapEmail({
 }: {
 	userId: User.UserId;
 	email: string;
-	videoId: string;
+	videoId: Video.VideoId;
 	videoName: string;
 	url: string;
 }) {
-	const claimed = await updateMarker(userId, (current) =>
-		current
-			? undefined
-			: { videoId, sendAt: Date.now() + FIRST_CAP_EMAIL_DELAY_MS },
+	const sendAt = Date.now() + FIRST_CAP_EMAIL_DELAY_MS;
+	const release = () =>
+		updateFirstCapEmailMarker(userId, (current) =>
+			current?.videoId === videoId ? null : undefined,
+		);
+
+	const claimed = await updateFirstCapEmailMarker(userId, (current) =>
+		current ? undefined : { videoId, sendAt },
 	);
-	if (!claimed) return false;
+	if (!claimed) return;
 
 	const result = await sendEmail({
 		email,
@@ -71,29 +42,32 @@ export async function scheduleFirstCapEmail({
 		marketing: true,
 		scheduledAt: "in 5 min",
 	});
+	if (result?.error) {
+		await release();
+		return;
+	}
 
 	const emailId = result?.data?.id;
-	if (!emailId) return true;
+	if (!emailId) return;
 
-	const recorded = await updateMarker(userId, (current) =>
+	const recorded = await updateFirstCapEmailMarker(userId, (current) =>
 		current?.videoId === videoId ? { ...current, emailId } : undefined,
 	);
-	if (!recorded) await cancelScheduledEmail(emailId);
-	return recorded;
-}
+	if (recorded) {
+		const [video] = await db()
+			.select({ id: videos.id })
+			.from(videos)
+			.where(eq(videos.id, videoId))
+			.limit(1);
+		if (video) return;
+	}
 
-export async function cancelFirstCapEmail(
-	userId: User.UserId,
-	videoId: string,
-) {
-	let emailId: string | undefined;
-	const released = await updateMarker(userId, (current) => {
-		if (current?.videoId !== videoId || Date.now() >= current.sendAt)
-			return undefined;
-		emailId = current.emailId;
-		return null;
-	});
-
-	if (released && emailId) await cancelScheduledEmail(emailId);
-	return released;
+	// The recording was deleted while its email was being scheduled, so the
+	// delete could not see an email to cancel. A cancel that fails keeps the
+	// claim, which stops a second email going out on top of this one.
+	if (await cancelScheduledFirstCapEmail(emailId)) await release();
+	else if (!recorded)
+		await updateFirstCapEmailMarker(userId, (current) =>
+			current ? undefined : { videoId, sendAt, emailId },
+		);
 }

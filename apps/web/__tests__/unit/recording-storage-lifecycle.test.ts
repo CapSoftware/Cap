@@ -22,10 +22,14 @@ const mocks = vi.hoisted(() => ({
 	driveCopy: vi.fn(),
 	driveText: vi.fn(),
 	driveFind: vi.fn(),
+	cancelFirstCapEmail: vi.fn(),
 	nextId: "duplicate-video",
 }));
 
 vi.mock("@cap/database", () => ({ db: mocks.database }));
+vi.mock("@cap/database/first-cap-email", () => ({
+	cancelFirstCapEmail: mocks.cancelFirstCapEmail,
+}));
 vi.mock("@cap/database/helpers", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@cap/database/helpers")>()),
 	nanoId: () => mocks.nextId,
@@ -1161,6 +1165,42 @@ describe("recording storage lifecycle", () => {
 				new Map([["other-share", { videoId: "other-video" }]]),
 			);
 		}
+	});
+
+	it("cancels the owner's pending first Cap email once the recording is gone", async () => {
+		const database = databaseFixture();
+		await storageFixture([[outputKey, "verified-video"]]);
+		let rowExistedAtCancel: boolean | undefined;
+		mocks.cancelFirstCapEmail.mockImplementation(async () => {
+			rowExistedAtCancel = database.rows.has(videoId);
+			return true;
+		});
+
+		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
+		expect(mocks.cancelFirstCapEmail).toHaveBeenCalledExactlyOnceWith(
+			ownerId,
+			videoId,
+		);
+		expect(rowExistedAtCancel).toBe(false);
+	});
+
+	it("reports a successful deletion when cancelling the first Cap email fails", async () => {
+		const database = databaseFixture();
+		await storageFixture([[outputKey, "verified-video"]]);
+		mocks.cancelFirstCapEmail.mockRejectedValue(new Error("Provider is down"));
+
+		expect(Exit.isSuccess(await runVideoOperation("delete"))).toBe(true);
+		expect(database.rows.has(videoId)).toBe(false);
+	});
+
+	it("leaves the first Cap email alone when the recording could not be deleted", async () => {
+		const database = databaseFixture();
+		const storage = await storageFixture([[outputKey, "verified-video"]]);
+		storage.deniedDeletes.add(outputKey);
+
+		expect(Exit.isFailure(await runVideoOperation("delete"))).toBe(true);
+		expect(database.rows.has(videoId)).toBe(true);
+		expect(mocks.cancelFirstCapEmail).not.toHaveBeenCalled();
 	});
 
 	it("waits for job deletion before deleting any dependent database row", async () => {

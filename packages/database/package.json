@@ -68,6 +68,7 @@
 		"./auth/sso-state": "./auth/sso-state.ts",
 		"./schema": "./schema.ts",
 		"./video-sharing-default": "./video-sharing-default.ts",
+		"./first-cap-email": "./first-cap-email.ts",
 		"./pro-seat-subscription": "./pro-seat-subscription.ts",
 		"./referrals": "./referrals.ts",
 		"./loops/*": "./loops/*.ts",

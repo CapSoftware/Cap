@@ -20,10 +20,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { getDesktopShareUrl } from "@/lib/desktop-share-url";
-import {
-	cancelFirstCapEmail,
-	scheduleFirstCapEmail,
-} from "@/lib/first-cap-email";
+import { scheduleFirstCapEmail } from "@/lib/first-cap-email";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -434,11 +431,6 @@ app.delete(
 			await invalidateGoogleDriveStorageQuotaCache(
 				result.video.storageIntegrationId,
 			);
-
-			if (user.preferences?.firstCapEmail?.videoId === videoId)
-				await cancelFirstCapEmail(user.id, videoId).catch((error) =>
-					console.error("Error cancelling first Cap email:", error),
-				);
 
 			const cleanup = readInstantCleanupReport(
 				c.req.query("reason"),

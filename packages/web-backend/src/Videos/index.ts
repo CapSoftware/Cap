@@ -1,3 +1,4 @@
+import { cancelFirstCapEmail } from "@cap/database/first-cap-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
@@ -402,6 +403,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					}
 				} while (continuationToken);
 				yield* repo.delete(video.id, video.ownerId);
+				yield* Effect.tryPromise(() =>
+					cancelFirstCapEmail(video.ownerId, video.id),
+				).pipe(
+					Effect.catchAll((error) =>
+						Effect.logError("Failed to cancel the first Cap email", error),
+					),
+				);
 				yield* Effect.log(`Deleted video ${video.id}`);
 			}),
 
