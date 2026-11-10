@@ -148,5 +148,101 @@ fn main() {
             );
         }
     }
+    #[cfg(windows)]
+    windows_extra(&base);
     let _ = fs::remove_dir_all(&base);
+}
+
+#[cfg(windows)]
+fn deletable(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            deletable(&entry.path())?;
+        } else if kind.is_file() {
+            fs::OpenOptions::new()
+                .access_mode(0x0001_0000)
+                .share_mode(7)
+                .open(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_extra(base: &Path) {
+    for (index, (name, hold)) in holders().into_iter().enumerate() {
+        let root = base.join(format!("preflight-{index}"));
+        let bundle = build(&root);
+        let held = hold(&bundle);
+        let checked = deletable(&bundle);
+        println!(
+            "| {name} | check every file opens for delete | check | {} | {} of {} | |",
+            describe(&checked),
+            count(&bundle),
+            FILES.len()
+        );
+        if checked.is_ok() {
+            let removed = fs::remove_dir_all(&bundle);
+            println!(
+                "| {name} | check every file opens for delete | remove_dir_all after check | {} | {} of {} | |",
+                describe(&removed),
+                count(&bundle),
+                FILES.len()
+            );
+        }
+        drop(held);
+    }
+    for (index, shown) in ["", "content", "content/segments/segment-0"].into_iter().enumerate() {
+        let name = format!("Explorer window showing <recording>/{shown}");
+        let root = base.join(format!("explorer-{index}"));
+        let bundle = build(&root);
+        let spawned = std::process::Command::new("explorer.exe")
+            .arg(bundle.join(shown))
+            .spawn();
+        std::thread::sleep(std::time::Duration::from_secs(12));
+        let holding = root.join(".cap-deleting");
+        fs::create_dir(&holding).unwrap();
+        let moved = fs::rename(&bundle, holding.join("0123456789abcdef"));
+        println!(
+            "| {name} | move aside | rename (explorer spawn {}) | {} | {} of {} | {} |",
+            describe(&spawned),
+            describe(&moved),
+            count(&bundle),
+            FILES.len(),
+            count(&holding)
+        );
+        if moved.is_err() {
+            let checked = deletable(&bundle);
+            let removed = fs::remove_dir_all(&bundle);
+            println!(
+                "| {name} | check every file opens for delete, then remove in place | check then remove_dir_all | {} then {} | {} of {} | |",
+                describe(&checked),
+                describe(&removed),
+                count(&bundle),
+                FILES.len()
+            );
+        } else {
+            let removed = fs::remove_dir_all(&holding);
+            println!(
+                "| {name} | move aside | remove_dir_all after rename | {} | {} of {} | {} |",
+                describe(&removed),
+                count(&bundle),
+                FILES.len(),
+                count(&holding)
+            );
+        }
+    }
+    let listed = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "(Get-Process explorer -ErrorAction SilentlyContinue | Measure-Object).Count; (New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.LocationURL }"])
+        .output();
+    if let Ok(listed) = listed {
+        println!();
+        println!("explorer processes and open folder windows at the end:");
+        println!("```");
+        println!("{}", String::from_utf8_lossy(&listed.stdout).trim());
+        println!("```");
+    }
 }
