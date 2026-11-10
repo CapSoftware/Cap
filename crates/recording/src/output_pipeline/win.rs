@@ -1,7 +1,9 @@
 use crate::{
     AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
     output_pipeline::{
-        HealthSender, PipelineHealthEvent, emit_health,
+        HealthSender, PipelineHealthEvent,
+        camera_rgb::convert_rgb24_to_bgra_into,
+        emit_health,
         frame_pacing::{FramePacer, Paced},
         mjpeg::MjpegDecoder,
     },
@@ -127,8 +129,7 @@ use windows::{
     Win32::Graphics::{
         Direct3D11::ID3D11Device,
         Dxgi::Common::{
-            DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM,
-            DXGI_FORMAT_YUY2,
+            DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2,
         },
     },
 };
@@ -644,10 +645,10 @@ impl NativeCameraFrame {
             cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
                 DXGI_FORMAT_YUY2
             }
-            cap_camera_windows::PixelFormat::ARGB | cap_camera_windows::PixelFormat::RGB32 => {
-                DXGI_FORMAT_B8G8R8A8_UNORM
-            }
-            cap_camera_windows::PixelFormat::RGB24 => DXGI_FORMAT_R8G8B8A8_UNORM,
+            cap_camera_windows::PixelFormat::ARGB
+            | cap_camera_windows::PixelFormat::RGB32
+            | cap_camera_windows::PixelFormat::RGB24
+            | cap_camera_windows::PixelFormat::BGR24 => DXGI_FORMAT_B8G8R8A8_UNORM,
             _ => DXGI_FORMAT_NV12,
         }
     }
@@ -685,7 +686,7 @@ fn ffmpeg_pixel_to_dxgi(pixel: ffmpeg::format::Pixel) -> DXGI_FORMAT {
         ffmpeg::format::Pixel::NV12 => DXGI_FORMAT_NV12,
         ffmpeg::format::Pixel::YUYV422 | ffmpeg::format::Pixel::UYVY422 => DXGI_FORMAT_YUY2,
         ffmpeg::format::Pixel::BGRA | ffmpeg::format::Pixel::RGBA => DXGI_FORMAT_B8G8R8A8_UNORM,
-        ffmpeg::format::Pixel::BGR24 | ffmpeg::format::Pixel::RGB24 => DXGI_FORMAT_R8G8B8A8_UNORM,
+        ffmpeg::format::Pixel::BGR24 | ffmpeg::format::Pixel::RGB24 => DXGI_FORMAT_B8G8R8A8_UNORM,
         _ => DXGI_FORMAT_NV12,
     }
 }
@@ -1125,6 +1126,16 @@ impl AudioMuxer for WindowsCameraMuxer {
 pub struct CameraBuffers {
     uyvy_buffer: Vec<u8>,
     flip_buffer: Vec<u8>,
+    bgra_buffer: Vec<u8>,
+    texture: Option<CameraUploadTexture>,
+}
+
+struct CameraUploadTexture {
+    key: (u32, u32, DXGI_FORMAT),
+    device: ID3D11Device,
+    context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    dynamic: bool,
 }
 
 impl CameraBuffers {
@@ -1132,6 +1143,8 @@ impl CameraBuffers {
         Self {
             uyvy_buffer: Vec::new(),
             flip_buffer: Vec::new(),
+            bgra_buffer: Vec::new(),
+            texture: None,
         }
     }
 
@@ -1837,8 +1850,8 @@ pub fn upload_mf_buffer_to_texture(
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
     use cap_mediafoundation_utils::IMFMediaBufferExt;
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-        D3D11_USAGE_DEFAULT,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_WRITE_DISCARD,
+        D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
     };
     use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
@@ -1869,11 +1882,86 @@ pub fn upload_mf_buffer_to_texture(
         )
     })?;
 
+    let key = (frame.width, frame.height, dxgi_format);
+    if buffers
+        .texture
+        .as_ref()
+        .is_none_or(|cached| cached.key != key || cached.device != *device)
+    {
+        let mut desc = D3D11_TEXTURE2D_DESC {
+            Width: frame.width,
+            Height: frame.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: dxgi_format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DYNAMIC,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        let dynamic = unsafe {
+            device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .is_ok()
+        };
+        if !dynamic {
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.CPUAccessFlags = 0;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture))? };
+        }
+        buffers.texture = Some(CameraUploadTexture {
+            key,
+            device: device.clone(),
+            context: unsafe { device.GetImmediateContext()? },
+            texture: texture.ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::core::HRESULT(-1),
+                    "CreateTexture2D succeeded but returned no texture",
+                )
+            })?,
+            dynamic,
+        });
+    }
+    let cached = buffers.texture.as_ref().unwrap();
+    let texture = cached.texture.clone();
+    let context = cached.context.clone();
+    let dynamic = cached.dynamic;
+
     let needs_uyvy_conversion = frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422;
+    let needs_rgb_conversion = matches!(
+        frame.pixel_format,
+        cap_camera_windows::PixelFormat::RGB24 | cap_camera_windows::PixelFormat::BGR24
+    );
     let needs_flip = frame.is_bottom_up;
     let mut row_pitch = layout.primary_stride as u32;
 
     let data: &[u8] = match (needs_uyvy_conversion, needs_flip) {
+        (false, flip) if needs_rgb_conversion => {
+            row_pitch = frame.width.checked_mul(4).ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "Camera BGRA row pitch is too large",
+                )
+            })?;
+            // Windows RGB24 stores BGR bytes, just like BGR24 and the FFmpeg fallback.
+            convert_rgb24_to_bgra_into(
+                original_data,
+                &mut buffers.bgra_buffer,
+                frame.width as usize,
+                frame.height as usize,
+                layout.primary_stride,
+                false,
+                flip,
+            )
+            .map_err(|message| {
+                windows::core::Error::new(windows::Win32::Foundation::E_INVALIDARG, message)
+            })?
+        }
         (false, false) => original_data,
         (true, false) => {
             let uyvy_size = (frame.width * frame.height * 2) as usize;
@@ -1953,36 +2041,46 @@ pub fn upload_mf_buffer_to_texture(
         }
     };
 
-    let texture_desc = D3D11_TEXTURE2D_DESC {
-        Width: frame.width,
-        Height: frame.height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: dxgi_format,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
+    let (row_bytes, rows) = match dxgi_format {
+        DXGI_FORMAT_NV12 => (
+            frame.width as usize,
+            frame.height as usize + frame.height as usize / 2,
+        ),
+        DXGI_FORMAT_YUY2 => (frame.width as usize * 2, frame.height as usize),
+        _ => (frame.width as usize * 4, frame.height as usize),
     };
-
-    let subresource_data = D3D11_SUBRESOURCE_DATA {
-        pSysMem: data.as_ptr() as *const _,
-        SysMemPitch: row_pitch,
-        SysMemSlicePitch: 0,
-    };
-
-    unsafe {
-        let mut texture = None;
-        device.CreateTexture2D(&texture_desc, Some(&subresource_data), Some(&mut texture))?;
-        texture.ok_or_else(|| {
-            windows::core::Error::new(
-                windows::core::HRESULT(-1),
-                "CreateTexture2D succeeded but returned no texture",
-            )
-        })
+    if (row_pitch as usize) < row_bytes || data.len() < (rows - 1) * row_pitch as usize + row_bytes
+    {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_INVALIDARG,
+            "Camera buffer is too small for the upload texture",
+        ));
     }
+    unsafe {
+        if dynamic {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context.Map(&texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            if (mapped.RowPitch as usize) < row_bytes {
+                context.Unmap(&texture, 0);
+                return Err(windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "Mapped camera texture row pitch is too small",
+                ));
+            }
+            for row in 0..rows {
+                std::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(row * row_pitch as usize),
+                    mapped
+                        .pData
+                        .cast::<u8>()
+                        .add(row * mapped.RowPitch as usize),
+                    row_bytes,
+                );
+            }
+            context.Unmap(&texture, 0);
+        } else {
+            context.UpdateSubresource(&texture, 0, None, data.as_ptr().cast(), row_pitch, 0);
+        }
+    }
+    Ok(texture)
 }
