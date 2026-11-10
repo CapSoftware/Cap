@@ -210,6 +210,47 @@ function Button-Name([IntPtr]$handle, [int]$id) {
   if ($button -eq [IntPtr]::Zero) { return "" }
   return ([Win]::Title($button) -replace "&", "")
 }
+# A click on the button itself, the way the mouse delivers it.
+function Click([IntPtr]$handle, [int]$id) {
+  $button = Child $handle "Button" $id
+  if ($button -eq [IntPtr]::Zero) { return "" }
+  $point = [IntPtr]((6 -shl 16) -bor 6)
+  [Win]::PostMessage($button, 0x0201, [IntPtr]1, $point) | Out-Null
+  Start-Sleep -Milliseconds 120
+  [Win]::PostMessage($button, 0x0202, [IntPtr]0, $point) | Out-Null
+  return (Button-Name $handle $id)
+}
+# Single-click an item in the dialog's list, the way a person selects a folder.
+function Select-Item([IntPtr]$handle, [string]$name) {
+  try {
+    $condition = Both (Cond "type" ([System.Windows.Automation.ControlType]::ListItem)) (Cond "class" "UIItem")
+    foreach ($item in (Element $handle).FindAll($Scope::Descendants, $condition)) {
+      if ($item.Current.Name -eq $name) {
+        $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Start-Sleep -Milliseconds 500
+        return [bool]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected
+      }
+    }
+  } catch { Write-Host "select $name failed: $_" }
+  return $false
+}
+function Folder-Field-Text([IntPtr]$handle) {
+  $edit = Path-Field $handle
+  if ($edit -eq [IntPtr]::Zero) { return "" }
+  return [Win]::GetText($edit)
+}
+function Still-Open($process, [IntPtr]$dialog) {
+  return ((-not $process.HasExited) -and [Win]::IsWindow($dialog))
+}
+function Wait-Error-Dialog($process, [int]$seconds) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  do {
+    $handles = @(Dialog-Handles $process.Id "Import Error")
+    if ($handles.Count -gt 0) { return $handles[0] }
+    Start-Sleep -Milliseconds 500
+  } until ((Get-Date) -ge $deadline)
+  return $null
+}
 function Press([IntPtr]$handle, [int]$id) {
   $button = Child $handle "Button" $id
   [Win]::PostMessage($handle, 0x0111, [IntPtr]$id, $button) | Out-Null
@@ -240,16 +281,16 @@ function Open-Picker([string]$round) {
   return $null
 }
 
-# Round 1: pick the recording folder.
-$round = Open-Picker "pick"
+# Round 1: select the recording folder in the list and click the accept button.
+$round = Open-Picker "select"
 Result "dialog_opened" ($null -ne $round)
 if ($round) {
   $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
   Result "editor_opened" ([bool]((Log-Text $name) -match "editor project validated"))
-  Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 3
   [Win]::Raise($dialog)
-  Shot "pick-1-opened"
-  Dump $dialog "pick-dialog.txt"
+  Shot "select-1-opened"
+  Dump $dialog "select-dialog.txt"
   Result "dialog_title" ([Win]::Title($dialog))
   $address = Address $dialog
   Result "dialog_address" $address
@@ -257,49 +298,83 @@ if ($round) {
   Result "dialog_items_at_root" ((Items $dialog) -join ";")
   Result "dialog_accept_button" (Button-Name $dialog 1)
   Result "dialog_has_folder_field" ((Child $dialog "Edit" 1152) -ne [IntPtr]::Zero)
-  Result "path_typed" (Type-Path $dialog $source)
+  Result "select_item_selected" (Select-Item $dialog "source.cap")
   Start-Sleep -Seconds 1
-  Shot "pick-2-typed"
-  Result "accept_pressed" (Press $dialog 1)
-  Start-Sleep -Seconds 3
-  $still = @(Dialog-Handles $process.Id ([Win]::Title($dialog)))
-  Result "dialog_still_open_after_accept" ($still.Count -gt 0)
-  if ($still.Count -gt 0) {
-    [Win]::Raise($still[0])
-    Shot "pick-3-still-open"
-    Result "dialog_address_after_accept" (Address $still[0])
-    Result "dialog_items_after_accept" ((Items $still[0]) -join ";")
+  Result "select_field_text" (Folder-Field-Text $dialog)
+  Shot "select-2-selected"
+  Result "select_clicked" (Click $dialog 1)
+  Start-Sleep -Seconds 4
+  $open = Still-Open $process $dialog
+  Result "select_dialog_still_open" $open
+  if ($open) {
+    [Win]::Raise($dialog)
+    Shot "select-3-still-open"
+    Result "select_address_after_click" (Address $dialog)
+    Result "select_items_after_click" ((Items $dialog) -join ";")
+    Result "select_field_text_after_click" (Folder-Field-Text $dialog)
+    Result "select_clicked_again" (Click $dialog 1)
+    Start-Sleep -Seconds 4
+    Result "select_dialog_still_open_after_second_click" (Still-Open $process $dialog)
+    Shot "select-4-second-click"
   }
   Result "imported" (Wait-Log $process $name "clips imported" 60)
   Result "picked_line" ((Lines $name "existing recording picked|picker returned nothing" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
   Result "imported_line" ((Lines $name "clips imported|failed to import clip" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
   Start-Sleep -Seconds 5
-  Shot "pick-4-end"
+  Shot "select-5-end"
   Result "app_alive_after_pick" (-not $process.HasExited)
-  foreach ($open in @(Dialog-Handles $process.Id "")) { Press $open 2 | Out-Null }
+  foreach ($left in @(Dialog-Handles $process.Id "")) { Press $left 2 | Out-Null }
   Stop-App $process
 }
 Result "target_segments" (Segments $target)
-Result "target_display_files" (@(Get-ChildItem -Path (Join-Path $target "content\segments") -Recurse -Filter "display.mp4").Count)
 
 if ($Variant -eq "fix") {
-  # Round 2: a folder that is not a recording gives the import error.
+  # Round 2: go inside the recording folder, as the reporter did, and click the accept button.
+  $round = Open-Picker "inside"
+  Result "inside_dialog_opened" ($null -ne $round)
+  if ($round) {
+    $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
+    Start-Sleep -Seconds 3
+    Result "inside_path_typed" (Type-Path $dialog $source)
+    Press $dialog 1 | Out-Null
+    Start-Sleep -Seconds 4
+    $open = Still-Open $process $dialog
+    Result "inside_dialog_open_after_enter" $open
+    if ($open) {
+      [Win]::Raise($dialog)
+      Result "inside_address" (Address $dialog)
+      Result "inside_items" ((Items $dialog) -join ";")
+      Result "inside_field_text" (Folder-Field-Text $dialog)
+      Shot "inside-1-navigated"
+      Result "inside_clicked" (Click $dialog 1)
+      Start-Sleep -Seconds 4
+      Result "inside_dialog_still_open" (Still-Open $process $dialog)
+    }
+    Result "inside_imported" (Wait-Log $process $name "clips imported" 60)
+    Result "inside_picked_line" ((Lines $name "existing recording picked|picker returned nothing" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
+    Start-Sleep -Seconds 5
+    Shot "inside-2-end"
+    Result "inside_app_alive" (-not $process.HasExited)
+    foreach ($left in @(Dialog-Handles $process.Id "")) { Press $left 2 | Out-Null }
+    Stop-App $process
+  }
+  Result "target_segments_after_inside" (Segments $target)
+
+  # Round 3: a folder that is not a recording gives the import error.
   $before = (Get-FileHash (Join-Path $target "recording-meta.json")).Hash
   $round = Open-Picker "reject"
   Result "reject_dialog_opened" ($null -ne $round)
   if ($round) {
     $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
-    Start-Sleep -Seconds 2
-    Result "reject_path_typed" (Type-Path $dialog $plain)
+    Start-Sleep -Seconds 3
+    Result "reject_item_selected" (Select-Item $dialog "Holiday photos")
     Start-Sleep -Seconds 1
-    Press $dialog 1 | Out-Null
+    Click $dialog 1 | Out-Null
+    Start-Sleep -Seconds 4
+    if (Still-Open $process $dialog) { Click $dialog 1 | Out-Null }
     Result "reject_logged" (Wait-Log $process $name "failed to import clip: Select a Cap project folder" 60)
-    $error_dialog = $null
-    $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $deadline -and -not $error_dialog) {
-      $handles = @(Dialog-Handles $process.Id "Import Error")
-      if ($handles.Count -gt 0) { $error_dialog = $handles[0] } else { Start-Sleep -Milliseconds 500 }
-    }
+    Result "reject_picked_line" ((Lines $name "existing recording picked|picker returned nothing" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
+    $error_dialog = Wait-Error-Dialog $process 30
     $listing = @([Win]::Windows([uint32]$process.Id) | ForEach-Object { [Win]::Title($_) + " [" + [Win]::Class($_) + "]" })
     Set-Content -Path (Join-Path $Out "reject-windows.txt") -Value $listing
     Result "reject_error_dialog_shown" ($null -ne $error_dialog)
@@ -309,8 +384,10 @@ if ($Variant -eq "fix") {
       Shot "reject-1-error"
       Dump $error_dialog "reject-dialog.txt"
       Result "reject_error_title" ([Win]::Title($error_dialog))
-      Result "reject_error_text" (([Win]::ChildTexts($error_dialog) | Where-Object { $_ -like "Static: *" -and $_.Length -gt 8 } | Select-Object -First 1) -replace "^Static: ", "")
+      Result "reject_error_text" (([Win]::ChildTexts($error_dialog) | Where-Object { $_ -like "Static *" -and $_ -like "*import*" } | Select-Object -First 1) -replace "^Static #\d+: ", "")
       [Win]::PostMessage($error_dialog, 0x0111, [IntPtr]1, [IntPtr]::Zero) | Out-Null
+      Start-Sleep -Seconds 1
+      [Win]::PostMessage($error_dialog, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null
       Start-Sleep -Seconds 2
       Result "reject_error_dialog_dismissed" (-not [Win]::IsWindow($error_dialog))
     } else {
@@ -321,13 +398,13 @@ if ($Variant -eq "fix") {
     Stop-App $process
   }
 
-  # Round 3: cancelling the dialog imports nothing and shows no error.
+  # Round 4: cancelling the dialog imports nothing and shows no error.
   $round = Open-Picker "cancel"
   Result "cancel_dialog_opened" ($null -ne $round)
   if ($round) {
     $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
-    Start-Sleep -Seconds 2
-    Press $dialog 2 | Out-Null
+    Start-Sleep -Seconds 3
+    Click $dialog 2 | Out-Null
     Result "cancel_logged" (Wait-Log $process $name "existing recording picker returned nothing" 30)
     Start-Sleep -Seconds 2
     Result "cancel_no_dialog_left" (@(Dialog-Handles $process.Id "").Count -eq 0)

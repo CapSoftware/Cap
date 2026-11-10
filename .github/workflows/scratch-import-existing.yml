@@ -85,14 +85,16 @@ jobs:
           cat "$result"
           if [[ "${{ matrix.variant }}" == fix ]]; then
             for line in editor_opened=True dialog_opened=True dialog_rooted_at_recordings=True imported=True \
-              target_segments=2 app_alive_after_pick=True reject_logged=True reject_error_dialog_shown=True \
+              target_segments=2 app_alive_after_pick=True inside_imported=True target_segments_after_inside=3 \
+              inside_app_alive=True reject_logged=True reject_error_dialog_shown=True \
               reject_error_dialog_dismissed=True reject_target_unchanged=True reject_app_alive=True \
               cancel_logged=True cancel_no_dialog_left=True cancel_target_unchanged=True cancel_app_alive=True; do
               grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
             done
           else
             for line in editor_opened=True dialog_opened=True dialog_rooted_at_recordings=True \
-              dialog_still_open_after_accept=True imported=False target_segments=1; do
+              select_dialog_still_open=True select_dialog_still_open_after_second_click=True \
+              imported=False target_segments=1; do
               grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
             done
           fi
