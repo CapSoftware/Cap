@@ -1,0 +1,122 @@
+name: Delete all or nothing proof (scratch)
+
+# Temporary, lives only on scratch/delete-atomic-proof. `plan.txt` names the
+# jobs a push runs and the source revisions the real app is built from.
+on:
+  push:
+    branches:
+      - scratch/delete-atomic-proof
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delete-atomic-proof-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      probe: ${{ steps.plan.outputs.probe }}
+      revisions: ${{ steps.plan.outputs.revisions }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/delete-proof
+      - name: Plan
+        id: plan
+        run: |
+          set -euo pipefail
+          plan=.github/delete-proof/plan.txt
+          echo "probe=$(sed -n 's/^probe=//p' "$plan")" >> "$GITHUB_OUTPUT"
+          revisions=$(sed -n 's/^build \([a-z0-9-]*\) \([0-9a-f]*\)$/{"name":"\1","ref":"\2"}/p' "$plan" | paste -sd, -)
+          echo "revisions=[$revisions]" >> "$GITHUB_OUTPUT"
+          cat "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  probe:
+    name: Probe, ${{ matrix.runner }}
+    needs: plan
+    if: needs.plan.outputs.probe == 'yes'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-2025, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/delete-proof
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc +1.95.0 --version
+          rustc +1.95.0 --edition 2024 -O -o "$RUNNER_TEMP/probe" .github/delete-proof/probe.rs
+          { echo "### ${{ matrix.runner }}, $(rustc +1.95.0 --version)"; echo; "$RUNNER_TEMP/probe"; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  realapp:
+    name: Real app on windows-2022, ${{ matrix.revision.name }}
+    needs: plan
+    if: needs.plan.outputs.revisions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: ${{ fromJSON(needs.plan.outputs.revisions) }}
+    runs-on: windows-2022
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision.ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          path: rc
+          sparse-checkout: .github/delete-proof
+
+      - name: Build
+        uses: ./rc/.github/delete-proof/build
+        with:
+          target: x86_64-pc-windows-msvc
+          key: delproof-windows-2022-${{ matrix.revision.ref }}-v1
+
+      - name: Scenario tools
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow
+          choco install tesseract --no-progress -y > "$RUNNER_TEMP/choco.log" 2>&1 || tail -n 20 "$RUNNER_TEMP/choco.log"
+          ls "/c/Program Files/Tesseract-OCR/tesseract.exe"
+          git log -1 --format='source %H %s'
+
+      - name: Delete with the editor closed
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONPATH: rc/.github/delete-proof
+        run: python rc/.github/delete-proof/win_delete_open.py rc-pkg "$RUNNER_TEMP/rc-out/editor-closed" editor-closed
+
+      - name: Delete with the editor open
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONPATH: rc/.github/delete-proof
+        run: python rc/.github/delete-proof/win_delete_open.py rc-pkg "$RUNNER_TEMP/rc-out/editor-open" editor-open
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delete-proof-${{ matrix.revision.name }}
+          path: |
+            ${{ runner.temp }}/rc-out/**/*.log
+            ${{ runner.temp }}/rc-out/**/*.txt
+            ${{ runner.temp }}/rc-out/**/*.png
+          retention-days: 7

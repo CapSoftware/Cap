@@ -1,0 +1,106 @@
+name: Build the GPUI app once
+description: Builds cap-gpui for the checked out tree and keeps the runnable package in the cache under a key naming that tree
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+  key:
+    description: Cache key naming the source revision
+    required: true
+outputs:
+  hit:
+    description: Whether the package came from the cache
+    value: ${{ steps.pkg.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Restore the built app
+      id: pkg
+      uses: actions/cache/restore@v4
+      with:
+        path: rc-pkg
+        key: ${{ inputs.key }}
+
+    # A debug build of gpui on Windows reads its shader sources from the
+    # checkout it was built from, so a restored package needs that checkout
+    # back at the same path.
+    - name: GPUI sources for the restored Windows package
+      if: ${{ steps.pkg.outputs.cache-hit == 'true' && runner.os == 'Windows' }}
+      shell: bash
+      run: ./scripts/prepare-gpui-dependency.sh
+
+    - name: Install Linux desktop dependencies
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' && runner.os == 'Linux' }}
+      uses: ./.github/actions/install-desktop-deps
+
+    - name: Rust setup
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      uses: dtolnay/rust-toolchain@1.95.0
+      with:
+        targets: ${{ inputs.target }}
+
+    - uses: ./.github/actions/setup-rust-cache
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      with:
+        target: ${{ inputs.target }}
+        prefix-key: v1-rust-gpui
+        save-cache: "false"
+        workspaces: apps/desktop-gpui -> target
+
+    - name: Run setup
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: node scripts/setup.js
+      env:
+        RUST_TARGET_TRIPLE: ${{ inputs.target }}
+
+    - name: Prepare GPUI dependency
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        node scripts/sync-desktop-versions.mjs
+        ./scripts/prepare-gpui-dependency.sh
+
+    - name: Build the app
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+      run: |
+        set -euo pipefail
+        cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+          --target ${{ inputs.target }} --bin cap-gpui
+        out="apps/desktop-gpui/target/${{ inputs.target }}/debug"
+        rm -rf rc-pkg
+        mkdir -p rc-pkg/bin
+        git rev-parse HEAD > rc-pkg/revision.txt
+        case "$RUNNER_OS" in
+          Windows)
+            cp "$out/cap-gpui.exe" rc-pkg/bin/
+            cp target/debug/*.dll rc-pkg/bin/
+            cp target/ffmpeg/bin/ffmpeg.exe target/ffmpeg/bin/ffprobe.exe rc-pkg/bin/ 2>/dev/null || true
+            ;;
+          Linux)
+            cp "$out/cap-gpui" rc-pkg/bin/
+            mkdir -p rc-pkg/libs
+            cp -a target/native-deps/lib/. rc-pkg/libs/
+            cp -a target/native-deps/onnxruntime/lib/. rc-pkg/libs/ 2>/dev/null || true
+            strip --strip-debug rc-pkg/bin/cap-gpui
+            ;;
+          macOS)
+            cp "$out/cap-gpui" rc-pkg/bin/
+            mkdir -p rc-pkg/Frameworks
+            cp -RL target/Frameworks/. rc-pkg/Frameworks/
+            DYLD_PRINT_LIBRARIES=0 otool -L rc-pkg/bin/cap-gpui | grep -i spacedrive | head -3
+            ls rc-pkg/Frameworks/Spacedrive.framework/Libraries | head -5
+            ;;
+        esac
+        ls -la rc-pkg rc-pkg/bin | head -80
+        du -sh rc-pkg
+
+    - name: Keep the built app
+      if: ${{ steps.pkg.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: rc-pkg
+        key: ${{ inputs.key }}
