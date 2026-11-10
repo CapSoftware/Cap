@@ -5289,6 +5289,11 @@ fn open_editor_window(
     #[cfg(not(target_os = "macos"))]
     let (bounds, display_id) = opening_window_placement(preferred, cx);
 
+    let Some(open_project) = crate::library::ProjectOpenInEditor::begin(&key) else {
+        tracing::info!(path = %key.display(), "recording is being deleted; editor remains closed");
+        return None;
+    };
+
     let handle = cx.open_window(
         WindowOptions {
             #[cfg(target_os = "linux")]
@@ -5321,7 +5326,13 @@ fn open_editor_window(
         },
         {
             let key = key.clone();
-            move |window, cx| cx.new(|cx| EditorWindow::new(key, window, cx))
+            move |window, cx| {
+                cx.new(|cx| {
+                    let mut editor = EditorWindow::new(key, window, cx);
+                    editor.hold_project(open_project);
+                    editor
+                })
+            }
         },
     );
 

@@ -1408,8 +1408,8 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
-    /// Held from open until the window gives up its engine, so the library
-    /// refuses to delete the project from under an open editor.
+    /// Held from the window opening until it gives up its engine, so the
+    /// library refuses to delete the project from under an open editor.
     open_project: Option<crate::library::ProjectOpenInEditor>,
     focus: FocusHandle,
 
@@ -2179,7 +2179,7 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
-            open_project: Some(crate::library::ProjectOpenInEditor::begin(&project_path)),
+            open_project: None,
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -3292,6 +3292,10 @@ impl EditorWindow {
         }
         instance.set_preview_speed(self.preview_speed);
         self.instance = Some(instance);
+    }
+
+    pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
+        self.open_project = Some(project);
     }
 
     /// Every way an editor window goes away takes its engine first: closing,
@@ -13863,8 +13867,12 @@ mod tests {
         let meta = project_path.join("recording-meta.json");
         std::fs::write(&meta, b"{}").unwrap();
         let opened = project_path.canonicalize().unwrap();
-        let (editor, cx) =
-            cx.add_window_view(move |window, cx| EditorWindow::new(opened.clone(), window, cx));
+        let held = crate::library::ProjectOpenInEditor::begin(&opened).unwrap();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            let mut editor = EditorWindow::new(opened.clone(), window, cx);
+            editor.hold_project(held);
+            editor
+        });
 
         assert_eq!(
             crate::library::delete_recording_directory_in(&dirs, &project_path),

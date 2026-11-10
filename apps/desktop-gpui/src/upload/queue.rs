@@ -1224,7 +1224,7 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
         return Ok(());
     }
     crate::library::ensure_not_recording_in_progress(&project)?;
-    crate::library::ensure_not_open_in_editor(&project)?;
+    let _deleting = crate::library::ProjectBeingDeleted::begin(&project)?;
     let canonical = project.canonicalize().map_err(|error| error.to_string())?;
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
@@ -2055,7 +2055,8 @@ mod tests {
         let before = read_state(&fixture.project()).unwrap().unwrap();
 
         let editor =
-            crate::library::ProjectOpenInEditor::begin(&fixture.project().canonicalize().unwrap());
+            crate::library::ProjectOpenInEditor::begin(&fixture.project().canonicalize().unwrap())
+                .unwrap();
         assert_eq!(
             runtime.block_on(delete_recording(fixture.project())),
             Err(tr::dialog::delete_recording::open_in_editor().to_string())
