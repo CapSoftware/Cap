@@ -128,7 +128,7 @@ beforeEach(() => {
 	mocks.objects.clear();
 	mocks.signed = [];
 	mocks.tables.set("videos", [{ isScreenshot: false }]);
-	mocks.tables.set("video_uploads", [{ rawFileKey: RAW }]);
+	mocks.tables.set("video_uploads", [{ rawFileKey: RAW, phase: "processing" }]);
 	mocks.objects.set(RAW, 100);
 });
 
@@ -145,7 +145,19 @@ describe("getDownloadInfo for viewers who are not members", () => {
 		);
 	});
 
-	it("signs the processed MP4 once it exists", async () => {
+	it.each(["uploading", "processing", "generating_thumbnail", "error"])(
+		"signs nothing while the upload is %s, even with bytes in result.mp4",
+		async (phase) => {
+			source = { type: "desktopMP4" };
+			mocks.tables.set("video_uploads", [{ rawFileKey: null, phase }]);
+			mocks.objects.set(RESULT, 100);
+			expect(Option.isNone(await downloadInfo(true))).toBe(true);
+			expect(mocks.signed).toEqual([]);
+		},
+	);
+
+	it("signs the processed MP4 once the upload is complete", async () => {
+		mocks.tables.set("video_uploads", [{ rawFileKey: RAW, phase: "complete" }]);
 		mocks.objects.set(RESULT, 100);
 		expect(await downloadInfo(true)).toEqual(
 			Option.some({
@@ -155,7 +167,15 @@ describe("getDownloadInfo for viewers who are not members", () => {
 		);
 	});
 
+	it("signs the processed MP4 when no upload row is left", async () => {
+		mocks.tables.set("video_uploads", []);
+		mocks.objects.set(RESULT, 100);
+		expect(Option.isSome(await downloadInfo(true))).toBe(true);
+		expect(mocks.signed).toEqual([RESULT]);
+	});
+
 	it("ignores an empty processed MP4", async () => {
+		mocks.tables.set("video_uploads", []);
 		mocks.objects.set(RESULT, 0);
 		expect(Option.isNone(await downloadInfo(true))).toBe(true);
 		expect(mocks.signed).toEqual([]);

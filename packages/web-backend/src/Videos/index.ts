@@ -806,10 +806,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						.where(Dz.eq(Db.videos.id, videoId)),
 				);
 
-				// Viewers who are not members only ever get the processed MP4: never a
-				// screenshot object, and never the raw upload while processing runs.
+				// Viewers who are not members only ever get the finished MP4: never a
+				// screenshot object, and nothing while an upload or processing is still
+				// running, when result.mp4 can hold the raw recording.
 				if (options?.publishedOnly) {
 					if (videoRow?.isScreenshot) return Option.none();
+					const [activeUpload] = yield* db.use((db) =>
+						db
+							.select({ phase: Db.videoUploads.phase })
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
+					);
+					if (activeUpload && activeUpload.phase !== "complete") {
+						return Option.none();
+					}
 					const published = Video.Video.getSource(video);
 					if (!(published instanceof Video.Mp4Source)) return Option.none();
 					const exists = yield* bucket.headObject(published.getFileKey()).pipe(
