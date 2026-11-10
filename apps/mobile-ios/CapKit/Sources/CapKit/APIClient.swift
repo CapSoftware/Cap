@@ -280,6 +280,16 @@ public final class CapAPI: Sendable {
         videoAccessTokens.withLock { $0.removeAll() }
     }
 
+    struct SharingBody: Encodable {
+        let isPublic: Bool
+        let linkAccess: LinkAccess?
+
+        enum CodingKeys: String, CodingKey {
+            case isPublic = "public"
+            case linkAccess
+        }
+    }
+
     static func body(_ value: some Encodable) throws(CapAPIError) -> Data {
         do {
             return try CapJSON.encoder().encode(value)
@@ -449,8 +459,8 @@ extension CapAPI {
         try await expectSuccess(mobile(.post, "caps", id.rawValue, "report", body: Self.body(["reason": reason.rawValue]), access: id))
     }
 
-    public func updateSharing(_ id: CapID, isPublic: Bool) async throws(CapAPIError) -> CapSummary {
-        try await send(mobile(.patch, "caps", id.rawValue, "sharing", body: Self.body(["public": isPublic])))
+    public func updateSharing(_ id: CapID, isPublic: Bool, linkAccess: LinkAccess? = nil) async throws(CapAPIError) -> CapSummary {
+        try await send(mobile(.patch, "caps", id.rawValue, "sharing", body: Self.body(SharingBody(isPublic: isPublic, linkAccess: linkAccess))))
     }
 
     public func updateTitle(_ id: CapID, title: String) async throws(CapAPIError) -> CapSummary {
