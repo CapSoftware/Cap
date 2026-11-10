@@ -360,7 +360,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		const vttEntries = entries.map((entry) => {
 			return `${entry.id}\n${formatTime(entry.startTime)} --> ${formatTime(
 				entry.endTime,
-			)}\n${entry.speaker ? `<v ${escapeVttText(transcriptSpeakerLabel(entry.speaker, speakerNames) ?? "Unknown speaker")}>${escapeVttText(entry.text)}</v>` : entry.text}\n`;
+			)}\n${entry.speaker ? `<v ${escapeVttText(transcriptSpeakerLabel(entry.speaker, speakerNames) ?? "Unknown speaker")}>${escapeVttText(entry.text)}</v>` : escapeVttText(entry.text)}\n`;
 		});
 
 		return vttHeader + vttEntries.join("\n");

@@ -69,6 +69,9 @@ export function parseTranscriptVoice(text: string): {
 	text: string;
 } {
 	const match = /^<v ([A-Za-z0-9_-]{1,64})>([\s\S]*?)(?:<\/v>)?$/.exec(text);
-	if (!match || !isTranscriptSpeakerId(match[1])) return { text };
+	// Legacy naked voice tags remain WebVTT annotations; their origin cannot be
+	// distinguished from old unescaped literal text. Decode only after parsing.
+	if (!match || !isTranscriptSpeakerId(match[1]))
+		return { text: decodeVttText(text) };
 	return { speaker: match[1], text: decodeVttText(match[2] ?? "") };
 }

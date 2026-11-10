@@ -61,7 +61,7 @@ export function updateVttEntryText(
 		);
 		const payload = voice.speaker
 			? `<v ${voice.speaker}>${escapeVttText(normalizedText)}</v>`
-			: normalizedText;
+			: escapeVttText(normalizedText);
 		updatedLines.push(...cueLines.slice(0, timingIndex + 1), payload);
 		if (cueEnd < lines.length) {
 			updatedLines.push(lines[cueEnd] ?? "");

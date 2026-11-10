@@ -46,8 +46,8 @@ export function formatToWebVTT(result: AssemblyAIResult): string {
 		isTranscriptSpeakerId(word?.speaker) ? word.speaker : null;
 	let speaker = speakerId(words[0]);
 	const captionText = () => {
-		const text = group.join(" ");
-		return speaker ? `<v ${speaker}>${escapeVttText(text)}</v>` : text;
+		const text = escapeVttText(group.join(" "));
+		return speaker ? `<v ${speaker}>${text}</v>` : text;
 	};
 
 	for (let i = 0; i < words.length; i++) {
