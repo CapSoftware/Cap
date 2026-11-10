@@ -8,11 +8,12 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faXmark } from "@fortawesome/free-solid-svg-icons/faXmark";
 import clsx from "clsx";
 import { ChevronDown } from "lucide-react";
 import { forwardRef, useEffect, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 

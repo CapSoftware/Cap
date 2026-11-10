@@ -5246,6 +5246,14 @@ impl MainWindow {
             ) {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
             }) else {
@@ -5254,6 +5262,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))

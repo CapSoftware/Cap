@@ -10,8 +10,8 @@ import {
 } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import { type ImageUpload, Space, type Video } from "@cap/web-domain";
-import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faShareNodes } from "@fortawesome/free-solid-svg-icons/faShareNodes";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Globe2, Lock, Search } from "lucide-react";
@@ -32,6 +32,7 @@ import {
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { buildEmbedCode } from "@/lib/embed-code";

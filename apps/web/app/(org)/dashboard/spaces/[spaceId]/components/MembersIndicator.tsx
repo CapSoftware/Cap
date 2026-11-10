@@ -14,14 +14,15 @@ import {
 	Select,
 } from "@cap/ui";
 import { type Space, User } from "@cap/web-domain";
-import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
 	normalizeSpaceRole,

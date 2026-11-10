@@ -9,13 +9,13 @@ import {
 } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { faGear } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import clsx from "clsx";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../Contexts";
 import type { OrganizationSettings } from "../../dashboard-data";

@@ -1,11 +1,11 @@
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import { formatDateTime, formatFromNow } from "@/lib/date-format";
 import type { CapCardProps } from "./CapCard";
