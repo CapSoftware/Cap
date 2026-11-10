@@ -40,16 +40,21 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
 	const [title, setTitle] = useState(cap.name);
+	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
 
-	const handleTitleBlur = async (capName: string) => {
-		if (!title || capName === title) {
+	const handleTitleBlur = async () => {
+		const next = title.trim();
+		if (!next || next === savedTitle) {
+			setTitle(savedTitle);
 			setIsEditing(false);
 			return;
 		}
 
 		try {
-			await editTitle(cap.id, title);
+			await editTitle(cap.id, next);
+			setSavedTitle(next);
+			setTitle(next);
 			toast.success("Video title updated");
 			setIsEditing(false);
 			router.refresh();
@@ -187,7 +192,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						rows={1}
 						value={title}
 						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
+						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
 					/>

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 		| { mutationFn: (id: string) => unknown }
 		| undefined,
 	capCardProps: undefined as { onDelete?: () => void } | undefined,
+	editTitle: vi.fn(),
 }));
 
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
@@ -38,6 +39,13 @@ vi.mock("@/app/(org)/dashboard/caps/components/CapCard/CapCard", () => ({
 	},
 }));
 
+vi.mock("@/actions/videos/edit-title", () => ({ editTitle: mocks.editTitle }));
+vi.mock("@/actions/videos/edit-date", () => ({ editDate: vi.fn() }));
+vi.mock("@/components/Tooltip", () => ({
+	Tooltip: ({ children }: { children: unknown }) => children,
+}));
+
+import { CapCardContent } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardContent";
 import { SharedCapCard } from "@/app/(org)/dashboard/spaces/[spaceId]/components/SharedCapCard";
 
 const cap = {
@@ -109,5 +117,76 @@ describe("SharedCapCard delete", () => {
 
 		expect(mocks.capCardProps).toBeDefined();
 		expect(mocks.capCardProps?.onDelete).toBeUndefined();
+	});
+});
+
+describe("CapCardContent title edit", () => {
+	let container: HTMLDivElement;
+	let root: Root;
+
+	beforeEach(() => {
+		(
+			globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+		).IS_REACT_ACT_ENVIRONMENT = true;
+		container = document.createElement("div");
+		document.body.append(container);
+		root = createRoot(container);
+		mocks.editTitle.mockReset();
+		mocks.editTitle.mockResolvedValue({ success: true });
+	});
+
+	afterEach(() => {
+		act(() => root.unmount());
+		container.remove();
+	});
+
+	const title = () => container.querySelector("p")?.textContent;
+
+	const editTo = async (value: string) => {
+		act(() => {
+			root.render(
+				createElement(CapCardContent, {
+					cap: cap as unknown as Parameters<typeof CapCardContent>[0]["cap"],
+					userId: "owner-1",
+					isOwner: true,
+					hideSharedStatus: true,
+					setIsSharingDialogOpen: () => {},
+				}),
+			);
+		});
+		act(() => {
+			container.querySelector("p")?.click();
+		});
+		const textarea = container.querySelector("textarea");
+		if (!textarea) throw new Error("title editor did not open");
+		const setValue = Object.getOwnPropertyDescriptor(
+			HTMLTextAreaElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setValue?.call(textarea, value);
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		await act(async () => {
+			textarea.focus();
+			textarea.blur();
+		});
+	};
+
+	it.each(["", "   "])(
+		"keeps the current title when cleared to %j",
+		async (value) => {
+			await editTo(value);
+
+			expect(mocks.editTitle).not.toHaveBeenCalled();
+			expect(title()).toBe("Demo");
+		},
+	);
+
+	it("saves the trimmed title", async () => {
+		await editTo("  Launch demo ");
+
+		expect(mocks.editTitle).toHaveBeenCalledWith("video-1", "Launch demo");
+		expect(title()).toBe("Launch demo");
 	});
 });
