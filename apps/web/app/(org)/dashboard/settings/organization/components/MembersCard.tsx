@@ -16,7 +16,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@cap/ui";
-import { faUser } from "@fortawesome/free-solid-svg-icons";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";

@@ -2316,7 +2316,7 @@ impl EditorWindow {
             clips: crate::editor_clips::ClipsState::default(),
             transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
             transcript_view,
-            panel: crate::editor_side_panel::PanelState::load(),
+            panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
         }
     }
 
@@ -4675,6 +4675,7 @@ impl EditorWindow {
 
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        self.follow_selection_to_style(selection.as_ref(), cx);
         if self.selection != selection {
             self.text_menu = None;
             self.style_presets.close_menu();
@@ -13448,6 +13449,54 @@ mod tests {
             });
             cx.simulate_keystrokes("escape");
             assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(shape.clone()), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.selection.as_ref(), Some(&shape));
+                });
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+
+        #[gpui::test]
+        fn reselecting_the_selected_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx).0, PanelTab::Transcript);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_clip_keeps_the_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(Selection::single(TrackKind::Clip, 0)), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx).0, tab);
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
         }
     }
 

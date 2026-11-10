@@ -14,7 +14,8 @@ import {
 	Select,
 } from "@cap/ui";
 import { type Space, User } from "@cap/web-domain";
-import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faUserGroup } from "@fortawesome/free-solid-svg-icons/faUserGroup";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";

@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import type { Folder, Space } from "@cap/web-domain";
-import { faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState } from "react";

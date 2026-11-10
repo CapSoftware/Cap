@@ -1,8 +1,6 @@
-import {
-	faHome,
-	faImage,
-	faRecordVinyl,
-} from "@fortawesome/free-solid-svg-icons";
+import { faHome } from "@fortawesome/free-solid-svg-icons/faHome";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faRecordVinyl } from "@fortawesome/free-solid-svg-icons/faRecordVinyl";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
