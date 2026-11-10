@@ -186,36 +186,42 @@ async function type(text: string) {
 }
 
 describe("share transcript rendering", () => {
-	it("reads saved recording-local names after reload and includes them in downloaded captions", async () => {
-		video.metadata = { transcriptSpeakerNames: { A: "Alice & Bob" } };
-		mocks.content =
-			"WEBVTT\n\n1\n00:00:01.125 --> 00:00:03.000\n<v A>Hello &amp; welcome</v>\n";
-		const createObjectURL = vi
-			.fn<(blob: Blob) => string>()
-			.mockReturnValue("blob:transcript");
-		vi.stubGlobal("Blob", Blob);
-		vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
-		vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-		await render();
-		expect(container.textContent).toContain("Alice & Bob");
-		const menu = container.querySelector<HTMLButtonElement>(
-			'button[aria-label="Download transcript"]',
-		);
-		if (!menu) throw new Error("Missing download menu");
-		await click(menu);
-		const captions = Array.from(container.querySelectorAll("button")).find(
-			(button) => button.textContent?.includes("Captions file"),
-		);
-		if (!captions) throw new Error("Missing caption export");
-		await click(captions);
-		const blob = createObjectURL.mock.calls[0]?.[0];
-		if (!blob) throw new Error("Missing downloaded captions");
-		expect(await blob.text()).toContain(
-			"<v Alice &amp; Bob>Hello &amp; welcome</v>",
-		);
-		expect(await blob.text()).toContain("00:00:01.125 --> 00:00:03.000");
-		expect(mocks.rename).not.toHaveBeenCalled();
-	});
+	it.each(["original", "es"])(
+		"reads saved recording-local names in %s and includes them in downloaded captions",
+		async (language) => {
+			mocks.language = language;
+			video.metadata = { transcriptSpeakerNames: { A: "Alice & Bob" } };
+			mocks.content =
+				"WEBVTT\n\n1\n00:00:01.125 --> 00:00:03.000\n<v A>Hello &amp; welcome</v>\n";
+			const createObjectURL = vi
+				.fn<(blob: Blob) => string>()
+				.mockReturnValue("blob:transcript");
+			vi.stubGlobal("Blob", Blob);
+			vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+			vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+				() => {},
+			);
+			await render();
+			expect(container.textContent).toContain("Alice & Bob");
+			const menu = container.querySelector<HTMLButtonElement>(
+				'button[aria-label="Download transcript"]',
+			);
+			if (!menu) throw new Error("Missing download menu");
+			await click(menu);
+			const captions = Array.from(container.querySelectorAll("button")).find(
+				(button) => button.textContent?.includes("Captions file"),
+			);
+			if (!captions) throw new Error("Missing caption export");
+			await click(captions);
+			const blob = createObjectURL.mock.calls[0]?.[0];
+			if (!blob) throw new Error("Missing downloaded captions");
+			expect(await blob.text()).toContain(
+				"<v Alice &amp; Bob>Hello &amp; welcome</v>",
+			);
+			expect(await blob.text()).toContain("00:00:01.125 --> 00:00:03.000");
+			expect(mocks.rename).not.toHaveBeenCalled();
+		},
+	);
 	it("renders speaker turns, seeks exact overlapping timestamps and saves recording-local names", async () => {
 		mocks.content =
 			"WEBVTT\n\n1\n00:00:01.125 --> 00:00:03.000\n<v A>Hello</v>\n\n2\n00:00:02.250 --> 00:00:04.000\n<v B>Overlapping</v>\n\n3\n00:00:05.000 --> 00:00:06.000\nUnknown\n";
