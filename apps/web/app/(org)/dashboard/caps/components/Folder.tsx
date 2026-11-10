@@ -121,10 +121,21 @@ const FolderCard = ({
 		},
 		onError: () => {
 			setPublicEnabled(isPublic);
+			setUpdateName(name);
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
 	});
+
+	const commitRename = () => {
+		setIsRenaming(false);
+		const nextName = updateName.trim();
+		if (!nextName) {
+			setUpdateName(name);
+			return;
+		}
+		if (nextName !== name) updateFolder.mutate({ id, name: nextName });
+	};
 
 	useEffect(() => {
 		if (isRenaming && nameRef.current) {
@@ -393,23 +404,9 @@ const FolderCard = ({
 								e.stopPropagation();
 							}}
 							onChange={(e) => setUpdateName(e.target.value)}
-							onBlur={() => {
-								setIsRenaming(false);
-								if (updateName.trim() !== name)
-									updateFolder.mutate({
-										id,
-										name: updateName.trim(),
-									});
-							}}
+							onBlur={commitRename}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") {
-									setIsRenaming(false);
-									if (updateName.trim() !== name)
-										updateFolder.mutate({
-											id,
-											name: updateName.trim(),
-										});
-								}
+								if (e.key === "Enter") commitRename();
 							}}
 							className={clsx(
 								"relative z-10 flex-1 w-full min-w-0 resize-none bg-transparent border-none focus:outline-none focus:ring-0 focus:border-none text-gray-12 truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal",
