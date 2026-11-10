@@ -134,6 +134,7 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
@@ -4849,7 +4850,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								const now = new Date();
 								await tx
 									.update(Db.organizations)
-									.set({ settings: next, updatedAt: now })
+									.set({
+										settings: organizationSettingsKeepingLinkOverride(next),
+										updatedAt: now,
+									})
 									.where(eq(Db.organizations.id, path.organizationId));
 								return {
 									state: "success",

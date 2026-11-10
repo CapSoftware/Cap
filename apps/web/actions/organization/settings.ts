@@ -12,6 +12,7 @@ import {
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -108,19 +109,9 @@ export async function updateOrganizationSettings(
 		? sanitizedSettings
 		: preserveProSettings(sanitizedSettings, organization.settings);
 
-	const allowPublicLinkOverride =
-		organization.settings?.allowPublicLinkOverride;
-
 	await db()
 		.update(organizations)
-		.set({
-			settings: {
-				...nextSettings,
-				...(allowPublicLinkOverride === undefined
-					? {}
-					: { allowPublicLinkOverride }),
-			},
-		})
+		.set({ settings: organizationSettingsKeepingLinkOverride(nextSettings) })
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/caps");
