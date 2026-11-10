@@ -1,9 +1,17 @@
-import { closeMainWindow, getPreferenceValues, open, showHUD } from "@raycast/api";
+import {
+	Toast,
+	closeMainWindow,
+	getPreferenceValues,
+	open,
+	openExtensionPreferences,
+	showHUD,
+	showToast,
+} from "@raycast/api";
 
 interface Preferences {
 	recordingMode?: "studio" | "instant";
 	captureTargetType?: "screen" | "window";
-	targetName?: string;
+	targetName: string;
 	captureSystemAudio?: boolean;
 }
 
@@ -11,11 +19,21 @@ export default async function Command() {
 	const {
 		recordingMode = "studio",
 		captureTargetType = "screen",
-		targetName = "Built-in Retina Display",
+		targetName,
 		captureSystemAudio = true,
 	} = getPreferenceValues<Preferences>();
 
-	const resolvedTarget = targetName.trim() || "Built-in Retina Display";
+	const resolvedTarget = targetName?.trim();
+	if (!resolvedTarget) {
+		await showToast({
+			style: Toast.Style.Failure,
+			title: "Capture target name required",
+			message: "Set a valid display or window name in extension preferences before recording.",
+		});
+		await openExtensionPreferences();
+		return;
+	}
+
 	const capture_mode =
 		captureTargetType === "window"
 			? { window: resolvedTarget }
