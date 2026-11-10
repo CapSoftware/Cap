@@ -8,6 +8,23 @@ import { describe, expect, it } from "vitest";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 
 describe("AI generation language support", () => {
+	it("never requests paid diarization without an explicit opt-in", () => {
+		for (const language of ["auto", "en", "ro"] as const) {
+			expect(getAssemblyAITranscriptionOptions(language)).not.toHaveProperty(
+				"speaker_labels",
+			);
+			expect(
+				getAssemblyAITranscriptionOptions(language, { speakerLabels: false }),
+			).not.toHaveProperty("speaker_labels");
+			expect(
+				getAssemblyAITranscriptionOptions(language, { speakerLabels: true }),
+			).toMatchObject({
+				speaker_labels: true,
+				speech_models: ["universal-3-5-pro", "universal-2"],
+			});
+		}
+	});
+
 	it("exposes Romanian for AI generation", () => {
 		expect(AI_GENERATION_LANGUAGES.ro).toBe("Romanian");
 		expect(isAiGenerationLanguage("ro")).toBe(true);

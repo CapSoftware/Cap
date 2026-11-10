@@ -789,7 +789,9 @@ async function transcribeWithAssemblyAI(
 
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
-		...getAssemblyAITranscriptionOptions(language),
+		...getAssemblyAITranscriptionOptions(language, {
+			speakerLabels: serverEnv().ASSEMBLY_SPEAKER_LABELS === true,
+		}),
 		disfluencies: true,
 	});
 

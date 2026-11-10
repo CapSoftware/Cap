@@ -43,11 +43,15 @@ const videoRow = vi.hoisted(() => ({
 	},
 }));
 
-const state = vi.hoisted(() => ({ editRows: [] as unknown[] }));
+const state = vi.hoisted(() => ({
+	editRows: [] as unknown[],
+	speakerLabels: false,
+}));
 
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
 		ASSEMBLY_API_KEY: "test-assembly-api-key",
+		ASSEMBLY_SPEAKER_LABELS: state.speakerLabels,
 		NEXTAUTH_SECRET: "test-secret-with-enough-entropy",
 	}),
 }));
@@ -176,6 +180,7 @@ function pipeValue(value: unknown) {
 describe("transcribeVideoWorkflow", () => {
 	beforeEach(() => {
 		mocks.updates.length = 0;
+		state.speakerLabels = false;
 		state.editRows = [];
 		mocks.transcribe.mockResolvedValue({
 			...assemblyAIEditResponse,
@@ -209,6 +214,9 @@ describe("transcribeVideoWorkflow", () => {
 
 		expect(result.success).toBe(true);
 		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+		expect(mocks.transcribe.mock.calls[0]?.[0]).not.toHaveProperty(
+			"speaker_labels",
+		);
 		expect(mocks.transcribe.mock.calls[0]?.[0]).toMatchObject({
 			disfluencies: true,
 			speech_models: ["universal-3-5-pro", "universal-2"],
@@ -246,6 +254,58 @@ describe("transcribeVideoWorkflow", () => {
 		expect(stored?.words).toHaveLength(9);
 
 		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
+	});
+
+	it("persists provider speaker turns in the actual completed captions", async () => {
+		state.speakerLabels = true;
+		mocks.transcribe.mockResolvedValueOnce({
+			id: "speaker-transcript",
+			status: "completed",
+			audio_duration: 4,
+			speech_model_used: "universal-3-5-pro",
+			words: [
+				{ text: "Um,", start: 0, end: 100, speaker: "A" },
+				{ text: "hello", start: 100, end: 200, speaker: "A" },
+				{ text: "yes", start: 200, end: 300, speaker: "B" },
+				{ text: "thanks", start: 300, end: 400, speaker: "A" },
+			],
+		});
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: false,
+		});
+		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+		expect(mocks.transcribe.mock.calls[0]?.[0]).toMatchObject({
+			speaker_labels: true,
+		});
+		const vttWrite = mocks.putObject.mock.calls.find(
+			(call) => call[0] === "user-456/video-123/transcription.vtt",
+		);
+		expect(vttWrite?.[1]).toBe(
+			"WEBVTT\n\n1\n00:00:00.100 --> 00:00:00.200\n<v A>hello</v>\n\n2\n00:00:00.200 --> 00:00:00.300\n<v B>yes</v>\n\n3\n00:00:00.300 --> 00:00:00.400\n<v A>thanks</v>\n\n",
+		);
+		const { decryptEditTranscriptObject } = await import(
+			"@/lib/edit-transcript-storage"
+		);
+		const { parseEditTranscript } = await import("@/lib/edit-transcript");
+		const editWrite = mocks.putObject.mock.calls.find(
+			(call) => call[0] === "user-456/video-123/transcription.edit.v3.json",
+		);
+		const stored = parseEditTranscript(
+			decryptEditTranscriptObject(
+				editWrite?.[1] as string,
+				"user-456",
+				"video-123",
+			) ?? "",
+		);
+		expect(stored?.words.map((word) => word.speaker)).toEqual([
+			"A",
+			"A",
+			"B",
+			"A",
+		]);
 	});
 
 	it("handles no-speech errors across workflow realms without retrying transcription", async () => {
@@ -356,6 +416,7 @@ describe("backfillEditTranscriptWorkflow", () => {
 	});
 
 	it("transcribes the original media in the original timeline when edits exist", async () => {
+		state.speakerLabels = true;
 		state.editRows = [
 			{
 				sourceKey: "user-456/video-123/original.mp4",
@@ -377,6 +438,9 @@ describe("backfillEditTranscriptWorkflow", () => {
 		});
 
 		expect(result.success).toBe(true);
+		expect(mocks.transcribe.mock.calls[0]?.[0]).not.toHaveProperty(
+			"speaker_labels",
+		);
 		expect(mocks.getInternalSignedObjectUrl.mock.calls[0]?.[0]).toBe(
 			"user-456/video-123/original.mp4",
 		);
