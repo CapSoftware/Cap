@@ -7340,6 +7340,68 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
     true
 }
 
+/// How long the overlays get to show their empty frame before a screenshot
+/// stops waiting for them. A compositor that is drawing them asks for the two
+/// frames this takes within a few refreshes.
+#[cfg(target_os = "linux")]
+const OVERLAY_EMPTY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Wayland: has every picker overlay draw nothing, and resolves once the
+/// compositor has shown them all empty, or did not in time. `None` when no
+/// overlay is up.
+#[cfg(target_os = "linux")]
+pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output = ()> + use<>> {
+    let overlays: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+    if overlays.is_empty() {
+        return None;
+    }
+    let mut shown = Vec::new();
+    for handle in overlays {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let scheduled = handle.update(cx, |view, window, cx| {
+            view.empty_for_capture(cx);
+            // The next frame draws the empty overlay. The compositor asks for
+            // the one after it once it has put that frame on screen.
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |_, _| {
+                    let _ = sender.send(());
+                });
+            });
+        });
+        if scheduled.is_ok() {
+            shown.push(receiver);
+        }
+    }
+    let waited = gpui_tokio::Tokio::spawn(cx, async move {
+        tokio::time::timeout(OVERLAY_EMPTY_TIMEOUT, async move {
+            for receiver in shown {
+                if receiver.await.is_err() {
+                    return false;
+                }
+            }
+            true
+        })
+        .await
+        .unwrap_or(false)
+    });
+    let started = std::time::Instant::now();
+    Some(async move {
+        if waited.await.unwrap_or(false) {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                "picker overlays emptied for the screenshot"
+            );
+        } else {
+            tracing::warn!("the picker overlays did not show an empty frame in time");
+        }
+    })
+}
+
 /// A screenshot finished (`Some` PNG path) or failed (`None`): refresh every
 /// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
 /// the Tauri app -- and open the screenshot editor on the new bundle, the

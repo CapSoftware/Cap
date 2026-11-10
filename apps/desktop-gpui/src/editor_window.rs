@@ -2966,6 +2966,11 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        // History holds the project, not the row flags, and these two rows
+        // show exactly when their overlay renders.
+        let restored = TrackLanes::from_project(&self.project, self.has_camera);
+        self.tracks.caption = restored.caption;
+        self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
         self.transcript.dirty = true;
         self.transcript.selection = None;
@@ -13804,6 +13809,70 @@ mod tests {
                 assert!(zoom_segments(editor).is_empty());
                 assert!(editor.history.can_redo());
                 assert!(editor.selection.is_none());
+            });
+        }
+
+        fn shows_row(editor: &EditorWindow, kind: TrackKind) -> bool {
+            editor.timeline.rows.iter().any(|row| row.kind == kind)
+        }
+
+        #[gpui::test]
+        fn undo_and_redo_bring_caption_and_keyboard_rows_back_with_their_overlay(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                editor.project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                        "zoomSegments": [],
+                        "captionSegments": [{"id": "c", "start": 1.0, "end": 2.0, "text": "hi"}],
+                        "keyboardSegments": [{"id": "k", "start": 3.0, "end": 4.0, "displayText": "A"}]
+                    }))
+                    .unwrap(),
+                );
+                let mut captions = cap_project::CaptionsData::default();
+                captions.settings.enabled = true;
+                editor.project.captions = Some(captions);
+                let mut keyboard = cap_project::KeyboardData::default();
+                keyboard.settings.enabled = true;
+                editor.project.keyboard = Some(keyboard);
+                editor.tracks = TrackLanes::from_project(&editor.project, editor.has_camera);
+                editor.history.record(&editor.project);
+                editor.rebuild_timeline();
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            for kind in [TrackKind::Caption, TrackKind::Keyboard] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.delete_single_track(kind, window, cx);
+                    // `project_changed` records nothing until a recording loads.
+                    editor.history.record(&editor.project);
+                    editor.rebuild_timeline();
+                });
+            }
+            editor.read_with(cx, |editor, _| {
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Keyboard));
+                assert!(!shows_row(editor, TrackKind::Caption));
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
             });
         }
 

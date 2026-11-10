@@ -16,6 +16,8 @@ import {
 } from "@/app/s/[videoId]/_components/timeline/TimelineProvider";
 
 vi.mock("@/actions/videos/new-comment", () => ({ newComment: vi.fn() }));
+const showError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: showError } }));
 vi.mock("@/app/Layout/AuthContext", () => ({
 	useCurrentUser: () => ({ id: "viewer", name: "Viewer", imageUrl: null }),
 }));
@@ -306,3 +308,106 @@ it.each(["success", "failure"])(
 		expect(success).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
 	},
 );
+
+it("keeps the toolbar draft open and says so when the comment fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(
+		new Error("Feedback is disabled on this video"),
+	);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const success = vi.fn();
+	await act(async () => {
+		root.render(
+			createElement(Toolbar, {
+				data: video,
+				disableReactions: true,
+				onCommentSuccess: success,
+			}),
+		);
+	});
+	const open = container.querySelector("button");
+	if (!open) throw new Error("Missing comment button");
+	await act(async () => open.click());
+	const input = container.querySelector("input");
+	if (!input) throw new Error("Missing comment field");
+	await change(input, "Worth keeping");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(success).not.toHaveBeenCalled();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	expect(container.querySelector("input")).toBe(input);
+	expect(input.value).toBe("Worth keeping");
+});
+
+it("brings the timeline draft back and says so when the comment fails to post", async () => {
+	vi.mocked(newComment).mockRejectedValueOnce(
+		new Error("Feedback is disabled on this video"),
+	);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const { input } = await renderComposer("timeline");
+	await change(input, "Worth keeping");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+
+	expect(newComment).toHaveBeenCalledOnce();
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	const restored = container.querySelector("input");
+	expect(restored?.value).toBe("Worth keeping");
+	expect(restored?.getAttribute("aria-label")).toBe(
+		input.getAttribute("aria-label"),
+	);
+});
+
+it("leaves a newer timeline draft alone when an earlier comment fails", async () => {
+	const save = Promise.withResolvers<Awaited<ReturnType<typeof newComment>>>();
+	vi.mocked(newComment).mockImplementationOnce(() => save.promise);
+	vi.spyOn(console, "error").mockImplementation(() => {});
+	showError.mockReset();
+	const { input } = await renderComposer("timeline");
+	await change(input, "First draft");
+	await act(async () => {
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Enter",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+	});
+	const open = container.querySelector("button");
+	if (!open) throw new Error("Composer trigger is missing");
+	await act(async () => open.click());
+	const newer = container.querySelector("input");
+	if (!newer) throw new Error("Missing comment field");
+	await change(newer, "Newer draft");
+	await act(async () => {
+		save.reject(new Error("Offline"));
+	});
+
+	expect(showError).toHaveBeenCalledExactlyOnceWith(
+		"Couldn't post your comment. Please try again.",
+	);
+	expect(container.querySelector("input")).toBe(newer);
+	expect(newer.value).toBe("Newer draft");
+});
