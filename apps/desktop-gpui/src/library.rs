@@ -3467,6 +3467,115 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A studio bundle with the files a finished recording has around its
+    /// video, and their paths relative to the bundle.
+    fn write_recorded_bundle(dir: &Path, name: &str) -> (PathBuf, Vec<PathBuf>) {
+        let bundle = write_studio_bundle(dir, name, 1);
+        for file in [
+            "content/cursors/cursor_0.png",
+            "content/segments/segment-0/cursor.json",
+            "content/segments/segment-0/display.mp4",
+            "content/segments/segment-0/keyboard.bin",
+            "project-config.json",
+            "screenshots/display.jpg",
+        ] {
+            let path = bundle.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"recorded").unwrap();
+        }
+        let files = files_under(&bundle);
+        assert_eq!(files.len(), 7);
+        (bundle, files)
+    }
+
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        fn collect(dir: &Path, root: &Path, files: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect(&path, root, files);
+                } else {
+                    files.push(path.strip_prefix(root).unwrap().to_path_buf());
+                }
+            }
+        }
+        let mut files = Vec::new();
+        collect(dir, dir, &mut files);
+        files.sort();
+        files
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Windows will not delete a file another handle has open without sharing
+    /// deletion, which is how a decoder or a media player opens one. Removing
+    /// the folder in place stopped at that file with the ones before it
+    /// already gone: the recording was left with its video and metadata but
+    /// no cursor data.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_nothing_when_a_file_in_the_recording_is_open() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ_WRITE: u32 = 0x3;
+        let root = temp_dir("delete-open-file");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, files) = write_recorded_bundle(&recordings, "open");
+
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ_WRITE)
+            .open(bundle.join("content/segments/segment-0/display.mp4"))
+            .unwrap();
+        let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+        assert!(error.contains("os error 32"), "{error}");
+        assert_eq!(files_under(&bundle), files, "{error}");
+        assert_eq!(names_in(&recordings), ["open.cap"]);
+
+        drop(held);
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A handle that shares deletion (an Explorer window on a folder inside,
+    /// a file this app opened) stops Windows moving the folder but not
+    /// deleting it. Such a recording was deletable before and still is.
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_a_recording_with_handles_that_share_deletion() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let root = temp_dir("delete-shared-handles");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let dirs = vec![recordings.clone()];
+        let (bundle, _) = write_recorded_bundle(&recordings, "shared");
+
+        let file =
+            std::fs::File::open(bundle.join("content/segments/segment-0/display.mp4")).unwrap();
+        let folder = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(bundle.join("content"))
+            .unwrap();
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        drop((file, folder));
+        assert_eq!(names_in(&recordings), Vec::<String>::new());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A recording started through a symlinked library folder is recognised
     /// when the library lists it under the real folder, where the row decides
     /// whether to offer Delete without resolving anything.
