@@ -2339,7 +2339,6 @@ text_item = "टेक्स्ट"
 [editor.clips]
 append_error = "क्लिप नहीं जोड़ी जा सकी: {message}"
 append_error_title = "रिकॉर्डिंग त्रुटि"
-cap_filter = "Cap रिकॉर्डिंग"
 clip = "क्लिप {number}"
 count = { one = "{count} क्लिप", other = "{count} क्लिप" }
 empty_description = "कोई क्लिप रिकॉर्ड या इम्पोर्ट करें, वह यहाँ दिखेगी।"

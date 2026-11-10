@@ -2339,7 +2339,6 @@ text_item = "テキスト"
 [editor.clips]
 append_error = "クリップを追加できませんでした：{message}"
 append_error_title = "録画エラー"
-cap_filter = "Cap録画"
 clip = "クリップ{number}"
 count = { other = "{count}個のクリップ" }
 empty_description = "クリップを録画するか読み込むと、ここに表示されます。"

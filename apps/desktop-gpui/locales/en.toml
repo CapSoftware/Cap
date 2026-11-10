@@ -2341,7 +2341,6 @@ text_item = "Text"
 [editor.clips]
 append_error = { text = "Failed to add clip: {message}", context = "{message} explains why." }
 append_error_title = "Recording Error"
-cap_filter = { text = "Cap Recording", context = "File type filter name for .cap recordings in the file picker." }
 clip = { text = "Clip {number}", context = "Default clip name; {number} starts at 1." }
 count = { one = "{count} clip", other = "{count} clips", context = "How many clips the Clips tab lists." }
 empty_description = "Record or import a clip and it will show up here."

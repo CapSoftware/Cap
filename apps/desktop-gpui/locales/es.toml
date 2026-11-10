@@ -2339,7 +2339,6 @@ text_item = "Texto"
 [editor.clips]
 append_error = "No se pudo añadir el clip: {message}"
 append_error_title = "Error de grabación"
-cap_filter = "Grabación de Cap"
 clip = "Clip {number}"
 count = { one = "{count} clip", many = "{count} de clips", other = "{count} clips" }
 empty_description = "Graba o importa un clip y aparecerá aquí."
