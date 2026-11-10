@@ -1,12 +1,37 @@
 import { closeMainWindow, getPreferenceValues, open, showHUD } from "@raycast/api";
 
 interface Preferences {
-	captureMode?: "fullscreen" | "window" | "area";
+	recordingMode?: "studio" | "instant";
+	captureTargetType?: "screen" | "window";
+	targetName?: string;
+	captureSystemAudio?: boolean;
 }
 
 export default async function Command() {
-	const { captureMode = "fullscreen" } = getPreferenceValues<Preferences>();
+	const {
+		recordingMode = "studio",
+		captureTargetType = "screen",
+		targetName = "Built-in Retina Display",
+		captureSystemAudio = true,
+	} = getPreferenceValues<Preferences>();
+
+	const resolvedTarget = targetName.trim() || "Built-in Retina Display";
+	const capture_mode =
+		captureTargetType === "window"
+			? { window: resolvedTarget }
+			: { screen: resolvedTarget };
+
+	const action = {
+		start_recording: {
+			capture_mode,
+			camera: null,
+			mic_label: null,
+			capture_system_audio: Boolean(captureSystemAudio),
+			mode: recordingMode,
+		},
+	};
+
 	await closeMainWindow();
-	await open(`cap://start-recording?mode=${encodeURIComponent(captureMode)}`);
-	await showHUD(`Cap recording started (${captureMode})`);
+	await open(`cap-desktop://action?value=${encodeURIComponent(JSON.stringify(action))}`);
+	await showHUD(`Cap ${recordingMode} recording started (${resolvedTarget})`);
 }
