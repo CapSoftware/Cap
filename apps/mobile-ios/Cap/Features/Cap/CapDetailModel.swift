@@ -709,6 +709,14 @@ final class CapDetailModel {
         }
     }
 
+    func setLinkAccess(_ linkAccess: LinkAccess) async {
+        guard let session, case var .loaded(detail) = content else { return }
+        if let updated = await CapActions.setLinkAccess(detail.cap, linkAccess: linkAccess, session: session) {
+            detail.cap = updated
+            content = .loaded(detail)
+        }
+    }
+
     func report(_ reason: ContentReportReason) async -> Bool {
         guard let session else { return false }
         do {
