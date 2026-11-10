@@ -1,4 +1,4 @@
-build head be9bbb0
+build head be041a1
 == 1. default: no settings stored anywhere
 org settings: NULL, cap settings: NULL
 visitor sees Download buttons: 1
@@ -9,18 +9,21 @@ captured server action id: yes
 owner signed in with the emailed code (printed to the server log)
 org setting "Enable downloads" -> off; stored settings: {"disableSummary": false, "disableCaptions": false, "disableChapters": false, "disableComments": false, "disableDownloads": true, "disableReactions": false, "disableTranscript": false, "aiGenerationLanguage": "auto", "defaultPlaybackSpeed": 1.2, "hideShareableLinkCapLogo": false, "shareableLinkUseOrganizationIcon": false}
 visitor sees Download buttons: 0
-02 org off: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"kw8Y4mL60C9-frQOGyqQ6"} 1:E{"digest":"1385620609"} ; signed download URL in page HTML: false
+02 org off: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"y6GE-uedpKpJBGhkGeK_a"} 1:E{"digest":"2524892612"} ; signed download URL in page HTML: false
 org setting "Enable downloads" -> on; stored settings: {"disableSummary": false, "disableCaptions": false, "disableChapters": false, "disableComments": false, "disableDownloads": false, "disableReactions": false, "disableTranscript": false, "aiGenerationLanguage": "auto", "defaultPlaybackSpeed": 1.2, "hideShareableLinkCapLogo": false, "shareableLinkUseOrganizationIcon": false}
 visitor sees Download buttons after org on again: 1
 == 3. owner turns downloads off for one cap
 cap "Product walkthrough" setting "Enable downloads" -> off; stored cap settings: Product walkthrough = {"disableDownloads": true}; Quarterly update = NULL
 visitor sees Download buttons on that cap: 0
-03 cap off: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"kw8Y4mL60C9-frQOGyqQ6"} 1:E{"digest":"1385620609"} ; signed download URL in page HTML: false
+03 cap off: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"y6GE-uedpKpJBGhkGeK_a"} 1:E{"digest":"2524892612"} ; signed download URL in page HTML: false
 visitor sees Download buttons on the other cap: 1
 03 other cap: direct RPC -> Success, signed URL returned: true; server action replay -> signed URL: true, error: null; signed download URL in page HTML: false
 cap "Product walkthrough" setting "Enable downloads" -> on; stored cap settings: Product walkthrough = {"disableDownloads": false}; Quarterly update = NULL
 == 4. password-protected cap
 before password: visitor sees Download buttons: 0
-04 password not entered: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"kw8Y4mL60C9-frQOGyqQ6"} 1:E{"digest":"1385620609"} ; signed download URL in page HTML: false
+04 password not entered: direct RPC -> Failure (PolicyDenied), signed URL returned: false; server action replay -> signed URL: false, error: 0:{"a":"$@1","q":"","i":false,"b":"y6GE-uedpKpJBGhkGeK_a"} 1:E{"digest":"2524892612"} ; signed download URL in page HTML: false
 after password: visitor sees Download buttons: 1
 04: visitor downloaded "Quarterly update.mp4" 4808662 bytes (source 4808662 bytes, identical: true)
+== 5. direct RPC for what the share page never offers a visitor
+05 web upload still processing, only the raw file in storage: direct RPC -> Success, signed URL returned: false
+05 screenshot: direct RPC -> Failure (PolicyDenied), signed URL returned: false
