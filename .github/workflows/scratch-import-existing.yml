@@ -1,0 +1,197 @@
+name: Scratch import existing recording
+
+on:
+  push:
+    branches:
+      - scratch/import-existing-proof
+
+permissions:
+  contents: read
+
+env:
+  FIX_SHA: 879980a8c6e7a6ea1e358e333fcc284c7a4dc891
+  CAP_DEB_URL: https://cdn.crabnebula.app/asset/01M5CHFS77QM2HSZ69KT784SAV
+  CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
+
+jobs:
+  windows:
+    name: Windows (${{ matrix.variant }})
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [fix, base]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Put main's picker back
+        if: ${{ matrix.variant == 'base' }}
+        shell: bash
+        run: |
+          git config user.name scratch
+          git config user.email scratch@example.invalid
+          git revert --no-commit "$FIX_SHA"
+          git diff --cached --stat
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build the app
+        shell: bash
+        run: |
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked \
+            --target x86_64-pc-windows-msvc --bin cap-gpui
+
+      - name: Import an existing recording through the native dialog
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:GITHUB_WORKSPACE\target\debug;$env:PATH"
+          ./scripts/scratch/import-existing-windows.ps1 `
+            -App "$env:GITHUB_WORKSPACE\apps\desktop-gpui\target\x86_64-pc-windows-msvc\debug\cap-gpui.exe" `
+            -Out "$env:RUNNER_TEMP\import-existing" `
+            -Fixture "$env:GITHUB_WORKSPACE\apps\media-server\src\__tests__\fixtures\test-no-audio.mp4" `
+            -Variant "${{ matrix.variant }}"
+
+      - name: Expectations
+        shell: bash
+        run: |
+          result="$(cygpath "$RUNNER_TEMP")/import-existing/result.txt"
+          cat "$result"
+          if [[ "${{ matrix.variant }}" == fix ]]; then
+            for line in editor_opened=True dialog_opened=True dialog_rooted_at_recordings=True imported=True \
+              target_segments=2 panics=0 reject_logged=True reject_error_dialog_shown=True \
+              reject_target_unchanged=True reject_app_alive=True cancel_logged=True cancel_target_unchanged=True \
+              cancel_app_alive=True; do
+              grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
+            done
+          else
+            for line in editor_opened=True dialog_opened=True imported=False target_segments=1; do
+              grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
+            done
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-existing-windows-${{ matrix.variant }}
+          path: ${{ runner.temp }}/import-existing
+          retention-days: 7
+
+  gnome:
+    name: GNOME (${{ matrix.variant }})
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [fix, base]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Put main's picker back
+        if: ${{ matrix.variant == 'base' }}
+        run: |
+          git config user.name scratch
+          git config user.email scratch@example.invalid
+          git revert --no-commit "$FIX_SHA"
+          git diff --cached --stat
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build cap-gpui
+        run: >-
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --bin cap-gpui
+          --config 'profile.dev.package.wgpu-types.debug-assertions=false'
+
+      - name: Fetch the Cap package for desktop integration
+        run: |
+          curl --fail --location --retry 3 -o "$RUNNER_TEMP/cap.deb" "$CAP_DEB_URL"
+          echo "$CAP_DEB_SHA256  $RUNNER_TEMP/cap.deb" | sha256sum --check
+
+      - name: GNOME 50 existing recording from the portal chooser
+        env:
+          DEV_BIN: ${{ github.workspace }}/apps/desktop-gpui/target/debug/cap-gpui
+          DEV_LIBS: ${{ github.workspace }}/target/native-deps/lib
+          SCENARIO: import-existing
+        run: |
+          reject=1
+          [[ "${{ matrix.variant }}" == base ]] && reject=0
+          sudo -E bash scripts/linux-desktop-harness/run-desktop.sh gnome "$RUNNER_TEMP/cap.deb" \
+            "$RUNNER_TEMP/out/import-existing" GNOME_UNSAFE=1 LAUNCH=dock APPROVE_SHORTCUT_AFTER=6 REJECT=$reject
+          result="$RUNNER_TEMP/out/import-existing/result.txt"
+          cat "$result"
+          cat "$RUNNER_TEMP/out/import-existing/actions.log" || true
+          if [[ "${{ matrix.variant }}" == fix ]]; then
+            for line in recorded=yes import_editor_opened=yes import_chooser_opened=yes imported=yes \
+              picked_recording_folder=yes target_segments_after=2 import_panics=0 rejected=yes \
+              reject_target_unchanged=yes reject_panics=0; do
+              grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
+            done
+          else
+            for line in recorded=yes import_editor_opened=yes import_chooser_opened=yes imported=no \
+              target_segments_after=1; do
+              grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
+            done
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-existing-gnome-${{ matrix.variant }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7

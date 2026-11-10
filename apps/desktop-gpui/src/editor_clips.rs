@@ -1544,7 +1544,7 @@ impl EditorWindow {
 
     /// `pickCapRecording` (`:533-539`): the `.cap` picker, rooted at the
     /// recordings directory where the platform dialog supports a root.
-    fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.importing {
             return;
         }
@@ -1552,8 +1552,10 @@ impl EditorWindow {
             // Blocking modal, so from a spawned task with no borrow held --
             // the `save_file_panel` rule.
             let Some(path) = pick_existing_recording_path(cx).await else {
+                tracing::info!("existing recording picker returned nothing");
                 return;
             };
+            tracing::info!(path = %path.display(), "existing recording picked");
             this.update_in(cx, |this, window, cx| {
                 this.import_recording_path(path, window, cx);
             })

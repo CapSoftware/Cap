@@ -6218,6 +6218,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     let desktop_background =
         std::env::var("CAP_GPUI_AUTO_DESKTOP_BACKGROUND").is_ok_and(|value| value == "1");
+    let import_existing =
+        std::env::var("CAP_GPUI_AUTO_IMPORT_EXISTING").is_ok_and(|value| value == "1");
     if panel.is_none()
         && tab.is_none()
         && select.is_none()
@@ -6230,12 +6232,35 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && !generate_zoom
         && !pick_background
         && !desktop_background
+        && !import_existing
     {
         return;
     }
     cx.background_executor()
         .timer(std::time::Duration::from_millis(1200))
         .await;
+
+    if import_existing {
+        let started = std::time::Instant::now();
+        while !handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(true)
+            && started.elapsed() < std::time::Duration::from_secs(120)
+        {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+        }
+        let ready = handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(false);
+        tracing::info!(ready, "auto import existing: opening the picker");
+        handle
+            .update(cx, |view, window, cx| {
+                view.pick_existing_recording(window, cx)
+            })
+            .ok();
+    }
 
     if desktop_background {
         handle
