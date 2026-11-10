@@ -12,15 +12,20 @@ import {
 	videos,
 } from "@cap/database/schema";
 import type { Organisation, Space, Video } from "@cap/web-domain";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
+import {
+	type LinkAccessChoice,
+	linkAccessSettingsPatch,
+	resolveLinkAccessWrite,
+} from "@/lib/link-access";
 
 interface ShareCapParams {
 	capId: Video.VideoId;
 	spaceIds: Space.SpaceIdOrOrganisationId[];
 	public?: boolean;
-	linkAccess?: "anyone" | "restricted";
+	linkAccess?: LinkAccessChoice;
 }
 
 export async function shareCap({
@@ -165,20 +170,11 @@ export async function shareCap({
 			await db().insert(spaceVideos).values(newSpaceEntries);
 		}
 
-		const nextLinkAccess =
-			isPublic === false
-				? null
-				: linkAccess === "anyone"
-					? "anyone"
-					: linkAccess === "restricted"
-						? null
-						: undefined;
+		const nextLinkAccess = resolveLinkAccessWrite(isPublic, linkAccess);
 		const linkAccessPatch =
 			nextLinkAccess === undefined
 				? {}
-				: {
-						settings: sql`JSON_MERGE_PATCH(COALESCE(${videos.settings}, JSON_OBJECT()), CAST(${JSON.stringify({ linkAccess: nextLinkAccess })} AS JSON))`,
-					};
+				: { settings: linkAccessSettingsPatch(nextLinkAccess) };
 
 		if (typeof isPublic === "boolean") {
 			await db()

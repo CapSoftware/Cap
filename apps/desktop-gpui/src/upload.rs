@@ -1369,7 +1369,22 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
-    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+    check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
+    let auth_state = crate::store::store_section("auth");
+    let Ok(context) = auth::UploadRequestContext::for_upload(
+        &auth::server_url(),
+        auth_state.get("user_id").and_then(Value::as_str),
+    ) else {
+        return Ok(UploadResult::NotAuthenticated);
+    };
+    context
+        .run(upload_exported_video_inner(
+            project_path,
+            organization_id,
+            progress,
+            cancel,
+            false,
+        ))
         .await
         .map(|(result, _)| result)
 }
