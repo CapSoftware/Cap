@@ -63,10 +63,12 @@ def record_clip():
         return existing[0]
     os.makedirs(project_home, exist_ok=True)
     profile = rclib.make_profile(os.path.join(out, "record-profile"))
-    # The clip reaches the app as the microphone only, the shape of the
-    # recordings PR 3908 is about: through a second null sink on Linux, and
-    # through the virtual cable's capture end on Windows.
-    env = {"CAP_GPUI_AUTO_RECORD": "studio:14", "CAP_GPUI_AUTO_NO_MIC": "0"}
+    # On Linux the clip reaches the app as the microphone only, the shape of
+    # the recordings PR 3908 is about, through a second null sink. On hosted
+    # Windows the image denies microphone capture to desktop apps, so the clip
+    # is recorded as system audio from the virtual output device instead.
+    env = {"CAP_GPUI_AUTO_RECORD": "studio:14"}
+    env.update({"CAP_GPUI_AUTO_NO_MIC": "1", "CAP_GPUI_AUTO_SYSTEM_AUDIO": "1"} if rclib.WINDOWS else {"CAP_GPUI_AUTO_NO_MIC": "0"})
     helper = None
     if rclib.LINUX:
         helper = subprocess.Popen(["xmessage", "-geometry", "640x360+200+200", "-title", WINDOW, "A window to record"])

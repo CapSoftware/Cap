@@ -9,6 +9,10 @@ import subprocess
 import sys
 import time
 
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 WINDOWS = sys.platform == "win32"
 MAC = sys.platform == "darwin"
 LINUX = sys.platform.startswith("linux")
