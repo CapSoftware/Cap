@@ -306,18 +306,26 @@ if state and state["project"]:
         # The recording as it was on disk while still recording, which is what
         # a crash or a power cut leaves: the editor recovers it first.
         open_in_editor("interrupted", copy_of_interrupted(state, "interrupted"), state["offset"], past_1000, later)
-        # The same fragments with the metadata marked Complete by this
-        # harness, so the editor reads the fragment directory itself instead
-        # of a remuxed file. That is the state GitHub #3961 describes and the
-        # only one in which the editor lists the fragments by name.
+        # The same fragments with metadata written by this harness: the
+        # finalized recording's metadata with its display track pointed back
+        # at the fragment directory. The app's own stop and recovery both
+        # remux before the editor opens, so this is the only way to make the
+        # editor list the fragments by name, the state GitHub #3961 reports
+        # and the code #3974 changed.
         target = copy_of_interrupted(state, "fragments")
-        meta_path = os.path.join(target, "recording-meta.json")
-        with open(meta_path) as handle:
-            meta = json.load(handle)
-        results.note("fragments: status as recorded", rclib.meta_status(meta))
-        meta["status"] = {"status": "Complete"}
-        with open(meta_path, "w") as handle:
+        meta = rclib.read_meta(state["project"])
+        display = meta["segments"][0]["display"]
+        display["path"] = display["path"].removesuffix(".mp4")
+        for key in ("cursor", "keyboard"):
+            relative = meta["segments"][0].get(key)
+            if relative and not os.path.exists(os.path.join(target, relative)):
+                source = os.path.join(state["project"], relative)
+                if os.path.exists(source):
+                    shutil.copy(source, os.path.join(target, relative))
+        with open(os.path.join(target, "recording-meta.json"), "w") as handle:
             json.dump(meta, handle)
+        listing = segment_listing(target)
+        results.note("fragments: display track handed to the editor", f"{display['path']}: {'; '.join(listing)}")
         outcome = open_in_editor("fragments", target, state["offset"], past_1000, later)
         if outcome:
             results.add(

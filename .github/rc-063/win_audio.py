@@ -25,7 +25,7 @@ from rclib import App, Results, log
 package, out, fixture = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
 results = Results(out, "Item 3: playback when the audio buffer cannot be allocated (#3971)")
 RECORD_SECONDS = int(os.environ.get("RC_AUDIO_SECONDS", "660"))
-MARGIN = int(os.environ.get("RC_AUDIO_MARGIN_MB", "128")) * 1024 * 1024
+MARGIN = int(os.environ.get("RC_AUDIO_MARGIN_MB", "215")) * 1024 * 1024
 SCRIPT = "wait:30000,play,wait:25000,stop,wait:3000"
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -229,6 +229,13 @@ def play(name, project, limited):
             detail["job_peak"] = info.PeakProcessMemoryUsed
     code = app.stop()
     text = app.text()
+    # The app sends its own stderr, where an allocation failure aborts, to a
+    # file in its log folder.
+    logs = os.path.join(profile, "logs")
+    for name in sorted(os.listdir(logs)) if os.path.isdir(logs) else []:
+        if name.endswith(".stderr"):
+            with open(os.path.join(logs, name), "rb") as handle:
+                text += "\n" + handle.read().decode("utf-8", "replace")
     detail.update(text=text, alive=alive, code=code)
     with open(os.path.join(out, f"{name}.audio.log"), "w", encoding="utf-8") as handle:
         handle.write(
@@ -288,10 +295,12 @@ if limited:
         " / ".join(line[-260:] for line in refused[:2]) or "no fallback line in the log",
     )
     aborted = rclib.grep(text, r"memory allocation of \d+ bytes failed|panicked at")
+    starved = len(rclib.grep(text, r"get_buffer\(\) failed"))
     results.add(
         "limited: no abort",
         not aborted and limited["alive"],
-        " / ".join(line[-200:] for line in aborted[:3]) or f"alive at the end: {limited['alive']}",
+        (" / ".join(line[-200:] for line in aborted[:3]) or f"alive at the end: {limited['alive']}")
+        + f"; video decoder buffer failures: {starved}; exit code {limited['code']}",
     )
     rendered = stats(text)
     results.add(

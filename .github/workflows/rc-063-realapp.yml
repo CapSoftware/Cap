@@ -112,14 +112,19 @@ jobs:
           key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v2
 
       - name: Item 3, playback when the audio buffer cannot be allocated (#3971)
+        id: audiorun
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
         shell: bash
         env:
           PYTHONPATH: .github/rc-063
-        run: python .github/rc-063/win_audio.py rc-pkg "$RUNNER_TEMP/rc-out/item3" "$RUNNER_TEMP/rc-fix/audio"
+        run: |
+          status=0
+          python .github/rc-063/win_audio.py rc-pkg "$RUNNER_TEMP/rc-out/item3" "$RUNNER_TEMP/rc-fix/audio" || status=$?
+          if [[ -f "$RUNNER_TEMP/rc-fix/audio/recorded.txt" ]]; then echo "recorded=true" >> "$GITHUB_OUTPUT"; fi
+          exit $status
 
       - name: Keep the long recording with audio
-        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') && steps.audio.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-fix/audio/recorded.txt', runner.temp)) != '' }}
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') && steps.audio.outputs.cache-hit != 'true' && steps.audiorun.outputs.recorded == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/rc-fix/audio
@@ -159,6 +164,7 @@ jobs:
           LD_LIBRARY_PATH="$PWD/rc-pkg/libs" ldd rc-pkg/bin/cap-gpui | grep 'not found' || true
 
       - name: Item 4, a short recording through the same steps
+        id: short
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-short,') }}
         env:
           PYTHONPATH: .github/rc-063
@@ -170,24 +176,28 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/rc-out/item4-long
-          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v1
+          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v2
 
       - name: Item 4, a 53 minute recording past 1000 fragments (#3974)
-        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') }}
+        id: longrun
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') && steps.short.outcome != 'failure' }}
         env:
           PYTHONPATH: .github/rc-063
           HAVE_RECORDING: ${{ steps.long.outputs.cache-hit }}
         run: |
           phase=long
           if [[ "$HAVE_RECORDING" == true && -s "$RUNNER_TEMP/rc-out/item4-long/state.json" ]]; then phase=open; fi
-          bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-long" "$phase" 3200
+          status=0
+          bash .github/rc-063/linux_session.sh python3 .github/rc-063/linux_long.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item4-long" "$phase" 3200 || status=$?
+          if [[ -s "$RUNNER_TEMP/rc-out/item4-long/state.json" ]]; then echo "recorded=true" >> "$GITHUB_OUTPUT"; fi
+          exit $status
 
       - name: Keep the long recording
-        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') && steps.long.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-out/item4-long/state.json', runner.temp)) != '' }}
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item4-long,') && steps.long.outputs.cache-hit != 'true' && steps.longrun.outputs.recorded == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/rc-out/item4-long
-          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v1
+          key: rc063-item4-long-${{ env.MAIN_REVISION }}-v2
 
       - name: Upload evidence
         if: always()

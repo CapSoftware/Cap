@@ -133,10 +133,14 @@ for entry in opened:
 time.sleep(1)
 text = app.text()
 after_click = listing(project) if project else []
+# A fragment being written is renamed when it completes, so names ending in
+# .tmp may change; everything else that was there must still be there.
+settled = {name for name in before if not name.endswith(".tmp")}
+missing = sorted(settled - set(after_click))
 results.add(
     "the recording's files stay",
-    set(before) <= set(after_click) and "deleted a recording" not in text,
-    f"{len(before)} files before the click, {len(after_click)} after, none missing: {set(before) <= set(after_click)}",
+    not missing and "deleted a recording" not in text,
+    f"{len(before)} files before the click, {len(after_click)} after, missing: {missing or 'none'}",
 )
 results.add("the recording is still running", "recording finished" not in text and app.alive())
 

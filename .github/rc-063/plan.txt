@@ -1,1 +1,1 @@
-jobs=win-main,item2,item3,win-pr,item6-old,item6-fresh
+jobs=win-main,item2,item3,linux-main,item4-short,item4-long
