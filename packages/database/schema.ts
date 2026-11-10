@@ -241,6 +241,7 @@ export const organizations = mysqlTable(
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
+			allowPublicLinkOverride?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -490,6 +491,7 @@ export const videos = mysqlTable(
 			disableComments?: boolean;
 			defaultPlaybackSpeed?: number;
 			callToAction?: VideoCallToAction;
+			linkAccess?: "anyone";
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
