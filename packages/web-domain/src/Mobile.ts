@@ -182,6 +182,31 @@ export const MobileUserBlockInput = Schema.Struct({
 	userId: UserId,
 });
 
+export const MobileNotificationPreferences = Schema.Struct({
+	comments: Schema.Boolean,
+	replies: Schema.Boolean,
+	views: Schema.Boolean,
+	anonymousViews: Schema.Boolean,
+	reactions: Schema.Boolean,
+});
+
+export const MobileNotificationPreferencesInput = Schema.Struct({
+	comments: Schema.optional(Schema.Boolean),
+	replies: Schema.optional(Schema.Boolean),
+	views: Schema.optional(Schema.Boolean),
+	anonymousViews: Schema.optional(Schema.Boolean),
+	reactions: Schema.optional(Schema.Boolean),
+});
+
+export const MobilePushTokenInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.pattern(/^[0-9a-fA-F]{32,200}$/)),
+	environment: Schema.Literal("sandbox", "production"),
+});
+
+export const MobilePushTokenRemoveInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.maxLength(200)),
+});
+
 export const MobileContentReportInput = Schema.Struct({
 	reason: Schema.Literal(
 		"harassment",
@@ -241,6 +266,8 @@ export const MobileUploadProgress = Schema.Struct({
 	processingError: Schema.NullOr(Schema.String),
 });
 
+export const MobileLinkAccess = Schema.Literal("anyone", "restricted");
+
 export const MobileCapSummary = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
@@ -260,6 +287,8 @@ export const MobileCapSummary = Schema.Struct({
 	reactionCount: Schema.Number,
 	upload: Schema.NullOr(MobileUploadProgress),
 	ownedByCurrentUser: Schema.optional(Schema.Boolean),
+	linkAccess: Schema.optional(MobileLinkAccess),
+	linkRestricted: Schema.optional(Schema.Boolean),
 });
 
 export const MobileComment = Schema.Struct({
@@ -386,6 +415,7 @@ export const MobileProfileImageInput = Schema.Struct({
 
 export const MobileCapSharingInput = Schema.Struct({
 	public: Schema.Boolean,
+	linkAccess: Schema.optional(MobileLinkAccess),
 });
 
 export const MobileCapTitleInput = Schema.Struct({
@@ -665,6 +695,47 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.get(
+			"getNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.patch(
+			"updateNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.setPayload(MobileNotificationPreferencesInput)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("registerPushToken", "/user/push-tokens")
+			.setHeaders(MobileAuthHeaders)
+			.setPayload(MobilePushTokenInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("removePushToken", "/user/push-tokens/remove")
+			.setPayload(MobilePushTokenRemoveInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
 		HttpApiEndpoint.get("bootstrap", "/bootstrap")
 			.addSuccess(MobileBootstrapResponse)
 			.middleware(HttpAuthMiddleware)
@@ -791,6 +862,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPayload(MobileCapSharingInput)
 			.addSuccess(MobileCapSummary)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Conflict)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	)

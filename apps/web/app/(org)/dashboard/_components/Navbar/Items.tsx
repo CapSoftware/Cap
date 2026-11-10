@@ -7,6 +7,7 @@ import {
 	CommandGroup,
 	CommandInput,
 	CommandItem,
+	commandScore,
 	Dialog,
 	DialogContent,
 	DialogFooter,
@@ -149,6 +150,16 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const formRef = useRef<HTMLFormElement | null>(null);
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
+	const organizationSearchText = useMemo(
+		() =>
+			new Map(
+				(orgData ?? []).map(({ organization }) => [
+					organization.id.toLowerCase(),
+					organization.name.trim().toLowerCase(),
+				]),
+			),
+		[orgData],
+	);
 	const isOwner = activeOrg?.organization.ownerId === user.id;
 	const currentMember = activeOrg?.members.find(
 		(member) => member.userId === user.id,
@@ -310,7 +321,14 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											sidebarCollapsed ? "ml-3" : "mx-auto",
 										)}
 									>
-										<Command>
+										<Command
+											filter={(value, search) =>
+												commandScore(
+													organizationSearchText.get(value) ?? value,
+													search,
+												)
+											}
+										>
 											<CommandInput placeholder="Search organizations..." />
 											<CommandEmpty>No organizations found</CommandEmpty>
 											<CommandGroup>
@@ -327,6 +345,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																	: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 															)}
 															key={`${organization.organization.name}-organization-${organization.organization.id}`}
+															value={organization.organization.id}
 															onSelect={async () => {
 																await updateActiveOrganization(
 																	organization.organization.id,

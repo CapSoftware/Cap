@@ -244,6 +244,40 @@ final class CapUITests: XCTestCase {
         }
     }
 
+    func testLinkAccessSwitch() {
+        let app = launch(route: "cap:cap_link")
+        let more = app.buttons["More"].firstMatch
+        let open = app.buttons["Open to anyone with the link"].firstMatch
+        let limit = app.buttons["Limit to your organization"].firstMatch
+        waitFor(more, 15)
+        more.tap()
+        waitFor(open)
+        XCTAssertFalse(limit.exists)
+        shot("90-link-restricted-menu")
+        open.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(limit)
+        XCTAssertFalse(open.exists)
+        shot("91-link-open-menu")
+        limit.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(open)
+        app.buttons["Make private"].firstMatch.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(app.buttons["Make public"].firstMatch)
+        XCTAssertFalse(open.exists)
+        XCTAssertFalse(limit.exists)
+        shot("92-link-private-menu")
+        app.buttons["Make public"].firstMatch.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(open)
+        XCTAssertFalse(limit.exists)
+    }
+
     func testScopeBar() {
         let app = launch()
         let myCaps = app.buttons["My Caps"]
@@ -366,6 +400,124 @@ final class CapUITests: XCTestCase {
         shot("65-cap-analytics")
     }
 
+    func testNotificationSettings() {
+        var app = launch(route: "tab:settings")
+        let link = app.buttons["Notifications"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15))
+        link.tap()
+        let views = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        let reactions = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Reactions'")).firstMatch
+        XCTAssertTrue(views.waitForExistence(timeout: 10))
+        XCTAssertEqual(views.value as? String, "1")
+        XCTAssertEqual(reactions.value as? String, "1")
+
+        // Two quick changes both reach the server and neither flips back.
+        views.switches.firstMatch.tap()
+        reactions.switches.firstMatch.tap()
+        XCTAssertTrue(waitForServerNotifications(["views": false, "reactions": false]))
+        XCTAssertEqual(views.value as? String, "0")
+        XCTAssertEqual(reactions.value as? String, "0")
+        shot("66-notifications")
+        app.terminate()
+
+        app = launch(route: "tab:settings")
+        XCTAssertTrue(app.buttons["Notifications"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Notifications"].firstMatch.tap()
+        let savedViews = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Views'")).firstMatch
+        let savedReactions = app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Reactions'")).firstMatch
+        XCTAssertTrue(savedViews.waitForExistence(timeout: 10))
+        XCTAssertEqual(savedViews.value as? String, "0")
+        XCTAssertEqual(savedReactions.value as? String, "0")
+        savedViews.switches.firstMatch.tap()
+        savedReactions.switches.firstMatch.tap()
+        XCTAssertTrue(waitForServerNotifications(["views": true, "reactions": true]))
+    }
+
+    /// Needs a fresh install (no notification permission yet) and a simulator that can reach APNs.
+    func testPushNotificationsRegister() {
+        let app = launch(route: "tab:settings")
+        let link = app.buttons["Notifications"].firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15))
+        link.tap()
+        let turnOn = app.buttons["Turn on push notifications"]
+        XCTAssertTrue(turnOn.waitForExistence(timeout: 10))
+        shot("67-push-off")
+        var request = URLRequest(url: URL(string: "\(fixtureURL)/fixture/push-tokens")!)
+        request.setValue("Bearer \(CapUITests.key)", forHTTPHeaderField: "Authorization")
+        let before = Set(fetchObject(request).keys)
+        turnOn.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons["Allow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 10))
+        allow.tap()
+
+        XCTAssertTrue(app.staticTexts["Push notifications are on"].waitForExistence(timeout: 10))
+        shot("68-push-on")
+        let deadline = Date().addingTimeInterval(30)
+        var added: [String: Any] = [:]
+        repeat {
+            added = fetchObject(request).filter { !before.contains($0.key) }
+            if !added.isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        XCTAssertEqual(added.values.compactMap { $0 as? String }, ["sandbox"], "the app should register one new sandbox token")
+    }
+
+    /// Manual end-to-end check: a real APNs push sent to the registered token while this waits
+    /// (CAP_PUSH_E2E=1) must show a banner, and tapping it must open that Cap.
+    func testTappingPushOpensCap() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["CAP_PUSH_E2E"] == "1", "needs a push sent from outside the test")
+        let app = launch(route: "tab:settings")
+        XCTAssertTrue(app.buttons["Notifications"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Notifications"].firstMatch.tap()
+        let turnOn = app.buttons["Turn on push notifications"]
+        if turnOn.waitForExistence(timeout: 5) {
+            turnOn.tap()
+            let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+            XCTAssertTrue(allow.waitForExistence(timeout: 10))
+            allow.tap()
+        }
+        XCTAssertTrue(app.staticTexts["Push notifications are on"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home)
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Love the new editor'")).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 120), "the push banner should appear")
+        shot("69-push-banner")
+        banner.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.buttons["More"].firstMatch.waitForExistence(timeout: 15), "tapping the push should open the Cap")
+        shot("70-push-opened-cap")
+    }
+
+    private func waitForServerNotifications(_ expected: [String: Bool], timeout: TimeInterval = 10) -> Bool {
+        var request = URLRequest(url: URL(string: "\(fixtureURL)/api/mobile/user/notification-preferences")!)
+        request.setValue("Bearer \(CapUITests.key)", forHTTPHeaderField: "Authorization")
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let current = fetchJSON(request)
+            if expected.allSatisfy({ current[$0.key] == $0.value }) { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    private func fetchJSON(_ request: URLRequest) -> [String: Bool] {
+        fetchObject(request).compactMapValues { $0 as? Bool }
+    }
+
+    private func fetchObject(_ request: URLRequest) -> [String: Any] {
+        let done = DispatchSemaphore(value: 0)
+        let box = JSONBox()
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            box.value = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+            done.signal()
+        }.resume()
+        done.wait()
+        return box.value
+    }
+
     func testEmptyAccount() {
         var app = launch(key: CapUITests.emptyKey, user: "user_empty")
         sleep(4)
@@ -379,4 +531,15 @@ final class CapUITests: XCTestCase {
         sleep(3)
         shot("72-empty-settings")
     }
+}
+
+private extension XCTNSPredicateExpectation {
+    static func wait(for element: XCUIElement, value: String, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+}
+
+private final class JSONBox: @unchecked Sendable {
+    var value: [String: Any] = [:]
 }

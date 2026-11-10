@@ -75,7 +75,14 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import {
+	describeLinkAccessChoice,
+	isLinkRestricted,
+	linkAccessSettingsPatch,
+	resolveLinkAccessWrite,
+} from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { pushSessionHash } from "@/lib/mobile-push";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -153,6 +160,11 @@ type MobileOrganizationIconInput =
 	(typeof Mobile.MobileOrganizationIconInput)["Type"];
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
+type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
+type MobileNotificationPreferences =
+	(typeof Mobile.MobileNotificationPreferences)["Type"];
+type MobileNotificationPreferencesInput =
+	(typeof Mobile.MobileNotificationPreferencesInput)["Type"];
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
@@ -715,6 +727,144 @@ const getBlockedUserIds = (preferences: unknown) => {
 		),
 	);
 };
+
+// Stored as the web's "pause" flags, so email, the web bell and the app share one setting.
+const notificationPauseKeys = {
+	comments: "pauseComments",
+	replies: "pauseReplies",
+	views: "pauseViews",
+	anonymousViews: "pauseAnonViews",
+	reactions: "pauseReactions",
+} as const satisfies Record<keyof MobileNotificationPreferences, string>;
+
+const notificationPreferenceKeys = Object.keys(
+	notificationPauseKeys,
+) as (keyof MobileNotificationPreferences)[];
+
+const toMobileNotificationPreferences = (
+	preferences: unknown,
+): MobileNotificationPreferences => {
+	const stored = getMetadataRecord(
+		getMetadataRecord(preferences).notifications,
+	);
+	return {
+		comments: stored.pauseComments !== true,
+		replies: stored.pauseReplies !== true,
+		views: stored.pauseViews !== true,
+		anonymousViews: stored.pauseAnonViews !== true,
+		reactions: stored.pauseReactions !== true,
+	};
+};
+
+const getNotificationPreferences = Effect.fn(
+	"Mobile.getNotificationPreferences",
+)(function* () {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({ preferences: Db.users.preferences })
+			.from(Db.users)
+			.where(eq(Db.users.id, user.id))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	return toMobileNotificationPreferences(row.preferences);
+});
+
+const updateNotificationPreferences = Effect.fn(
+	"Mobile.updateNotificationPreferences",
+)(function* (input: MobileNotificationPreferencesInput) {
+	const user = yield* CurrentUser;
+	const patch: Record<string, boolean> = {};
+	for (const key of notificationPreferenceKeys) {
+		const enabled = input[key];
+		if (enabled !== undefined) patch[notificationPauseKeys[key]] = !enabled;
+	}
+	if (Object.keys(patch).length > 0) {
+		const defaults = Object.fromEntries(
+			Object.values(notificationPauseKeys).map((key) => [key, false]),
+		);
+		const database = yield* Database;
+		// One statement so a concurrent web change to another flag isn't lost, and every
+		// flag stays present for the web settings schema.
+		yield* database.use((db) =>
+			db
+				.update(Db.users)
+				.set({
+					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+				})
+				.where(eq(Db.users.id, user.id)),
+		);
+	}
+	return yield* getNotificationPreferences();
+});
+
+const MAX_PUSH_TOKENS_PER_USER = 10;
+
+const registerPushToken = Effect.fn("Mobile.registerPushToken")(function* (
+	input: MobilePushTokenInput,
+	authorization: string | undefined,
+) {
+	const user = yield* CurrentUser;
+	const apiKey = parseBearerToken(authorization);
+	if (!apiKey) return yield* Effect.fail(new HttpApiError.BadRequest());
+	const database = yield* Database;
+	const token = input.token.toLowerCase();
+	const sessionHash = pushSessionHash(apiKey);
+	yield* database.use(async (db) => {
+		// A token belongs to one install; signing in as someone else on the same phone moves it.
+		await db
+			.insert(Db.mobilePushTokens)
+			.values({
+				id: nanoId(),
+				userId: user.id,
+				token,
+				sessionHash,
+				environment: input.environment,
+			})
+			.onDuplicateKeyUpdate({
+				set: { userId: user.id, sessionHash, environment: input.environment },
+			});
+		const stale = await db
+			.select({ id: Db.mobilePushTokens.id })
+			.from(Db.mobilePushTokens)
+			.where(eq(Db.mobilePushTokens.userId, user.id))
+			.orderBy(
+				desc(Db.mobilePushTokens.updatedAt),
+				desc(Db.mobilePushTokens.id),
+			)
+			.limit(1000)
+			.offset(MAX_PUSH_TOKENS_PER_USER);
+		if (stale.length > 0) {
+			await db.delete(Db.mobilePushTokens).where(
+				inArray(
+					Db.mobilePushTokens.id,
+					stale.map((row) => row.id),
+				),
+			);
+		}
+	});
+	return { success: true as const };
+});
+
+const removePushToken = Effect.fn("Mobile.removePushToken")(function* (
+	token: string,
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	yield* database.use((db) =>
+		db
+			.delete(Db.mobilePushTokens)
+			.where(
+				and(
+					eq(Db.mobilePushTokens.token, token.toLowerCase()),
+					eq(Db.mobilePushTokens.userId, user.id),
+				),
+			),
+	);
+	return { success: true as const };
+});
 
 const getCurrentBlockedUserIds = Effect.fn("Mobile.getBlockedUserIds")(
 	function* () {
@@ -2268,6 +2418,25 @@ const runMobileVideoEdit = Effect.fn("Mobile.runVideoEdit")(function* (
 	return { success: true as const };
 });
 
+const getLinkAccessState = Effect.fn("Mobile.getLinkAccessState")(function* (
+	videoId: Video.VideoId,
+) {
+	const database = yield* Database;
+	const [state] = yield* database.use((db) =>
+		db
+			.select({
+				videoSettings: Db.videos.settings,
+				organizationSettings: Db.organizations.settings,
+				allowedEmailDomain: Db.organizations.allowedEmailDomain,
+			})
+			.from(Db.videos)
+			.innerJoin(Db.organizations, eq(Db.videos.orgId, Db.organizations.id))
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	return state;
+});
+
 const getCapById = Effect.fn("Mobile.getCapById")(function* (
 	videoId: Video.VideoId,
 	publicOrigin: string,
@@ -2345,9 +2514,24 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 		Effect.catchAll(() => Effect.succeed(0)),
 	);
 
+	const linkAccessState =
+		capRow.ownerId === user.id && capRow.public
+			? yield* getLinkAccessState(capRow.id)
+			: undefined;
+	const linkAccess = linkAccessState
+		? describeLinkAccessChoice({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+	const linkRestricted = linkAccessState
+		? isLinkRestricted({ isPublic: capRow.public, ...linkAccessState })
+		: undefined;
+
 	return {
 		row: capRow,
-		cap: toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+		cap: {
+			...toMobileCapSummary(capRow, analytics, publicOrigin, user.id, true),
+			...(linkAccess ? { linkAccess } : {}),
+			...(linkRestricted === undefined ? {} : { linkRestricted }),
+		},
 	};
 });
 
@@ -3531,9 +3715,22 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const token = parseBearerToken(headers.authorization);
 								if (!token)
 									return yield* Effect.fail(new HttpApiError.Unauthorized());
-								yield* database.use((db) =>
-									db.delete(Db.authApiKeys).where(eq(Db.authApiKeys.id, token)),
-								);
+								yield* database.use(async (db) => {
+									await db
+										.delete(Db.authApiKeys)
+										.where(eq(Db.authApiKeys.id, token));
+									// Delivery already skips tokens whose session is gone; this only tidies up,
+									// so it must never stop the key above from being revoked.
+									await db
+										.delete(Db.mobilePushTokens)
+										.where(
+											eq(
+												Db.mobilePushTokens.sessionHash,
+												pushSessionHash(token),
+											),
+										)
+										.catch(() => undefined);
+								});
 								return { success: true as const };
 							}),
 						),
@@ -3543,6 +3740,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("blockUser", ({ payload }) =>
 						withMappedErrors(blockMobileUser(payload.userId)),
+					)
+					.handle("getNotificationPreferences", () =>
+						withMappedErrors(getNotificationPreferences()),
+					)
+					.handle("updateNotificationPreferences", ({ payload }) =>
+						withMappedErrors(updateNotificationPreferences(payload)),
+					)
+					.handle("registerPushToken", ({ payload, headers }) =>
+						withMappedErrors(registerPushToken(payload, headers.authorization)),
+					)
+					.handle("removePushToken", ({ payload }) =>
+						withMappedErrors(removePushToken(payload.token)),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>
@@ -3633,18 +3842,51 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const publicOrigin = getMobilePublicOrigin(request);
 								const user = yield* CurrentUser;
 								yield* assertMobileVideoOwner(path.id);
+								if (payload.linkAccess === "anyone") {
+									const state = yield* getLinkAccessState(path.id);
+									if (
+										state?.organizationSettings?.allowPublicLinkOverride !==
+										true
+									) {
+										return yield* Effect.fail(new HttpApiError.Forbidden());
+									}
+								}
+								const nextLinkAccess = resolveLinkAccessWrite(
+									payload.public,
+									payload.linkAccess,
+								);
 								yield* database.use((db) =>
 									db
 										.update(Db.videos)
-										.set({ public: payload.public })
+										.set({
+											public: payload.public,
+											...(nextLinkAccess === undefined
+												? {}
+												: {
+														settings: linkAccessSettingsPatch(nextLinkAccess),
+													}),
+										})
 										.where(
 											and(
 												eq(Db.videos.id, path.id),
 												eq(Db.videos.ownerId, user.id),
+												// A link access choice only exists on a public link. Without this an
+												// earlier "open to anyone" request landing after "make private" would
+												// publish the Cap again. The request is refused below instead.
+												payload.linkAccess === undefined
+													? undefined
+													: eq(Db.videos.public, true),
 											),
 										),
 								);
 								const { cap } = yield* getCapById(path.id, publicOrigin);
+								if (
+									payload.linkAccess !== undefined &&
+									payload.public &&
+									!cap.public
+								) {
+									return yield* Effect.fail(new HttpApiError.Conflict());
+								}
 								return cap;
 							}),
 						),
