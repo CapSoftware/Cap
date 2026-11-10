@@ -3,9 +3,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function editDate(videoId: Video.VideoId, date: string) {
@@ -40,19 +39,12 @@ export async function editDate(videoId: Video.VideoId, date: string) {
 			throw new Error("Cannot set a date in the future");
 		}
 
-		// Store the custom date in the metadata field
-		const currentMetadata = (video.metadata as VideoMetadata) || {};
-		const updatedMetadata: VideoMetadata = {
-			...currentMetadata,
-			customCreatedAt: newDate.toISOString(),
-		};
-
 		await db()
 			.update(videos)
 			.set({
-				metadata: updatedMetadata,
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.customCreatedAt', ${newDate.toISOString()})`,
 			})
-			.where(eq(videos.id, videoId));
+			.where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
 		// Revalidate paths to update the UI
 		revalidatePath("/dashboard/caps");
