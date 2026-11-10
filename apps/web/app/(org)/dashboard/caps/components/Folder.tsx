@@ -119,9 +119,12 @@ const FolderCard = ({
 			toast.success("Folder updated successfully");
 			router.refresh();
 		},
-		onError: () => {
+		onError: (_error, variables) => {
 			setPublicEnabled(isPublic);
-			setUpdateName(name);
+			const failedName = variables.name;
+			// Only undo the rename that failed, not one typed since.
+			if (failedName !== undefined)
+				setUpdateName((current) => (current === failedName ? name : current));
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
