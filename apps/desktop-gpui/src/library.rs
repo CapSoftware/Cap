@@ -3515,37 +3515,46 @@ mod tests {
         names
     }
 
-    /// Windows will not delete a file another handle has open without sharing
-    /// deletion, which is how a decoder or a media player opens one. Removing
-    /// the folder in place stopped at that file with the ones before it
-    /// already gone: the recording was left with its video and metadata but
-    /// no cursor data.
+    /// Windows will not delete a file or folder another handle has open
+    /// without sharing deletion, which is how a decoder or a media player
+    /// opens a file and how a terminal holds its current directory. Removing
+    /// the folder in place stopped there with the files before it already
+    /// gone: the recording was left with its video and metadata but no cursor
+    /// data.
     #[cfg(windows)]
     #[test]
-    fn delete_removes_nothing_when_a_file_in_the_recording_is_open() {
+    fn delete_removes_nothing_when_something_in_the_recording_is_held_open() {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_SHARE_READ_WRITE: u32 = 0x3;
-        let root = temp_dir("delete-open-file");
-        let recordings = root.join("recordings");
-        std::fs::create_dir_all(&recordings).unwrap();
-        let dirs = vec![recordings.clone()];
-        let (bundle, files) = write_recorded_bundle(&recordings, "open");
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        for held in ["content/segments/segment-0/display.mp4", "content/segments"] {
+            let root = temp_dir("delete-held-open");
+            let recordings = root.join("recordings");
+            std::fs::create_dir_all(&recordings).unwrap();
+            let dirs = vec![recordings.clone()];
+            let (bundle, files) = write_recorded_bundle(&recordings, "open");
 
-        let held = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ_WRITE)
-            .open(bundle.join("content/segments/segment-0/display.mp4"))
-            .unwrap();
-        let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
-        assert!(error.contains("os error 32"), "{error}");
-        assert_eq!(files_under(&bundle), files, "{error}");
-        assert_eq!(names_in(&recordings), ["open.cap"]);
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(bundle.join(held))
+                .unwrap();
+            let error = delete_recording_directory_in(&dirs, &bundle).unwrap_err();
+            assert!(error.contains("os error 32"), "{held}: {error}");
+            assert_eq!(files_under(&bundle), files, "{held}: {error}");
+            assert_eq!(names_in(&recordings), ["open.cap"], "{held}");
 
-        drop(held);
-        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
-        assert_eq!(names_in(&recordings), Vec::<String>::new());
+            drop(handle);
+            assert_eq!(
+                delete_recording_directory_in(&dirs, &bundle),
+                Ok(()),
+                "{held}"
+            );
+            assert_eq!(names_in(&recordings), Vec::<String>::new(), "{held}");
 
-        std::fs::remove_dir_all(root).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     /// A handle that shares deletion (an Explorer window on a folder inside,
