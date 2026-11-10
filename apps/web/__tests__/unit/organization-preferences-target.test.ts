@@ -1,4 +1,6 @@
 import type { Organisation } from "@cap/web-domain";
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -70,12 +72,13 @@ describe("organization preference actions", () => {
 			editedOrganizationId,
 		);
 		expect(mocks.readOrganizationIds).toEqual([editedOrganizationId]);
-		expect(mocks.updates).toEqual([
-			{
-				organizationId: editedOrganizationId,
-				values: { settings: { disableComments: true } },
-			},
-		]);
+		expect(mocks.updates).toHaveLength(1);
+		expect(mocks.updates[0]?.organizationId).toBe(editedOrganizationId);
+		expect(
+			new MySqlDialect().sqlToQuery(
+				(mocks.updates[0]?.values as { settings: SQL }).settings,
+			).params,
+		).toEqual(['{"disableComments":true}']);
 	});
 
 	it("saves the sharing default to the organization being edited after the active organization changes", async () => {

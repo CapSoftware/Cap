@@ -22,12 +22,7 @@ import {
 	RecordingInProgressOverlay,
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
 import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
-import {
-	formatChaptersAsVTT,
-	formatTranscriptAsVTT,
-	parseVTT,
-	type TranscriptEntry,
-} from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { formatChaptersAsVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { formatPlayerTime } from "@/lib/player-time";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
@@ -105,7 +100,6 @@ export const EmbedVideo = forwardRef<
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 		usePlayerJsReceiver({ playerContainerRef, videoRef });
 
-		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 		const [longestDuration, setLongestDuration] = useState<number>(
 			data.duration ?? 0,
 		);
@@ -133,26 +127,21 @@ export const EmbedVideo = forwardRef<
 		);
 
 		useEffect(() => {
-			if (transcriptContent) {
-				const parsed = parseVTT(transcriptContent);
-				setTranscriptData(parsed);
-			} else if (transcriptError) {
+			if (transcriptError) {
 				console.error(
 					"[Transcript] Transcript error from React Query:",
 					transcriptError.message,
 				);
 			}
-		}, [transcriptContent, transcriptError]);
+		}, [transcriptError]);
 
 		useEffect(() => {
 			if (
 				!captionsDisabled &&
 				data.transcriptionStatus === "COMPLETE" &&
-				transcriptData &&
-				transcriptData.length > 0
+				transcriptContent?.includes("-->")
 			) {
-				const vttContent = formatTranscriptAsVTT(transcriptData);
-				const blob = new Blob([vttContent], { type: "text/vtt" });
+				const blob = new Blob([transcriptContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
 					if (prev) URL.revokeObjectURL(prev);
@@ -166,7 +155,7 @@ export const EmbedVideo = forwardRef<
 				if (prev) URL.revokeObjectURL(prev);
 				return null;
 			});
-		}, [captionsDisabled, data.transcriptionStatus, transcriptData]);
+		}, [captionsDisabled, data.transcriptionStatus, transcriptContent]);
 
 		useEffect(() => {
 			if (!chaptersDisabled && chapters?.length > 0) {
