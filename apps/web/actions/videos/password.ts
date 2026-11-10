@@ -11,12 +11,13 @@ import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { isPasswordAttemptLimited } from "@/lib/password-attempt-limit";
 import {
 	passwordAttemptResourceKey,
 	TOO_MANY_PASSWORD_ATTEMPTS,
 } from "@/lib/password-attempts";
 import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function setVideoPassword(
 	videoId: Video.VideoId,
@@ -36,6 +37,12 @@ export async function setVideoPassword(
 
 		if (!video || video.ownerId !== user.id) {
 			throw new Error("Unauthorized");
+		}
+
+		// A blank password would silently replace a working one with an empty
+		// password; removing a password has its own action.
+		if (!password.trim()) {
+			return { success: false, error: "Enter a password" };
 		}
 
 		const hashed = await hashPassword(password);
@@ -102,10 +109,14 @@ export async function verifyVideoPassword(
 		}
 
 		if (
-			(await isRateLimited(RATE_LIMIT_IDS.VIDEO_PASSWORD)) ||
-			(await isRateLimited(RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO, {
-				key: `video:${resourceKey}`,
-			}))
+			await isPasswordAttemptLimited(
+				{
+					perClient: RATE_LIMIT_IDS.VIDEO_PASSWORD,
+					perViewer: RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIEWER,
+					perResource: RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO,
+				},
+				`video:${resourceKey}`,
+			)
 		) {
 			return { success: false, error: TOO_MANY_PASSWORD_ATTEMPTS };
 		}

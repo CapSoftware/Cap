@@ -38,10 +38,12 @@ mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
 mod editor_shapes;
+mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
 mod editor_window;
+mod encoder_recovery;
 mod feeds;
 mod focus_border;
 mod hotkeys;
@@ -345,7 +347,8 @@ fn main() {
 
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
-    blur_recovery::configure(previous_session);
+    encoder_recovery::configure(previous_session.as_ref());
+    blur_recovery::configure(previous_session.as_ref());
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();

@@ -8,6 +8,7 @@ use crate::{
     output_pipeline::NativeCameraFrame, screen_capture,
 };
 use anyhow::{Context, anyhow};
+use cap_enc_ffmpeg::StorageStalled;
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
 use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, SegmentCompletedEvent, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
@@ -133,7 +134,16 @@ fn finish_segmented_encoder(
     let finalize_error = match state.encoder.lock() {
         Ok(mut encoder) => encoder
             .finish_with_timestamp(timestamp)
-            .map_err(|error| anyhow!("{finish_label}: {error:#}"))
+            .map_err(|error| {
+                let message = format!("{finish_label}: {error:#}");
+                // A stalled writer may still write the segments, so Stop must see it.
+                match std::error::Error::source(&error) {
+                    Some(source) if StorageStalled::is_in(source) => {
+                        anyhow::Error::new(StorageStalled).context(message)
+                    }
+                    _ => anyhow!(message),
+                }
+            })
             .err(),
         Err(_) => Some(anyhow!(
             "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
@@ -143,6 +153,9 @@ fn finish_segmented_encoder(
     match (thread_error, finalize_error) {
         (None, None) => Ok(()),
         (Some(error), None) | (None, Some(error)) => Err(error),
+        (Some(primary), Some(secondary)) if secondary.chain().any(StorageStalled::is_in) => {
+            Err(secondary.context(format!("{primary:#}")))
+        }
         (Some(primary), Some(secondary)) => Err(combine_finish_errors(primary, secondary)),
     }
 }
