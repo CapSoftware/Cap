@@ -845,9 +845,11 @@ async function AuthorizedContent({
 	// This component only renders once the view gates have passed, so the
 	// organization and cap download settings and the share limit are all that
 	// is left to decide. getVideoDownloadInfo checks everything again.
+	// Viewers only ever get the published MP4, which older HLS caps do not have.
 	const viewerDownloadsEnabled =
 		isVideoDownloadReady &&
 		!video.isScreenshot &&
+		(video.source?.type === "desktopMP4" || video.source?.type === "webMP4") &&
 		areViewerDownloadsEnabled({
 			videoSettings: video.videoSettings,
 			organizationSettings: video.orgSettings,

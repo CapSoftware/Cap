@@ -496,6 +496,11 @@ describe("share page loading", () => {
 		["the share limit hides the video", { quota: true }],
 		["the video is still uploading", { hasActiveUpload: true }],
 		["the video is a screenshot", { isScreenshot: true }],
+		[
+			"the cap is an older MediaConvert one",
+			{ source: { type: "MediaConvert" } },
+		],
+		["the cap is an older local one", { source: { type: "local" } }],
 	])("offers no viewer download when %s", async (_label, state) => {
 		if ("quota" in state) mocks.quota.mockResolvedValue(true);
 		const { quota: _quota, ...row } = { quota: false, ...state };
