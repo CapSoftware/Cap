@@ -119,7 +119,7 @@ vi.mock("@/lib/server", async () => {
 });
 
 import { getVideoDownloadInfo } from "@/actions/videos/download";
-import { canDownloadCurrentVideo } from "@/lib/video-download-access";
+import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 
 const VIDEO = Video.VideoId.make("video");
 const CURRENT_KEY = "owner/video/result.mp4";
@@ -268,7 +268,9 @@ describe("turning downloads off", () => {
 				SIGNED_IN_DENIAL,
 			);
 			expectNoStorageAccess();
-			expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+			expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+				"denied",
+			);
 		},
 	);
 
@@ -297,14 +299,18 @@ describe("the view gates still apply to viewers", () => {
 	it("requires the video password to be verified first", async () => {
 		setVideo({ password: "video-hash" });
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"denied",
+		);
 		mocks.verifiedPasswords = ["another-hash"];
 		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
 		expectNoStorageAccess();
 
 		mocks.verifiedPasswords = ["video-hash"];
 		expect(await getVideoDownloadInfo(VIDEO)).toMatchObject({ success: true });
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(true);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"viewer",
+		);
 	});
 
 	it("requires an inherited space password to be verified first", async () => {
@@ -370,7 +376,9 @@ describe("rate limit", () => {
 			success: false,
 			error: "Too many downloads. Please wait a moment and try again.",
 		});
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"denied",
+		);
 		expectNoStorageAccess();
 	});
 
@@ -396,25 +404,51 @@ describe("the RPC download check", () => {
 
 	it("allows viewers by default and members always", async () => {
 		setVideo();
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(true);
-		expect(await canDownloadCurrentVideo(VIDEO, signedIn(stranger))).toBe(true);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"viewer",
+		);
+		expect(await currentVideoDownloadAccess(VIDEO, signedIn(stranger))).toBe(
+			"viewer",
+		);
 
 		setVideo({ organizationSettings: OFF });
-		expect(await canDownloadCurrentVideo(VIDEO, signedIn(stranger))).toBe(
-			false,
+		expect(await currentVideoDownloadAccess(VIDEO, signedIn(stranger))).toBe(
+			"denied",
 		);
 		mocks.isMember = true;
-		expect(await canDownloadCurrentVideo(VIDEO, signedIn(member))).toBe(true);
+		expect(await currentVideoDownloadAccess(VIDEO, signedIn(member))).toBe(
+			"member",
+		);
 	});
 
 	it("uses the identity it is given, not the session cookie", async () => {
 		mocks.viewer = { id: "colleague", email: "colleague@example.com" };
 		mocks.allowedEmailDomain = "example.com";
 		setVideo();
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"denied",
+		);
 	});
 
-	it("is false for a video that does not exist", async () => {
-		expect(await canDownloadCurrentVideo(VIDEO, Option.none())).toBe(false);
+	it("refuses viewers a screenshot but keeps it for members", async () => {
+		setVideo();
+		mocks.tables.set("videos", [
+			{ ...(mocks.tables.get("videos")?.[0] as object), isScreenshot: true },
+		]);
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"denied",
+		);
+		await expect(getVideoDownloadInfo(VIDEO)).rejects.toThrow(ANONYMOUS_DENIAL);
+		expectNoStorageAccess();
+		mocks.isMember = true;
+		expect(await currentVideoDownloadAccess(VIDEO, signedIn(member))).toBe(
+			"member",
+		);
+	});
+
+	it("is denied for a video that does not exist", async () => {
+		expect(await currentVideoDownloadAccess(VIDEO, Option.none())).toBe(
+			"denied",
+		);
 	});
 });

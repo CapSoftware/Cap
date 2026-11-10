@@ -8,14 +8,14 @@ import { HttpServer } from "@effect/platform";
 import { RpcSerialization, RpcServer } from "@effect/rpc";
 import { Effect, Layer } from "effect";
 import { Dependencies } from "@/lib/server";
-import { canDownloadCurrentVideo } from "@/lib/video-download-access";
+import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 
 const VideoDownloadGateLive = Layer.succeed(VideoDownloadGate, {
-	allows: (videoId, viewer) =>
-		Effect.tryPromise(() => canDownloadCurrentVideo(videoId, viewer)).pipe(
+	access: (videoId, viewer) =>
+		Effect.tryPromise(() => currentVideoDownloadAccess(videoId, viewer)).pipe(
 			Effect.catchAll((error) =>
 				Effect.logError("Video download access check failed", error).pipe(
-					Effect.as(false),
+					Effect.as("denied" as const),
 				),
 			),
 		),

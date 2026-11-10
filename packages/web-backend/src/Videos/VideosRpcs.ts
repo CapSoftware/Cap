@@ -64,10 +64,13 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 			VideoGetDownloadInfo: (videoId) =>
 				Effect.gen(function* () {
 					const viewer = yield* Effect.serviceOption(CurrentUser);
-					if (!(yield* downloadGate.allows(videoId, viewer))) {
+					const access = yield* downloadGate.access(videoId, viewer);
+					if (access === "denied") {
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
 					}
-					return yield* videos.getDownloadInfo(videoId);
+					return yield* videos.getDownloadInfo(videoId, {
+						publishedOnly: access === "viewer",
+					});
 				}).pipe(
 					provideOptionalAuth,
 					Effect.catchTag("DatabaseError", () =>

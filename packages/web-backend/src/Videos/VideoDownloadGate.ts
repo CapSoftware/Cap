@@ -7,9 +7,9 @@ import { Context, type Effect, type Option } from "effect";
 export class VideoDownloadGate extends Context.Tag("VideoDownloadGate")<
 	VideoDownloadGate,
 	{
-		readonly allows: (
+		readonly access: (
 			videoId: Video.VideoId,
 			viewer: Option.Option<CurrentUser["Type"]>,
-		) => Effect.Effect<boolean>;
+		) => Effect.Effect<"member" | "viewer" | "denied">;
 	}
 >() {}

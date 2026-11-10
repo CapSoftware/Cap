@@ -13,7 +13,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	session: null as { user: { id: string } } | null,
-	allows: vi.fn(),
+	access: vi.fn(),
 	getDownloadInfo: vi.fn(),
 	user: {
 		id: "viewer",
@@ -57,7 +57,7 @@ const videos = Layer.succeed(Videos, {
 	getDownloadInfo: mocks.getDownloadInfo,
 } as unknown as Context.Tag.Service<typeof Videos>);
 
-const gate = Layer.succeed(VideoDownloadGate, { allows: mocks.allows });
+const gate = Layer.succeed(VideoDownloadGate, { access: mocks.access });
 
 const server = RpcServer.toWebHandler(Video.VideoRpcs, {
 	layer: Layer.mergeAll(
@@ -97,7 +97,7 @@ const requestDownload = async () => {
 
 beforeEach(() => {
 	mocks.session = null;
-	mocks.allows.mockReset();
+	mocks.access.mockReset();
 	mocks.getDownloadInfo.mockReset();
 	mocks.getDownloadInfo.mockReturnValue(
 		Effect.succeed(
@@ -111,34 +111,43 @@ beforeEach(() => {
 
 describe("VideoGetDownloadInfo", () => {
 	it("refuses a direct request the download check denies, without signing", async () => {
-		mocks.allows.mockReturnValue(Effect.succeed(false));
+		mocks.access.mockReturnValue(Effect.succeed("denied"));
 		const exit = await requestDownload();
 		expect(exit._tag).toBe("Failure");
 		expect(JSON.stringify(exit.cause)).toContain("PolicyDenied");
 		expect(mocks.getDownloadInfo).not.toHaveBeenCalled();
 	});
 
-	it("returns the signed URL when the download check allows it", async () => {
-		mocks.allows.mockReturnValue(Effect.succeed(true));
-		const exit = await requestDownload();
-		expect(exit).toMatchObject({
-			_tag: "Success",
-			value: {
-				_tag: "Some",
-				value: { downloadUrl: "https://media.example.com/video.mp4" },
-			},
-		});
-	});
+	it.each([
+		["member", false],
+		["viewer", true],
+	] as const)(
+		"signs for a %s, published video only: %s",
+		async (access, publishedOnly) => {
+			mocks.access.mockReturnValue(Effect.succeed(access));
+			const exit = await requestDownload();
+			expect(exit).toMatchObject({
+				_tag: "Success",
+				value: {
+					_tag: "Some",
+					value: { downloadUrl: "https://media.example.com/video.mp4" },
+				},
+			});
+			expect(mocks.getDownloadInfo).toHaveBeenCalledWith("video", {
+				publishedOnly,
+			});
+		},
+	);
 
 	it("passes no identity for a signed-out caller and the session user otherwise", async () => {
-		mocks.allows.mockReturnValue(Effect.succeed(true));
+		mocks.access.mockReturnValue(Effect.succeed("viewer"));
 		await requestDownload();
-		expect(mocks.allows.mock.calls[0]?.[0]).toBe("video");
-		expect(Option.isNone(mocks.allows.mock.calls[0]?.[1])).toBe(true);
+		expect(mocks.access.mock.calls[0]?.[0]).toBe("video");
+		expect(Option.isNone(mocks.access.mock.calls[0]?.[1])).toBe(true);
 
 		mocks.session = { user: { id: "viewer" } };
 		await requestDownload();
-		const viewer = mocks.allows.mock.calls[1]?.[1] as Option.Option<{
+		const viewer = mocks.access.mock.calls[1]?.[1] as Option.Option<{
 			id: string;
 		}>;
 		expect(Option.isSome(viewer) && viewer.value.id).toBe("viewer");

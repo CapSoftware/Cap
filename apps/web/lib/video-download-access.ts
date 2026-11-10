@@ -73,7 +73,7 @@ export async function resolveVideoDownloadAccess({
 		return "member";
 	}
 
-	if (variant !== "current") return "denied";
+	if (variant !== "current" || video.isScreenshot) return "denied";
 	if (await isRateLimited(RATE_LIMIT_IDS.VIEWER_DOWNLOAD)) {
 		return "rate_limited";
 	}
@@ -82,20 +82,20 @@ export async function resolveVideoDownloadAccess({
 	return (await viewerPassesViewGates(video, viewer)) ? "viewer" : "denied";
 }
 
-export async function canDownloadCurrentVideo(
+export async function currentVideoDownloadAccess(
 	videoId: Video.VideoId,
 	viewer: Viewer,
-): Promise<boolean> {
+): Promise<"member" | "viewer" | "denied"> {
 	const [video] = await db()
 		.select()
 		.from(videos)
 		.where(eq(videos.id, videoId));
-	if (!video) return false;
+	if (!video) return "denied";
 
 	const access = await resolveVideoDownloadAccess({
 		viewer,
 		video,
 		variant: "current",
 	});
-	return access === "member" || access === "viewer";
+	return access === "member" || access === "viewer" ? access : "denied";
 }
