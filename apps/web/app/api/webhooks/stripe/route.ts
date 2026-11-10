@@ -9,7 +9,12 @@ import {
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { isProSubscription, isSsoSubscription, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	isSsoSubscription,
+	isStandaloneScimSubscription,
+	stripe,
+} from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -118,9 +123,25 @@ const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
 // It must never be treated as the Pro subscription: it would otherwise
 // overwrite users.stripeSubscriptionId/Status and inflate the seat quota.
 function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
-	return subscriptions.some(
+	return entitledProSubscriptions(subscriptions).length > 0;
+}
+
+function entitledProSubscriptions(subscriptions: Stripe.Subscription[]) {
+	return subscriptions.filter(
 		(sub) =>
 			isProSubscription(sub) && ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+	);
+}
+
+function seatCount(subscriptions: Stripe.Subscription[]) {
+	return subscriptions.reduce(
+		(total, sub) =>
+			total +
+			sub.items.data.reduce(
+				(subTotal, item) => subTotal + (item.quantity || 1),
+				0,
+			),
+		0,
 	);
 }
 
@@ -460,6 +481,9 @@ export const POST = async (req: Request) => {
 					await syncSsoSubscription(subscription.id);
 					return NextResponse.json({ received: true });
 				}
+				if (isStandaloneScimSubscription(subscription)) {
+					return NextResponse.json({ received: true });
+				}
 			}
 			if (
 				event.type === "invoice.paid" ||
@@ -470,10 +494,14 @@ export const POST = async (req: Request) => {
 					typeof invoice.subscription === "string"
 						? invoice.subscription
 						: invoice.subscription?.id;
-				const ssoInvoice = isSsoSubscription({
+				const invoiceIdentity = {
 					metadata: invoice.subscription_details?.metadata,
 					items: { data: invoice.lines?.data ?? [] },
-				});
+				};
+				if (isStandaloneScimSubscription(invoiceIdentity)) {
+					return NextResponse.json({ received: true });
+				}
+				const ssoInvoice = isSsoSubscription(invoiceIdentity);
 				if (
 					ssoInvoice ||
 					(event.type === "invoice.payment_failed" &&
@@ -526,6 +554,9 @@ export const POST = async (req: Request) => {
 								subscriptionId,
 							});
 						}
+						return NextResponse.json({ received: true });
+					}
+					if (isStandaloneScimSubscription(checkoutSubscription)) {
 						return NextResponse.json({ received: true });
 					}
 				}
@@ -811,21 +842,9 @@ export const POST = async (req: Request) => {
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
 				// Stripe retries the card.
-				const inviteQuota = subscriptions.data
-					.filter(
-						(sub) =>
-							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
-							isProSubscription(sub),
-					)
-					.reduce((total, sub) => {
-						return (
-							total +
-							sub.items.data.reduce(
-								(subTotal, item) => subTotal + (item.quantity || 1),
-								0,
-							)
-						);
-					}, 0);
+				const inviteQuota = seatCount(
+					entitledProSubscriptions(subscriptions.data),
+				);
 
 				console.log("Updating user in database with:", {
 					subscriptionId: subscription.id,
@@ -1030,19 +1049,33 @@ export const POST = async (req: Request) => {
 					});
 				}
 
+				const remainingProSubscriptions = entitledProSubscriptions(
+					remainingSubscriptions.data.filter(
+						(sub) => sub.id !== subscription.id,
+					),
+				);
+				const [nextSubscription] = remainingProSubscriptions;
+				const userUpdate = nextSubscription
+					? {
+							stripeSubscriptionId: nextSubscription.id,
+							stripeSubscriptionStatus: nextSubscription.status,
+							inviteQuota: seatCount(remainingProSubscriptions),
+						}
+					: {
+							stripeSubscriptionId: subscription.id,
+							stripeSubscriptionStatus: subscription.status,
+							inviteQuota: 1,
+						};
+
 				await db()
 					.update(users)
-					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
-						inviteQuota: 1,
-					})
+					.set(userUpdate)
 					.where(eq(users.id, foundUserId));
 				await enqueueLoopsSync(db(), foundUserId);
 
 				console.log("User updated successfully", {
 					foundUserId,
-					inviteQuota: 1,
+					...userUpdate,
 				});
 			}
 

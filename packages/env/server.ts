@@ -30,6 +30,11 @@ function createServerEnv() {
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
 
+			// Push notifications for the iOS app. Push is off when any of these are unset.
+			APNS_KEY_ID: z.string().optional(),
+			APNS_TEAM_ID: z.string().optional(),
+			APNS_PRIVATE_KEY: z.string().optional(),
+
 			// Cap uses Resend for email sending, including sending login code emails
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
@@ -78,6 +83,7 @@ function createServerEnv() {
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
+			WORKOS_WEBHOOK_SECRET: z.string().optional(),
 
 			/// Generic OIDC
 			OIDC_ISSUER: z.string().optional(),
@@ -204,6 +210,7 @@ function createServerEnv() {
 					"Enables the in-app Cap Pro checkout; hosted Stripe Checkout is used without it",
 				),
 			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
+			STRIPE_SCIM_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),

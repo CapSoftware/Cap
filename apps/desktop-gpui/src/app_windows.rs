@@ -290,6 +290,11 @@ pub struct AppWindows {
     /// State the app owns, unlike a visibility probe that also reads a
     /// minimized window or a hidden app as gone.
     pub main_hidden_by_app: bool,
+    /// The user closed the main window ([`request_close_main`]) and nothing
+    /// has shown it since. Closing Settings or the last editor leaves it
+    /// closed rather than bringing back a window the user put away; the tray,
+    /// the dock and the shortcuts still reach it.
+    main_closed_by_user: bool,
     /// `hiddenForPicker` in the editor's record modal
     /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
     /// itself for an editor-owned target picker ("Record a new clip"). A
@@ -567,6 +572,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main_hidden_for_picker: false,
         main_visible_before_picker: false,
         main_hidden_by_app: false,
+        main_closed_by_user: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
         #[cfg(target_os = "linux")]
@@ -628,12 +634,13 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor, finished_instant) =
+            let (finished_studio, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
                     (
                         session.finished_studio.take(),
                         session.take_preparing_studio_editor(),
                         std::mem::take(&mut session.finished_instant),
+                        std::mem::take(&mut session.deleted_recording),
                     )
                 });
             // The in-editor re-record target is consumed first, before
@@ -676,21 +683,34 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // until an overlay exists) reshows the main window as before.
                 // A clean instant recording reshows it only for "Show Cap";
                 // otherwise the browser tab, or the copied link alone, is
-                // the completion and Cap stays out of the way.
+                // the completion and Cap stays out of the way. A recording
+                // deleted from the bar reshows it only for "Reopen recording
+                // window", as the Tauri `delete_recording` did.
                 let settings = crate::store::GeneralSettings::load();
                 let behaviour = settings.post_studio_recording_behaviour;
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
                 // main window reopened mid-recording (even if minimized since)
                 // takes the reshow too, which resumes its inputs.
-                let keep_hidden_after_instant = cfg!(not(target_os = "linux"))
-                    && finished_instant
+                let main_away = |cx: &mut App| {
+                    cfg!(not(target_os = "linux"))
+                        && cx.global::<AppWindows>().main_hidden_by_app
+                        && !main
+                            .update(cx, |_, window, _| {
+                                // Windows counts a minimised window as visible.
+                                platform::window_is_visible(window)
+                                    && !platform::window_is_minimized(window)
+                            })
+                            .unwrap_or(true)
+                };
+                let keep_hidden_after_instant = finished_instant
                     && settings.post_instant_behaviour()
                         != crate::store::PostInstantBehaviour::ShowCap
-                    && cx.global::<AppWindows>().main_hidden_by_app
-                    && !main
-                        .update(cx, |_, window, _| platform::window_is_visible(window))
-                        .unwrap_or(true);
+                    && main_away(cx);
+                let keep_hidden_after_delete = deleted
+                    && settings.post_deletion_behaviour
+                        == crate::store::PostDeletionBehaviour::DoNothing
+                    && main_away(cx);
                 match (finished_studio, behaviour) {
                     (Some(project_dir), crate::store::PostStudioBehaviour::OpenEditor) => {
                         open_editor(project_dir, cx)
@@ -701,6 +721,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                     }
                     (None, _) if keep_hidden_after_instant => {
                         tracing::info!("main window kept hidden after the Instant recording");
+                        park_idle_camera_preview(cx);
+                        crate::menus::schedule_dock_sync(cx);
+                    }
+                    (None, _) if keep_hidden_after_delete => {
+                        tracing::info!("main window kept hidden after the deleted recording");
                         park_idle_camera_preview(cx);
                         crate::menus::schedule_dock_sync(cx);
                     }
@@ -912,7 +937,9 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
         open_onboarding(cx);
         return;
     }
-    cx.global_mut::<AppWindows>().main_hidden_by_app = false;
+    let windows = cx.global_mut::<AppWindows>();
+    windows.main_hidden_by_app = false;
+    windows.main_closed_by_user = false;
     let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
     if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
@@ -1048,6 +1075,43 @@ pub fn hide_main_window(cx: &mut App) {
     .detach();
 }
 
+/// `MainWindowRecordingStartBehaviour::perform`: Close hides the main window,
+/// Minimise sends it to the Dock or taskbar. Linux keeps hiding it, which its
+/// clean-capture lease depends on.
+fn put_main_window_away_for_recording(cx: &mut App) {
+    #[cfg(any(target_os = "macos", windows))]
+    if crate::store::GeneralSettings::load().main_window_recording_start_behaviour
+        == crate::store::MainWindowStartBehaviour::Minimise
+    {
+        minimize_main_window(cx);
+        return;
+    }
+    hide_main_window(cx);
+}
+
+/// [`hide_main_window`]'s twin for Minimise. [`show_main_window`] restores
+/// the window from the Dock or taskbar.
+#[cfg(any(target_os = "macos", windows))]
+fn minimize_main_window(cx: &mut App) {
+    cx.global_mut::<AppWindows>().main_hidden_by_app = true;
+    let main = cx.global::<AppWindows>().main;
+    let native = main
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            #[cfg(target_os = "macos")]
+            platform::miniaturize_native(native);
+            #[cfg(windows)]
+            platform::minimize_native(native);
+            tracing::info!("main window minimised");
+        }
+        cx.update(crate::menus::schedule_dock_sync);
+    })
+    .detach();
+}
+
 fn hide_main_and_park_camera_preview(cx: &mut App) {
     hide_main_window(cx);
     park_idle_camera_preview(cx);
@@ -1099,6 +1163,7 @@ pub fn request_close_main(cx: &mut App) {
         })
         .ok();
     }
+    cx.global_mut::<AppWindows>().main_closed_by_user = true;
     hide_main_window(cx);
 
     // `state.is_recording_active_or_pending()`: everything but Idle.
@@ -1547,7 +1612,9 @@ fn restore_after_settings(cx: &mut App) {
     crate::hotkeys::resume(cx);
     // Not while recording: the main window is deliberately hidden then, and
     // the session observer brings it back when the recording ends.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && !cx.global::<AppWindows>().main_closed_by_user
+    {
         show_main_window(cx);
         return;
     }
@@ -2308,6 +2375,9 @@ fn area_overlay_matches(
         && bounds.size() == candidate_bounds.size()
 }
 
+/// The picker overlay an area recording keeps on screen as its outline, when
+/// it can be kept out of the recording: macOS leaves it out by window number,
+/// Windows by display affinity, set here. Linux has neither and closes it.
 fn area_overlay_for_recording(
     target: &ScreenCaptureTarget,
     cx: &mut App,
@@ -2316,21 +2386,34 @@ fn area_overlay_for_recording(
         return None;
     };
     let handle = overlay_handle(Some(screen.clone()), cx)?;
-    handle
+    let (candidate, capture_excluded) = handle
         .update(cx, |view, window, cx| {
             let candidate = view.target(cx)?;
             #[cfg(target_os = "macos")]
             let capture_excluded = platform::window_is_visible(window)
                 && platform::window_number(window).is_some_and(|number| number > 0);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            let capture_excluded = platform::window_is_visible(window)
+                .then(|| platform::native_window(window))
+                .flatten();
+            #[cfg(not(any(target_os = "macos", windows)))]
             let capture_excluded = {
                 let _ = window;
                 false
             };
-            area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+            Some((candidate, capture_excluded))
         })
         .ok()
-        .flatten()
+        .flatten()?;
+    // Outside the update: the affinity change reaches the window server
+    // without a gpui borrow held. A remote or streamed session keeps windows
+    // in captures, and then the outline would be in the recording.
+    #[cfg(windows)]
+    let capture_excluded = capture_excluded.is_some_and(|native| {
+        platform::set_window_capture_hidden(&native, true);
+        platform::window_capture_hidden(&native)
+    });
+    area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
 }
 
 fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
@@ -2551,26 +2634,33 @@ fn start_recording_from_overlay_now(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    let retained_area =
-        cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
-    if retained_area {
-        let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
+    let area = matches!(&target, ScreenCaptureTarget::Area { .. });
+    let retained = if area && cfg!(any(target_os = "macos", windows)) {
+        area_overlay_for_recording(&target, cx).filter(|handle| {
             handle
                 .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
                 .unwrap_or(false)
-        });
-        let Some(handle) = handle else {
+        })
+    } else {
+        None
+    };
+    let retained_area = retained.is_some();
+    match retained {
+        Some(handle) => close_other_overlays(handle, cx),
+        // A remote or streamed Windows session cannot leave the outline out
+        // of the capture, so it records the area without one.
+        None if area && cfg!(target_os = "macos") => {
             dismiss_target_overlays(cx);
             RecordingSession::global(cx).update(cx, |session, cx| {
                 session.error = Some(tr::dialog::capture::area_unavailable().into());
                 cx.notify();
             });
             return;
-        };
-        close_other_overlays(handle, cx);
-    } else {
-        release_camera_park(cx);
-        close_target_overlays(cx);
+        }
+        None => {
+            release_camera_park(cx);
+            close_target_overlays(cx);
+        }
     }
 
     let preparing = main
@@ -2643,6 +2733,31 @@ fn overlay_handle(display: Option<DisplayId>, cx: &App) -> Option<WindowHandle<O
     }
 }
 
+fn target_overlay_window_bounds(
+    bounds: scap_targets::bounds::LogicalBounds,
+    capture_scale: f32,
+) -> Bounds<Pixels> {
+    #[cfg(target_os = "windows")]
+    let origin = point(
+        px(bounds.position().x() as f32),
+        px(bounds.position().y() as f32),
+    );
+    #[cfg(target_os = "linux")]
+    let origin = point(
+        px(bounds.position().x() as f32 / capture_scale),
+        px(bounds.position().y() as f32 / capture_scale),
+    );
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let origin = point(px(0.), px(0.));
+    Bounds {
+        origin,
+        size: size(
+            px(bounds.size().width() as f32 / capture_scale),
+            px(bounds.size().height() as f32 / capture_scale),
+        ),
+    }
+}
+
 fn open_overlay(
     display: &scap_targets::Display,
     select: Entity<TargetSelect>,
@@ -2661,20 +2776,7 @@ fn open_overlay(
             crate::target_overlay::capture_scale_factor(window)
         })
         .unwrap_or(1.);
-    #[cfg(target_os = "windows")]
-    let origin = point(
-        px(bounds.position().x() as f32),
-        px(bounds.position().y() as f32),
-    );
-    #[cfg(not(target_os = "windows"))]
-    let origin = point(px(0.), px(0.));
-    let window_bounds = WindowBounds::Windowed(Bounds {
-        origin,
-        size: size(
-            px(width as f32 / capture_scale),
-            px(height as f32 / capture_scale),
-        ),
-    });
+    let window_bounds = WindowBounds::Windowed(target_overlay_window_bounds(bounds, capture_scale));
     #[cfg(target_os = "linux")]
     let overlay_display = if uses_wayland() {
         let Some(matched) = platform_display_for_capture(display, cx) else {
@@ -2700,10 +2802,8 @@ fn open_overlay(
         WindowOptions {
             #[cfg(target_os = "linux")]
             app_id: Some(crate::app_windows::app_id().into()),
-            // The origin is corrected right after opening -- gpui's own
-            // window-origin math cannot express "cover this display" (see
-            // `platform::set_window_frame_cg`). The size is honoured, and it is
-            // the size the renderer is built for.
+            // macOS corrects the origin after opening; X11 needs the display's
+            // origin here because its native panel placement is a no-op.
             window_bounds: Some(window_bounds),
             #[cfg(target_os = "linux")]
             display_id: overlay_display.as_ref().map(|display| display.id()),
@@ -2991,6 +3091,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         main_hidden_for_picker: _,
         main_visible_before_picker: _,
         main_hidden_by_app: _,
+        main_closed_by_user: _,
         editor_hidden_for_picker: _,
         camera_park: _,
         #[cfg(target_os = "linux")]
@@ -4173,7 +4274,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     // on macOS: the main window goes away at every recording start, whatever
     // else happened. Gating this on the bar having opened left the window in
     // the frame on any start that never got a bar.
-    hide_main_window(cx);
+    put_main_window_away_for_recording(cx);
 
     let config = StartConfig {
         excluded_windows: excluded,
@@ -6089,7 +6190,9 @@ fn load_editor_waveforms(
 /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
 /// optionally scrolls its body, `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`
 /// makes a 3D shot, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects
-/// timeline segments so their panel opens.
+/// timeline segments so their panel opens. In debug builds
+/// `CAP_GPUI_AUTO_PANEL=style|transcript|clips` switches the side panel's tab
+/// first, the way a click on its switcher does.
 ///
 /// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
 /// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
@@ -6098,6 +6201,9 @@ fn load_editor_waveforms(
 /// but moves nothing when it lands on the scroll body, so a tab taller than
 /// 470px cannot be photographed below the fold without this.
 async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    let panel = std::env::var("CAP_GPUI_AUTO_PANEL")
+        .ok()
+        .filter(|_| cfg!(debug_assertions));
     let tab = std::env::var("CAP_GPUI_AUTO_SIDEBAR").ok();
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
     let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
@@ -6112,7 +6218,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     let desktop_background =
         std::env::var("CAP_GPUI_AUTO_DESKTOP_BACKGROUND").is_ok_and(|value| value == "1");
-    if tab.is_none()
+    if panel.is_none()
+        && tab.is_none()
         && select.is_none()
         && canvas.is_none()
         && crop.is_none()
@@ -6134,6 +6241,24 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         handle
             .update(cx, |view, window, cx| {
                 view.import_desktop_background(window, cx)
+            })
+            .ok();
+    }
+
+    if let Some(name) = panel {
+        let started = std::time::Instant::now();
+        while !handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(true)
+            && started.elapsed() < std::time::Duration::from_secs(20)
+        {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+        }
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_select_panel(&name, window, cx)
             })
             .ok();
     }
@@ -6449,8 +6574,13 @@ async fn drive_auto_playback(
 /// away) rather than revealing main over it. The idle gate is this port's
 /// own: during a recording the main window is deliberately hidden and the
 /// session observer restores it when the recording ends.
-fn reveal_main_after_editor_close(editors_left: usize, settings_open: bool, idle: bool) -> bool {
-    editors_left == 0 && !settings_open && idle
+fn reveal_main_after_editor_close(
+    editors_left: usize,
+    settings_open: bool,
+    idle: bool,
+    main_closed_by_user: bool,
+) -> bool {
+    editors_left == 0 && !settings_open && idle && !main_closed_by_user
 }
 
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
@@ -6552,15 +6682,22 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
+    let main_closed_by_user = windows.main_closed_by_user;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
+        main_closed_by_user,
         "editor window closed"
     );
     let session = session.read(cx);
     let capture_safe = session.phase == Phase::Idle || session.capture_stopped_for_editor();
-    if reveal_main_after_editor_close(editors_left, settings_open, capture_safe) {
+    if reveal_main_after_editor_close(
+        editors_left,
+        settings_open,
+        capture_safe,
+        main_closed_by_user,
+    ) {
         show_main_window(cx);
     } else {
         // A dock-activating window closed; the policy has to be recomputed
@@ -6618,7 +6755,13 @@ pub(crate) fn request_editor_deletion(
             platform::alert_dialog(tr::dialog::delete_recording::retained_title(), &error);
             return;
         }
-        if !platform::confirm_dialog("Cap", tr::main::delete_recording_confirm(), tr::common::yes(), tr::common::no(), false) {
+        if !platform::confirm_dialog(
+            "Cap",
+            tr::main::delete_recording_confirm(),
+            tr::common::yes(),
+            tr::common::no(),
+            false,
+        ) {
             return;
         }
         let prepared = cx.update(|cx| {
@@ -6658,34 +6801,36 @@ pub(crate) fn request_editor_deletion(
             }
         };
         let deleting = key.clone();
-        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, async move {
-            delete_after_editor_cleanup(
-                async move {
-                    if let Some(instance) = instance {
-                        for segment in instance.segment_medias.iter() {
-                            for audio in [&segment.audio, &segment.system_audio] {
-                                if let Err(error) = audio.get().await {
-                                    tracing::debug!(%error, "audio reader settled with an error before deletion");
-                                }
-                            }
+        let task = cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                delete_after_editor_cleanup(
+                    async move {
+                        if let Some(instance) = instance {
+                            release_editor_instance(instance).await;
                         }
-                        instance.dispose().await;
-                    }
-                    drop(ownership);
-                    Ok(())
-                },
-                crate::upload::queue::delete_recording(deleting),
-            ).await
-        }));
-        let notice = cx.background_executor().timer(std::time::Duration::from_secs(10));
+                        drop(ownership);
+                        Ok(())
+                    },
+                    crate::upload::queue::delete_recording(deleting),
+                )
+                .await
+            })
+        });
+        let notice = cx
+            .background_executor()
+            .timer(std::time::Duration::from_secs(10));
         futures_util::pin_mut!(task, notice);
         let result = match futures_util::future::select(&mut task, &mut notice).await {
             futures_util::future::Either::Left((result, _)) => result,
             futures_util::future::Either::Right(_) => {
-                platform::alert_dialog(tr::dialog::delete_recording::finishing_title(), tr::dialog::delete_recording::finishing_body());
+                platform::alert_dialog(
+                    tr::dialog::delete_recording::finishing_title(),
+                    tr::dialog::delete_recording::finishing_body(),
+                );
                 task.await
             }
-        }.unwrap_or_else(|error| Err(tr::dialog::delete_recording::failed(error)));
+        }
+        .unwrap_or_else(|error| Err(tr::dialog::delete_recording::failed(error)));
         cx.update(|cx| {
             cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
             refresh_library_after_delete(cx);
@@ -6694,7 +6839,8 @@ pub(crate) fn request_editor_deletion(
             tracing::error!(path = %key.display(), %error, "recording deletion failed");
             platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
         }
-    }).detach();
+    })
+    .detach();
 }
 
 async fn delete_after_editor_cleanup(
@@ -6703,6 +6849,42 @@ async fn delete_after_editor_cleanup(
 ) -> Result<(), String> {
     cleanup.await?;
     delete.await
+}
+
+/// How long deleting from the editor waits for the editor's own tasks to let
+/// go of its engine before it tries the delete anyway.
+const EDITOR_RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Stops the editor engine and waits until nothing holds it. The transport
+/// driver, the engine-stop drain and the waveform loader each own a clone and
+/// drop it only after they notice the window is gone, and playback tasks own
+/// the segment media. The decoders inside keep the clip's media files open
+/// until the last clone is dropped, and Windows refuses to delete an open
+/// file, so deleting straight after `dispose` failed with a sharing violation.
+async fn release_editor_instance(instance: Arc<cap_editor::EditorInstance>) {
+    for segment in instance.segment_medias.iter() {
+        for audio in [&segment.audio, &segment.system_audio] {
+            if let Err(error) = audio.get().await {
+                tracing::debug!(%error, "audio reader settled with an error before deletion");
+            }
+        }
+    }
+    instance.dispose().await;
+    let engine = Arc::downgrade(&instance);
+    let media = Arc::downgrade(&instance.segment_medias);
+    drop(instance);
+    let deadline = tokio::time::Instant::now() + EDITOR_RELEASE_TIMEOUT;
+    while engine.strong_count() > 0 || media.strong_count() > 0 {
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                engine = engine.strong_count(),
+                media = media.strong_count(),
+                "the editor engine is still held; deleting anyway"
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// `addExistingRecordingToEditor` ends with `EditorInstances::remove(window)`
@@ -7383,14 +7565,16 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
+    let main_closed_by_user = windows.main_closed_by_user;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
+        main_closed_by_user,
         "screenshot editor window closed"
     );
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
+    if reveal_main_after_editor_close(editors_left, settings_open, idle, main_closed_by_user) {
         show_main_window(cx);
     } else {
         crate::menus::schedule_dock_sync(cx);
@@ -7680,6 +7864,70 @@ mod tests {
         complete.send(()).unwrap();
         deletion.await.unwrap();
         assert!(!source.exists());
+    }
+
+    /// Opens a real project in the editor engine the way an editor window does
+    /// (instance, transport driver, a decoded frame), then deletes it the way
+    /// the editor's delete button does. Windows refuses to delete a file a
+    /// decoder still has open, so the delete must wait for the engine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn deleting_from_the_editor_releases_the_recordings_media() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("recordings");
+        std::fs::create_dir(&library).unwrap();
+        let bundle = library.join("delete.cap");
+        let spec = cap_verify::catalog::basic(cap_verify::report::Tier::Fast);
+        cap_verify::fixture::write_fixture(&spec, &bundle).unwrap();
+
+        let instance = match cap_editor::EditorInstance::new_with_audio_output(
+            bundle.clone(),
+            |_| {},
+            Box::new(|_, _| {}),
+            shared_wgpu_device().await,
+            Arc::new(cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}))),
+        )
+        .await
+        {
+            Ok(instance) => instance,
+            Err(error) if error.contains("No GPU adapter found") => {
+                eprintln!("skipping: the editor needs a GPU adapter ({error})");
+                return;
+            }
+            Err(error) => panic!("the editor failed to open the project: {error}"),
+        };
+        let (transport, driver, _engine_stopped) = editor_window::transport();
+        tokio::spawn(editor_window::run_transport(instance.clone(), driver));
+        let decoded = instance.segment_medias[0]
+            .decoders
+            .get_frames(0.5, true, true, cap_project::ClipOffsets::default())
+            .await;
+        assert!(decoded.is_some(), "the editor decoded no frame");
+
+        // The window's transport handle goes away a moment after deletion
+        // starts, as it does when the window is torn down, and only then does
+        // the driver let go of the engine and its open decoders.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            drop(transport);
+        });
+        let engine = Arc::downgrade(&instance);
+        let result = delete_after_editor_cleanup(
+            async {
+                release_editor_instance(instance).await;
+                Ok(())
+            },
+            async {
+                assert_eq!(
+                    engine.strong_count(),
+                    0,
+                    "deletion started while the editor engine still had the media open"
+                );
+                crate::library::delete_recording_directory_in(&[library.clone()], &bundle)
+            },
+        )
+        .await;
+        assert_eq!(result, Ok(()));
+        assert!(!bundle.exists());
     }
 
     #[tokio::test]
@@ -8335,14 +8583,21 @@ mod tests {
     #[test]
     fn main_window_never_returns_over_an_open_settings_window() {
         // The reported flow: last editor closes while Settings is open.
-        assert!(!reveal_main_after_editor_close(0, true, true));
+        assert!(!reveal_main_after_editor_close(0, true, true, false));
         // No Settings: the last editor closing reveals main.
-        assert!(reveal_main_after_editor_close(0, false, true));
+        assert!(reveal_main_after_editor_close(0, false, true, false));
         // Other editors still open keep main hidden either way.
-        assert!(!reveal_main_after_editor_close(1, false, true));
-        assert!(!reveal_main_after_editor_close(1, true, true));
+        assert!(!reveal_main_after_editor_close(1, false, true, false));
+        assert!(!reveal_main_after_editor_close(1, true, true, false));
         // Mid-recording the session observer owns the reveal, not this path.
-        assert!(!reveal_main_after_editor_close(0, false, false));
+        assert!(!reveal_main_after_editor_close(0, false, false, false));
+    }
+
+    /// A shortcut recording with the main window closed opens the editor
+    /// afterwards; closing that editor must not bring the main window back.
+    #[test]
+    fn main_window_closed_by_the_user_stays_closed_after_the_last_editor() {
+        assert!(!reveal_main_after_editor_close(0, false, true, true));
     }
 
     #[test]
@@ -8392,6 +8647,60 @@ mod tests {
             Some(&selected),
             Some(&other)
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_secondary_overlay_does_not_cover_the_primary_display() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        for capture_scale in [1., 1.5, 2.] {
+            let primary = target_overlay_window_bounds(
+                LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(3840., 2160.)),
+                capture_scale,
+            );
+            let secondary = target_overlay_window_bounds(
+                LogicalBounds::new(
+                    LogicalPosition::new(3840., 0.),
+                    LogicalSize::new(1920., 1080.),
+                ),
+                capture_scale,
+            );
+
+            assert_eq!(primary.origin, point(px(0.), px(0.)));
+            assert_eq!(secondary.origin.x, primary.size.width);
+            assert_eq!(secondary.origin.y, px(0.));
+            assert!(!secondary.contains(&primary.center()));
+            assert_eq!(secondary.size.width * 2., primary.size.width);
+            assert_eq!(secondary.size.height * 2., primary.size.height);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_overlay_bounds_preserve_offset_and_negative_display_coordinates() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        for (position, capture_scale, expected_origin, expected_size) in [
+            ((5120., 258.), 2., (2560., 129.), (960., 540.)),
+            ((-1920., 180.), 1.5, (-1280., 120.), (1280., 720.)),
+            ((0., -1080.), 1., (0., -1080.), (1920., 1080.)),
+            ((-1920., -1080.), 2., (-960., -540.), (960., 540.)),
+        ] {
+            let bounds = target_overlay_window_bounds(
+                LogicalBounds::new(
+                    LogicalPosition::new(position.0, position.1),
+                    LogicalSize::new(1920., 1080.),
+                ),
+                capture_scale,
+            );
+
+            assert_eq!(
+                bounds.origin,
+                point(px(expected_origin.0), px(expected_origin.1))
+            );
+            assert_eq!(bounds.size, size(px(expected_size.0), px(expected_size.1)));
+        }
     }
 
     #[test]
