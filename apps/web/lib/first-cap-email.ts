@@ -40,7 +40,7 @@ export async function scheduleFirstCapEmail({
 		subject: "You created your first Cap! 🥳",
 		react: FirstShareableLink({ email, url, videoName }),
 		marketing: true,
-		scheduledAt: "in 5 min",
+		scheduledAt: new Date(sendAt).toISOString(),
 	});
 	if (result?.error) {
 		await release();

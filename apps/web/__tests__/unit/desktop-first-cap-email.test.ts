@@ -245,12 +245,32 @@ describe("first Cap email", () => {
 			expect.objectContaining({
 				email: "someone@cap.test",
 				marketing: true,
-				scheduledAt: "in 5 min",
+				scheduledAt: new Date(state.now + 5 * MINUTE).toISOString(),
 				react: expect.objectContaining({
 					url: `https://cap.test/s/${videoId}`,
 				}),
 			}),
 		);
+	});
+
+	it("stops cancelling at exactly the time the provider was told to send", async () => {
+		const first = await record();
+		const scheduledAt = Date.parse(
+			email.sendEmail.mock.calls[0]?.[0].scheduledAt,
+		);
+
+		state.now = scheduledAt;
+		await remove(first);
+		expect(email.cancel).not.toHaveBeenCalled();
+		expect(marker()).toMatchObject({ videoId: first, sendAt: scheduledAt });
+	});
+
+	it("still cancels in the last moment before the provider sends", async () => {
+		const first = await record();
+		state.now = Date.parse(email.sendEmail.mock.calls[0]?.[0].scheduledAt) - 1;
+		await remove(first);
+
+		expect(email.cancel).toHaveBeenCalledExactlyOnceWith("email-1");
 	});
 
 	it("is not sent again when the only recording is deleted later and a new one is made", async () => {
