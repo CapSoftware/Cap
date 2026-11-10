@@ -1995,3 +1995,154 @@ fn landing_a_refinement_moves_the_cut_in_the_project_and_in_undo_entries_that_ha
     );
     assert_eq!(landing.land(&mut cut), None);
 }
+
+fn add_music(project: &mut ProjectConfiguration, start: f64, end: f64) {
+    timeline_mut(project).audio_segments.push(
+        serde_json::from_value(serde_json::json!({
+            "start": start,
+            "end": end,
+            "path": "music.mp3",
+            "fadeIn": 0.5,
+            "fadeOut": 0.5
+        }))
+        .unwrap(),
+    );
+}
+
+#[test]
+fn a_moved_filler_cut_leaves_music_playing_across_it_without_a_gap() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_music(&mut project, 0.0, 5.16);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    let mut refined = self::project(&REFINED, &durations);
+    add_music(&mut refined, 0.0, 5.16);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+
+    let music = |project: &ProjectConfiguration| -> Vec<[f64; 5]> {
+        timeline(project)
+            .audio_segments
+            .iter()
+            .map(|piece| {
+                [
+                    piece.start,
+                    piece.end,
+                    piece.trim_start,
+                    piece.fade_in,
+                    piece.fade_out,
+                ]
+            })
+            .collect()
+    };
+    let moved = music(&project);
+    assert_eq!(moved.len(), 2);
+    assert!(close(moved[0][1], moved[1][0]), "{moved:?}");
+    for (moved, direct) in moved.iter().zip(music(&refined)) {
+        for (moved, direct) in moved.iter().zip(direct) {
+            assert!(close(*moved, direct), "{moved:?} {direct:?}");
+        }
+    }
+}
+
+#[test]
+fn a_cut_follows_its_own_word_past_recovered_ones_or_stays_when_it_cannot_tell() {
+    let durations = [5.16];
+    let before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    let recovered = |word: (&'static str, f64, f64)| {
+        let mut words = REFINED.to_vec();
+        words.insert(3, word);
+        TranscriptDoc::build(&captions(&words))
+    };
+
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    let cut = bounds(&project);
+    let twin = recovered(("uh", 1.0, 1.1));
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &twin,
+            None
+        ),
+        0
+    );
+    assert_eq!(bounds(&project), cut);
+
+    let other = recovered(("so", 1.0, 1.1));
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &other,
+            None
+        ),
+        1
+    );
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+    assert_eq!(
+        kept(&project, &durations),
+        [true, true, true, false, true, true, true]
+    );
+}
+
+#[test]
+fn a_cut_made_before_the_loudness_envelope_loaded_still_moves() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+
+    let spoken = |time: f64| {
+        SPOKEN_UH.contains(&time)
+            || REFINED
+                .iter()
+                .any(|(text, start, end)| *text != "uh" && (*start..*end).contains(&time))
+    };
+    let clip: Vec<f32> = (0..(durations[0] / HOP_SECONDS) as usize)
+        .map(|hop| {
+            let time = hop as f64 * HOP_SECONDS;
+            if spoken(time) {
+                1e-2
+            } else if (1.17..1.19).contains(&time) {
+                1e-9
+            } else {
+                1e-7
+            }
+        })
+        .collect();
+    let envelope = EnergyEnvelope::new(vec![clip], &durations);
+    let mut before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    before.refine_voiced(Some(&envelope));
+    let mut after = TranscriptDoc::build(&captions(&REFINED));
+    after.refine_voiced(Some(&envelope));
+    let filler = 3..4;
+    let heard = plan_word_cuts(
+        &before,
+        Some(&envelope),
+        None,
+        std::slice::from_ref(&filler),
+    );
+    assert!(
+        !close(heard[0].start, bounds(&project)[0].1),
+        "with the envelope the same cut is planned elsewhere: {heard:?}"
+    );
+
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &after,
+            Some(&envelope)
+        ),
+        1
+    );
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+}
