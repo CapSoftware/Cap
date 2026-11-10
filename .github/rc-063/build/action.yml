@@ -21,6 +21,14 @@ runs:
         path: rc-pkg
         key: ${{ inputs.key }}
 
+    # A debug build of gpui on Windows reads its shader sources from the
+    # checkout it was built from, so a restored package needs that checkout
+    # back at the same path.
+    - name: GPUI sources for the restored Windows package
+      if: ${{ steps.pkg.outputs.cache-hit == 'true' && runner.os == 'Windows' }}
+      shell: bash
+      run: ./scripts/prepare-gpui-dependency.sh
+
     - name: Install Linux desktop dependencies
       if: ${{ steps.pkg.outputs.cache-hit != 'true' && runner.os == 'Linux' }}
       uses: ./.github/actions/install-desktop-deps

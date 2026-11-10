@@ -238,6 +238,23 @@ def ocr_both(path, **kwargs):
     return words
 
 
+def ocr_block(path, box, scale=3):
+    """The text of one region of a screenshot, read as a paragraph. Small grey
+    body text is missed by the full-screen passes and read well this way."""
+    from PIL import Image, ImageOps
+
+    binary = tesseract()
+    if not binary:
+        return ""
+    region = Image.open(path).convert("L").crop(box)
+    region = ImageOps.autocontrast(region.resize((region.width * scale, region.height * scale), Image.LANCZOS))
+    scaled = path + ".block.ocr.png"
+    region.save(scaled)
+    done = subprocess.run([binary, scaled, "stdout", "--psm", "6"], capture_output=True)
+    os.remove(scaled)
+    return " ".join(done.stdout.decode("utf-8", "replace").split())
+
+
 def ocr_text(words):
     return " ".join(word["text"] for word in words)
 

@@ -160,13 +160,15 @@ def download_through_the_editor(project, expect_note):
     words = look(app, "1-captions-tab")
     note = rclib.find_phrase(words, "Recommended model updated")
     wanted = os.environ.get("RC_NOTE_DESCRIPTION", "").strip()
-    opening = " ".join(wanted.split()[:5])
-    description = rclib.find_phrase(words, opening) if opening else None
+    description = ""
+    if note:
+        below = (note["x"] - 8, note["y"] + note["h"] + 4, note["x"] + 400, note["y"] + note["h"] + 56)
+        description = rclib.ocr_block(os.path.join(out, "1-captions-tab.png"), below)
     if expect_note:
         results.add(
             "the editor shows the update note",
-            bool(note) and bool(description),
-            f"title at {note}; description \"{wanted}\" starts at {description}",
+            bool(note) and bool(wanted) and words_of(description) == words_of(wanted),
+            f"title \"Recommended model updated\" at {note}; under it \"{description}\"; the PR head's copy is \"{wanted}\"",
         )
     else:
         results.add("a fresh install shows no update note", not note and not description, f"note {note}, description {description}")
