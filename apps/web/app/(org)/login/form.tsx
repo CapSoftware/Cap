@@ -1,11 +1,9 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
-import {
-	faArrowLeft,
-	faEnvelope,
-	faExclamationCircle,
-} from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
+import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
 import { captureException } from "@sentry/nextjs";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";

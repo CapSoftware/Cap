@@ -2,10 +2,8 @@
 
 import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import {
-	faRectangleList,
-	faRotateRight,
-} from "@fortawesome/free-solid-svg-icons";
+import { faRectangleList } from "@fortawesome/free-solid-svg-icons/faRectangleList";
+import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { Edit3 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";

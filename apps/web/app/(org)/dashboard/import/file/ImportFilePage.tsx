@@ -1,6 +1,7 @@
 "use client";
 
-import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useStore } from "@tanstack/react-store";
 import Link from "next/link";

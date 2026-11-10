@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faTerminal } from "@fortawesome/free-solid-svg-icons";
+import { faTerminal } from "@fortawesome/free-solid-svg-icons/faTerminal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";

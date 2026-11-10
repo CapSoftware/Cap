@@ -1,6 +1,7 @@
 "use client";
 
-import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import NumberFlow from "@number-flow/react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 

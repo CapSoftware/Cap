@@ -1,11 +1,9 @@
 import { buttonVariants, Logo } from "@cap/ui";
-import {
-	faArrowLeft,
-	faArrowUpRightFromSquare,
-	faFolder,
-	faLock,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons/faArrowUpRightFromSquare";
+import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";

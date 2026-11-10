@@ -8,7 +8,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@cap/ui";
-import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
+import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons/faTriangleExclamation";
 import { type ReactNode, useState } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 

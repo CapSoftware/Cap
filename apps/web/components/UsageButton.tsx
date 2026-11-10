@@ -1,5 +1,6 @@
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
-import { faCheck, faCircleInfo } from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import clsx from "clsx";
 import { HardDrive, Link2, Sparkles } from "lucide-react";
 import { motion } from "motion/react";

@@ -2,7 +2,8 @@
 
 import { Button } from "@cap/ui";
 import { ImageUpload } from "@cap/web-domain";
-import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";

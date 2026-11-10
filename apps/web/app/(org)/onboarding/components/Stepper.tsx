@@ -1,6 +1,6 @@
 "use client";
 
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import clsx from "clsx";
 import { usePathname } from "next/navigation";
 import { Fragment, useMemo } from "react";

@@ -1,12 +1,10 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import {
-	faCheck,
-	faMinus,
-	faPlus,
-	faTimes,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import clsx from "clsx";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import {

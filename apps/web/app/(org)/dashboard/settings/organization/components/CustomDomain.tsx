@@ -1,11 +1,9 @@
 import { Button } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
-import {
-	faCheckCircle,
-	faExclamationCircle,
-	faGlobe,
-	faX,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCheckCircle } from "@fortawesome/free-solid-svg-icons/faCheckCircle";
+import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faX } from "@fortawesome/free-solid-svg-icons/faX";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
