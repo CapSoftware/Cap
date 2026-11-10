@@ -102,10 +102,29 @@ finish import
 
 if [[ ${REJECT:-1} == 1 ]]; then
   before=$(sha256sum "$target/recording-meta.json" | cut -d' ' -f1)
+  result zenity_installed "$(command -v zenity >/dev/null 2>&1 && echo yes || echo no)"
   pick reject "$plain"
   result rejected "$(wait_log reject "failed to import clip: Select a Cap project folder" 40 && echo yes || echo no)"
-  sleep 2
+  error_shown=no
+  for _ in $(seq 40); do
+    if shell_eval "global.display.list_all_windows().some(w => (w.get_title() || '') == 'Import Error')" | grep -q "'true'"; then
+      error_shown=yes
+      break
+    fi
+    sleep 0.5
+  done
+  result reject_error_dialog_shown "$error_shown"
+  shell_eval "global.display.list_all_windows().map(w => (w.get_title() || '') + ' [' + (w.get_wm_class() || '') + ']').join(' | ')" >>"$out/actions.log"
+  sleep 1
   bash "$here/shot.sh" "$out/reject-5-error.png" >/dev/null 2>&1
+  if [[ $error_shown == yes ]]; then
+    shell_eval "global.display.list_all_windows().filter(w => (w.get_title() || '') == 'Import Error').forEach(w => w.activate(global.display.get_current_time_roundtrip()))" >/dev/null
+    sleep 1
+    python3 "$here/mutter-keys.py" Return >>"$out/actions.log" 2>&1
+    sleep 2
+    result reject_error_dialog_dismissed "$(shell_eval "global.display.list_all_windows().some(w => (w.get_title() || '') == 'Import Error')" | grep -q "'true'" && echo no || echo yes)"
+    bash "$here/shot.sh" "$out/reject-6-dismissed.png" >/dev/null 2>&1
+  fi
   result reject_target_unchanged "$([[ $(sha256sum "$target/recording-meta.json" | cut -d' ' -f1) == "$before" ]] && echo yes || echo no)"
   finish reject
 fi

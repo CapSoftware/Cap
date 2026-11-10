@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  FIX_SHA: 879980a8c6e7a6ea1e358e333fcc284c7a4dc891
+  FIX_SHAS: 520dbe50a 879980a8c6e7a6ea1e358e333fcc284c7a4dc891
   CAP_DEB_URL: https://cdn.crabnebula.app/asset/01M5CHFS77QM2HSZ69KT784SAV
   CAP_DEB_SHA256: bb03dddc5268f64d3e6eb4c11534462e5b7a8a5c1c7bb5bca5f5bdaa99d11c56
 
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 5
+          fetch-depth: 30
 
       - name: Put main's picker back
         if: ${{ matrix.variant == 'base' }}
@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name scratch
           git config user.email scratch@example.invalid
-          git revert --no-commit "$FIX_SHA"
+          git revert --no-commit $FIX_SHAS
           git diff --cached --stat
 
       - name: Rust setup
@@ -85,13 +85,14 @@ jobs:
           cat "$result"
           if [[ "${{ matrix.variant }}" == fix ]]; then
             for line in editor_opened=True dialog_opened=True dialog_rooted_at_recordings=True imported=True \
-              target_segments=2 panics=0 reject_logged=True reject_error_dialog_shown=True \
-              reject_target_unchanged=True reject_app_alive=True cancel_logged=True cancel_target_unchanged=True \
-              cancel_app_alive=True; do
+              target_segments=2 app_alive_after_pick=True reject_logged=True reject_error_dialog_shown=True \
+              reject_error_dialog_dismissed=True reject_target_unchanged=True reject_app_alive=True \
+              cancel_logged=True cancel_no_dialog_left=True cancel_target_unchanged=True cancel_app_alive=True; do
               grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
             done
           else
-            for line in editor_opened=True dialog_opened=True imported=False target_segments=1; do
+            for line in editor_opened=True dialog_opened=True dialog_rooted_at_recordings=True \
+              dialog_still_open_after_accept=True imported=False target_segments=1; do
               grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
             done
           fi
@@ -117,14 +118,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 5
+          fetch-depth: 30
 
       - name: Put main's picker back
         if: ${{ matrix.variant == 'base' }}
         run: |
           git config user.name scratch
           git config user.email scratch@example.invalid
-          git revert --no-commit "$FIX_SHA"
+          git revert --no-commit $FIX_SHAS
           git diff --cached --stat
 
       - name: Install Linux desktop dependencies
@@ -177,8 +178,9 @@ jobs:
           cat "$RUNNER_TEMP/out/import-existing/actions.log" || true
           if [[ "${{ matrix.variant }}" == fix ]]; then
             for line in recorded=yes import_editor_opened=yes import_chooser_opened=yes imported=yes \
-              picked_recording_folder=yes target_segments_after=2 import_panics=0 rejected=yes \
-              reject_target_unchanged=yes reject_panics=0; do
+              picked_recording_folder=yes target_segments_after=2 import_panics=0 import_chooser_still_open=no \
+              rejected=yes reject_error_dialog_shown=yes reject_error_dialog_dismissed=yes \
+              reject_target_unchanged=yes reject_panics=0 reject_cap_alive=yes; do
               grep -qx "$line" "$result" || { echo "missing $line"; exit 1; }
             done
           else

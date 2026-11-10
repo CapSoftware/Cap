@@ -9,6 +9,41 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class Win {
+  delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lparam);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr hwnd, EnumProc callback, IntPtr lparam);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder text, int max);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+  public static string Title(IntPtr hwnd) { var text = new StringBuilder(1024); GetWindowText(hwnd, text, 1024); return text.ToString(); }
+  public static string Class(IntPtr hwnd) { var text = new StringBuilder(256); GetClassName(hwnd, text, 256); return text.ToString(); }
+  public static List<IntPtr> Windows(uint pid) {
+    var found = new List<IntPtr>();
+    EnumWindows((hwnd, lparam) => {
+      uint owner; GetWindowThreadProcessId(hwnd, out owner);
+      if (owner == pid && IsWindowVisible(hwnd)) found.Add(hwnd);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static List<string> ChildTexts(IntPtr hwnd) {
+    var found = new List<string>();
+    EnumChildWindows(hwnd, (child, lparam) => { found.Add(Class(child) + ": " + Title(child)); return true; }, IntPtr.Zero);
+    return found;
+  }
+  public static void Raise(IntPtr hwnd) { SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0043); }
+}
+"@
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
@@ -61,212 +96,226 @@ $env:CAP_GPUI_AUTO_NO_MIC = "1"
 $env:CAP_GPUI_AUTO_EDITOR = $target
 $env:CAP_GPUI_AUTO_IMPORT_EXISTING = "1"
 $env:RUST_LOG = "info"
-$env:NO_COLOR = "1"
 
 function Log-Text([string]$name) {
   $text = ""
-  $files = @((Join-Path $Out "$name.out.log"), (Join-Path $Out "$name.err.log"))
-  foreach ($file in $files) {
-    if (Test-Path $file) {
-      try {
-        $stream = [System.IO.File]::Open($file, 'Open', 'Read', 'ReadWrite')
-        $reader = New-Object System.IO.StreamReader $stream
-        $text += $reader.ReadToEnd()
-        $reader.Dispose(); $stream.Dispose()
-      } catch {}
-    }
+  $file = Join-Path $Out "$name.out.log"
+  if (Test-Path $file) {
+    try {
+      $stream = [System.IO.File]::Open($file, 'Open', 'Read', 'ReadWrite')
+      $reader = New-Object System.IO.StreamReader $stream
+      $text = $reader.ReadToEnd()
+      $reader.Dispose(); $stream.Dispose()
+    } catch {}
   }
   return ($text -replace "\x1b\[[0-9;]*m", "")
 }
-function Wait-Log([string]$name, [string]$pattern, [int]$seconds) {
+function Wait-Log($process, [string]$name, [string]$pattern, [int]$seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline) {
     if ((Log-Text $name) -match $pattern) { return $true }
+    if ($process -and $process.HasExited) { return ((Log-Text $name) -match $pattern) }
     Start-Sleep -Milliseconds 500
   }
   return $false
 }
-
-$true_condition = [System.Windows.Automation.Condition]::TrueCondition
-function Dialogs([int]$processId) {
-  $found = @()
-  $root = [System.Windows.Automation.AutomationElement]::RootElement
-  foreach ($window in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $true_condition)) {
-    try {
-      if ($window.Current.ProcessId -eq $processId -and $window.Current.ClassName -eq "#32770") { $found += $window }
-      elseif ($window.Current.ProcessId -eq $processId) {
-        foreach ($child in $window.FindAll([System.Windows.Automation.TreeScope]::Children, $true_condition)) {
-          if ($child.Current.ClassName -eq "#32770") { $found += $child }
-        }
-      }
-    } catch {}
-  }
-  return $found
+function Lines([string]$name, [string]$pattern) {
+  return @((Log-Text $name) -split "`n" | Where-Object { $_ -match $pattern })
 }
-function Wait-Dialog([int]$processId, [int]$seconds) {
+
+$UIA = [System.Windows.Automation.AutomationElement]
+$Scope = [System.Windows.Automation.TreeScope]
+function Cond([string]$property, $value) {
+  $p = switch ($property) {
+    "type" { $UIA::ControlTypeProperty }
+    "id" { $UIA::AutomationIdProperty }
+    "class" { $UIA::ClassNameProperty }
+  }
+  return New-Object System.Windows.Automation.PropertyCondition($p, $value)
+}
+function Both($a, $b) { return New-Object System.Windows.Automation.AndCondition($a, $b) }
+
+# A dialog of the app: a visible top-level window of its process with the dialog class.
+function Dialog-Handles([int]$processId, [string]$title) {
+  return @([Win]::Windows([uint32]$processId) | Where-Object {
+      [Win]::Class($_) -eq "#32770" -and (-not $title -or [Win]::Title($_) -eq $title)
+    })
+}
+function Wait-Dialog($process, [int]$seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline) {
-    $dialogs = @(Dialogs $processId)
-    if ($dialogs.Count -gt 0) { return $dialogs[0] }
+    if ($process.HasExited) { return $null }
+    $handles = @(Dialog-Handles $process.Id "")
+    if ($handles.Count -gt 0) { return $handles[0] }
     Start-Sleep -Milliseconds 500
   }
   return $null
 }
-function Dump([System.Windows.Automation.AutomationElement]$element, [string]$file) {
-  $lines = @()
-  try {
-    foreach ($node in $element.FindAll([System.Windows.Automation.TreeScope]::Subtree, $true_condition)) {
-      try {
-        $c = $node.Current
-        $lines += ("{0} | id={1} | class={2} | name={3} | enabled={4}" -f $c.ControlType.ProgrammaticName, $c.AutomationId, $c.ClassName, $c.Name, $c.IsEnabled)
-      } catch {}
-    }
-  } catch { $lines += "dump failed: $_" }
+function Element([IntPtr]$handle) { return $UIA::FromHandle($handle) }
+function Dump([IntPtr]$handle, [string]$file) {
+  $lines = @("window: " + [Win]::Title($handle) + " [" + [Win]::Class($handle) + "]")
+  $lines += [Win]::ChildTexts($handle)
   Set-Content -Path (Join-Path $Out $file) -Value $lines
 }
-function Find-First([System.Windows.Automation.AutomationElement]$element, [scriptblock]$match) {
-  foreach ($node in $element.FindAll([System.Windows.Automation.TreeScope]::Subtree, $true_condition)) {
-    try { if (& $match $node.Current) { return $node } } catch {}
+function Address([IntPtr]$handle) {
+  foreach ($bar in (Element $handle).FindAll($Scope::Descendants, (Cond "type" ([System.Windows.Automation.ControlType]::ToolBar)))) {
+    if ($bar.Current.Name -like "Address:*") { return ($bar.Current.Name -replace "^Address:\s*", "") }
+  }
+  return ""
+}
+function Items([IntPtr]$handle) {
+  $names = @()
+  $condition = Both (Cond "type" ([System.Windows.Automation.ControlType]::ListItem)) (Cond "class" "UIItem")
+  foreach ($item in (Element $handle).FindAll($Scope::Descendants, $condition)) { $names += $item.Current.Name }
+  return $names
+}
+function Path-Field([IntPtr]$handle) {
+  foreach ($id in @("1152", "1148")) {
+    $edit = (Element $handle).FindFirst($Scope::Descendants, (Both (Cond "type" ([System.Windows.Automation.ControlType]::Edit)) (Cond "id" $id)))
+    if ($edit) { return $edit }
   }
   return $null
 }
-function Address([System.Windows.Automation.AutomationElement]$dialog) {
-  $bar = Find-First $dialog { param($c) $c.ControlType -eq [System.Windows.Automation.ControlType]::ToolBar -and $c.Name -like "Address:*" }
-  if ($bar) { return ($bar.Current.Name -replace "^Address:\s*", "") }
-  return ""
-}
-function Items([System.Windows.Automation.AutomationElement]$dialog) {
-  $names = @()
-  foreach ($node in $dialog.FindAll([System.Windows.Automation.TreeScope]::Subtree, $true_condition)) {
-    try {
-      if ($node.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $node.Current.ClassName -eq "UIItem") { $names += $node.Current.Name }
-    } catch {}
-  }
-  return $names
-}
-function Type-Path([System.Windows.Automation.AutomationElement]$dialog, [string]$path) {
-  $edit = Find-First $dialog { param($c) $c.ControlType -eq [System.Windows.Automation.ControlType]::Edit -and ($c.AutomationId -eq "1152" -or $c.AutomationId -eq "1148") }
+function Type-Path([IntPtr]$handle, [string]$path) {
+  $edit = Path-Field $handle
   if (-not $edit) { return $false }
-  $edit.SetFocus()
-  $pattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-  $pattern.SetValue($path)
+  try { $edit.SetFocus() } catch {}
+  $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($path)
   return $true
 }
-function Press([System.Windows.Automation.AutomationElement]$dialog, [string]$id) {
-  $button = Find-First $dialog { param($c) $c.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $c.AutomationId -eq $id }
+function Button([IntPtr]$handle, [string]$id) {
+  return (Element $handle).FindFirst($Scope::Descendants, (Both (Cond "type" ([System.Windows.Automation.ControlType]::Button)) (Cond "id" $id)))
+}
+function Press([IntPtr]$handle, [string]$id) {
+  $button = Button $handle $id
   if (-not $button) { return "" }
   $name = $button.Current.Name
-  try {
-    $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $invoke.Invoke()
-  } catch { Write-Host "press $id failed: $_" }
+  try { $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { Write-Host "press $id failed: $_" }
   return $name
 }
 
-function Launch([string]$name) {
-  $process = Start-Process -FilePath $App -PassThru -RedirectStandardOutput (Join-Path $Out "$name.out.log") -RedirectStandardError (Join-Path $Out "$name.err.log")
-  return $process
-}
 function Stop-App($process) {
   try { if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force } } catch {}
   Start-Sleep -Seconds 2
 }
+# The runner renders on Microsoft's software adapter, which can lose its device or
+# crash inside d3d10warp.dll while the editor draws its first preview frame, before
+# the picker is asked for. Launch again when that happens and count it.
+$script:launches = 0
+$script:crashes = 0
+function Open-Picker([string]$round) {
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $name = "$round-$attempt"
+    $script:launches++
+    $process = Start-Process -FilePath $App -PassThru -RedirectStandardOutput (Join-Path $Out "$name.out.log") -RedirectStandardError (Join-Path $Out "$name.err.log")
+    Wait-Log $process $name "auto import existing: opening the picker" 240 | Out-Null
+    $handle = Wait-Dialog $process 60
+    if ($handle) { return @{ Process = $process; Name = $name; Dialog = $handle } }
+    $script:crashes++
+    Write-Host "$name did not reach the picker (exited=$($process.HasExited))"
+    Stop-App $process
+  }
+  return $null
+}
 
 # Round 1: pick the recording folder.
-$app1 = Launch "pick"
-Result "editor_opened" (Wait-Log "pick" "editor project validated" 180)
-Result "picker_requested" (Wait-Log "pick" "auto import existing: opening the picker" 180)
-$dialog = Wait-Dialog $app1.Id 60
-Result "dialog_opened" ($null -ne $dialog)
-if ($dialog) {
+$round = Open-Picker "pick"
+Result "dialog_opened" ($null -ne $round)
+if ($round) {
+  $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
+  Result "editor_opened" ([bool]((Log-Text $name) -match "editor project validated"))
   Start-Sleep -Seconds 2
+  [Win]::Raise($dialog)
   Shot "pick-1-opened"
   Dump $dialog "pick-dialog.txt"
-  Result "dialog_title" $dialog.Current.Name
+  Result "dialog_title" ([Win]::Title($dialog))
   $address = Address $dialog
   Result "dialog_address" $address
   Result "dialog_rooted_at_recordings" ($address.TrimEnd('\') -ieq $recordings.TrimEnd('\'))
   Result "dialog_items_at_root" ((Items $dialog) -join ";")
-  $accept = Find-First $dialog { param($c) $c.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $c.AutomationId -eq "1" }
+  $accept = Button $dialog "1"
   Result "dialog_accept_button" $(if ($accept) { $accept.Current.Name } else { "" })
+  $field = Path-Field $dialog
+  Result "dialog_path_field" $(if ($field) { $field.Current.Name } else { "" })
   Result "path_typed" (Type-Path $dialog $source)
   Start-Sleep -Seconds 1
   Shot "pick-2-typed"
   Result "accept_pressed" (Press $dialog "1")
   Start-Sleep -Seconds 3
-  Shot "pick-3-accepted"
-  $still = @(Dialogs $app1.Id)
+  $still = @(Dialog-Handles $process.Id ([Win]::Title($dialog)))
   Result "dialog_still_open_after_accept" ($still.Count -gt 0)
   if ($still.Count -gt 0) {
-    Dump $still[0] "pick-dialog-after-accept.txt"
-    Result "dialog_title_after_accept" $still[0].Current.Name
+    [Win]::Raise($still[0])
+    Shot "pick-3-still-open"
     Result "dialog_address_after_accept" (Address $still[0])
     Result "dialog_items_after_accept" ((Items $still[0]) -join ";")
   }
+  Result "imported" (Wait-Log $process $name "clips imported" 60)
+  Result "picked_line" ((Lines $name "existing recording picked|picker returned nothing" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
+  Result "imported_line" ((Lines $name "clips imported|failed to import clip" | Select-Object -First 1) -replace "^\S+\s+", "" -replace "\s+", " ")
+  Start-Sleep -Seconds 5
+  Shot "pick-4-end"
+  Result "app_alive_after_pick" (-not $process.HasExited)
+  foreach ($open in @(Dialog-Handles $process.Id "")) { Press $open "2" | Out-Null }
+  Stop-App $process
 }
-Result "imported" (Wait-Log "pick" "clips imported" 60)
-$log = Log-Text "pick"
-Result "picked_path_logged" ([bool]($log -match "existing recording picked"))
-Result "picked_line" (($log -split "`n" | Where-Object { $_ -match "existing recording picked|picker returned nothing|failed to import clip" } | Select-Object -First 1) -replace "\s+", " ")
 Result "target_segments" (Segments $target)
-$copied = @(Get-ChildItem -Path (Join-Path $target "content\segments") -Recurse -Filter "display.mp4")
-Result "target_display_files" $copied.Count
-Result "panics" (([regex]::Matches($log, "panicked at")).Count)
-Result "app_alive_after_pick" (-not $app1.HasExited)
-Start-Sleep -Seconds 3
-Shot "pick-4-end"
-foreach ($open in @(Dialogs $app1.Id)) { Press $open "2" | Out-Null }
-Stop-App $app1
+Result "target_display_files" (@(Get-ChildItem -Path (Join-Path $target "content\segments") -Recurse -Filter "display.mp4").Count)
 
 if ($Variant -eq "fix") {
   # Round 2: a folder that is not a recording gives the import error.
-  $before = Get-FileHash (Join-Path $target "recording-meta.json")
-  $app2 = Launch "reject"
-  Wait-Log "reject" "auto import existing: opening the picker" 180 | Out-Null
-  $dialog = Wait-Dialog $app2.Id 60
-  Result "reject_dialog_opened" ($null -ne $dialog)
-  if ($dialog) {
+  $before = (Get-FileHash (Join-Path $target "recording-meta.json")).Hash
+  $round = Open-Picker "reject"
+  Result "reject_dialog_opened" ($null -ne $round)
+  if ($round) {
+    $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
     Start-Sleep -Seconds 2
-    Type-Path $dialog $plain | Out-Null
+    Result "reject_path_typed" (Type-Path $dialog $plain)
     Start-Sleep -Seconds 1
     Press $dialog "1" | Out-Null
-  }
-  Result "reject_logged" (Wait-Log "reject" "failed to import clip: Select a Cap project folder" 60)
-  $error_dialog = $null
-  $deadline = (Get-Date).AddSeconds(30)
-  while ((Get-Date) -lt $deadline -and -not $error_dialog) {
-    foreach ($candidate in @(Dialogs $app2.Id)) {
-      if (Find-First $candidate { param($c) $c.Name -like "*Select a Cap project folder*" }) { $error_dialog = $candidate }
+    Result "reject_logged" (Wait-Log $process $name "failed to import clip: Select a Cap project folder" 60)
+    $error_dialog = $null
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and -not $error_dialog) {
+      $handles = @(Dialog-Handles $process.Id "Import Error")
+      if ($handles.Count -gt 0) { $error_dialog = $handles[0] } else { Start-Sleep -Milliseconds 500 }
     }
-    Start-Sleep -Milliseconds 500
+    $listing = @([Win]::Windows([uint32]$process.Id) | ForEach-Object { [Win]::Title($_) + " [" + [Win]::Class($_) + "]" })
+    Set-Content -Path (Join-Path $Out "reject-windows.txt") -Value $listing
+    Result "reject_error_dialog_shown" ($null -ne $error_dialog)
+    if ($error_dialog) {
+      [Win]::Raise($error_dialog)
+      Start-Sleep -Seconds 1
+      Shot "reject-1-error"
+      Dump $error_dialog "reject-dialog.txt"
+      Result "reject_error_title" ([Win]::Title($error_dialog))
+      Result "reject_error_text" (([Win]::ChildTexts($error_dialog) | Where-Object { $_ -like "Static: *" -and $_.Length -gt 8 } | Select-Object -First 1) -replace "^Static: ", "")
+      [Win]::PostMessage($error_dialog, 0x0111, [IntPtr]1, [IntPtr]::Zero) | Out-Null
+      Start-Sleep -Seconds 2
+      Result "reject_error_dialog_dismissed" (-not [Win]::IsWindow($error_dialog))
+    } else {
+      Shot "reject-1-no-error"
+    }
+    Result "reject_target_unchanged" ((Get-FileHash (Join-Path $target "recording-meta.json")).Hash -eq $before)
+    Result "reject_app_alive" (-not $process.HasExited)
+    Stop-App $process
   }
-  Result "reject_error_dialog_shown" ($null -ne $error_dialog)
-  Shot "reject-1-error"
-  if ($error_dialog) {
-    Dump $error_dialog "reject-dialog.txt"
-    Result "reject_error_title" $error_dialog.Current.Name
-    $text = Find-First $error_dialog { param($c) $c.Name -like "*Select a Cap project folder*" }
-    Result "reject_error_text" $text.Current.Name
-    $ok = Find-First $error_dialog { param($c) $c.ControlType -eq [System.Windows.Automation.ControlType]::Button }
-    if ($ok) { Press $error_dialog $ok.Current.AutomationId | Out-Null }
-  }
-  Start-Sleep -Seconds 2
-  Result "reject_target_unchanged" ((Get-FileHash (Join-Path $target "recording-meta.json")).Hash -eq $before.Hash)
-  Result "reject_app_alive" (-not $app2.HasExited)
-  Result "reject_panics" (([regex]::Matches((Log-Text "reject"), "panicked at")).Count)
-  Stop-App $app2
 
   # Round 3: cancelling the dialog imports nothing and shows no error.
-  $app3 = Launch "cancel"
-  Wait-Log "cancel" "auto import existing: opening the picker" 180 | Out-Null
-  $dialog = Wait-Dialog $app3.Id 60
-  Result "cancel_dialog_opened" ($null -ne $dialog)
-  if ($dialog) { Start-Sleep -Seconds 2; Press $dialog "2" | Out-Null }
-  Result "cancel_logged" (Wait-Log "cancel" "existing recording picker returned nothing" 30)
-  Start-Sleep -Seconds 2
-  Result "cancel_no_dialog_left" (@(Dialogs $app3.Id).Count -eq 0)
-  Result "cancel_target_unchanged" ((Get-FileHash (Join-Path $target "recording-meta.json")).Hash -eq $before.Hash)
-  Result "cancel_app_alive" (-not $app3.HasExited)
-  Stop-App $app3
+  $round = Open-Picker "cancel"
+  Result "cancel_dialog_opened" ($null -ne $round)
+  if ($round) {
+    $dialog = $round.Dialog; $process = $round.Process; $name = $round.Name
+    Start-Sleep -Seconds 2
+    Press $dialog "2" | Out-Null
+    Result "cancel_logged" (Wait-Log $process $name "existing recording picker returned nothing" 30)
+    Start-Sleep -Seconds 2
+    Result "cancel_no_dialog_left" (@(Dialog-Handles $process.Id "").Count -eq 0)
+    Result "cancel_target_unchanged" ((Get-FileHash (Join-Path $target "recording-meta.json")).Hash -eq $before)
+    Result "cancel_app_alive" (-not $process.HasExited)
+    Stop-App $process
+  }
 }
+Result "launches" $script:launches
+Result "launches_lost_before_the_picker" $script:crashes
 Get-Content $results

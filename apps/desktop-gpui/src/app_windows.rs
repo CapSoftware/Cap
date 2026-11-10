@@ -6240,7 +6240,9 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         .timer(std::time::Duration::from_millis(1200))
         .await;
 
-    if import_existing {
+    static IMPORT_EXISTING_FIRED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if import_existing && !IMPORT_EXISTING_FIRED.swap(true, std::sync::atomic::Ordering::AcqRel) {
         let started = std::time::Instant::now();
         while !handle
             .update(cx, |view, _, _| view.project_ready())
