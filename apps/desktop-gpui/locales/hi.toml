@@ -2173,6 +2173,9 @@ mode = "ज़ूम मोड"
 positions_mixed = "सेगमेंट अलग-अलग जगहों पर ज़ूम करते हैं। सभी को एक ही जगह ले जाने के लिए ड्रैग करें।"
 title = "ज़ूम {number}"
 
+[editor.side_panel]
+style = "स्टाइल"
+
 [editor.sidebar]
 desktop_import_failed = "आपका डेस्कटॉप वॉलपेपर इम्पोर्ट नहीं हो सका"
 importing_image = "इमेज इम्पोर्ट हो रही है…"
@@ -2336,9 +2339,9 @@ text_item = "टेक्स्ट"
 [editor.clips]
 append_error = "क्लिप नहीं जोड़ी जा सकी: {message}"
 append_error_title = "रिकॉर्डिंग त्रुटि"
-back = "एडिटर पर वापस जाएँ"
 cap_filter = "Cap रिकॉर्डिंग"
 clip = "क्लिप {number}"
+count = { one = "{count} क्लिप", other = "{count} क्लिप" }
 empty_description = "कोई क्लिप रिकॉर्ड या इम्पोर्ट करें, वह यहाँ दिखेगी।"
 empty_title = "अभी कोई क्लिप नहीं"
 import = "इम्पोर्ट करें"
@@ -2349,6 +2352,7 @@ import_mp4 = "MP4 वीडियो…"
 importing = "इम्पोर्ट हो रहा है…"
 mp4_filter = "MP4 वीडियो"
 prepare_controls_failed = "रिकॉर्डिंग कंट्रोल तैयार नहीं हो सके: {error}"
+record = "रिकॉर्ड करें"
 record_new = "नई क्लिप रिकॉर्ड करें"
 save_before_recording_failed = "रिकॉर्डिंग से पहले मौजूदा प्रोजेक्ट सेव नहीं हो सका: {error}"
 split = "हिस्सा {number}"
@@ -3012,8 +3016,6 @@ delete_recording = "रिकॉर्डिंग हटाएँ"
 export = "एक्सपोर्ट"
 open_bundle = "रिकॉर्डिंग बंडल खोलें"
 presets = "प्रीसेट"
-transcript = "ट्रांसक्रिप्ट"
-transcript_tooltip = "ट्रांसक्रिप्ट से एडिट करें"
 
 [editor.window.image]
 changed = "बदलने के लिए चुनते समय यह इमेज बदल गई। इसे चुनें और फिर से कोशिश करें।"
