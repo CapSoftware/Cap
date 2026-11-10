@@ -251,7 +251,16 @@ else:
         time.sleep(4)
     results.add("the editor closed", app_window("editor") is None)
     again = listing(project) if os.path.exists(project) else []
-    if again == before:
+    results.note(
+        "files in the recording once the editor closed",
+        f"{len(again)}; written by the closing editor: {sorted(set(again) - set(before))}",
+    )
+    results.add(
+        "closing the editor removed none of the recording's files",
+        set(before) <= set(again),
+        f"missing: {sorted(set(before) - set(again)) or 'none'}",
+    )
+    if set(before) <= set(again):
         winui.raise_window(window["hwnd"])
         time.sleep(1)
         reload_recordings()
@@ -263,7 +272,7 @@ else:
             f"log line: {retry['deleted']}; folder exists: {os.path.exists(project)}",
         )
     else:
-        results.note("second delete skipped", f"the recording had {len(again)} of {len(before)} files left")
+        results.note("second delete skipped", f"the recording had {len(again)} files, {len(before)} before")
 
 dismiss()
 shot("4-end")
