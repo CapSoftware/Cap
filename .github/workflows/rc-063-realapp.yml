@@ -66,7 +66,7 @@ jobs:
         run: python -m pip install --quiet pillow
 
       - name: Item 1, recording metadata save (#3975)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item1,') }}
         shell: bash
         env:
           PYTHONPATH: .github/rc-063
@@ -74,11 +74,42 @@ jobs:
         run: python .github/rc-063/win_meta.py rc-pkg "$RUNNER_TEMP/rc-out/item1"
 
       - name: Item 2, deleting the recording in progress (#3969)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item2,') }}
         shell: bash
         env:
           PYTHONPATH: .github/rc-063
+          RC_DELETE_OFFSET: ""
         run: python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2"
+
+      # Hosted Windows runners have no audio endpoint, and without one the
+      # editor never builds a playback audio buffer. This installs a virtual
+      # output device (no sound card is emulated beyond that) after items 1
+      # and 2 have run on the stock image.
+      - name: Virtual audio output device
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
+        uses: LABSN/sound-ci-helpers@d08c889a7bba7d9b1b059f8f76dac4672ea3a9cf
+
+      - name: Restore the long recording with audio
+        id: audio
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc-fix/audio
+          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v1
+
+      - name: Item 3, playback when the audio buffer cannot be allocated (#3971)
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
+        shell: bash
+        env:
+          PYTHONPATH: .github/rc-063
+        run: python .github/rc-063/win_audio.py rc-pkg "$RUNNER_TEMP/rc-out/item3" "$RUNNER_TEMP/rc-fix/audio"
+
+      - name: Keep the long recording with audio
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') && steps.audio.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-fix/audio/rec/**/recording-meta.json', runner.temp)) != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/rc-fix/audio
+          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v1
 
       - name: Upload evidence
         if: always()
@@ -280,6 +311,76 @@ jobs:
           target: x86_64-pc-windows-msvc
           key: rc063-windows-2022-pr3908-${{ needs.plan.outputs.pr_revision }}-${{ env.PACKAGE_VERSION }}
 
+      - name: Scenario tools
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow
+          choco install tesseract --no-progress -y > "$RUNNER_TEMP/choco.log" 2>&1 || tail -n 20 "$RUNNER_TEMP/choco.log"
+          ls "/c/Program Files/Tesseract-OCR/tesseract.exe"
+          ls rc-pkg/bin/ffmpeg.exe || choco install ffmpeg --no-progress -y >> "$RUNNER_TEMP/choco.log" 2>&1
+
+      # Hosted Windows runners have no audio endpoint. A virtual audio cable
+      # gives the app an output device, so a clip another program plays is
+      # recorded as system audio. It is not a microphone or a sound card.
+      - name: Virtual audio output device
+        uses: LABSN/sound-ci-helpers@d08c889a7bba7d9b1b059f8f76dac4672ea3a9cf
+
+      - name: Audio service
+        shell: pwsh
+        run: |
+          Start-Service audiosrv -ErrorAction SilentlyContinue
+          Get-Service audiosrv, AudioEndpointBuilder | Format-Table Name, Status
+          Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
+
+      - name: Restore the old-layout Recommended model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rc-models/old
+          key: rc063-parakeet-old-layout-v1
+          enableCrossOsArchive: true
+
+      - name: Model files and the fixture clip
+        shell: bash
+        run: |
+          ffmpeg=rc-pkg/bin/ffmpeg.exe
+          [[ -f $ffmpeg ]] || ffmpeg=ffmpeg
+          bash rc/.github/rc-063/model_setup.sh "$RUNNER_TEMP/rc-models" \
+            apps/desktop-gpui/tests/data/transcription/audio/splice-13-am_fenrir.ogg "$ffmpeg"
+
+      - name: Item 6, old layout, update note, download, Generate
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-old,') }}
+        shell: bash
+        env:
+          PYTHONPATH: rc/.github/rc-063
+          RC_PROJECT_DIR: ${{ runner.temp }}\rc-fix\clip
+          RC_OLD_MODEL: ${{ runner.temp }}\rc-models\old
+        run: |
+          python rc/.github/rc-063/model.py rc-pkg "$RUNNER_TEMP/rc-out/item6-old" old "$RUNNER_TEMP/rc-models/clip.wav" \
+            "The new editor has, er, a lot of, you know, small improvements."
+
+      - name: Item 6, fresh install, download, Generate
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-fresh,') }}
+        shell: bash
+        env:
+          PYTHONPATH: rc/.github/rc-063
+          RC_PROJECT_DIR: ${{ runner.temp }}\rc-fix\clip
+        run: |
+          python rc/.github/rc-063/model.py rc-pkg "$RUNNER_TEMP/rc-out/item6-fresh" fresh "$RUNNER_TEMP/rc-models/clip.wav" \
+            "The new editor has, er, a lot of, you know, small improvements."
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-win-pr
+          path: |
+            ${{ runner.temp }}/rc-out/**/*.log
+            ${{ runner.temp }}/rc-out/**/*.txt
+            ${{ runner.temp }}/rc-out/**/*.json
+            ${{ runner.temp }}/rc-out/**/*.png
+            !${{ runner.temp }}/rc-out/**/data-home/**
+          retention-days: 7
+
   linux-pr:
     name: "Linux, PR 3908 head (item 6)"
     needs: plan
@@ -301,3 +402,75 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
           key: rc063-blacksmith-ubuntu-2404-pr3908-${{ needs.plan.outputs.pr_revision }}-${{ env.PACKAGE_VERSION }}
+
+      - name: Runtime libraries
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Scenario tools
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb x11-utils xdotool xterm openbox imagemagick tesseract-ocr python3-pil fonts-dejavu-core \
+            dbus pulseaudio pulseaudio-utils mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri ffmpeg >/dev/null
+          LD_LIBRARY_PATH="$PWD/rc-pkg/libs" ldd rc-pkg/bin/cap-gpui | grep 'not found' || true
+
+      - name: Restore the old-layout Recommended model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rc-models/old
+          key: rc063-parakeet-old-layout-v1
+
+      - name: Restore the High Accuracy model
+        if: ${{ contains(needs.plan.outputs.jobs, ',item6-full,') }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rc-models/full
+          key: rc063-parakeet-high-accuracy-v1
+
+      - name: Model files and the fixture clip
+        env:
+          WANT_FULL: ${{ contains(needs.plan.outputs.jobs, ',item6-full,') && 'full' || '' }}
+        run: |
+          bash rc/.github/rc-063/model_setup.sh "$RUNNER_TEMP/rc-models" \
+            apps/desktop-gpui/tests/data/transcription/audio/splice-13-am_fenrir.ogg ffmpeg $WANT_FULL
+
+      - name: Item 6, old layout, update note, download, Generate
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-old,') }}
+        env:
+          PYTHONPATH: rc/.github/rc-063
+          RC_PROJECT_DIR: ${{ runner.temp }}/rc-fix/clip
+          RC_OLD_MODEL: ${{ runner.temp }}/rc-models/old
+        run: |
+          bash rc/.github/rc-063/linux_session.sh python3 rc/.github/rc-063/model.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item6-old" old \
+            "$RUNNER_TEMP/rc-models/clip.wav" "The new editor has, er, a lot of, you know, small improvements."
+
+      - name: Item 6, fresh install, download, Generate
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-fresh,') }}
+        env:
+          PYTHONPATH: rc/.github/rc-063
+          RC_PROJECT_DIR: ${{ runner.temp }}/rc-fix/clip
+        run: |
+          bash rc/.github/rc-063/linux_session.sh python3 rc/.github/rc-063/model.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item6-fresh" fresh \
+            "$RUNNER_TEMP/rc-models/clip.wav" "The new editor has, er, a lot of, you know, small improvements."
+
+      - name: Item 6, High Accuracy, Generate
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-full,') }}
+        env:
+          PYTHONPATH: rc/.github/rc-063
+          RC_PROJECT_DIR: ${{ runner.temp }}/rc-fix/clip
+          RC_FULL_MODEL: ${{ runner.temp }}/rc-models/full
+        run: |
+          bash rc/.github/rc-063/linux_session.sh python3 rc/.github/rc-063/model.py "$PWD/rc-pkg" "$RUNNER_TEMP/rc-out/item6-full" full \
+            "$RUNNER_TEMP/rc-models/clip.wav" "The new editor has, er, a lot of, you know, small improvements."
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc063-linux-pr
+          path: |
+            ${{ runner.temp }}/rc-out/**/*.log
+            ${{ runner.temp }}/rc-out/**/*.txt
+            ${{ runner.temp }}/rc-out/**/*.json
+            ${{ runner.temp }}/rc-out/**/*.png
+            !${{ runner.temp }}/rc-out/**/data-home/**
+          retention-days: 7
