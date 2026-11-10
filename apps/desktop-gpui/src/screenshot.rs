@@ -66,6 +66,28 @@ static WAYLAND_SCREENSHOTS_ALLOWED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 fn capture(target: ScreenCaptureTarget, cx: &mut App) {
+    // A Wayland compositor keeps drawing a closed window while it animates it
+    // away, and the animation can outlast the pause below (KWin's fade does
+    // at slower animation speeds), which left the selection overlay in the
+    // screenshot. The overlays present an empty frame first and are closed
+    // once the compositor has shown it, so nothing of theirs is left to
+    // animate. The pause stays for what the compositor itself draws around a
+    // closing window, such as Hyprland's border.
+    #[cfg(target_os = "linux")]
+    if cap_recording::screenshot::uses_wayland_portal()
+        && let Some(emptied) = app_windows::empty_overlays_for_screenshot(cx)
+    {
+        cx.spawn(async move |cx| {
+            emptied.await;
+            cx.update(|cx| capture_without_overlays(target, cx));
+        })
+        .detach();
+        return;
+    }
+    capture_without_overlays(target, cx);
+}
+
+fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
