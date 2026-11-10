@@ -3,11 +3,11 @@ import type { ImageUpload } from "@cap/web-domain";
 import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { faEye } from "@fortawesome/free-solid-svg-icons/faEye";
 import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import { AnimalAvatar } from "@/components/AnimalAvatar";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { formatFromNow } from "@/lib/date-format";
 

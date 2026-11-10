@@ -22,7 +22,6 @@ import { classNames } from "@cap/utils";
 import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
 import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -37,6 +36,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";

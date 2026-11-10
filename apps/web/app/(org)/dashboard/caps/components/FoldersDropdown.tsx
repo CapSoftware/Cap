@@ -10,8 +10,8 @@ import { faFolderTree } from "@fortawesome/free-solid-svg-icons/faFolderTree";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
 import { faPencil } from "@fortawesome/free-solid-svg-icons/faPencil";
 import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type RefObject, useRef } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 interface FoldersDropdownProps {
 	id: string;

@@ -30,7 +30,6 @@ import { faFileCsv } from "@fortawesome/free-solid-svg-icons/faFileCsv";
 import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons/faTriangleExclamation";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
@@ -53,6 +52,7 @@ import {
 	type LoomCsvImportRowResult,
 } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	formatLoomCsvCell,
