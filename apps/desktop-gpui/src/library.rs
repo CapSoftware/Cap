@@ -1008,8 +1008,11 @@ fn is_in_use(error: &std::io::Error) -> bool {
     )
 }
 
+/// Shorter under test: a delete holds the thumbnail lock while it waits, the
+/// tests share that lock, and its other waiters give up after ten seconds.
 #[cfg(windows)]
-const IN_USE_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+const IN_USE_RETRY: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 2 } else { 5 });
 
 /// Antivirus or the search indexer can briefly open a file, so on Windows an
 /// in-use error is retried for a few seconds before it is reported.
