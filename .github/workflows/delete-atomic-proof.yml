@@ -148,6 +148,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --quiet pillow
+          ls rc-pkg/bin/ffmpeg.exe || choco install ffmpeg --no-progress -y > "$RUNNER_TEMP/choco-ffmpeg.log" 2>&1 || true
           choco install tesseract --no-progress -y > "$RUNNER_TEMP/choco.log" 2>&1 || tail -n 20 "$RUNNER_TEMP/choco.log"
           ls "/c/Program Files/Tesseract-OCR/tesseract.exe"
           git log -1 --format='source %H %s'
@@ -175,4 +176,5 @@ jobs:
             ${{ runner.temp }}/rc-out/**/*.log
             ${{ runner.temp }}/rc-out/**/*.txt
             ${{ runner.temp }}/rc-out/**/*.png
+            ${{ runner.temp }}/rc-out/**/*.mp4
           retention-days: 7

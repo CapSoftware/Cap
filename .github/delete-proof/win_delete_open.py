@@ -68,6 +68,39 @@ def child_texts(hwnd):
     return found
 
 
+def start_screen_recording(name):
+    import shutil
+    import subprocess
+
+    ffmpeg = os.path.join(package, "bin", "ffmpeg.exe")
+    if not os.path.exists(ffmpeg):
+        ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log("no ffmpeg, no screen recording")
+        return None
+    path = os.path.join(out, f"{name}.mp4")
+    handle = open(os.path.join(out, f"{name}.ffmpeg.log"), "wb")
+    process = subprocess.Popen(
+        [ffmpeg, "-y", "-f", "gdigrab", "-framerate", "10", "-i", "desktop", "-c:v", "libx264",
+         "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", path],
+        stdin=subprocess.PIPE, stdout=handle, stderr=subprocess.STDOUT,
+    )
+    log(f"screen recording to {path}")
+    return process
+
+
+def stop_screen_recording(process):
+    if not process:
+        return
+    try:
+        process.stdin.write(b"q")
+        process.stdin.flush()
+        process.wait(30)
+    except Exception as error:
+        log(f"stopping the screen recording: {error!r}")
+        process.kill()
+
+
 def listing(project):
     found = []
     for base, _, names in os.walk(project):
@@ -155,14 +188,14 @@ def delete_from_settings(name):
             confirmed = True
     deleted = None
     if confirmed:
-        deleted = app.wait_log(r"deleted a recording|deleting the recording failed", 30, since)
+        deleted = app.wait_log(r"deleted a recording|deleting the recording failed|recording deletion failed", 45, since)
         time.sleep(2)
     second = read_dialogs(f"{name}-settled") if confirmed else []
     return {
         "asked": confirmed,
         "said": first + second,
         "deleted": bool(deleted) and "deleted a recording" in deleted.group(0),
-        "log": rclib.grep(app.text()[since:], r"deleting the recording failed|deleted a recording"),
+        "log": rclib.grep(app.text()[since:], r"deleting the recording failed|recording deletion failed|deleted a recording"),
     }
 
 
@@ -205,6 +238,7 @@ if variant == "editor-closed":
     time.sleep(4)
     results.add("the editor was closed before Delete", app_window("editor") is None)
 
+screen = start_screen_recording(f"screen-{variant}")
 before = listing(project)
 results.note("files in the recording before Delete", f"{len(before)}: {before}")
 winui.raise_window(window["hwnd"])
@@ -233,49 +267,26 @@ else:
     text = " ".join(
         " ".join(entry["controls"]) + " " + entry["read"] + " " + entry["title"] for entry in outcome["said"]
     ).lower()
-    results.add("the recording was left untouched", left == before, f"{len(left)} of {len(before)} files")
-    results.add("the editor is still open", app_window("editor") is not None)
+    results.add("the app asked for confirmation", outcome["asked"])
+    results.add("the editor closed", app_window("editor") is None)
     results.add(
-        "the app said the recording is open in the editor",
-        "editor" in text,
-        said(outcome["said"]),
+        "Delete removed the whole recording",
+        outcome["deleted"] and not os.path.exists(project),
+        f"log line: {outcome['deleted']}; folder exists: {os.path.exists(project)}; {len(left)} of {len(before)} files left",
     )
     results.add(
-        "no raw OS error reached the log or the dialog",
+        "no raw OS error reached the log or a dialog",
         "os error" not in text and not rclib.grep(" ".join(outcome["log"]), r"os error"),
     )
-    dismiss()
-    editor = app_window("editor")
-    if editor:
-        winui.user32.PostMessageW(editor["hwnd"], 0x0010, 0, 0)
-        time.sleep(4)
-    results.add("the editor closed", app_window("editor") is None)
-    again = listing(project) if os.path.exists(project) else []
-    results.note(
-        "files in the recording once the editor closed",
-        f"{len(again)}; written by the closing editor: {sorted(set(again) - set(before))}",
-    )
-    results.add(
-        "closing the editor removed none of the recording's files",
-        set(before) <= set(again),
-        f"missing: {sorted(set(before) - set(again)) or 'none'}",
-    )
-    if set(before) <= set(again):
-        winui.raise_window(window["hwnd"])
-        time.sleep(1)
-        reload_recordings()
-        retry = delete_from_settings("3-delete-editor-closed")
-        results.note("what the app said with the editor closed", said(retry["said"]))
-        results.add(
-            "Delete with the editor closed removed the recording",
-            retry["deleted"] and not os.path.exists(project),
-            f"log line: {retry['deleted']}; folder exists: {os.path.exists(project)}",
-        )
-    else:
-        results.note("second delete skipped", f"the recording had {len(again)} files, {len(before)} before")
+    holding = os.path.join(rclib.long_path(recordings), ".cap-deleting")
+    staged = os.listdir(holding) if os.path.isdir(holding) else []
+    results.add("nothing left in the holding folder", not staged, str(staged))
+    time.sleep(3)
+    shot("3-after-delete")
 
 dismiss()
 shot("4-end")
+stop_screen_recording(screen)
 leftovers = [name for name in os.listdir(rclib.long_path(recordings)) if name not in (".upload-locks",)]
 results.note("what is left in the recordings folder", str(leftovers))
 results.add("no panic", "panicked at" not in app.text() and app.alive())
