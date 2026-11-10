@@ -56,6 +56,7 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 		}),
 	}) {}
 	return {
+		findScreenshotObjectKey: actual.findScreenshotObjectKey,
 		Storage: { getAccessForVideo: mocks.access },
 		VideosPolicy,
 		provideOptionalAuth: <A, E, R>(app: Effect.Effect<A, E, R>) =>
@@ -80,6 +81,18 @@ vi.mock("@/lib/video-download-permissions", () => ({
 vi.mock("@/lib/server", () => ({ runPromise: Effect.runPromise }));
 
 import { getVideoDownloadInfo } from "@/actions/videos/download";
+
+const screenshot = {
+	id: "video",
+	ownerId: "owner",
+	orgId: "organization",
+	name: "Diagram",
+	public: true,
+	isScreenshot: true,
+	source: { type: "webMP4" },
+	createdAt: new Date("2026-11-09T00:00:00Z"),
+	updatedAt: new Date("2026-11-09T00:00:00Z"),
+};
 
 describe("current video download", () => {
 	beforeEach(() => {
@@ -143,6 +156,97 @@ describe("current video download", () => {
 			);
 		},
 	);
+
+	it.each([
+		{ sourceType: "webMP4", extension: "png", upload: { phase: "uploading" } },
+		{ sourceType: "desktopMP4", extension: "jpg", upload: undefined },
+	])(
+		"downloads a $sourceType screenshot as $extension",
+		async ({ sourceType, extension, upload }) => {
+			const imageKey = `owner/video/screenshot/screen-capture.${extension}`;
+			const downloadUrl = `https://media.example.com/image.${extension}`;
+			const listObjects = vi.fn(() =>
+				Effect.succeed({ Contents: [{ Key: imageKey }] }),
+			);
+			mocks.rows = [
+				[{ ...screenshot, source: { type: sourceType } }],
+				upload ? [upload] : [],
+			];
+			mocks.sign.mockReturnValue(Effect.succeed(downloadUrl));
+			mocks.access.mockReturnValue(
+				Effect.succeed([
+					{
+						listObjects,
+						headObject: (key: string) =>
+							key === imageKey
+								? Effect.succeed({})
+								: Effect.fail(new Error("NoSuchKey")),
+						getSignedDownloadUrl: mocks.sign,
+					},
+				]),
+			);
+
+			expect(await getVideoDownloadInfo(Video.VideoId.make("video"))).toEqual({
+				success: true,
+				downloadUrl,
+				filename: `Diagram.${extension}`,
+			});
+			expect(listObjects).toHaveBeenCalledExactlyOnceWith({
+				prefix: "owner/video/",
+			});
+			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
+				imageKey,
+				`Diagram.${extension}`,
+			);
+		},
+	);
+
+	it("does not sign a download when the screenshot is missing", async () => {
+		mocks.rows = [[screenshot], []];
+		mocks.access.mockReturnValue(
+			Effect.succeed([
+				{
+					listObjects: () => Effect.succeed({ Contents: [] }),
+					headObject: () => Effect.fail(new Error("NoSuchKey")),
+					getSignedDownloadUrl: mocks.sign,
+				},
+			]),
+		);
+
+		expect(
+			await getVideoDownloadInfo(Video.VideoId.make("video")),
+		).toMatchObject({
+			success: false,
+		});
+		expect(mocks.sign).not.toHaveBeenCalled();
+	});
+
+	it("checks screenshot passwords before accessing storage", async () => {
+		mocks.userId = "member";
+		mocks.rows = [[{ ...screenshot, password: "video-hash" }], []];
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(
+			await getVideoDownloadInfo(Video.VideoId.make("video")),
+		).toMatchObject({
+			success: false,
+		});
+		expect(mocks.access).not.toHaveBeenCalled();
+		expect(mocks.sign).not.toHaveBeenCalled();
+	});
+
+	it("keeps an unfinished video blocked", async () => {
+		mocks.rows = [
+			[{ ...screenshot, isScreenshot: false }],
+			[{ phase: "uploading" }],
+		];
+
+		expect(await getVideoDownloadInfo(Video.VideoId.make("video"))).toEqual({
+			success: false,
+			error: "Video is still processing. Try again once it has finished.",
+		});
+		expect(mocks.access).not.toHaveBeenCalled();
+	});
 });
 
 describe.each(["current", "original"] as const)(
