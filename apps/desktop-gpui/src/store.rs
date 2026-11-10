@@ -1143,6 +1143,17 @@ pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIso
     section.insert("isolation".into(), serde_json::to_value(isolation).unwrap());
     set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
 }
+pub const EDITOR_PREFERENCES: &str = "editor_preferences";
+pub const AUDIO_SCRUB_KEY: &str = "audioScrub";
+
+pub fn audio_scrub_enabled() -> bool {
+    bool_at(&store_section(EDITOR_PREFERENCES), AUDIO_SCRUB_KEY, true)
+}
+
+pub fn set_audio_scrub_enabled(enabled: bool) -> bool {
+    set_store_setting(EDITOR_PREFERENCES, AUDIO_SCRUB_KEY, Value::Bool(enabled))
+}
+
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
 /// the section the tray's mode picker reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
