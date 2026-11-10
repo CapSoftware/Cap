@@ -6775,83 +6775,124 @@ pub(crate) fn request_editor_deletion(
         ) {
             return;
         }
-        let prepared = cx.update(|cx| {
-            editor_deletion_allowed(&key, handle, cx)?;
-            let ownership = cap_recording::upload_resume::UploadLock::acquire(&key)
-                .map_err(tr::dialog::delete_recording::in_use)?;
+        close_editor_and_delete(key, handle, cx).await;
+    })
+    .detach();
+}
+
+/// Deletes a recording the user confirmed from the library (the Settings
+/// recordings row or a main window library card). When an editor window has
+/// it open, that editor is closed the way its own Delete closes it, and the
+/// delete starts once the engine has let go of the media, so the delete is
+/// not refused and does not pull the folder from under a live editor.
+/// Returns false when no editor has the recording open, leaving the delete to
+/// the caller.
+pub(crate) fn delete_closing_open_editor(project_path: &Path, cx: &mut App) -> bool {
+    let Some(handle) = editor_window_handle(project_path, cx) else {
+        return false;
+    };
+    let key = editor_key(project_path);
+    cx.spawn(async move |cx| close_editor_and_delete(key, handle, cx).await)
+        .detach();
+    true
+}
+
+/// Closes an editor window so its project can be deleted. Refuses, leaving
+/// the window open and registered, while the editor is busy with something
+/// that must not be cut short (an export, a clip import, still opening) or
+/// cannot save its last edit.
+fn close_editor_for_deletion(
+    key: &Path,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut App,
+) -> Result<Option<Arc<cap_editor::EditorInstance>>, String> {
+    let windows = cx.global_mut::<AppWindows>();
+    windows.deleting_editors.insert(key.to_path_buf());
+    windows.editors.retain(|(_, current)| *current != handle);
+    let result = handle.update(cx, |view, window, cx| {
+        let instance = view.prepare_for_deletion(cx)?;
+        window.remove_window();
+        Ok::<_, String>(instance)
+    });
+    match result {
+        Ok(Ok(instance)) => Ok(instance),
+        Ok(Err(error)) => {
             let windows = cx.global_mut::<AppWindows>();
-            windows.deleting_editors.insert(key.clone());
-            windows.editors.retain(|(_, current)| *current != handle);
-            let result = handle.update(cx, |view, window, cx| {
-                let instance = view.prepare_for_deletion(cx)?;
-                window.remove_window();
-                Ok::<_, String>(instance)
-            });
-            match result {
-                Ok(Ok(instance)) => {
-                    restore_after_editor_close(&key, cx);
-                    Ok((instance, ownership))
-                }
-                Ok(Err(error)) => {
-                    let windows = cx.global_mut::<AppWindows>();
-                    windows.deleting_editors.remove(&key);
-                    windows.editors.push((key.clone(), handle));
-                    Err(error)
-                }
-                Err(error) => {
-                    cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
-                    Err(tr::dialog::delete_recording::close_failed(error))
-                }
-            }
-        });
-        let (instance, ownership) = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                platform::alert_dialog(tr::dialog::delete_recording::retained_title(), &error);
-                return;
-            }
-        };
-        let deleting = key.clone();
-        let task = cx.update(|cx| {
-            gpui_tokio::Tokio::spawn(cx, async move {
-                delete_after_editor_cleanup(
-                    async move {
-                        if let Some(instance) = instance {
-                            release_editor_instance(instance).await;
-                        }
-                        drop(ownership);
-                        Ok(())
-                    },
-                    crate::upload::queue::delete_recording(deleting),
-                )
-                .await
-            })
-        });
-        let notice = cx
-            .background_executor()
-            .timer(std::time::Duration::from_secs(10));
-        futures_util::pin_mut!(task, notice);
-        let result = match futures_util::future::select(&mut task, &mut notice).await {
-            futures_util::future::Either::Left((result, _)) => result,
-            futures_util::future::Either::Right(_) => {
-                platform::alert_dialog(
-                    tr::dialog::delete_recording::finishing_title(),
-                    tr::dialog::delete_recording::finishing_body(),
-                );
-                task.await
-            }
+            windows.deleting_editors.remove(key);
+            windows.editors.push((key.to_path_buf(), handle));
+            Err(error)
         }
-        .unwrap_or_else(|error| Err(tr::dialog::delete_recording::failed(error)));
-        cx.update(|cx| {
-            cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
-            refresh_library_after_delete(cx);
-        });
-        if let Err(error) = result {
+        Err(error) => {
+            cx.global_mut::<AppWindows>().deleting_editors.remove(key);
+            Err(tr::dialog::delete_recording::close_failed(error))
+        }
+    }
+}
+
+async fn close_editor_and_delete(
+    key: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut gpui::AsyncApp,
+) {
+    let prepared = cx.update(|cx| {
+        editor_deletion_allowed(&key, handle, cx)?;
+        let ownership = cap_recording::upload_resume::UploadLock::acquire(&key)
+            .map_err(tr::dialog::delete_recording::in_use)?;
+        let instance = close_editor_for_deletion(&key, handle, cx)?;
+        restore_after_editor_close(&key, cx);
+        Ok::<_, String>((instance, ownership))
+    });
+    let (instance, ownership) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            platform::alert_dialog(tr::dialog::delete_recording::retained_title(), &error);
+            return;
+        }
+    };
+    let deleting = key.clone();
+    let task = cx.update(|cx| {
+        gpui_tokio::Tokio::spawn(cx, async move {
+            delete_after_editor_cleanup(
+                async move {
+                    if let Some(instance) = instance {
+                        release_editor_instance(instance).await;
+                    }
+                    drop(ownership);
+                    Ok(())
+                },
+                crate::upload::queue::delete_recording(deleting),
+            )
+            .await
+        })
+    });
+    let notice = cx
+        .background_executor()
+        .timer(std::time::Duration::from_secs(10));
+    futures_util::pin_mut!(task, notice);
+    let result = match futures_util::future::select(&mut task, &mut notice).await {
+        futures_util::future::Either::Left((result, _)) => result,
+        futures_util::future::Either::Right(_) => {
+            platform::alert_dialog(
+                tr::dialog::delete_recording::finishing_title(),
+                tr::dialog::delete_recording::finishing_body(),
+            );
+            task.await
+        }
+    }
+    .unwrap_or_else(|error| Err(tr::dialog::delete_recording::failed(error)));
+    cx.update(|cx| {
+        cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+        refresh_library_after_delete(cx);
+    });
+    match result {
+        Ok(()) => {
+            tracing::info!(path = %key.display(), "deleted a recording after closing its editor")
+        }
+        Err(error) => {
             tracing::error!(path = %key.display(), %error, "recording deletion failed");
             platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
         }
-    })
-    .detach();
+    }
 }
 
 async fn delete_after_editor_cleanup(
@@ -8001,6 +8042,107 @@ mod tests {
         .await;
         assert_eq!(result, Ok(()));
         assert!(!bundle.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_app_windows(editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>) -> AppWindows {
+        AppWindows {
+            main: WindowHandle::new(u64::MAX.into()),
+            controls: None,
+            camera: None,
+            settings: None,
+            onboarding: None,
+            mode_select: None,
+            teleprompter: None,
+            overlays: Vec::new(),
+            editors,
+            deleting_editors: HashSet::new(),
+            preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
+            screenshot_editors: Vec::new(),
+            main_hidden_for_picker: false,
+            main_visible_before_picker: false,
+            main_hidden_by_app: false,
+            main_closed_by_user: false,
+            editor_hidden_for_picker: None,
+            camera_park: CameraPark::default(),
+            clean_capture: None,
+            clean_capture_generation: 0,
+        }
+    }
+
+    /// Deleting from the library a recording an editor window has open closes
+    /// that editor first. An editor that is still opening keeps the window and
+    /// the project, and nothing is deleted. Once it can close, the window goes,
+    /// it lets go of the project and the whole folder is removed.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_library_delete_closes_the_editor_holding_the_recording(cx: &mut gpui::TestAppContext) {
+        let library = tempfile::tempdir().unwrap();
+        let dirs = [library.path().to_path_buf()];
+        let project_path = library.path().join("open.cap");
+        let segment = project_path.join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment).unwrap();
+        let files = [
+            project_path.join("recording-meta.json"),
+            project_path.join("project-config.json"),
+            segment.join("display.mp4"),
+            segment.join("cursor.json"),
+        ];
+        for file in &files {
+            std::fs::write(file, b"recording bytes").unwrap();
+        }
+        let key = editor_key(&project_path);
+        let held = crate::library::ProjectOpenInEditor::begin(&key).unwrap();
+        let handle = cx.add_window({
+            let key = key.clone();
+            move |window, cx| {
+                let mut editor = EditorWindow::new(key, window, cx);
+                editor.hold_project(held);
+                editor
+            }
+        });
+        cx.update(|cx| cx.set_global(test_app_windows(vec![(key.clone(), handle)])));
+
+        let opening = cx.update(|cx| close_editor_for_deletion(&key, handle, cx));
+        assert_eq!(
+            opening.err().as_deref(),
+            Some(tr::editor::window::busy::opening())
+        );
+        cx.update(|cx| {
+            let windows = cx.global::<AppWindows>();
+            assert_eq!(editor_window_handle(&project_path, cx), Some(handle));
+            assert!(windows.deleting_editors.is_empty());
+        });
+        assert!(
+            handle.update(cx, |_, _, _| ()).is_ok(),
+            "the editor stays open"
+        );
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        assert!(files.iter().all(|file| file.is_file()));
+
+        handle
+            .update(cx, |editor, window, cx| {
+                editor.set_error("unreadable".into(), window, cx)
+            })
+            .unwrap();
+        let closed = cx.update(|cx| close_editor_for_deletion(&key, handle, cx));
+        assert!(matches!(closed, Ok(None)));
+        assert!(
+            handle.update(cx, |_, _, _| ()).is_err(),
+            "the editor closed"
+        );
+        cx.update(|cx| {
+            assert_eq!(editor_window_handle(&project_path, cx), None);
+            assert!(cx.global::<AppWindows>().deleting_editors.contains(&key));
+        });
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Ok(())
+        );
+        assert!(!project_path.exists());
     }
 
     #[tokio::test]

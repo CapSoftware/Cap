@@ -800,7 +800,8 @@ pub fn ensure_not_recording_in_progress(path: &Path) -> Result<(), String> {
 /// Marks a project folder as open in an editor window until dropped. The
 /// editor keeps the project's media open and writes its edits back into the
 /// folder, so the library refuses to delete it from under the window. The
-/// editor's own Delete closes the window, which lets go, before it deletes.
+/// editor's own Delete and a delete from the Settings recordings row or a
+/// library card close the window, which lets go, before they delete.
 pub struct ProjectOpenInEditor(u64);
 
 impl ProjectOpenInEditor {

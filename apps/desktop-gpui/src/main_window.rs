@@ -5237,13 +5237,6 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |_, cx| {
-            if let Err(error) = crate::library::ensure_not_open_in_editor(&path) {
-                crate::platform::alert_dialog(
-                    tr::dialog::delete_recording::retained_title(),
-                    &error,
-                );
-                return;
-            }
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_recording_confirm(),
@@ -5251,6 +5244,14 @@ impl MainWindow {
                 tr::common::no(),
                 false,
             ) {
+                return;
+            }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
                 return;
             }
             let Ok(task) = cx.update(|_, cx| {
@@ -5261,6 +5262,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))

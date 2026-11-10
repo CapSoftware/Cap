@@ -1191,13 +1191,6 @@ impl SettingsWindow {
     /// right thread and the right borrow state.
     fn delete_recording(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |_, cx| {
-            if let Err(error) = crate::library::ensure_not_open_in_editor(&path) {
-                crate::platform::alert_dialog(
-                    tr::dialog::delete_recording::retained_title(),
-                    &error,
-                );
-                return;
-            }
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_recording_confirm(),
@@ -1206,6 +1199,14 @@ impl SettingsWindow {
                 false,
             );
             if !confirmed {
+                return;
+            }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
                 return;
             }
 
@@ -1217,6 +1218,7 @@ impl SettingsWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             tracing::info!(path = %path.display(), "deleted a recording");
