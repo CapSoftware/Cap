@@ -7,7 +7,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 export type PublicShareVideoCandidate = {
@@ -19,6 +19,7 @@ export type PublicShareVideoCandidate = {
 	hasPassword: boolean;
 	hasInheritedPassword: boolean;
 	allowedEmailDomain: string | null;
+	linkOpenToAnyone: boolean;
 	isScreenshot: boolean;
 	hasActiveUpload: boolean;
 	sourceType:
@@ -40,6 +41,7 @@ export type PublicShareVideo = Omit<
 	| "hasPassword"
 	| "hasInheritedPassword"
 	| "allowedEmailDomain"
+	| "linkOpenToAnyone"
 	| "isScreenshot"
 	| "hasActiveUpload"
 	| "jobStatus"
@@ -52,7 +54,8 @@ export const isPublicShareVideoCandidateEligible = (
 	video.public &&
 	!video.hasPassword &&
 	!video.hasInheritedPassword &&
-	(video.allowedEmailDomain?.trim().length ?? 0) === 0 &&
+	((video.allowedEmailDomain?.trim().length ?? 0) === 0 ||
+		video.linkOpenToAnyone) &&
 	!video.isScreenshot &&
 	!video.hasActiveUpload &&
 	(video.sourceType !== "MediaConvert" ||
@@ -73,6 +76,8 @@ export async function getPublicShareVideo(
 				Boolean,
 			),
 			allowedEmailDomain: organizations.allowedEmailDomain,
+			videoSettings: videos.settings,
+			organizationSettings: organizations.settings,
 			isScreenshot: videos.isScreenshot,
 			hasActiveUpload:
 				sql<boolean>`${videoUploads.videoId} IS NOT NULL AND ${videoUploads.phase} <> 'complete'`.mapWith(
@@ -109,8 +114,13 @@ export async function getPublicShareVideo(
 		.where(and(eq(spaceVideos.videoId, videoId), isNotNull(spaces.password)))
 		.limit(1);
 
+	const { videoSettings, organizationSettings, ...rest } = video;
 	const candidate: PublicShareVideoCandidate = {
-		...video,
+		...rest,
+		linkOpenToAnyone: Video.isLinkOpenToAnyone(
+			videoSettings,
+			organizationSettings,
+		),
 		hasInheritedPassword: Boolean(inheritedPassword),
 	};
 
