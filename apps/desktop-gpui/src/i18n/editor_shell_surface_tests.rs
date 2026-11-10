@@ -576,7 +576,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::editor::tabs::captions::model_updated_description(),
-            "Download the new version for more accurate transcripts.",
+            "We recommend the new version. It is more accurate and catches short recordings the old one missed.",
         ),
         (tr::editor::tabs::captions::position(), "Position"),
         (tr::editor::tabs::captions::preset::classic(), "Classic"),
