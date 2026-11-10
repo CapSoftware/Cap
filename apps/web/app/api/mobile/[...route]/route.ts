@@ -76,6 +76,7 @@ import {
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { pushSessionHash } from "@/lib/mobile-push";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -153,6 +154,11 @@ type MobileOrganizationIconInput =
 	(typeof Mobile.MobileOrganizationIconInput)["Type"];
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
+type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
+type MobileNotificationPreferences =
+	(typeof Mobile.MobileNotificationPreferences)["Type"];
+type MobileNotificationPreferencesInput =
+	(typeof Mobile.MobileNotificationPreferencesInput)["Type"];
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodePattern = /^\d{6}$/;
@@ -715,6 +721,144 @@ const getBlockedUserIds = (preferences: unknown) => {
 		),
 	);
 };
+
+// Stored as the web's "pause" flags, so email, the web bell and the app share one setting.
+const notificationPauseKeys = {
+	comments: "pauseComments",
+	replies: "pauseReplies",
+	views: "pauseViews",
+	anonymousViews: "pauseAnonViews",
+	reactions: "pauseReactions",
+} as const satisfies Record<keyof MobileNotificationPreferences, string>;
+
+const notificationPreferenceKeys = Object.keys(
+	notificationPauseKeys,
+) as (keyof MobileNotificationPreferences)[];
+
+const toMobileNotificationPreferences = (
+	preferences: unknown,
+): MobileNotificationPreferences => {
+	const stored = getMetadataRecord(
+		getMetadataRecord(preferences).notifications,
+	);
+	return {
+		comments: stored.pauseComments !== true,
+		replies: stored.pauseReplies !== true,
+		views: stored.pauseViews !== true,
+		anonymousViews: stored.pauseAnonViews !== true,
+		reactions: stored.pauseReactions !== true,
+	};
+};
+
+const getNotificationPreferences = Effect.fn(
+	"Mobile.getNotificationPreferences",
+)(function* () {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	const [row] = yield* database.use((db) =>
+		db
+			.select({ preferences: Db.users.preferences })
+			.from(Db.users)
+			.where(eq(Db.users.id, user.id))
+			.limit(1),
+	);
+	if (!row) return yield* Effect.fail(new HttpApiError.NotFound());
+	return toMobileNotificationPreferences(row.preferences);
+});
+
+const updateNotificationPreferences = Effect.fn(
+	"Mobile.updateNotificationPreferences",
+)(function* (input: MobileNotificationPreferencesInput) {
+	const user = yield* CurrentUser;
+	const patch: Record<string, boolean> = {};
+	for (const key of notificationPreferenceKeys) {
+		const enabled = input[key];
+		if (enabled !== undefined) patch[notificationPauseKeys[key]] = !enabled;
+	}
+	if (Object.keys(patch).length > 0) {
+		const defaults = Object.fromEntries(
+			Object.values(notificationPauseKeys).map((key) => [key, false]),
+		);
+		const database = yield* Database;
+		// One statement so a concurrent web change to another flag isn't lost, and every
+		// flag stays present for the web settings schema.
+		yield* database.use((db) =>
+			db
+				.update(Db.users)
+				.set({
+					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+				})
+				.where(eq(Db.users.id, user.id)),
+		);
+	}
+	return yield* getNotificationPreferences();
+});
+
+const MAX_PUSH_TOKENS_PER_USER = 10;
+
+const registerPushToken = Effect.fn("Mobile.registerPushToken")(function* (
+	input: MobilePushTokenInput,
+	authorization: string | undefined,
+) {
+	const user = yield* CurrentUser;
+	const apiKey = parseBearerToken(authorization);
+	if (!apiKey) return yield* Effect.fail(new HttpApiError.BadRequest());
+	const database = yield* Database;
+	const token = input.token.toLowerCase();
+	const sessionHash = pushSessionHash(apiKey);
+	yield* database.use(async (db) => {
+		// A token belongs to one install; signing in as someone else on the same phone moves it.
+		await db
+			.insert(Db.mobilePushTokens)
+			.values({
+				id: nanoId(),
+				userId: user.id,
+				token,
+				sessionHash,
+				environment: input.environment,
+			})
+			.onDuplicateKeyUpdate({
+				set: { userId: user.id, sessionHash, environment: input.environment },
+			});
+		const stale = await db
+			.select({ id: Db.mobilePushTokens.id })
+			.from(Db.mobilePushTokens)
+			.where(eq(Db.mobilePushTokens.userId, user.id))
+			.orderBy(
+				desc(Db.mobilePushTokens.updatedAt),
+				desc(Db.mobilePushTokens.id),
+			)
+			.limit(1000)
+			.offset(MAX_PUSH_TOKENS_PER_USER);
+		if (stale.length > 0) {
+			await db.delete(Db.mobilePushTokens).where(
+				inArray(
+					Db.mobilePushTokens.id,
+					stale.map((row) => row.id),
+				),
+			);
+		}
+	});
+	return { success: true as const };
+});
+
+const removePushToken = Effect.fn("Mobile.removePushToken")(function* (
+	token: string,
+) {
+	const user = yield* CurrentUser;
+	const database = yield* Database;
+	yield* database.use((db) =>
+		db
+			.delete(Db.mobilePushTokens)
+			.where(
+				and(
+					eq(Db.mobilePushTokens.token, token.toLowerCase()),
+					eq(Db.mobilePushTokens.userId, user.id),
+				),
+			),
+	);
+	return { success: true as const };
+});
 
 const getCurrentBlockedUserIds = Effect.fn("Mobile.getBlockedUserIds")(
 	function* () {
@@ -3531,9 +3675,22 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								const token = parseBearerToken(headers.authorization);
 								if (!token)
 									return yield* Effect.fail(new HttpApiError.Unauthorized());
-								yield* database.use((db) =>
-									db.delete(Db.authApiKeys).where(eq(Db.authApiKeys.id, token)),
-								);
+								yield* database.use(async (db) => {
+									await db
+										.delete(Db.authApiKeys)
+										.where(eq(Db.authApiKeys.id, token));
+									// Delivery already skips tokens whose session is gone; this only tidies up,
+									// so it must never stop the key above from being revoked.
+									await db
+										.delete(Db.mobilePushTokens)
+										.where(
+											eq(
+												Db.mobilePushTokens.sessionHash,
+												pushSessionHash(token),
+											),
+										)
+										.catch(() => undefined);
+								});
 								return { success: true as const };
 							}),
 						),
@@ -3543,6 +3700,18 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("blockUser", ({ payload }) =>
 						withMappedErrors(blockMobileUser(payload.userId)),
+					)
+					.handle("getNotificationPreferences", () =>
+						withMappedErrors(getNotificationPreferences()),
+					)
+					.handle("updateNotificationPreferences", ({ payload }) =>
+						withMappedErrors(updateNotificationPreferences(payload)),
+					)
+					.handle("registerPushToken", ({ payload, headers }) =>
+						withMappedErrors(registerPushToken(payload, headers.authorization)),
+					)
+					.handle("removePushToken", ({ payload }) =>
+						withMappedErrors(removePushToken(payload.token)),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>

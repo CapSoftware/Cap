@@ -104,6 +104,7 @@ final class RecordingCoordinator {
             let inApp = UIApplication.shared.applicationState == .active
             Task { await UploadActivities.shared.finish(id: job.id, phase: .done, dismissImmediately: inApp) }
             if let session { refreshLibrary(session) }
+            PushNotifications.shared.askAfterFirstUpload()
         case let .failed(job, message):
             Self.log.error("Recording upload failed for \(job.id, privacy: .public)")
             recent.failed(jobId: job.id, message: message)

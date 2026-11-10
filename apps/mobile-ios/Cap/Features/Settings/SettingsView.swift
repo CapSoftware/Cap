@@ -84,6 +84,9 @@ struct SettingsView: View {
             }
 
             Section("App") {
+                NavigationLink(value: Route.notifications) {
+                    Label("Notifications", systemImage: "bell")
+                }
                 // A plain account link for every storefront: the dashboard's home, never billing, and nothing near the
                 // plan's limit, so it isn't a call to buy outside the App Store (App Review 3.1.1(a)).
                 Button {
