@@ -33,6 +33,9 @@ final class EditorModel {
     /// Plays the untouched video, shown while a trim handle is dragged so frames outside the edit can be seen.
     let sourcePlayer = AVPlayer()
     private(set) var isTrimming = false
+    /// The untouched video covers the preview from the first frame a trim lands on until the rebuilt preview has
+    /// its own, so neither black nor the old edit shows in between.
+    private(set) var showsSource = false
 
     private(set) var outputTime: Double = 0
     private(set) var isPlaying = false
@@ -41,6 +44,10 @@ final class EditorModel {
 
     private(set) var thumbnails: [UIImage] = []
     static let thumbnailCount = 24
+    private(set) var detailThumbnails: [Int: UIImage] = [:]
+    private static let detailCount = thumbnailCount * Int(TrimTrack.zoomFactor)
+    private var detailTask: Task<Void, Never>?
+    private(set) var videoAspect: CGFloat = 9.0 / 16
 
     private var asset: AVURLAsset?
     private var videoTrack: AVAssetTrack?
@@ -50,6 +57,8 @@ final class EditorModel {
     private var timeObservers: [Any] = []
     private var rebuildGeneration = 0
     private var endObserver: NSObjectProtocol?
+    private var itemReady: NSKeyValueObservation?
+    private var rebuildPending = false
     private var thumbnailTask: Task<Void, Never>?
     let metrics = EditorMetrics()
 
@@ -74,6 +83,10 @@ final class EditorModel {
         guard let selectedClip else { return false }
         return timeline.deleting(clipAt: selectedClip) != nil
     }
+    var activeClip: Int? {
+        if let selectedClip, timeline.clips.indices.contains(selectedClip) { return selectedClip }
+        return timeline.clips.count == 1 ? 0 : nil
+    }
 
     // MARK: Loading
 
@@ -94,6 +107,9 @@ final class EditorModel {
             let audio = try await audioTracks.first
             assetDuration = try await duration
             videoTransform = (try? await video.load(.preferredTransform)) ?? .identity
+            if let size = try? await video.load(.naturalSize).applying(videoTransform), size.height != 0 {
+                videoAspect = min(max(abs(size.width / size.height), 0.4), 2.4)
+            }
             self.asset = asset
             videoTrack = video
             audioTrack = audio
@@ -159,10 +175,48 @@ final class EditorModel {
         }
     }
 
-    func thumbnail(atSource time: Double) -> UIImage? {
+    func thumbnail(atSource time: Double, detailed: Bool = false) -> UIImage? {
         guard !thumbnails.isEmpty, timeline.sourceDuration > 0 else { return nil }
-        let index = Int((time / timeline.sourceDuration) * Double(thumbnails.count))
+        let fraction = time / timeline.sourceDuration
+        if detailed, let image = detailThumbnails[Int(fraction * Double(Self.detailCount))] { return image }
+        let index = Int(fraction * Double(thumbnails.count))
         return thumbnails[min(max(0, index), thumbnails.count - 1)]
+    }
+
+    /// The expanded strip shows a fifth of the video, so it needs frames five times closer together than the
+    /// filmstrip has. Only the stretch around `time` is decoded.
+    func loadDetailThumbnails(aroundSource time: Double) {
+        guard let asset, timeline.sourceDuration > 0 else { return }
+        let duration = timeline.sourceDuration
+        let step = duration / Double(Self.detailCount)
+        let centre = Int(time / step)
+        let wanted = (centre - Self.thumbnailCount...centre + Self.thumbnailCount)
+            .filter { $0 >= 0 && $0 < Self.detailCount && detailThumbnails[$0] == nil }
+            .sorted { abs($0 - centre) < abs($1 - centre) }
+        guard !wanted.isEmpty else { return }
+        let scale = UITraitCollection.current.displayScale
+        detailTask?.cancel()
+        detailTask = Task { [weak self] in
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 96 * scale, height: 96 * scale)
+            let tolerance = CMTime(seconds: step / 2, preferredTimescale: 600)
+            generator.requestedTimeToleranceBefore = tolerance
+            generator.requestedTimeToleranceAfter = tolerance
+            let times = wanted.map { CMTime(seconds: (Double($0) + 0.5) * step, preferredTimescale: 600) }
+            for await result in generator.images(for: times) {
+                guard let self, !Task.isCancelled else { return }
+                guard let image = try? result.image,
+                      let index = times.firstIndex(where: { $0 == result.requestedTime })
+                else { continue }
+                self.detailThumbnails[wanted[index]] = UIImage(cgImage: image)
+            }
+        }
+    }
+
+    func cancelDetailThumbnails() {
+        detailTask?.cancel()
+        detailTask = nil
     }
 
     // MARK: Composition
@@ -194,7 +248,6 @@ final class EditorModel {
         item.preferredForwardBufferDuration = 2
         metrics.record("rebuildMs", (CACurrentMediaTime() - started) * 1000)
 
-        let wasPlaying = isPlaying
         let target = min(max(0, output), timeline.outputDuration)
         outputTime = target
         rebuildGeneration += 1
@@ -202,19 +255,39 @@ final class EditorModel {
         // The first build has nothing on screen to keep, so it loads straight into the visible player.
         let next = player.currentItem == nil ? activePlayer : 1 - activePlayer
         let incoming = players[next]
+        // The old edit stops where it is. `isPlaying` carries on as the intent, and Play or a seek made before the
+        // new preview is up is applied to it when it arrives.
+        rebuildPending = true
+        player.pause()
         incoming.pause()
         incoming.replaceCurrentItem(with: item)
-        incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+        // A seek on an item that isn't ready yet completes at once, with nothing decoded, and swapping on that
+        // showed black until the frame arrived. Once the item is ready, the seek completing means the frame is there.
+        itemReady?.invalidate()
+        itemReady = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            guard item.status != .unknown else { return }
             Task { @MainActor in
-                guard let self, finished, generation == self.rebuildGeneration else { return }
-                let outgoing = self.players[self.activePlayer]
-                self.activePlayer = next
-                if outgoing !== incoming {
-                    outgoing.pause()
-                    outgoing.replaceCurrentItem(with: nil)
+                guard let self, generation == self.rebuildGeneration, self.itemReady != nil else { return }
+                self.itemReady?.invalidate()
+                self.itemReady = nil
+                incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, generation == self.rebuildGeneration else { return }
+                        if !self.isTrimming { self.showsSource = false }
+                        let outgoing = self.players[self.activePlayer]
+                        self.activePlayer = next
+                        self.rebuildPending = false
+                        if outgoing !== incoming {
+                            outgoing.pause()
+                            outgoing.replaceCurrentItem(with: nil)
+                        }
+                        if abs(self.outputTime - target) > 0.02 {
+                            incoming.seek(to: CMTime(seconds: self.outputTime, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                        }
+                        if self.isPlaying { incoming.play() }
+                        self.metrics.record("rebuildToFrameMs", (CACurrentMediaTime() - started) * 1000)
+                    }
                 }
-                if wasPlaying { incoming.play() }
-                self.metrics.record("rebuildToFrameMs", (CACurrentMediaTime() - started) * 1000)
             }
         }
     }
@@ -222,16 +295,21 @@ final class EditorModel {
     private func show(_ next: EditTimeline, previous: EditTimeline, seekTo output: Double) {
         if next.playsSame(as: previous) {
             outputTime = min(max(0, output), next.outputDuration)
+            showsSource = false
             return
         }
-        try? rebuild(seekTo: output)
+        do {
+            try rebuild(seekTo: output)
+        } catch {
+            showsSource = false
+        }
     }
 
     private func observePlayback() {
         timeObservers = players.enumerated().map { index, player in
             player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
                 MainActor.assumeIsolated {
-                    guard let self, index == self.activePlayer, !self.isScrubbing, !self.isTrimming else { return }
+                    guard let self, index == self.activePlayer, !self.isScrubbing, !self.isTrimming, !self.rebuildPending else { return }
                     self.outputTime = time.seconds.isFinite ? time.seconds : 0
                     self.isPlaying = player.rate != 0
                 }
@@ -249,6 +327,10 @@ final class EditorModel {
     // MARK: Playback
 
     func togglePlay() {
+        if rebuildPending {
+            isPlaying.toggle()
+            return
+        }
         if isPlaying {
             player.pause()
             isPlaying = false
@@ -261,8 +343,7 @@ final class EditorModel {
 
     private(set) var isScrubbing = false
     private var seekInFlight = false
-    private var pendingSeek: (source: Bool, time: Double, exact: Bool)?
-    private var seekIssuedAt: CFTimeInterval = 0
+    private var pendingSeek: Seek?
     private var settleTask: Task<Void, Never>?
 
     func beginScrub() {
@@ -288,45 +369,101 @@ final class EditorModel {
         player.seek(to: CMTime(seconds: outputTime, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    /// While a finger moves, show the nearest earlier keyframe: it decodes on its own, so the picture keeps up. When the
-    /// finger rests or lifts, one exact seek lands on the frame. Exact seeks on Cap's 250-frame GOPs decode up to
-    /// eight seconds of video each, too slow to follow a drag.
-    private func scrubSeek(source: Bool, to time: Double) {
-        chaseSeek(source: source, to: time, exact: false)
-        settle(source: source, to: time, after: 0.12)
+    func scrub(toSource time: Double) {
+        scrub(toOutput: timeline.outputTime(forSource: time))
     }
+
+    func seek(toSource time: Double) {
+        seek(toOutput: timeline.outputTime(forSource: time))
+    }
+
+    var playheadSource: Double { displayedTimeline.sourceTime(forOutput: outputTime) }
+
+    /// A drag shows the exact frame under the finger for as long as exact seeks keep up with it, which is what makes
+    /// a trim point choosable. Cap's 250-frame GOPs mean an exact seek can decode up to eight seconds of video, so
+    /// when they run slow the nearest earlier keyframe is shown while the finger moves and one exact seek lands on
+    /// the frame once it rests or lifts. A trim is chosen by its frame, so it waits longer for the exact one.
+    private func scrubSeek(source: Bool, to time: Double, metric: String = "scrubFrameMs") {
+        let budget = source ? 0.4 : 0.2
+        if exactSeekCost <= budget {
+            settleTask?.cancel()
+            chaseSeek(Seek(source: source, time: time, exact: true, metric: metric, budget: budget))
+        } else {
+            chaseSeek(Seek(source: source, time: time, exact: false, metric: metric, budget: budget))
+            settle(source: source, to: time, after: 0.12)
+        }
+    }
+
+    private struct Seek {
+        let source: Bool
+        let time: Double
+        let exact: Bool
+        let metric: String
+        var budget: Double?
+    }
+
+    /// Seconds an exact seek has been taking lately. A hidden player seeks without decoding, so this can only be
+    /// learned from seeks made while dragging.
+    private var exactSeekCost: Double = 0
+    private var seekSerial = 0
 
     private func settle(source: Bool, to time: Double, after delay: Double) {
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             guard !Task.isCancelled else { return }
-            self?.chaseSeek(source: source, to: time, exact: true)
+            self?.chaseSeek(Seek(source: source, time: time, exact: true, metric: "settleMs"))
         }
     }
 
     /// One seek at a time; while one is running only the newest target is kept, so dragging never queues up.
-    private func chaseSeek(source: Bool, to time: Double, exact: Bool) {
-        let player = source ? sourcePlayer : self.player
+    private func chaseSeek(_ seek: Seek) {
         guard !seekInFlight else {
             // The newest target wins; the settle seek always comes last, so an exact landing is never lost.
-            pendingSeek = (source, time, exact)
+            pendingSeek = seek
             return
         }
+        issue(seek)
+    }
+
+    private func issue(_ seek: Seek) {
         seekInFlight = true
-        seekIssuedAt = CACurrentMediaTime()
-        let before: CMTime = exact ? .zero : .positiveInfinity
-        player.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: before, toleranceAfter: .zero) { [weak self] _ in
+        seekSerial += 1
+        let serial = seekSerial
+        let issued = CACurrentMediaTime()
+        let before: CMTime = seek.exact ? .zero : .positiveInfinity
+        let player = seek.source ? sourcePlayer : self.player
+        player.seek(to: CMTime(seconds: seek.time, preferredTimescale: 600), toleranceBefore: before, toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
-                self.metrics.record(exact ? "settleMs" : "scrubFrameMs", (CACurrentMediaTime() - self.seekIssuedAt) * 1000)
+                guard let self, serial == self.seekSerial else { return }
+                let took = CACurrentMediaTime() - issued
+                self.metrics.record(seek.metric, took * 1000)
+                if seek.exact { self.exactSeekCost = (self.exactSeekCost + took) / 2 }
+                if seek.source, self.isTrimming { self.showsSource = true }
                 self.seekInFlight = false
                 if let next = self.pendingSeek {
                     self.pendingSeek = nil
-                    self.chaseSeek(source: next.source, to: next.time, exact: next.exact)
+                    self.chaseSeek(next)
                 }
             }
         }
+        guard seek.exact, let budget = seek.budget else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(budget))
+            self?.overtake(serial, budget: budget)
+        }
+    }
+
+    /// An exact seek still running after its budget, with the finger already somewhere else, gives way to a keyframe
+    /// at the newer position, so the picture never freezes for longer than the budget. One slow seek among fast ones
+    /// keeps exact frames; a second in a row switches to keyframes until exact seeks are quick again.
+    private func overtake(_ serial: Int, budget: Double) {
+        guard serial == seekSerial, seekInFlight, let next = pendingSeek, next.budget != nil else { return }
+        exactSeekCost = (exactSeekCost + budget * 1.5) / 2
+        pendingSeek = nil
+        metrics.record("overtakenSeeks", 1)
+        issue(Seek(source: next.source, time: next.time, exact: false, metric: next.metric, budget: budget))
+        settle(source: next.source, to: next.time, after: 0.12)
     }
 
     // MARK: Editing
@@ -376,7 +513,7 @@ final class EditorModel {
 
     // MARK: Trimming
 
-    enum Edge { case start, end }
+    typealias Edge = TrimEdge
     /// Committed as one undo step when the finger lifts.
     private(set) var trimPreview: EditTimeline?
     private var trimMark: CFTimeInterval = 0
@@ -388,6 +525,7 @@ final class EditorModel {
             player.pause()
             isPlaying = false
         }
+        settleTask?.cancel()
         isTrimming = true
         trimPreview = timeline
         trimMark = CACurrentMediaTime()
@@ -398,15 +536,19 @@ final class EditorModel {
         let next = edge == .start ? base.trimming(clipAt: index, start: time) : base.trimming(clipAt: index, end: time)
         trimPreview = next
         let shown = edge == .start ? next.clips[index].start : max(next.clips[index].start, next.clips[index].end - 1.0 / 30)
-        scrubSeek(source: true, to: shown)
+        scrubSeek(source: true, to: shown, metric: "trimFrameMs")
     }
 
     func endTrim(clip index: Int, edge: Edge) {
         settleTask?.cancel()
+        cancelDetailThumbnails()
         isTrimming = false
-        guard let next = trimPreview else { return }
+        guard let next = trimPreview, next != timeline, next.clips.indices.contains(index) else {
+            trimPreview = nil
+            showsSource = false
+            return
+        }
         trimPreview = nil
-        guard next != timeline, next.clips.indices.contains(index) else { return }
         let starts = next.outputStarts
         let resumeAt = edge == .start ? starts[index] : starts[index] + next.clips[index].duration - 0.05
         apply(next, seekTo: max(0, resumeAt))
@@ -450,6 +592,9 @@ final class EditorModel {
         guard !closed else { return }
         closed = true
         thumbnailTask?.cancel()
+        detailTask?.cancel()
+        itemReady?.invalidate()
+        itemReady = nil
         for player in players { player.pause() }
         sourcePlayer.pause()
         for (player, observer) in zip(players, timeObservers) { player.removeTimeObserver(observer) }
@@ -542,13 +687,14 @@ extension EditorModel {
             await pause(1.0 / 60)
         }
         endScrub()
-        await pause(0.4)
+        await pause(0.9)
         let first = timeline.clips[0]
         beginTrim()
-        for step in 0...20 {
+        for step in 0...90 {
             trim(clip: 0, edge: .end, toSource: first.end - Double(step) * 0.05)
             await pause(1.0 / 60)
         }
+        await pause(0.9)
         endTrim(clip: 0, edge: .end)
         await pause(0.5)
         undo()
