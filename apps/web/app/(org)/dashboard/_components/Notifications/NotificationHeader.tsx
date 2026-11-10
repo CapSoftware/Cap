@@ -1,9 +1,9 @@
 import { faCheckDouble } from "@fortawesome/free-solid-svg-icons/faCheckDouble";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { toast } from "sonner";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 export const NotificationHeader = () => {
 	const queryClient = useQueryClient();

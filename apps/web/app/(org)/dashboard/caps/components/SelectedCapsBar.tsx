@@ -4,12 +4,12 @@ import { Button } from "@cap/ui";
 import type { Folder, Video } from "@cap/web-domain";
 import { faFilm } from "@fortawesome/free-solid-svg-icons/faFilm";
 import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FolderInput } from "lucide-react";
 import { useState } from "react";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { MoveLocation } from "@/lib/move-items";
 import { MoveItemsDialog } from "./MoveItemsDialog";
 

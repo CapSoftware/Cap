@@ -5,7 +5,7 @@ import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
 import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
 import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { MoveLocation } from "@/lib/move-items";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 

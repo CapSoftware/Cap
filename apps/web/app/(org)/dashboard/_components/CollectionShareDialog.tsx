@@ -19,9 +19,9 @@ import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
 import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useEffect, useId, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
 import {
 	PUBLIC_GRID_COLUMN_OPTIONS,

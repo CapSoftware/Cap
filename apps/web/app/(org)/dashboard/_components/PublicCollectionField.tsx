@@ -5,8 +5,8 @@ import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
 import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
 
 interface PublicCollectionFieldProps {

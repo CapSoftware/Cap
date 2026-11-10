@@ -9,7 +9,6 @@ import {
 import { Organisation } from "@cap/web-domain";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
 import { faRefresh } from "@fortawesome/free-solid-svg-icons/faRefresh";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
@@ -19,6 +18,7 @@ import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
 import type { ConfettiRef } from "@/app/(org)/dashboard/_components/Confetti";
 import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useDashboardContext } from "../../../../Contexts";
 import DomainStep from "./DomainStep";
 import { Stepper } from "./Stepper";
