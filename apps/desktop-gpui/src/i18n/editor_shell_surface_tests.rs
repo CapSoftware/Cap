@@ -441,6 +441,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::camera::rounded_corners(),
             "Rounded Corners",
         ),
+        (tr::editor::window::reel::off(), "Off"),
+        (tr::editor::window::reel::title(), "Reel Mode"),
+        (
+            tr::editor::window::reel::tooltip(),
+            "See how a phone app's interface sits over your video. It never appears in the export.",
+        ),
         (tr::editor::tabs::camera::shadow(), "Shadow"),
         (tr::editor::tabs::camera::shadow_blur(), "Blur"),
         (tr::editor::tabs::camera::shadow_opacity(), "Opacity"),

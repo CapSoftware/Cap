@@ -3054,6 +3054,11 @@ half = "Mitad"
 label = "Vista previa"
 quarter = "Un cuarto"
 
+[editor.window.reel]
+off = "Desactivado"
+title = "Modo Reel"
+tooltip = "Mira cómo queda la interfaz de una app móvil sobre tu vídeo. Nunca aparece en la exportación."
+
 [editor.window.text_menu]
 copy_style = "Copiar estilo"
 copy_style_first = "Copia primero un estilo"

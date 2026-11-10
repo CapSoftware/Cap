@@ -3056,6 +3056,11 @@ half = { text = "Half", context = "Preview quality option." }
 label = { text = "Preview", context = "Label in front of the preview quality picker." }
 quarter = { text = "Quarter", context = "Preview quality option." }
 
+[editor.window.reel]
+off = "Off"
+title = "Reel Mode"
+tooltip = "See how a phone app's interface sits over your video. It never appears in the export."
+
 [editor.window.text_menu]
 copy_style = "Copy style"
 copy_style_first = "Copy a style first"
