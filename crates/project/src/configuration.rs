@@ -4721,6 +4721,74 @@ mod tests {
     }
 
     #[test]
+    fn voice_eq_is_absent_until_set_and_survives_partial_or_out_of_range_values() {
+        let mut segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert!(segment.voice_eq.is_none());
+        assert!(segment.active_voice_eq().is_none());
+        assert!(
+            serde_json::to_value(&segment)
+                .unwrap()
+                .get("voiceEq")
+                .is_none()
+        );
+
+        segment.voice_eq = Some(VoiceEq {
+            enabled: false,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        assert!(segment.active_voice_eq().is_none());
+        segment.voice_eq = Some(VoiceEq {
+            declick: VoiceDeclick::Light,
+            ..VoiceEq::from_preset(VoiceEqPreset::Warm)
+        });
+        let saved = serde_json::to_string(&segment).unwrap();
+        let restored: TimelineSegment = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.voice_eq, segment.voice_eq);
+        assert_eq!(restored.active_voice_eq(), segment.voice_eq);
+
+        let partial: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": { "declick": "strong", "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(
+            partial.voice_eq,
+            Some(VoiceEq {
+                enabled: false,
+                declick: VoiceDeclick::Strong,
+                ..VoiceEq::default()
+            })
+        );
+        assert!(partial.active_voice_eq().is_some());
+
+        let damaged: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 4.0,
+            "voiceEq": {
+                "highPassHz": 1e9,
+                "low": { "hz": -5.0, "gainDb": 400.0 },
+                "highMid": { "hz": 3500.0, "gainDb": -90.0, "q": 0.0 }
+            }
+        }))
+        .unwrap();
+        let active = damaged.active_voice_eq().unwrap();
+        assert_eq!(active.high_pass_hz, VoiceEq::HIGH_PASS_RANGE.1);
+        assert_eq!(active.low.hz, VoiceEqBandKind::Low.hz_range().0);
+        assert_eq!(active.low.gain_db, VoiceEq::GAIN_RANGE.1);
+        assert_eq!(active.high_mid.gain_db, VoiceEq::GAIN_RANGE.0);
+        assert_eq!(active.high_mid.q, VoiceEq::Q_RANGE.0);
+    }
+
+    #[test]
     fn timeline_segment_speed_audio_mode_is_backward_compatible() {
         let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
             "recordingSegment": 0,
