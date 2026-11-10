@@ -2808,6 +2808,16 @@ impl EditorWindow {
             &removed_takes,
             energy.as_deref(),
         );
+        let moves_cuts = landing
+            .land(&mut self.project.clone())
+            .is_some_and(|moved| moved > 0);
+        if moves_cuts {
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.dismiss_frame_controls(cx);
+            self.canvas_mouse_up(window, cx);
+            self.end_timeline_gesture(window, cx);
+        }
         let landed = landing.land(&mut self.project);
         self.history.amend_all(|entry| {
             landing.land(entry);
@@ -2820,16 +2830,9 @@ impl EditorWindow {
         if moved_cuts > 0 {
             self.transcript.selection = None;
             self.transcript.hovered_cut = None;
+            self.set_selection(None, cx);
+            self.canvas_selection = None;
             self.rebuild_timeline();
-            if let Some(selection) = &self.selection
-                && let Some(timeline) = self.project.timeline.as_ref()
-                && selection
-                    .indices
-                    .iter()
-                    .any(|index| *index >= edits::segment_count(timeline, selection.track))
-            {
-                self.selection = None;
-            }
             self.note_edit("caption-refinement", Some(TrackKind::Clip));
         }
         self.publish_project();
