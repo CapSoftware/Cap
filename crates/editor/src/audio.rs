@@ -3796,12 +3796,21 @@ mod tests {
         ));
     }
 
-    struct ProgressiveAllocationLimit;
+    static ALLOCATION_LIMIT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct ProgressiveAllocationLimit {
+        _one_test_at_a_time: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl ProgressiveAllocationLimit {
         fn set(bytes: usize) -> Self {
+            let guard = ALLOCATION_LIMIT_TESTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             set_progressive_audio_allocation_limit(Some(bytes));
-            Self
+            Self {
+                _one_test_at_a_time: guard,
+            }
         }
     }
 
@@ -5552,6 +5561,116 @@ mod tests {
             fixture.reference(output_info, 0.0),
             flat,
             "an active voice eq must change the audio"
+        );
+    }
+
+    #[test]
+    fn voice_eq_plays_the_same_on_the_streaming_fallback() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let mut fixture = ProgressiveFixture::new();
+        fixture.timeline().segments[0].voice_eq = Some(voice_eq(
+            cap_project::VoiceEqPreset::Broadcast,
+            VoiceDeclick::Strong,
+        ));
+        fixture.timeline().segments[2].voice_eq = Some(voice_eq(
+            cap_project::VoiceEqPreset::Bright,
+            VoiceDeclick::Off,
+        ));
+        let output_info = stereo_48k();
+        let samples = (fixture.duration() * 48_000.0) as usize * 2;
+        let mut progressive = fixture.buffer(output_info, 0.0);
+        let expected = read_everything(&mut progressive);
+        drop(progressive);
+        assert_ne!(
+            expected[..samples],
+            ProgressiveFixture::new().reference(output_info, 0.0)[..samples],
+            "an active voice eq must change the audio"
+        );
+
+        let duration = 600.0;
+        let bytes = progressive_buffer_bytes(progressive_buffer_samples(duration, 48_000, 2));
+        let _limit = ProgressiveAllocationLimit::set(bytes / 2);
+        let read = |buffer: &mut PrerenderedAudioBuffer<f32>, from: usize| {
+            let mut actual = vec![0.0f32; samples - from];
+            for block in actual.chunks_mut(1024) {
+                assert!(buffer.wait_until_ready(std::time::Duration::from_secs(5)));
+                buffer.fill(block);
+            }
+            actual
+        };
+        for start in [0.0, 2.75, 6.5] {
+            let mut streaming = PrerenderedAudioBuffer::<f32>::new(
+                fixture.segments.clone(),
+                fixture.music.clone(),
+                &fixture.project,
+                output_info,
+                duration,
+                start,
+            );
+            assert!(matches!(
+                &streaming.mode,
+                PrerenderedAudioBufferMode::Streaming(_)
+            ));
+            let from = (start * 48_000.0) as usize * 2;
+            assert_bit_identical(
+                &read(&mut streaming, from),
+                &expected[from..samples],
+                &format!("streaming fallback from {start}"),
+            );
+            for seek in [1.25, 5.75] {
+                streaming.set_playhead(seek);
+                let from = (seek * 48_000.0) as usize * 2;
+                assert_bit_identical(
+                    &read(&mut streaming, from),
+                    &expected[from..samples],
+                    &format!("streaming fallback from {start}, seek to {seek}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn voice_eq_follows_a_clip_that_plays_at_another_speed() {
+        let mut fixture = ProgressiveFixture::new();
+        fixture.timeline().audio_segments.clear();
+        let fast = &mut fixture.timeline().segments[1];
+        fast.timescale = 1.5;
+        fast.speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
+        let render = |renderer: &mut AudioRenderer, project: &ProjectConfiguration| {
+            renderer.set_playhead(0.0, project);
+            let mut output = Vec::new();
+            while let Some((_, samples)) = renderer.render_frame_raw(1024, project) {
+                output.extend(samples);
+            }
+            output
+        };
+        let mut renderer = AudioRenderer::new(fixture.segments.clone());
+        let plain = render(&mut renderer, &fixture.project);
+        fixture.timeline().segments[1].voice_eq = Some(voice_eq(
+            cap_project::VoiceEqPreset::Warm,
+            VoiceDeclick::Off,
+        ));
+        let warm = render(&mut renderer, &fixture.project);
+        assert_bit_identical(
+            &warm,
+            &render(
+                &mut AudioRenderer::new(fixture.segments.clone()),
+                &fixture.project,
+            ),
+            "a reused renderer must pick up the new voice eq",
+        );
+        let first_clip = 3 * 48_000 * 2;
+        let fast_clip = first_clip..first_clip + 48_000 * 2;
+        assert_bit_identical(
+            &warm[..first_clip],
+            &plain[..first_clip],
+            "clips without voice eq",
+        );
+        assert!(mean_abs(&plain[fast_clip.clone()]) > 0.01);
+        assert_ne!(
+            warm[fast_clip.clone()],
+            plain[fast_clip],
+            "voice eq must change the sped-up clip"
         );
     }
 
