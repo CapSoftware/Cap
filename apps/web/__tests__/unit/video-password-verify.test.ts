@@ -124,15 +124,18 @@ describe("verifyVideoPassword attempt limits", () => {
 	it("stops verifying one video after many attempts across clients", async () => {
 		const verifyVideoPassword = await loadAction();
 
-		for (let client = 0; client < 10; client++) {
+		for (let client = 0; client < 11; client++) {
 			fromIp(`198.51.100.${client}`);
 			for (let attempt = 0; attempt < 20; attempt++) {
 				await verifyVideoPassword("video-1" as never, "nope");
 			}
 		}
-		mocks.verifyPassword.mockClear();
 
 		fromIp("192.0.2.200");
+		expect(await verifyVideoPassword("video-1" as never, "nope")).toEqual(
+			WRONG,
+		);
+		mocks.verifyPassword.mockClear();
 		expect(await verifyVideoPassword("video-1" as never, "open")).toEqual(
 			TOO_MANY,
 		);
@@ -150,7 +153,7 @@ describe("verifyVideoPassword attempt limits", () => {
 	it("shares the per-video budget across id casing", async () => {
 		const verifyVideoPassword = await loadAction();
 
-		for (let client = 0; client < 10; client++) {
+		for (let client = 0; client < 11; client++) {
 			fromIp(`198.51.100.${client}`);
 			for (let attempt = 0; attempt < 20; attempt++) {
 				await verifyVideoPassword(
@@ -159,13 +162,69 @@ describe("verifyVideoPassword attempt limits", () => {
 				);
 			}
 		}
-		mocks.verifyPassword.mockClear();
 
 		fromIp("192.0.2.200");
+		expect(await verifyVideoPassword("Video-1" as never, "nope")).toEqual(
+			WRONG,
+		);
+		mocks.verifyPassword.mockClear();
 		expect(await verifyVideoPassword("Video-1" as never, "open")).toEqual(
 			TOO_MANY,
 		);
 		expect(mocks.verifyPassword).not.toHaveBeenCalled();
+	});
+
+	it("still verifies a new visitor's password after many attempts across clients", async () => {
+		const verifyVideoPassword = await loadAction();
+
+		for (let client = 0; client < 11; client++) {
+			fromIp(`198.51.100.${client}`);
+			for (let attempt = 0; attempt < 20; attempt++) {
+				await verifyVideoPassword("video-1" as never, "nope");
+			}
+		}
+
+		fromIp("192.0.2.200");
+		expect(await verifyVideoPassword("video-1" as never, "open")).toEqual(
+			VERIFIED,
+		);
+		expect(mocks.setVerifiedPasswordCookie).toHaveBeenCalledWith("hash:open");
+	});
+
+	it("gives one IPv6 network a single attempt outside the per-video budget", async () => {
+		const verifyVideoPassword = await loadAction();
+
+		for (let client = 0; client < 11; client++) {
+			fromIp(`198.51.100.${client}`);
+			for (let attempt = 0; attempt < 20; attempt++) {
+				await verifyVideoPassword("video-1" as never, "nope");
+			}
+		}
+
+		fromIp("2001:db8:5:6::1");
+		expect(await verifyVideoPassword("video-1" as never, "nope")).toEqual(
+			WRONG,
+		);
+		fromIp("2001:db8:5:6::2");
+		expect(await verifyVideoPassword("video-1" as never, "open")).toEqual(
+			TOO_MANY,
+		);
+	});
+
+	it("bounds first attempts from forwarded addresses a client can choose off Vercel", async () => {
+		vi.stubEnv("VERCEL", "");
+		const verifyVideoPassword = await loadAction();
+		const fromForwarded = (ip: string) =>
+			mocks.headers.mockResolvedValue(new Headers({ "x-forwarded-for": ip }));
+
+		const results: unknown[] = [];
+		for (let index = 0; index < 250; index++) {
+			fromForwarded(`198.51.${index >> 8}.${index & 255}`);
+			results.push(await verifyVideoPassword("video-1" as never, "nope"));
+		}
+
+		expect(results.slice(0, 200)).toEqual(Array(200).fill(WRONG));
+		expect(results.slice(200)).toEqual(Array(50).fill(TOO_MANY));
 	});
 
 	it("rejects ids outside the id alphabet before any lookup", async () => {

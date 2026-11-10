@@ -64,6 +64,14 @@ vi.mock("@/lib/server", async () => {
 			),
 	};
 });
+vi.mock("@/actions/organization/authorization", () => ({
+	getOrganizationAccess: async () => ({
+		id: "org-1",
+		ownerId: "owner-1",
+		memberId: "member-1",
+		role: "member",
+	}),
+}));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({
 	getOrgAnalyticsData: mocks.getOrgAnalyticsData,
 }));

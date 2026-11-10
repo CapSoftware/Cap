@@ -1,7 +1,6 @@
 import { db } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -15,6 +14,7 @@ import {
 } from "@/lib/desktop-recording-upload-status";
 import { recordingVerificationSchema } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().post(

@@ -814,11 +814,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 					if (!screenshotKey) return Option.none();
 					const extension = getFileExtensionFromKey(screenshotKey) ?? "jpg";
-					const downloadUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
-					return Option.some({
-						fileName: `${video.name}.${extension}`,
-						downloadUrl,
-					});
+					const fileName = `${video.name}.${extension}`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						screenshotKey,
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
 				}
 
 				const src = Video.Video.getSource(video);
@@ -832,14 +833,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Option.isSome(mp4Head) &&
 						(mp4Head.value.ContentLength ?? 0) > 0
 					) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
+						const fileName = `${video.name}.mp4`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
 							src.getFileKey(),
+							fileName,
 						);
 
-						return Option.some({
-							fileName: `${video.name}.mp4`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 
 					const [upload] = yield* db.use((db) =>
@@ -850,24 +850,27 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 
 					if (upload?.rawFileKey) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
-							upload.rawFileKey,
-						);
 						const extension =
 							getFileExtensionFromKey(upload.rawFileKey) ?? "mp4";
+						const fileName = `${video.name}.${extension}`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
+							upload.rawFileKey,
+							fileName,
+						);
 
-						return Option.some({
-							fileName: `${video.name}.${extension}`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 				}
 
 				if (!src) return Option.none();
 				if (!(src instanceof Video.Mp4Source)) return Option.none();
 
-				const downloadUrl = yield* bucket.getSignedObjectUrl(src.getFileKey());
-				return Option.some({ fileName: `${video.name}.mp4`, downloadUrl });
+				const fileName = `${video.name}.mp4`;
+				const downloadUrl = yield* bucket.getSignedDownloadUrl(
+					src.getFileKey(),
+					fileName,
+				);
+				return Option.some({ fileName, downloadUrl });
 			}),
 
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (

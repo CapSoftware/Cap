@@ -601,10 +601,17 @@ fn resolve_session(id: Option<&str>, path: Option<&Path>) -> Result<Session, Str
             .ok_or_else(|| format!("No recording session found for path {}", path.display()));
     }
 
-    let mut active: Vec<Session> = sessions
+    select_active_session(sessions)
+}
+
+fn select_active_session(sessions: Vec<Session>) -> Result<Session, String> {
+    let (mut active, inactive): (Vec<Session>, Vec<Session>) = sessions
         .into_iter()
         .filter(|s| s.status == SessionStatus::Recording)
-        .collect();
+        .partition(|session| session::process_alive(session.pid));
+    if active.is_empty() {
+        active = inactive;
+    }
     match active.len() {
         0 => Err(
             "No active recording sessions. Start one with `cap record start --detach`".to_string(),
@@ -1707,6 +1714,44 @@ mod tests {
         assert_eq!(
             row.error.as_deref(),
             Some("recording process is not running")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_sessions_do_not_hide_the_only_running_recording() {
+        let mut worker = std::process::Command::new("/bin/true").spawn().unwrap();
+        let dead_pid = worker.id();
+        worker.wait().unwrap();
+        assert!(!session::process_alive(dead_pid));
+        let interrupted = Session {
+            recording_id: "interrupted".to_string(),
+            pid: dead_pid,
+            path: PathBuf::from("interrupted.cap"),
+            status: SessionStatus::Recording,
+            started_at: Some(1),
+            recording_meta_exists: None,
+            error: None,
+        };
+        let current = Session {
+            recording_id: "current".to_string(),
+            pid: std::process::id(),
+            path: PathBuf::from("current.cap"),
+            ..interrupted.clone()
+        };
+        let selected = select_active_session(vec![interrupted.clone(), current.clone()]).unwrap();
+        assert_eq!(selected.recording_id, "current");
+        let selected = select_active_session(vec![interrupted]).unwrap();
+        assert_eq!(selected.recording_id, "interrupted");
+        let other = Session {
+            recording_id: "other".to_string(),
+            ..current.clone()
+        };
+        assert!(
+            select_active_session(vec![current, other])
+                .err()
+                .unwrap()
+                .contains("Multiple active recordings")
         );
     }
 }

@@ -32,6 +32,20 @@ export const isMobileRecordingDurationAllowed = ({
 		mobileFreeRecordingDurationSeconds +
 			mobileRecordingDurationToleranceSeconds;
 
+// The total and the segment durations are both client-reported; gating on the larger stops a client that
+// only understates the total. Authoritative enforcement needs the length measured after processing.
+export const mobileRecordingGateDurationSeconds = ({
+	durationSeconds,
+	videoSegments,
+}: {
+	durationSeconds: number;
+	videoSegments: ReadonlyArray<{ duration: number }>;
+}) =>
+	Math.max(
+		durationSeconds,
+		videoSegments.reduce((total, segment) => total + segment.duration, 0),
+	);
+
 export const isMobileAuthRedirectUri = (redirectUri: string) => {
 	try {
 		const redirectUrl = new URL(redirectUri);
@@ -166,6 +180,31 @@ export const MobileAccountDeletionInput = Schema.Struct({
 
 export const MobileUserBlockInput = Schema.Struct({
 	userId: UserId,
+});
+
+export const MobileNotificationPreferences = Schema.Struct({
+	comments: Schema.Boolean,
+	replies: Schema.Boolean,
+	views: Schema.Boolean,
+	anonymousViews: Schema.Boolean,
+	reactions: Schema.Boolean,
+});
+
+export const MobileNotificationPreferencesInput = Schema.Struct({
+	comments: Schema.optional(Schema.Boolean),
+	replies: Schema.optional(Schema.Boolean),
+	views: Schema.optional(Schema.Boolean),
+	anonymousViews: Schema.optional(Schema.Boolean),
+	reactions: Schema.optional(Schema.Boolean),
+});
+
+export const MobilePushTokenInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.pattern(/^[0-9a-fA-F]{32,200}$/)),
+	environment: Schema.Literal("sandbox", "production"),
+});
+
+export const MobilePushTokenRemoveInput = Schema.Struct({
+	token: Schema.String.pipe(Schema.maxLength(200)),
 });
 
 export const MobileContentReportInput = Schema.Struct({
@@ -380,6 +419,19 @@ export const MobileCapTitleInput = Schema.Struct({
 
 export const MobileCapPasswordInput = Schema.Struct({
 	password: Schema.NullOr(Schema.String),
+});
+
+export const MobileCapEditState = Schema.Struct({
+	status: Schema.Literal("available", "pro_required", "not_editable", "busy"),
+	duration: Schema.Number,
+	hasEdits: Schema.Boolean,
+});
+
+export const MobileCapEditInput = Schema.Struct({
+	sourceDuration: Schema.Number,
+	keepRanges: Schema.Array(
+		Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+	).pipe(Schema.minItems(1), Schema.maxItems(500)),
 });
 
 export const MobileFolderCreateInput = Schema.Struct({
@@ -638,6 +690,47 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.addError(HttpApiError.NotFound),
 	)
 	.add(
+		HttpApiEndpoint.get(
+			"getNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.patch(
+			"updateNotificationPreferences",
+			"/user/notification-preferences",
+		)
+			.setPayload(MobileNotificationPreferencesInput)
+			.addSuccess(MobileNotificationPreferences)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("registerPushToken", "/user/push-tokens")
+			.setHeaders(MobileAuthHeaders)
+			.setPayload(MobilePushTokenInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("removePushToken", "/user/push-tokens/remove")
+			.setPayload(MobilePushTokenRemoveInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
 		HttpApiEndpoint.get("bootstrap", "/bootstrap")
 			.addSuccess(MobileBootstrapResponse)
 			.middleware(HttpAuthMiddleware)
@@ -794,6 +887,39 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.get("getCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileCapEditState)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound),
+	)
+	.add(
+		HttpApiEndpoint.post("saveCapEdit", "/caps/:id/edit")
+			.setPath(MobileVideoPath)
+			.setPayload(MobileCapEditInput)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
+	)
+	.add(
+		HttpApiEndpoint.post("restoreCapEdit", "/caps/:id/edit/restore")
+			.setPath(MobileVideoPath)
+			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.BadRequest)
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.Conflict)
+			.addError(HttpApiError.InternalServerError)
+			.addError(MobileTooManyRequests),
 	)
 	.add(
 		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback")
