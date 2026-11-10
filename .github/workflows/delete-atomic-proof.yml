@@ -111,9 +111,11 @@ jobs:
           export PATH="$debug_path:$PATH"
           git log -1 --format='source %H %s'
           status=0
-          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-pc-windows-msvc --bin cap-gpui -- \
-            delete_ open_in_the_editor 2>&1 | tee "$RUNNER_TEMP/tests.log" || status=$?
-          { echo "### Delete tests, ${{ matrix.revision.name }} ($(git rev-parse --short HEAD))"; echo '```'; grep -E '^test |^test result|panicked|left:|right:|os error' "$RUNNER_TEMP/tests.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          for round in 1 2 3 4 5; do
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target x86_64-pc-windows-msvc --bin cap-gpui -- \
+              delete_ open_in_the_editor an_editor > "$RUNNER_TEMP/tests-$round.log" 2>&1 || status=$?
+            { echo "### Delete tests, ${{ matrix.revision.name }} ($(git rev-parse --short HEAD)), round $round"; echo '```'; grep -E '^test |^test result|panicked|left:|right:|os error|Timed out' "$RUNNER_TEMP/tests-$round.log"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
           exit $status
 
   realapp:
