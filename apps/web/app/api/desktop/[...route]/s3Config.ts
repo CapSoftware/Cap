@@ -329,14 +329,16 @@ app.post(
 					accessKeyId: data.accessKeyId,
 					secretAccessKey: data.secretAccessKey,
 				},
-				requestHandler: {
-					abortSignal: controller.signal,
-					...publicOnlyS3Agents(),
-				},
+				requestHandler: publicOnlyS3Agents(),
 			});
 
 			try {
-				await s3Client.send(new HeadBucketCommand({ Bucket: data.bucketName }));
+				await s3Client.send(
+					new HeadBucketCommand({ Bucket: data.bucketName }),
+					{
+						abortSignal: controller.signal,
+					},
+				);
 
 				clearTimeout(timeoutId);
 			} catch (error) {
