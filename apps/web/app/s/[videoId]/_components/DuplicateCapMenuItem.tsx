@@ -2,7 +2,7 @@
 
 import { DropdownMenuItem } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { faCopy } from "@fortawesome/free-solid-svg-icons";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
 import { useIsMutating } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";

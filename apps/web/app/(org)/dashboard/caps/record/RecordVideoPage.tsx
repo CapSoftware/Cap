@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faDownload } from "@fortawesome/free-solid-svg-icons";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";

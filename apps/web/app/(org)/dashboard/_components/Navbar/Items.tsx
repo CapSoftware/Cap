@@ -18,11 +18,9 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import {
-	faBuilding,
-	faCircleInfo,
-	faLink,
-} from "@fortawesome/free-solid-svg-icons";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";

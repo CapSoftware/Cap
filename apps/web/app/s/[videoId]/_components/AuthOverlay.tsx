@@ -1,6 +1,7 @@
 import { NODE_ENV } from "@cap/env";
 import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
-import { faArrowLeft, faEnvelope } from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";

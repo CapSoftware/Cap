@@ -1,7 +1,7 @@
 "use client";
 
 import { LogoBadge } from "@cap/ui";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";

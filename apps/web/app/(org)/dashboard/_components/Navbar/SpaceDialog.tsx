@@ -16,7 +16,8 @@ import {
 	Switch,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faLayerGroup, faLock } from "@fortawesome/free-solid-svg-icons";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";

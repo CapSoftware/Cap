@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { useCurrency } from "hooks/useCurrency";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";

@@ -1,5 +1,5 @@
 import type { ImageUpload } from "@cap/web-domain";
-import { faComment } from "@fortawesome/free-solid-svg-icons";
+import { faComment } from "@fortawesome/free-solid-svg-icons/faComment";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 

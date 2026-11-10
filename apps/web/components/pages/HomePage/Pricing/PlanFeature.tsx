@@ -1,7 +1,7 @@
 "use client";
 
 import { classNames } from "@cap/utils";
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import type { ReactNode } from "react";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 

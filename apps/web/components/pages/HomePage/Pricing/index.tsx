@@ -1,4 +1,4 @@
-import { faHeart } from "@fortawesome/free-solid-svg-icons";
+import { faHeart } from "@fortawesome/free-solid-svg-icons/faHeart";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { CommercialCard } from "./CommercialCard";

@@ -1,12 +1,10 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import {
-	faBookOpen,
-	faCopy,
-	faRocket,
-	faUsers,
-} from "@fortawesome/free-solid-svg-icons";
+import { faBookOpen } from "@fortawesome/free-solid-svg-icons/faBookOpen";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faRocket } from "@fortawesome/free-solid-svg-icons/faRocket";
+import { faUsers } from "@fortawesome/free-solid-svg-icons/faUsers";
 import { motion, type Variants } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";

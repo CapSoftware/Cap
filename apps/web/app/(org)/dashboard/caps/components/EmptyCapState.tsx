@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faDownload } from "@fortawesome/free-solid-svg-icons";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCapChromeExtension } from "hooks/useCapChromeExtension";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";

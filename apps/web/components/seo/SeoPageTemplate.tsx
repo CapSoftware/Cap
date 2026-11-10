@@ -1,14 +1,12 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import {
-	faCheck,
-	faExclamation,
-	faInfo,
-	faMinus,
-	faPlus,
-	faTimes,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faExclamation } from "@fortawesome/free-solid-svg-icons/faExclamation";
+import { faInfo } from "@fortawesome/free-solid-svg-icons/faInfo";
+import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faTimes } from "@fortawesome/free-solid-svg-icons/faTimes";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";

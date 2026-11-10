@@ -23,15 +23,13 @@ import {
 	TableRow,
 } from "@cap/ui";
 import { Folder } from "@cap/web-domain";
-import {
-	faArrowLeft,
-	faCircleCheck,
-	faDownload,
-	faFileCsv,
-	faLink,
-	faTriangleExclamation,
-	faUpload,
-} from "@fortawesome/free-solid-svg-icons";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faCircleCheck } from "@fortawesome/free-solid-svg-icons/faCircleCheck";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faFileCsv } from "@fortawesome/free-solid-svg-icons/faFileCsv";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
+import { faTriangleExclamation } from "@fortawesome/free-solid-svg-icons/faTriangleExclamation";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";

@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faCircleInfo } from "@fortawesome/free-solid-svg-icons";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import NumberFlow from "@number-flow/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useCurrency } from "hooks/useCurrency";

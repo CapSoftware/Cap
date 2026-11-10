@@ -11,22 +11,20 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import {
-	faChartSimple,
-	faCheck,
-	faCopy,
-	faDownload,
-	faEllipsis,
-	faGear,
-	faImage,
-	faLink,
-	faLock,
-	faScissors,
-	faShare,
-	faTrash,
-	faUnlock,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faScissors } from "@fortawesome/free-solid-svg-icons/faScissors";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";

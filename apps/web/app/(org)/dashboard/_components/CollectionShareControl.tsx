@@ -2,12 +2,10 @@
 
 import { Button } from "@cap/ui";
 import { type Folder, PublicCollection } from "@cap/web-domain";
-import {
-	faCheck,
-	faCopy,
-	faGlobe,
-	faSliders,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faSliders } from "@fortawesome/free-solid-svg-icons/faSliders";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";

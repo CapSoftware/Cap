@@ -13,14 +13,12 @@ import {
 	Switch,
 } from "@cap/ui";
 import { PublicCollection } from "@cap/web-domain";
-import {
-	faArrowUpRightFromSquare,
-	faCheck,
-	faCopy,
-	faGlobe,
-	faLock,
-	faUpload,
-} from "@fortawesome/free-solid-svg-icons";
+import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons/faArrowUpRightFromSquare";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useEffect, useId, useRef, useState } from "react";
