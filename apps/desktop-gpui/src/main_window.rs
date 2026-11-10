@@ -5237,6 +5237,13 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |_, cx| {
+            if let Err(error) = crate::library::ensure_not_open_in_editor(&path) {
+                crate::platform::alert_dialog(
+                    tr::dialog::delete_recording::retained_title(),
+                    &error,
+                );
+                return;
+            }
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_recording_confirm(),
