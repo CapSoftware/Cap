@@ -29,17 +29,45 @@
 	],
 	"preferences": [
 		{
-			"name": "captureMode",
-			"title": "Default Capture Mode",
-			"description": "Default recording mode when invoking Start Recording",
+			"name": "recordingMode",
+			"title": "Recording Mode",
+			"description": "Cap recording mode (Studio or Instant)",
 			"type": "dropdown",
 			"required": false,
-			"default": "fullscreen",
+			"default": "studio",
 			"data": [
-				{ "title": "Full Screen", "value": "fullscreen" },
-				{ "title": "Window", "value": "window" },
-				{ "title": "Area", "value": "area" }
+				{ "title": "Studio", "value": "studio" },
+				{ "title": "Instant", "value": "instant" }
 			]
+		},
+		{
+			"name": "captureTargetType",
+			"title": "Capture Target Type",
+			"description": "Whether to capture a Screen or a Window by name",
+			"type": "dropdown",
+			"required": false,
+			"default": "screen",
+			"data": [
+				{ "title": "Screen", "value": "screen" },
+				{ "title": "Window", "value": "window" }
+			]
+		},
+		{
+			"name": "targetName",
+			"title": "Target Screen or Window Name",
+			"description": "Display or window name resolved by Cap (e.g. Built-in Retina Display)",
+			"type": "textfield",
+			"required": false,
+			"default": "Built-in Retina Display"
+		},
+		{
+			"name": "captureSystemAudio",
+			"title": "Capture System Audio",
+			"description": "Include system audio when starting a recording",
+			"type": "checkbox",
+			"label": "Capture System Audio",
+			"required": false,
+			"default": true
 		},
 		{
 			"name": "dashboardUrl",
