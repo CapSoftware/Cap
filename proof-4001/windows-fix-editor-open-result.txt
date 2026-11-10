@@ -1,0 +1,16 @@
+recording started	ok	
+Settings window is open	ok	{'hwnd': 393700, 'pid': 6672, 'title': 'Cap Settings', 'class': 'Zed::Window', 'visible': True, 'minimized': False, 'rect': (113, 12, 911, 716)}
+recording finished	ok	
+the recording finalized	ok	status=Complete
+the app opened the editor on the recording by itself	ok	Cap Editor
+files in the recording before Delete	note	14: ['.recovery-f5bdebca-8ffe-486f-a2ca-210629e43a31\\original-project-config.json', '.recovery-f5bdebca-8ffe-486f-a2ca-210629e43a31\\original-recording-meta.json', '.recovery-f5bdebca-8ffe-486f-a2ca-210629e43a31\\publication-receipt.json', '.recovery-f5bdebca-8ffe-486f-a2ca-210629e43a31\\staged\\content\\cursors\\cursor_0.png', '.recovery.lock', 'content\\cursors\\cursor_0.png', 'content\\segments\\segment-0\\cursor.json', 'content\\segments\\segment-0\\display.mp4', 'content\\segments\\segment-0\\keyboard.bin', 'content\\segments\\segment-0\\start-times.json', 'project-config.json', 'recording-meta.json', 'screenshots\\display.jpg', 'screenshots\\thumbnail-1a1f518e6c0bf373adc8c.jpg']
+what the app said	note	[Cap] OK Cancel Are you sure you want to delete this recording?
+delete lines in the log	note	2026-11-10T17:57:26.043322Z  INFO cap_gpui::app_windows: deleted a recording after closing its editor path=\\?\D:\a\_temp\rc-out\editor-open\rec\Generic PnP Monitor (Display) 2026-11-10 05.56 PM.cap
+the delete was all or nothing	ok	14 files before, 0 after
+the app asked for confirmation	ok	
+the editor closed	ok	
+Delete removed the whole recording	ok	log line: True; folder exists: False; 0 of 14 files left
+no raw OS error reached the log or a dialog	ok	
+nothing left in the holding folder	ok	[]
+what is left in the recordings folder	note	[]
+no panic	ok	

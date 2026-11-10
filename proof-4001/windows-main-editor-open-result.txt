@@ -1,0 +1,16 @@
+recording started	ok	
+Settings window is open	ok	{'hwnd': 590280, 'pid': 2516, 'title': 'Cap Settings', 'class': 'Zed::Window', 'visible': True, 'minimized': False, 'rect': (113, 12, 911, 716)}
+recording finished	ok	
+the recording finalized	ok	status=Complete
+the app opened the editor on the recording by itself	ok	Cap Editor
+files in the recording before Delete	note	14: ['.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\original-project-config.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\original-recording-meta.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\publication-receipt.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\staged\\content\\cursors\\cursor_0.png', '.recovery.lock', 'content\\cursors\\cursor_0.png', 'content\\segments\\segment-0\\cursor.json', 'content\\segments\\segment-0\\display.mp4', 'content\\segments\\segment-0\\keyboard.bin', 'content\\segments\\segment-0\\start-times.json', 'project-config.json', 'recording-meta.json', 'screenshots\\display.jpg', 'screenshots\\thumbnail-18a3c18e6c12391918c30.jpg']
+what the app said	note	[Cap] OK Cancel Are you sure you want to delete this recording?
+delete lines in the log	note	ttings_window: deleting the recording failed: Failed to delete recording: The process cannot access the file because it is being used by another process. (os error 32) path=D:\a\_temp\rc-out\editor-open\rec\Generic PnP Monitor (Display) 2026-11-10 06.04 PM.cap
+the delete was all or nothing	NOT_OK	14 files before, 7 after; gone: ['.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\original-project-config.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\original-recording-meta.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\publication-receipt.json', '.recovery-4192d27e-8179-4757-bd78-97031fc9738d\\staged\\content\\cursors\\cursor_0.png', '.recovery.lock', 'content\\cursors\\cursor_0.png', 'content\\segments\\segment-0\\cursor.json']; left: ['content\\segments\\segment-0\\display.mp4', 'content\\segments\\segment-0\\keyboard.bin', 'content\\segments\\segment-0\\start-times.json', 'project-config.json', 'recording-meta.json', 'screenshots\\display.jpg', 'screenshots\\thumbnail-18a3c18e6c12391918c30.jpg']
+the app asked for confirmation	ok	
+the editor closed	NOT_OK	
+Delete removed the whole recording	NOT_OK	log line: False; folder exists: True; 7 of 14 files left
+no raw OS error reached the log or a dialog	NOT_OK	
+nothing left in the holding folder	ok	[]
+what is left in the recordings folder	note	['Generic PnP Monitor (Display) 2026-11-10 06.04 PM.cap']
+no panic	ok	
