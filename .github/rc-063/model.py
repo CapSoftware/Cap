@@ -134,6 +134,26 @@ def click_phrase(words, phrase):
     return box
 
 
+def click_in_captions_tab(app, name, words, phrase):
+    """Clicks a button of the Captions tab, scrolling the tab with the wheel
+    first when the window is too short to show it."""
+    for attempt in range(4):
+        box = click_phrase(words, phrase)
+        if box:
+            return box
+        anchor = (
+            rclib.find_phrase(words, "Language")
+            or rclib.find_phrase(words, "Model")
+            or rclib.find_phrase(words, "Captions")
+        )
+        if not anchor:
+            return None
+        rclib.scroll_down(anchor["x"] + 60, anchor["y"] + 20)
+        time.sleep(1.5)
+        words = look(app, f"{name}-scrolled-{attempt}")
+    return None
+
+
 def saved_captions(project):
     try:
         with open(os.path.join(project, "project-config.json"), encoding="utf-8") as handle:
@@ -174,7 +194,7 @@ def download_through_the_editor(project, expect_note):
         )
     else:
         results.add("a fresh install shows no update note", not note and not description, f"note {note}, description {description}")
-    button = click_phrase(words, "Download Recommended Model")
+    button = click_in_captions_tab(app, "1-captions-tab", words, "Download Recommended Model")
     results.add("the editor offers the download", bool(button), f"button at {button}" if button else rclib.ocr_text(words)[-600:])
     installed = False
     if button:
@@ -220,7 +240,7 @@ def download_through_the_editor(project, expect_note):
         words = look(app, "3-after-download")
         note = rclib.find_phrase(words, "Recommended model updated")
         results.add("no update note once the model is current", not note, f"note {note}")
-        generate = click_phrase(words, "Generate Captions")
+        generate = click_in_captions_tab(app, "3-after-download", words, "Generate Captions")
         results.note("Generate Captions button", f"clicked at {generate}" if generate else "not found on screen")
         if generate:
             deadline = time.time() + 600

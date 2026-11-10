@@ -12,6 +12,7 @@ import ctypes.wintypes as wt
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -121,10 +122,13 @@ def record():
     import winsound
 
     recordings = os.path.join(fixture, "rec")
+    marker = os.path.join(fixture, "recorded.txt")
     existing = rclib.find_projects(recordings)
-    if existing:
+    if existing and os.path.exists(marker):
         results.note("recording", f"reused {os.path.basename(existing[0])}")
         return existing[0]
+    if os.path.isdir(recordings):
+        shutil.rmtree(recordings)
     os.makedirs(recordings, exist_ok=True)
     profile = rclib.make_profile(os.path.join(out, "record-profile"))
     wav = tone(os.path.join(out, "tone.wav"))
@@ -141,7 +145,7 @@ def record():
         "record",
     )
     started = app.wait_log(r"recording started", 120)
-    results.add("the recording with system audio started", bool(started), app.text()[-2000:] if not started else "")
+    results.add("the recording with system audio started", bool(started))
     finished = app.wait_log(r"recording finished", RECORD_SECONDS + 600) if started else None
     time.sleep(3)
     app.stop()
@@ -149,9 +153,18 @@ def record():
         winsound.PlaySound(None, 0)
     except RuntimeError:
         pass
-    results.add("the recording finished", bool(finished), app.text()[-2500:] if started and not finished else "")
+    failure = rclib.grep(app.text(), r"recording failed to start|failed to stop cleanly")
+    results.add(
+        "the recording finished",
+        bool(finished),
+        " / ".join(line[-300:] for line in failure[:2]) if not finished else "",
+    )
     projects = rclib.find_projects(recordings)
-    return projects[0] if projects else None
+    if not (finished and projects):
+        return None
+    with open(marker, "w") as handle:
+        handle.write(os.path.basename(projects[0]) + "\n")
+    return projects[0]
 
 
 def play(name, project, limited):
@@ -173,7 +186,7 @@ def play(name, project, limited):
             return None
     ready = app.wait_log(r"editor waveforms ready", 180)
     ready_at = time.time()
-    results.add(f"{name}: the editor opened the recording", bool(ready), app.text()[-2500:] if not ready else "")
+    results.add(f"{name}: the editor opened the recording", bool(ready))
     if not ready:
         app.stop()
         return None

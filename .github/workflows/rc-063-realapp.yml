@@ -61,9 +61,12 @@ jobs:
           target: x86_64-pc-windows-msvc
           key: rc063-windows-2022-main-${{ env.MAIN_REVISION }}-${{ env.PACKAGE_VERSION }}
 
-      - name: Python packages
+      - name: Scenario tools
         shell: bash
-        run: python -m pip install --quiet pillow
+        run: |
+          python -m pip install --quiet pillow
+          choco install tesseract --no-progress -y > "$RUNNER_TEMP/choco.log" 2>&1 || tail -n 20 "$RUNNER_TEMP/choco.log"
+          ls "/c/Program Files/Tesseract-OCR/tesseract.exe"
 
       - name: Item 1, recording metadata save (#3975)
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item1,') }}
@@ -78,8 +81,11 @@ jobs:
         shell: bash
         env:
           PYTHONPATH: .github/rc-063
-          RC_DELETE_OFFSET: "735,256"
-        run: python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2"
+        run: |
+          status=0
+          python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2-editor-closed" editor-closed || status=1
+          python .github/rc-063/win_delete.py rc-pkg "$RUNNER_TEMP/rc-out/item2-editor-open" editor-open || status=1
+          exit $status
 
       # Hosted Windows runners have no audio endpoint, and without one the
       # editor never builds a playback audio buffer. This installs a virtual
@@ -89,13 +95,21 @@ jobs:
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
         uses: LABSN/sound-ci-helpers@d08c889a7bba7d9b1b059f8f76dac4672ea3a9cf
 
+      - name: Audio service
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
+        shell: pwsh
+        run: |
+          Start-Service audiosrv -ErrorAction SilentlyContinue
+          Get-Service audiosrv, AudioEndpointBuilder | Format-Table Name, Status
+          Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
+
       - name: Restore the long recording with audio
         id: audio
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/rc-fix/audio
-          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v1
+          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v2
 
       - name: Item 3, playback when the audio buffer cannot be allocated (#3971)
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') }}
@@ -105,11 +119,11 @@ jobs:
         run: python .github/rc-063/win_audio.py rc-pkg "$RUNNER_TEMP/rc-out/item3" "$RUNNER_TEMP/rc-fix/audio"
 
       - name: Keep the long recording with audio
-        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') && steps.audio.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-fix/audio/rec/**/recording-meta.json', runner.temp)) != '' }}
+        if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item3,') && steps.audio.outputs.cache-hit != 'true' && hashFiles(format('{0}/rc-fix/audio/recorded.txt', runner.temp)) != '' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/rc-fix/audio
-          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v1
+          key: rc063-win-audio-recording-${{ env.MAIN_REVISION }}-v2
 
       - name: Upload evidence
         if: always()

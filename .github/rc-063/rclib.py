@@ -318,6 +318,27 @@ def click(x, y):
         )
 
 
+def scroll_down(x, y, notches=3):
+    """Real wheel input with the pointer at x, y."""
+    log(f"scroll down {notches} at {x},{y}")
+    if WINDOWS:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.2)
+        for _ in range(notches):
+            user32.mouse_event(0x0800, 0, 0, ctypes.c_uint32(-120 & 0xFFFFFFFF).value, 0)
+            time.sleep(0.1)
+    elif MAC:
+        subprocess.run(["cliclick", f"m:{int(x)},{int(y)}"], check=False)
+    else:
+        subprocess.run(
+            ["xdotool", "mousemove", str(int(x)), str(int(y)), "sleep", "0.2", "click", "--repeat", str(notches), "5"],
+            check=False,
+        )
+
+
 def move(x, y):
     if WINDOWS:
         import ctypes
