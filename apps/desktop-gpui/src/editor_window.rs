@@ -2795,16 +2795,43 @@ impl EditorWindow {
             return;
         }
         let durations = self.clip_display_durations.clone();
-        let changed =
-            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
+        let energy = self.transcript.energy.clone();
+        let mut landing = crate::transcript::RefinementLanding::new(
+            refined,
+            &durations,
+            &removed_takes,
+            energy.as_deref(),
+        );
+        let landed = landing.land(&mut self.project);
         self.history.amend_all(|entry| {
-            crate::transcription::apply_refined_captions(entry, refined, &durations);
+            landing.land(entry);
         });
-        if !changed {
+        let Some(moved_cuts) = landed else {
             return;
-        }
+        };
         self.caption_sync_signature = self.caption_projection_signature();
         self.transcript.dirty = true;
+        if moved_cuts > 0 {
+            self.transcript.selection = None;
+            self.transcript.hovered_cut = None;
+            self.rebuild_timeline();
+            if let Some(selection) = &self.selection
+                && let Some(timeline) = self.project.timeline.as_ref()
+                && selection
+                    .indices
+                    .iter()
+                    .any(|index| *index >= edits::segment_count(timeline, selection.track))
+            {
+                self.selection = None;
+            }
+            self.note_edit("caption-refinement", Some(TrackKind::Clip));
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();

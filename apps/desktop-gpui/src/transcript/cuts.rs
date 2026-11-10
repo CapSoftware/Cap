@@ -3,7 +3,10 @@ use std::ops::Range;
 use cap_project::TimelineConfiguration;
 
 use super::energy::{EnergyEnvelope, HOP_SECONDS};
-use super::model::{TranscriptDoc, TranscriptEdl, build_mappings, merge_ranges, recording_offsets};
+use super::model::{
+    TranscriptDoc, TranscriptEdl, build_mappings, hole_around, kept_ranges, merge_ranges,
+    recording_offsets,
+};
 use crate::editor_edits::{self, RangeCut};
 
 /// Speech decays after the recognizer's word end, so a cut keeps at least this
@@ -509,4 +512,86 @@ pub fn restore_words(
     }
     *timeline = next;
     Ok(restored)
+}
+
+/// Each word of `before` in `after`, the same transcript once its timings are
+/// refined: the same words in the same order, with any the refinement
+/// recovered in between.
+fn follow_words(before: &TranscriptDoc, after: &TranscriptDoc) -> Vec<Option<usize>> {
+    let mut next = 0;
+    before
+        .words
+        .iter()
+        .map(|word| {
+            let found = next
+                + after.words[next..]
+                    .iter()
+                    .position(|candidate| candidate.text == word.text)?;
+            next = found + 1;
+            Some(found)
+        })
+        .collect()
+}
+
+/// Moves word cuts made on the first pass's timings to where the refined
+/// timings put the same words, and returns how many moved. The first pass can
+/// place a word a third of a second off, so a cut planned on it removes the
+/// silence beside a filler and leaves the filler playing.
+///
+/// Only a hole that is exactly what cutting its words would have produced
+/// moves. Anything else, a trim made on the timeline or a word cut edited
+/// since, stays where it is, as does a cut that cannot be redone.
+pub fn follow_refined_words(
+    timeline: &mut TimelineConfiguration,
+    recording_durations: &[f64],
+    removed_takes: &[cap_project::TimelineSegment],
+    before: &TranscriptDoc,
+    after: &TranscriptDoc,
+    energy: Option<&EnergyEnvelope>,
+) -> usize {
+    let total: f64 = recording_durations.iter().sum();
+    let within = |range: &Range<f64>| range.start.clamp(0.0, total)..range.end.clamp(0.0, total);
+    let same = |a: &Range<f64>, b: &Range<f64>| {
+        (a.start - b.start).abs() < TOUCH_EPSILON && (a.end - b.end).abs() < TOUCH_EPSILON
+    };
+    let followed = follow_words(before, after);
+    let runs = TranscriptEdl::build(before, timeline, recording_durations).cut_runs;
+    let mut moved = 0;
+    for run in runs {
+        let (Some(first), Some(last)) = (followed[run.start], followed[run.end - 1]) else {
+            continue;
+        };
+        let followed_run = first..last + 1;
+        let (Some(planned), Some(refined)) = (
+            plan_word_cuts(before, energy, None, std::slice::from_ref(&run)).pop(),
+            plan_word_cuts(after, energy, None, std::slice::from_ref(&followed_run)).pop(),
+        ) else {
+            continue;
+        };
+        let (planned, refined) = (within(&planned), within(&refined));
+        if same(&planned, &refined) || refined.end <= refined.start {
+            continue;
+        }
+        let inside = (planned.start + planned.end) / 2.0;
+        let kept = kept_ranges(&build_mappings(timeline, recording_durations));
+        let Some(hole) = hole_around(&kept, inside).filter(|hole| same(&within(hole), &planned))
+        else {
+            continue;
+        };
+        let mut next = timeline.clone();
+        if restore_hole(&mut next, recording_durations, removed_takes, hole, inside).is_err() {
+            continue;
+        }
+        let report = apply_source_cuts(
+            &mut next,
+            recording_durations,
+            std::slice::from_ref(&refined),
+        );
+        if report.applied == 0 || report.skipped() > 0 {
+            continue;
+        }
+        *timeline = next;
+        moved += 1;
+    }
+    moved
 }
