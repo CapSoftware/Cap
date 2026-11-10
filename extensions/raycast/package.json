@@ -11,7 +11,7 @@
 		{
 			"name": "start-recording",
 			"title": "Start Recording",
-			"description": "Start a new Cap screen recording with your default capture settings",
+			"description": "Start a new Cap screen recording with your configured capture target",
 			"mode": "no-view"
 		},
 		{
@@ -55,10 +55,9 @@
 		{
 			"name": "targetName",
 			"title": "Target Screen or Window Name",
-			"description": "Display or window name resolved by Cap (e.g. Built-in Retina Display)",
+			"description": "Exact display or window name to capture in Cap",
 			"type": "textfield",
-			"required": false,
-			"default": "Built-in Retina Display"
+			"required": true
 		},
 		{
 			"name": "captureSystemAudio",
