@@ -598,49 +598,27 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const updatedAt = input.updatedAt;
 				const videoId = input.videoId;
 
-				const [record] = yield* db.use((db) =>
+				const [video] = yield* db.use((db) =>
 					db
-						.select({
-							video: Db.videos,
-							upload: Db.videoUploads,
-						})
+						.select({ ownerId: Db.videos.ownerId })
 						.from(Db.videos)
-						.leftJoin(
-							Db.videoUploads,
-							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
-						)
 						.where(Dz.eq(Db.videos.id, videoId)),
 				);
 
-				if (!record) return yield* Effect.fail(new Video.NotFoundError());
-				yield* policy.isOwnerLoaded(record.video);
+				if (!video) return yield* Effect.fail(new Video.NotFoundError());
+				yield* policy.isOwnerLoaded(video);
 
 				yield* db.use((db) =>
-					db.transaction(async (tx) => {
-						if (record.upload) {
-							await tx
-								.update(Db.videoUploads)
-								.set({
-									uploaded,
-									total,
-									updatedAt,
-								})
-								.where(
-									Dz.and(
-										Dz.eq(Db.videoUploads.videoId, videoId),
-										Dz.lte(Db.videoUploads.updatedAt, updatedAt),
-									),
-								);
-							return;
-						}
-
-						await tx.insert(Db.videoUploads).values({
-							videoId,
-							uploaded,
-							total,
-							updatedAt,
-						});
-					}),
+					db
+						.update(Db.videoUploads)
+						.set({ uploaded, total, updatedAt })
+						.where(
+							Dz.and(
+								Dz.eq(Db.videoUploads.videoId, videoId),
+								Dz.eq(Db.videoUploads.phase, "uploading"),
+								Dz.lte(Db.videoUploads.updatedAt, updatedAt),
+							),
+						),
 				);
 
 				return true as const;
