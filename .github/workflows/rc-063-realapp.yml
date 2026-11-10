@@ -346,6 +346,8 @@ jobs:
           [[ -f $ffmpeg ]] || ffmpeg=ffmpeg
           bash rc/.github/rc-063/model_setup.sh "$RUNNER_TEMP/rc-models" \
             apps/desktop-gpui/tests/data/transcription/audio/splice-13-am_fenrir.ogg "$ffmpeg"
+          echo "RC_NOTE_DESCRIPTION=$(sed -n 's/^model_updated_description = "\(.*\)"$/\1/p' apps/desktop-gpui/locales/en.toml)" >> "$GITHUB_ENV"
+          git log -1 --format='PR head %H %s'
 
       - name: Item 6, old layout, update note, download, Generate
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-old,') }}
@@ -378,6 +380,9 @@ jobs:
             ${{ runner.temp }}/rc-out/**/*.txt
             ${{ runner.temp }}/rc-out/**/*.json
             ${{ runner.temp }}/rc-out/**/*.png
+            ${{ runner.temp }}/rc-fix/clip/**/*.m4a
+            ${{ runner.temp }}/rc-fix/clip/**/*.ogg
+            ${{ runner.temp }}/rc-fix/clip/**/recording-meta.json
             !${{ runner.temp }}/rc-out/**/data-home/**
           retention-days: 7
 
@@ -432,6 +437,8 @@ jobs:
         run: |
           bash rc/.github/rc-063/model_setup.sh "$RUNNER_TEMP/rc-models" \
             apps/desktop-gpui/tests/data/transcription/audio/splice-13-am_fenrir.ogg ffmpeg $WANT_FULL
+          echo "RC_NOTE_DESCRIPTION=$(sed -n 's/^model_updated_description = "\(.*\)"$/\1/p' apps/desktop-gpui/locales/en.toml)" >> "$GITHUB_ENV"
+          git log -1 --format='PR head %H %s'
 
       - name: Item 6, old layout, update note, download, Generate
         if: ${{ !cancelled() && contains(needs.plan.outputs.jobs, ',item6-old,') }}
@@ -472,5 +479,8 @@ jobs:
             ${{ runner.temp }}/rc-out/**/*.txt
             ${{ runner.temp }}/rc-out/**/*.json
             ${{ runner.temp }}/rc-out/**/*.png
+            ${{ runner.temp }}/rc-fix/clip/**/*.m4a
+            ${{ runner.temp }}/rc-fix/clip/**/*.ogg
+            ${{ runner.temp }}/rc-fix/clip/**/recording-meta.json
             !${{ runner.temp }}/rc-out/**/data-home/**
           retention-days: 7

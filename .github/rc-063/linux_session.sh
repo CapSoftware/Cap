@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs a command inside a private X session: Xvfb with a window manager, a
 # session bus and a PulseAudio null sink for the start cue, as the Linux jobs
-# in instant-reliability.yml set up. The sink's monitor doubles as a
-# microphone, as in scripts/linux-desktop-harness/x11-capture.sh.
+# in instant-reliability.yml set up. A second null sink's monitor is the
+# microphone (as in scripts/linux-desktop-harness/x11-capture.sh), so a
+# scenario can speak into the microphone without it also being system audio.
 set -uo pipefail
 if [[ -z ${RC_SESSION_BUS:-} ]]; then
   exec env RC_SESSION_BUS=1 dbus-run-session -- bash "$0" "$@"
@@ -18,7 +19,8 @@ pulse_dir=$(mktemp -d)
 pulseaudio -n --daemonize=yes --exit-idle-time=-1 \
   -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
   -L "module-null-sink sink_name=cap_output" \
-  -L "module-remap-source master=cap_output.monitor source_name=cap_mic" \
+  -L "module-null-sink sink_name=cap_micsink" \
+  -L "module-remap-source master=cap_micsink.monitor source_name=cap_mic" \
   -L "module-always-sink"
 export PULSE_SERVER="unix:$pulse_dir/native"
 for _ in $(seq 40); do pactl info >/dev/null 2>&1 && break; sleep 0.25; done

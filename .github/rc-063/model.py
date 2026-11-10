@@ -63,12 +63,15 @@ def record_clip():
         return existing[0]
     os.makedirs(project_home, exist_ok=True)
     profile = rclib.make_profile(os.path.join(out, "record-profile"))
-    env = {"CAP_GPUI_AUTO_RECORD": "studio:14", "CAP_GPUI_AUTO_SYSTEM_AUDIO": "1"}
+    # The clip reaches the app as the microphone only, the shape of the
+    # recordings PR 3908 is about: through a second null sink on Linux, and
+    # through the virtual cable's capture end on Windows.
+    env = {"CAP_GPUI_AUTO_RECORD": "studio:14", "CAP_GPUI_AUTO_NO_MIC": "0"}
     helper = None
     if rclib.LINUX:
         helper = subprocess.Popen(["xmessage", "-geometry", "640x360+200+200", "-title", WINDOW, "A window to record"])
         time.sleep(1)
-        env.update({"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": WINDOW, "CAP_GPUI_AUTO_NO_MIC": "0"})
+        env.update({"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": WINDOW, "CAP_GPUI_AUTO_SYSTEM_AUDIO": "1"})
     app = App(package, profile, project_home, {**env, **extra_env}, "record")
     started = app.wait_log(r"recording started", 120)
     results.add("the recording of the clip started", bool(started), app.text()[-2000:] if not started else "")
@@ -82,7 +85,7 @@ def record_clip():
             except RuntimeError as error:
                 results.note("clip playback", f"could not play: {error}")
         else:
-            subprocess.Popen(["paplay", "--device=cap_output", clip])
+            subprocess.Popen(["paplay", "--device=cap_micsink", clip])
     finished = app.wait_log(r"recording finished", 120) if started else None
     time.sleep(3)
     app.stop()
@@ -156,9 +159,15 @@ def download_through_the_editor(project, expect_note):
     time.sleep(8)
     words = look(app, "1-captions-tab")
     note = rclib.find_phrase(words, "Recommended model updated")
-    description = rclib.find_phrase(words, "Download the new version")
+    wanted = os.environ.get("RC_NOTE_DESCRIPTION", "").strip()
+    opening = " ".join(wanted.split()[:5])
+    description = rclib.find_phrase(words, opening) if opening else None
     if expect_note:
-        results.add("the editor shows the update note", bool(note) and bool(description), f"note {note}, description {description}")
+        results.add(
+            "the editor shows the update note",
+            bool(note) and bool(description),
+            f"title at {note}; description \"{wanted}\" starts at {description}",
+        )
     else:
         results.add("a fresh install shows no update note", not note and not description, f"note {note}, description {description}")
     button = click_phrase(words, "Download Recommended Model")

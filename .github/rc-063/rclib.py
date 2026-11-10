@@ -229,7 +229,13 @@ def ocr(path, scale=3, invert=False, psm=11):
 
 
 def ocr_both(path, **kwargs):
-    return ocr(path, **kwargs) + ocr(path, invert=True, **kwargs)
+    """Sparse text and page layout readings of both polarities: the sparse
+    mode misses light text on dark buttons, the layout mode misses stray
+    labels."""
+    words = []
+    for psm in (11, 3):
+        words += ocr(path, psm=psm, **kwargs) + ocr(path, invert=True, psm=psm, **kwargs)
+    return words
 
 
 def ocr_text(words):
