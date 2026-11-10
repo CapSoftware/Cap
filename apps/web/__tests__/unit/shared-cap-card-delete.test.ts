@@ -17,7 +17,7 @@ vi.mock("@fortawesome/free-solid-svg-icons", () => ({
 	faBuilding: {},
 	faUser: {},
 }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("next/navigation", () => ({

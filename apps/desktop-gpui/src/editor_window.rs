@@ -2799,16 +2799,46 @@ impl EditorWindow {
             return;
         }
         let durations = self.clip_display_durations.clone();
-        let changed =
-            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
-        self.history.amend_all(|entry| {
-            crate::transcription::apply_refined_captions(entry, refined, &durations);
-        });
-        if !changed {
-            return;
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
+        let energy = self.transcript.energy.clone();
+        let mut landing = crate::transcript::RefinementLanding::new(
+            refined,
+            &durations,
+            &removed_takes,
+            energy.as_deref(),
+        );
+        let moves_cuts = landing
+            .land(&mut self.project.clone())
+            .is_some_and(|moved| moved > 0);
+        if moves_cuts {
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.dismiss_frame_controls(cx);
+            self.canvas_mouse_up(window, cx);
+            self.end_timeline_gesture(window, cx);
         }
+        let landed = landing.land(&mut self.project);
+        self.history.amend_all(|entry| {
+            landing.land(entry);
+        });
+        let Some(moved_cuts) = landed else {
+            return;
+        };
         self.caption_sync_signature = self.caption_projection_signature();
         self.transcript.dirty = true;
+        if moved_cuts > 0 {
+            self.transcript.selection = None;
+            self.transcript.hovered_cut = None;
+            self.set_selection(None, cx);
+            self.canvas_selection = None;
+            self.rebuild_timeline();
+            self.note_edit("caption-refinement", Some(TrackKind::Clip));
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();

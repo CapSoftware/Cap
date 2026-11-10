@@ -2,13 +2,13 @@
 
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useStore } from "@tanstack/react-store";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { importMediaFile } from "../import-media";
 
