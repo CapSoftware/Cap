@@ -6791,14 +6791,10 @@ pub(crate) fn request_editor_deletion(
 /// Returns false when no editor has the recording open, leaving the delete to
 /// the caller.
 pub(crate) fn delete_closing_open_editor(project_path: &Path, cx: &mut App) -> bool {
-    let key = editor_key(project_path);
-    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
-        tracing::info!(path = %key.display(), "recording is already being deleted");
-        return true;
-    }
     let Some(handle) = editor_window_handle(project_path, cx) else {
         return false;
     };
+    let key = editor_key(project_path);
     cx.spawn(async move |cx| close_editor_and_delete(key, handle, cx).await)
         .detach();
     true
