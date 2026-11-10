@@ -3,7 +3,7 @@
 	"name": "cap-screen-recorder",
 	"title": "Cap Screen Recorder",
 	"description": "Start and stop Cap.so recordings and open your Cap dashboard directly from Raycast.",
-	"icon": "cap-icon.svg",
+	"icon": "cap-icon.png",
 	"author": "CapSoftware",
 	"categories": ["Media", "Productivity", "Developer Tools"],
 	"license": "MIT",
