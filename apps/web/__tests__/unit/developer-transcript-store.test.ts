@@ -729,6 +729,7 @@ describe("expiring stale transcripts", () => {
 			appId: "app-1",
 			status,
 			sourceType: "upload",
+			createdAt: at(updatedAt),
 			updatedAt: at(updatedAt),
 		});
 
@@ -742,7 +743,7 @@ describe("expiring stale transcripts", () => {
 
 		const result = await expireStaleTranscripts(at("2026-11-11T10:00:00Z"));
 
-		expect(result).toEqual({ expired: 3 });
+		expect(result).toEqual({ expired: 3, redispatched: 0 });
 		const byId = Object.fromEntries(
 			transcripts().map((row) => [row.id, [row.status, row.errorCode]]),
 		);
@@ -758,6 +759,81 @@ describe("expiring stale transcripts", () => {
 		expect(context.deleted).not.toContain(
 			"developer/app-1/transcripts/done/result.json",
 		);
+	});
+});
+
+describe("recovering a job that was claimed but never started", () => {
+	const minutesAgo = (minutes: number) =>
+		new Date(Date.now() - minutes * 60 * 1000);
+	const seedQueued = (id: string, startedAt: Date, sourceType = "upload") =>
+		fake().seed(developerTranscripts, {
+			id,
+			appId: "app-1",
+			status: "queued",
+			sourceType,
+			sourceUrl: sourceType === "url" ? URL_A : null,
+			startedAt,
+			createdAt: startedAt,
+			updatedAt: startedAt,
+		});
+
+	it("starts it again when start is called after the claim went stale", async () => {
+		seedQueued("stale", minutesAgo(10));
+		const result = await startTranscriptUpload("app-1", "stale");
+
+		expect(result.ok).toBe(true);
+		expect(context.start).toHaveBeenCalledTimes(1);
+		expect(context.start).toHaveBeenCalledWith(
+			"developer-transcribe-workflow",
+			[{ transcriptId: "stale" }],
+		);
+	});
+
+	it("leaves a freshly claimed job alone", async () => {
+		seedQueued("fresh", minutesAgo(1));
+		await startTranscriptUpload("app-1", "fresh");
+		expect(context.start).not.toHaveBeenCalled();
+	});
+
+	it("starts it again when the same URL request is repeated", async () => {
+		const key = "retry-key-0001";
+		seedQueued(
+			transcriptIdForIdempotencyKey("app-1", key),
+			minutesAgo(10),
+			"url",
+		);
+
+		const replay = await fromUrl(URL_A, key);
+		expect(replay.ok).toBe(true);
+		expect(transcripts()).toHaveLength(1);
+		expect(context.start).toHaveBeenCalledTimes(1);
+
+		await fromUrl(URL_A, key);
+		expect(context.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("is picked up by the cleanup job, once", async () => {
+		seedQueued("stale", minutesAgo(10));
+		seedQueued("fresh", minutesAgo(1));
+		fake().seed(developerTranscripts, {
+			id: "running",
+			appId: "app-1",
+			status: "processing",
+			sourceType: "upload",
+			startedAt: minutesAgo(10),
+			createdAt: minutesAgo(10),
+			updatedAt: minutesAgo(10),
+		});
+
+		expect(await expireStaleTranscripts()).toEqual({
+			expired: 0,
+			redispatched: 1,
+		});
+		expect(await expireStaleTranscripts()).toEqual({
+			expired: 0,
+			redispatched: 0,
+		});
+		expect(context.start).toHaveBeenCalledTimes(1);
 	});
 });
 

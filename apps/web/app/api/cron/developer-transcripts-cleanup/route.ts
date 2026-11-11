@@ -17,7 +17,11 @@ class Api extends HttpApi.make("DeveloperTranscriptsCleanupApi").add(
 	HttpApiGroup.make("root").add(
 		HttpApiEndpoint.get("cleanup")`/api/cron/developer-transcripts-cleanup`
 			.addSuccess(
-				Schema.Struct({ expired: Schema.Number, swept: Schema.Number }),
+				Schema.Struct({
+					expired: Schema.Number,
+					redispatched: Schema.Number,
+					swept: Schema.Number,
+				}),
 			)
 			.addError(HttpApiError.Unauthorized)
 			.addError(HttpApiError.InternalServerError),
@@ -41,11 +45,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						return yield* new HttpApiError.Unauthorized();
 
 					return yield* Effect.tryPromise(async () => {
-						const { expired } = await expireStaleTranscripts();
+						const { expired, redispatched } = await expireStaleTranscripts();
 						const { deleted } = await sweepStaleDeveloperUploads(
 							new Date(Date.now() - DEVELOPER_UPLOAD_MAX_AGE_MS),
 						);
-						return { expired, swept: deleted };
+						return { expired, redispatched, swept: deleted };
 					}).pipe(
 						Effect.tapError((error) =>
 							Effect.sync(() =>

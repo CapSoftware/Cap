@@ -7,18 +7,7 @@ import {
 	developerTranscripts,
 	users,
 } from "@cap/database/schema";
-import {
-	and,
-	count,
-	desc,
-	eq,
-	gte,
-	inArray,
-	isNull,
-	lt,
-	or,
-	sql,
-} from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { start } from "workflow/api";
 import { hasMinimumTranscriptBalance } from "@/lib/developer-transcript-billing";
 import {
@@ -229,23 +218,32 @@ async function findTranscript(appId: string, transcriptId: string) {
 	return row ?? null;
 }
 
+const DISPATCH_RETRY_AFTER_MS = 2 * 60 * 1000;
+
 async function dispatchTranscript(
 	transcriptId: string,
 	from: "uploading" | "queued",
 	sourceBytes?: number,
 ) {
+	const now = new Date();
 	const claim = await db()
 		.update(developerTranscripts)
 		.set({
 			status: "queued",
-			startedAt: new Date(),
+			startedAt: now,
 			...(sourceBytes !== undefined ? { sourceBytes } : {}),
 		})
 		.where(
 			and(
 				eq(developerTranscripts.id, transcriptId),
 				eq(developerTranscripts.status, from),
-				isNull(developerTranscripts.startedAt),
+				or(
+					isNull(developerTranscripts.startedAt),
+					lt(
+						developerTranscripts.startedAt,
+						new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+					),
+				),
 				isNull(developerTranscripts.deletedAt),
 			),
 		);
@@ -324,7 +322,13 @@ export async function createTranscriptFromUrl(
 				return IDEMPOTENCY_CONFLICT;
 			}
 			if (existing.deletedAt) return IDEMPOTENCY_KEY_RETIRED;
-			return { ok: true, transcript: existing };
+			if (existing.status === "queued") {
+				await dispatchTranscript(id, "queued");
+			}
+			return {
+				ok: true,
+				transcript: (await findTranscript(appId, id)) ?? existing,
+			};
 		}
 	}
 
@@ -502,6 +506,13 @@ export async function startTranscriptUpload(
 ): Promise<{ ok: true; transcript: TranscriptRow } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
 	if (!transcript) return NOT_FOUND;
+	if (transcript.status === "queued") {
+		await dispatchTranscript(transcript.id, "queued");
+		return {
+			ok: true,
+			transcript: (await findTranscript(appId, transcript.id)) ?? transcript,
+		};
+	}
 	if (transcript.status !== "uploading") return { ok: true, transcript };
 
 	const keys = transcriptObjectKeys(appId, transcript.id);
@@ -675,7 +686,11 @@ export async function expireStaleTranscripts(now = new Date()) {
 					lt(developerTranscripts.updatedAt, uploadCutoff),
 				),
 				and(
-					inArray(developerTranscripts.status, ["queued", "processing"]),
+					eq(developerTranscripts.status, "queued"),
+					lt(developerTranscripts.createdAt, jobCutoff),
+				),
+				and(
+					eq(developerTranscripts.status, "processing"),
 					lt(developerTranscripts.updatedAt, jobCutoff),
 				),
 			),
@@ -693,6 +708,7 @@ export async function expireStaleTranscripts(now = new Date()) {
 				errorMessage: uploading
 					? "The file was not uploaded in time"
 					: "The transcript did not finish in time. Nothing was charged.",
+				reservedMicroCredits: 0,
 				completedAt: now,
 			})
 			.where(
@@ -706,7 +722,30 @@ export async function expireStaleTranscripts(now = new Date()) {
 		const keys = transcriptObjectKeys(row.appId, row.id);
 		await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
 	}
-	return { expired };
+
+	const unstarted = await db()
+		.select({ id: developerTranscripts.id })
+		.from(developerTranscripts)
+		.where(
+			and(
+				eq(developerTranscripts.status, "queued"),
+				lt(
+					developerTranscripts.startedAt,
+					new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+				),
+				isNull(developerTranscripts.deletedAt),
+			),
+		)
+		.limit(100);
+
+	let redispatched = 0;
+	for (const row of unstarted) {
+		if ((await dispatchTranscript(row.id, "queued")) === "dispatched") {
+			redispatched++;
+		}
+	}
+
+	return { expired, redispatched };
 }
 
 export async function getTranscriptionUsageSince(appId: string, since: Date) {
