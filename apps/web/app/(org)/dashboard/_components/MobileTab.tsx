@@ -20,6 +20,7 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../Contexts";
+import { InfraAppSwitcher } from "../infra/_components/infra-app-switcher";
 import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
 
@@ -36,7 +37,11 @@ const Tabs = [
 const MobileTab = () => {
 	const [open, setOpen] = useState(false);
 	const containerRef = useRef<HTMLButtonElement>(null);
-	const { activeOrganization: activeOrg, user } = useDashboardContext();
+	const {
+		activeOrganization: activeOrg,
+		user,
+		isInfraSection,
+	} = useDashboardContext();
 	const currentMember = activeOrg?.members.find(
 		(member) => member.userId === user.id,
 	);
@@ -56,11 +61,17 @@ const MobileTab = () => {
 	});
 	return (
 		<div className="flex sticky bottom-0 z-50 flex-1 gap-10 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
-			<div className="relative flex-auto w-fit">
-				<AnimatePresence>
-					{open && <OrgsMenu setOpen={setOpen} menuRef={menuRef} />}
-				</AnimatePresence>
-				<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
+			<div className="relative flex-auto w-fit min-w-0">
+				{isInfraSection ? (
+					<InfraAppSwitcher placement="mobile" />
+				) : (
+					<>
+						<AnimatePresence>
+							{open && <OrgsMenu setOpen={setOpen} menuRef={menuRef} />}
+						</AnimatePresence>
+						<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
+					</>
+				)}
 			</div>
 			<div className="flex gap-6 justify-between items-center h-full text-gray-11">
 				{Tabs.filter((i) => !i.adminOnly || canViewSettings).map((tab) => (

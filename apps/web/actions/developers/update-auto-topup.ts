@@ -58,6 +58,6 @@ export async function updateDeveloperAutoTopUp(data: {
 		.set(updates)
 		.where(eq(developerCreditAccounts.appId, data.appId));
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

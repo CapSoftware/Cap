@@ -18,7 +18,7 @@ import { KeyRound, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
-import { ApiKeyDisplay } from "../../../developers/_components/ApiKeyDisplay";
+import { ApiKeyDisplay } from "../../../infra/_components/api-key-display";
 import {
 	type CliApiKeySummary,
 	createCliApiKey,

@@ -1,5 +1,5 @@
 "use client";
-import { Button, Logo } from "@cap/ui";
+import { Button, Logo, LogoBadge } from "@cap/ui";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
@@ -8,11 +8,11 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { Tooltip } from "@/components/Tooltip";
 import { useDashboardContext } from "../../Contexts";
-import { DeveloperSidebarContent } from "../../developers/_components/DeveloperSidebarContent";
+import { InfraSidebar } from "../../infra/_components/infra-sidebar";
 import AdminNavItems from "./Items";
 
 export const DesktopNav = () => {
-	const { toggleSidebarCollapsed, sidebarCollapsed, isDeveloperSection } =
+	const { toggleSidebarCollapsed, sidebarCollapsed, isInfraSection } =
 		useDashboardContext();
 	const { platform } = useDetectPlatform();
 	const cmdSymbol = platform === "macos" ? "⌘" : "Ctrl";
@@ -49,19 +49,34 @@ export const DesktopNav = () => {
 		>
 			<div className="flex flex-col mx-auto w-full h-full">
 				<div className="flex justify-between items-center px-3 pt-5 mb-3.5 w-full truncate shrink-0 min-h-8">
-					{isDeveloperSection ? (
-						<Link
-							href="/dashboard/caps"
+					{isInfraSection ? (
+						<div
 							className={clsx(
-								"flex items-center gap-2 text-gray-11 hover:text-gray-12 transition-colors",
-								sidebarCollapsed ? "justify-center" : "",
+								"flex items-center gap-1 min-w-0",
+								sidebarCollapsed && "justify-center w-full",
 							)}
 						>
-							<ArrowLeft size={sidebarCollapsed ? 18 : 16} />
+							<Tooltip content="Back to dashboard" position="right">
+								<Link
+									href="/dashboard/caps"
+									aria-label="Back to dashboard"
+									className="flex justify-center items-center rounded-lg transition-colors size-8 shrink-0 text-gray-10 hover:bg-gray-3 hover:text-gray-12"
+								>
+									<ArrowLeft size={16} />
+								</Link>
+							</Tooltip>
 							{!sidebarCollapsed && (
-								<span className="text-sm font-medium">Dashboard</span>
+								<Link
+									href="/dashboard/infra"
+									className="flex gap-2 items-center min-w-0"
+								>
+									<LogoBadge className="w-auto h-6 shrink-0" />
+									<span className="text-base font-medium text-gray-12">
+										Infra
+									</span>
+								</Link>
 							)}
-						</Link>
+						</div>
 					) : (
 						<Link href="/dashboard">
 							<Logo
@@ -101,11 +116,7 @@ export const DesktopNav = () => {
 				</div>
 				<div className="flex overflow-hidden flex-col flex-grow min-h-0">
 					<div className="flex flex-col px-3 h-full min-h-0">
-						{isDeveloperSection ? (
-							<DeveloperSidebarContent />
-						) : (
-							<AdminNavItems />
-						)}
+						{isInfraSection ? <InfraSidebar /> : <AdminNavItems />}
 					</div>
 				</div>
 			</div>

@@ -121,8 +121,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		...(showDeveloperDashboard
 			? [
 					{
-						name: "Developers",
-						href: `/dashboard/developers`,
+						name: "Infra",
+						href: "/dashboard/infra",
 						ownerOnly: true,
 						matchChildren: true,
 						icon: <CodeIcon />,
