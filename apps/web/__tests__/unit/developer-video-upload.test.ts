@@ -387,7 +387,7 @@ describe("completing a developer video upload", () => {
 			status: 400,
 			code: "duration_required",
 		});
-		expect(context.objects.size).toBe(0);
+		expect([...context.objects.keys()]).toEqual([UPLOAD_KEY]);
 		expect(ledger()).toHaveLength(0);
 	});
 
@@ -402,7 +402,7 @@ describe("completing a developer video upload", () => {
 		expect(ledger()).toHaveLength(0);
 	});
 
-	it("removes the stored file and charges nothing when credits ran out", async () => {
+	it("charges nothing when credits ran out and completes after a top-up", async () => {
 		const id = await createAndUpload();
 		const current = account();
 		if (current) current.balanceMicroCredits = 9_999;
@@ -411,11 +411,18 @@ describe("completing a developer video upload", () => {
 			ok: false,
 			status: 402,
 		});
-		expect(context.objects.size).toBe(0);
+		expect([...context.objects.keys()]).toEqual([UPLOAD_KEY]);
 		expect(videos()[0]?.s3Key).toBe(INITIAL_KEY);
 		expect(account()?.balanceMicroCredits).toBe(9_999);
 		expect(ledger()).toHaveLength(0);
 		expect(videos()[0]?.duration).toBeNull();
+
+		if (current) current.balanceMicroCredits = 50_000;
+		expect(await completeDeveloperVideoUpload("app-1", id, {})).toMatchObject({
+			ok: true,
+			chargedMicroCredits: 10_000,
+		});
+		expect([...context.objects.keys()]).toEqual([storedKey()]);
 	});
 
 	it("rejects and removes an upload over 5 GB", async () => {
@@ -441,7 +448,7 @@ describe("completing a developer video upload", () => {
 		});
 		expect(ledger()).toHaveLength(0);
 		expect(account()?.balanceMicroCredits).toBe(1_000_000);
-		expect(context.objects.size).toBe(0);
+		expect([...context.objects.keys()]).toEqual([UPLOAD_KEY]);
 		expect(videos()[0]?.duration).toBeNull();
 	});
 

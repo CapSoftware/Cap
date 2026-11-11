@@ -253,7 +253,6 @@ export async function completeDeveloperVideoUpload(
 
 	const storedKey = `developer/${appId}/${video.id}/video-${nanoId()}`;
 	await copyDeveloperObject(uploadKey, storedKey);
-	await deleteDeveloperObjects([uploadKey]);
 
 	let kept = false;
 	try {
@@ -348,6 +347,6 @@ export async function completeDeveloperVideoUpload(
 			chargedMicroCredits: outcome.state === "stored" ? outcome.charged : 0,
 		};
 	} finally {
-		if (!kept) await deleteDeveloperObjects([storedKey]);
+		await deleteDeveloperObjects([kept ? uploadKey : storedKey]);
 	}
 }
