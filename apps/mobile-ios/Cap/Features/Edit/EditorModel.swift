@@ -276,10 +276,12 @@ final class EditorModel {
                     self.previewFailed()
                     return
                 }
-                incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     Task { @MainActor in
                         guard let self, generation == self.rebuildGeneration, !self.closed else { return }
-                        guard finished else {
+                        // An unfinished seek was replaced by a newer one on the same player: the first build loads
+                        // into the visible player, which a scrub can already be seeking. Only a failed item is a loss.
+                        guard incoming.currentItem?.status != .failed else {
                             self.previewFailed()
                             return
                         }
@@ -291,7 +293,7 @@ final class EditorModel {
                             outgoing.pause()
                             outgoing.replaceCurrentItem(with: nil)
                         }
-                        if abs(self.outputTime - target) > 0.02 {
+                        if !self.isScrubbing, abs(self.outputTime - target) > 0.02 {
                             incoming.seek(to: CMTime(seconds: self.outputTime, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                         if self.isPlaying { incoming.play() }
