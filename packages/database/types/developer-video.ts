@@ -39,9 +39,17 @@ export type DeveloperVideoPartState =
 	| { state: "failed"; reason: string }
 	| { state: "unavailable"; reason: string; retryAt: number };
 
+export interface DeveloperVideoProbe {
+	duration: number | null;
+	width: number;
+	height: number;
+	fps: number | null;
+}
+
 export interface DeveloperVideoProcessingState {
 	encodeId: string;
 	startedAt: number;
+	probe: DeveloperVideoProbe | null;
 	hls: DeveloperVideoPartState;
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;
