@@ -311,6 +311,12 @@ final class CapUITests: XCTestCase {
         shot("21-scope-space")
         app.buttons["Engineering"].tap()
         waitFor(app.navigationBars["Engineering"])
+        // In the iPhone Duo's narrow library column the chips scroll; bring My Caps back before tapping it.
+        let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<3 where myCaps.frame.minX < 0 {
+            let y = myCaps.frame.midY
+            origin.withOffset(CGVector(dx: 40, dy: y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 300, dy: y)))
+        }
         myCaps.tap()
         waitFor(app.navigationBars["My Caps"])
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Organization, '")).firstMatch.tap()
