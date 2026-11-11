@@ -1,6 +1,6 @@
 import Link from "next/link";
+import { Lockup } from "@/components/infra/Lockup";
 import { LINKS, NAV_LINKS } from "./content";
-import { Lockup } from "./Lockup";
 
 const NAV_ITEM =
 	"rounded-[6px] px-2.5 py-1.5 text-[13.5px] text-[rgba(232,236,244,0.58)] transition-colors duration-200 hover:text-[#E8ECF4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]";

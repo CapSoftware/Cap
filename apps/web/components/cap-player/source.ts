@@ -45,18 +45,17 @@ const startingEstimate = () => {
 		: DEFAULT_BITS_PER_SECOND;
 };
 
-const startingLevel = (
+export const pickStartingLevel = (
 	levels: readonly { bitrate: number; width: number }[],
-	video: HTMLVideoElement,
+	wantedWidth: number,
 	bitsPerSecond: number,
 ) => {
-	const wanted = video.clientWidth * window.devicePixelRatio;
 	let pick = 0;
 	for (let i = 1; i < levels.length; i++) {
 		const level = levels[i];
 		const below = levels[i - 1];
 		if (!level || !below) break;
-		if (level.bitrate > bitsPerSecond || below.width >= wanted) break;
+		if (level.bitrate > bitsPerSecond || below.width >= wantedWidth) break;
 		pick = i;
 	}
 	return pick;
@@ -140,7 +139,11 @@ export const attachSource = (
 				backBufferLength: 30,
 			});
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
-				hls.startLevel = startingLevel(data.levels, video, estimate);
+				hls.startLevel = pickStartingLevel(
+					data.levels,
+					video.clientWidth * window.devicePixelRatio,
+					estimate,
+				);
 				hls.startLoad();
 			});
 			let recovered = false;
