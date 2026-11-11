@@ -18,10 +18,6 @@ const schemaMocks = vi.hoisted(() => ({
 	},
 }));
 
-vi.mock("@cap/env", () => {
-	const env: Record<string, string | undefined> = {};
-	return { serverEnv: () => env };
-});
 vi.mock("@cap/database", () => ({ db: mockDb }));
 vi.mock("@cap/env", () => ({ serverEnv: () => mockEnv }));
 vi.mock("@cap/database/schema", () => schemaMocks);

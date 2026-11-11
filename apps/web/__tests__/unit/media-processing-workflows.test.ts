@@ -49,6 +49,7 @@ vi.mock("@cap/env", () => ({
 	}),
 }));
 vi.mock("@cap/web-domain", () => ({
+	SUPPORTED_LANGUAGES: {},
 	Video: {
 		VideoId: { make: (id: string) => id },
 		Video: { decodeSync: (value: unknown) => value },

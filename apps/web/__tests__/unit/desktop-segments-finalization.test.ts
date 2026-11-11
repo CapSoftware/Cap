@@ -14,10 +14,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@cap/database", () => ({
 	db: () => ({ select: () => ({ from: () => ({ where: async () => [] }) }) }),
 }));
-vi.mock("@cap/env", () => {
-	const env: Record<string, string | undefined> = {};
-	return { serverEnv: () => env };
-});
 vi.mock("@cap/database/schema", () => ({ users: {}, videos: {} }));
 vi.mock("@cap/env", () => ({ serverEnv: () => mocks.env }));
 vi.mock("drizzle-orm", () => ({ eq: vi.fn() }));
