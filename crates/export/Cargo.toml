@@ -35,6 +35,9 @@ imgref = "1.10"
 rgb = "0.8"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
 chrono = "0.4"
@@ -44,9 +47,6 @@ tokio.workspace = true
 serde_json.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 anyhow.workspace = true
-
-[target.'cfg(unix)'.dev-dependencies]
-libc = "0.2"
 
 [lints]
 workspace = true
