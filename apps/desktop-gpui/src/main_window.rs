@@ -5277,7 +5277,8 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = app_windows::screenshot_editor_key(&bundle);
+        cx.spawn_in(window, async move |_this, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -5298,10 +5299,7 @@ impl MainWindow {
                 tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Screenshots, window, cx);
-            })
-            .ok();
+            app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }
