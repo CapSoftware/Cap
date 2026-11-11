@@ -6826,13 +6826,20 @@ pub(crate) fn request_editor_deletion(
 /// it open, that editor is closed the way its own Delete closes it, and the
 /// delete starts once the engine has let go of the media, so the delete is
 /// not refused and does not pull the folder from under a live editor.
+/// A delete requested while an earlier one is still closing the editor joins
+/// that one: it holds the recording until the editor lets go, so a second
+/// delete would only fail and report an error for a delete that succeeds.
 /// Returns false when no editor has the recording open, leaving the delete to
 /// the caller.
 pub(crate) fn delete_closing_open_editor(project_path: &Path, cx: &mut App) -> bool {
+    let key = editor_key(project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        tracing::info!(path = %key.display(), "recording is already being deleted");
+        return true;
+    }
     let Some(handle) = editor_window_handle(project_path, cx) else {
         return false;
     };
-    let key = editor_key(project_path);
     cx.spawn(async move |cx| close_editor_and_delete(key, handle, cx).await)
         .detach();
     true
@@ -8128,6 +8135,30 @@ mod tests {
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    /// A second library delete while the first is still closing the editor
+    /// joins it rather than starting a delete that fails on the first one's
+    /// hold on the recording.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_library_delete_while_its_editor_is_closing_joins_that_delete(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let library = tempfile::tempdir().unwrap();
+        let project_path = library.path().join("closing.cap");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let key = editor_key(&project_path);
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            windows.deleting_editors.insert(key.clone());
+            cx.set_global(windows);
+            assert!(delete_closing_open_editor(&project_path, cx));
+
+            cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+            assert!(!delete_closing_open_editor(&project_path, cx));
+        });
+        assert!(project_path.is_dir());
     }
 
     /// Deleting from the library a recording an editor window has open closes
