@@ -293,7 +293,9 @@ final class EditorModel {
                             outgoing.pause()
                             outgoing.replaceCurrentItem(with: nil)
                         }
-                        if !self.isScrubbing, abs(self.outputTime - target) > 0.02 {
+                        // A scrub on the first build is already seeking this player; any other scrub was moving the
+                        // old one, so its position has to be carried over.
+                        if outgoing !== incoming || !self.isScrubbing, abs(self.outputTime - target) > 0.02 {
                             incoming.seek(to: CMTime(seconds: self.outputTime, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                         if self.isPlaying { incoming.play() }
