@@ -4,6 +4,8 @@ import clsx from "clsx";
 import Link from "next/link";
 import { useState } from "react";
 import { infraAppPath } from "@/lib/infra-routes";
+import type { InfraProCredit } from "../infra-data";
+import { AgentSetup } from "./agent-setup";
 import {
 	AppNameForm,
 	type CreatedApp,
@@ -11,16 +13,26 @@ import {
 	KeysReveal,
 	useCreateApp,
 } from "./create-app";
+import { ProCredit } from "./pro-credit";
 import { Brand } from "./shell";
 import { Step, StepNote, Steps } from "./steps";
-import { ButtonLink, EnvTag, FOCUS } from "./ui";
+import { Button, ButtonLink, EnvTag, FOCUS } from "./ui";
 
 const QUIET_LINK = clsx(
 	"rounded-[6px] px-2.5 py-1.5 text-[13.5px] text-[rgba(232,236,244,0.58)] transition-colors duration-200 hover:text-[#E8ECF4]",
 	FOCUS,
 );
 
-export function FirstRun() {
+const LEAD =
+	"m-0 max-w-[340px] text-pretty text-[15.5px] leading-[1.6] text-[rgba(232,236,244,0.6)]";
+
+export function FirstRun({
+	organizations,
+	proCredit,
+}: {
+	organizations: { id: string; name: string }[];
+	proCredit: InfraProCredit;
+}) {
 	const [created, setCreated] = useState<
 		(CreatedApp & { name: string; environment: Environment }) | null
 	>(null);
@@ -46,9 +58,15 @@ export function FirstRun() {
 					<h1 className="m-0 text-balance text-[clamp(30px,3.4vw,42px)] font-medium leading-[1.06] tracking-[-0.035em] text-[#E8ECF4]">
 						Set up Cap Infra.
 					</h1>
-					<p className="m-0 mt-5 max-w-[340px] text-pretty text-[15.5px] leading-[1.6] text-[rgba(232,236,244,0.6)]">
-						Name an app and your API keys are ready. Uploads, storage and
-						delivery are billed from prepaid credits, with no plans or seats.
+					<p className={clsx(LEAD, "mt-5")}>
+						Name an app and your API keys are ready. Usage is billed from
+						prepaid credits, with no plans or seats.
+					</p>
+					<p className={clsx(LEAD, "mt-4")}>
+						Infra is separate from Cap. Your recordings, plan and team stay
+						exactly as they are.
+						{proCredit.status !== "not_pro" &&
+							" Your Cap Pro plan adds $5 of Infra credit every month."}
 					</p>
 				</div>
 				<div className="min-w-0 max-w-[620px]">
@@ -60,12 +78,42 @@ export function FirstRun() {
 									<EnvTag environment={created.environment} />
 								</p>
 							) : (
-								<AppNameForm
-									submitLabel="Create app"
-									pending={create.isPending}
-									onSubmit={(input) => create.mutate(input)}
-									autoFocus
-								/>
+								<div className="flex flex-col gap-5">
+									{organizations.length > 0 && (
+										<div>
+											<div className="flex flex-wrap gap-2">
+												{organizations.map((organization) => (
+													<Button
+														key={organization.id}
+														variant="ghost"
+														disabled={create.isPending}
+														onClick={() =>
+															create.mutate({
+																name: organization.name,
+																environment: "development",
+															})
+														}
+														className="max-w-full"
+													>
+														<span className="truncate">
+															Use {organization.name}
+														</span>
+													</Button>
+												))}
+											</div>
+											<p className="m-0 mt-3 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
+												Starts an Infra app named after your Cap organization,
+												or name a new one below.
+											</p>
+										</div>
+									)}
+									<AppNameForm
+										submitLabel="Create app"
+										pending={create.isPending}
+										onSubmit={(input) => create.mutate(input)}
+										autoFocus={organizations.length === 0}
+									/>
+								</div>
 							)}
 						</Step>
 						<Step title="Copy your keys" state={created ? "current" : "next"}>
@@ -77,31 +125,40 @@ export function FirstRun() {
 								</StepNote>
 							)}
 						</Step>
-						<Step
-							title="Add credits and upload"
-							state={created ? "current" : "next"}
-						>
+						<Step title="Start building" state={created ? "current" : "next"}>
 							{created ? (
-								<div className="flex flex-col gap-4">
-									<StepNote>
-										Creating a video needs a balance. Credits start at $5 and
-										your dashboard has the first request ready to copy.
-									</StepNote>
+								<div className="flex flex-col gap-6">
+									{proCredit.status === "not_pro" ? (
+										<StepNote>
+											Uploading needs a balance. Credits start at $5, and Cap
+											Pro includes $5 every month.
+										</StepNote>
+									) : (
+										<ProCredit
+											appId={created.appId}
+											credit={proCredit}
+											refresh={false}
+										/>
+									)}
+									<AgentSetup compact />
 									<div className="flex flex-wrap gap-2.5">
-										<ButtonLink href={infraAppPath(created.appId, "billing")}>
-											Add credits
-										</ButtonLink>
-										<ButtonLink
-											variant="ghost"
-											href={infraAppPath(created.appId)}
-										>
+										<ButtonLink href={infraAppPath(created.appId)}>
 											Open dashboard
 										</ButtonLink>
+										{proCredit.status === "not_pro" && (
+											<ButtonLink
+												variant="ghost"
+												href={infraAppPath(created.appId, "billing")}
+											>
+												Add credits
+											</ButtonLink>
+										)}
 									</div>
 								</div>
 							) : (
 								<StepNote>
-									Top up from $5, then create your first video with one request.
+									Hand one prompt to your agent, or drop your first video into
+									the dashboard.
 								</StepNote>
 							)}
 						</Step>

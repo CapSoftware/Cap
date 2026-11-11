@@ -9,7 +9,7 @@ import {
 	developerApps,
 	users,
 } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
@@ -167,6 +167,14 @@ export const developerSdkCors = cors({
 	allowHeaders: ["Content-Type", "Authorization"],
 });
 
+function isOwnOrigin(origin: string) {
+	try {
+		return new URL(serverEnv().WEB_URL).origin === origin;
+	} catch {
+		return false;
+	}
+}
+
 export const withDeveloperPublicAuth = createMiddleware<{
 	Variables: {
 		developerAppId: string;
@@ -231,16 +239,18 @@ export const withDeveloperPublicAuth = createMiddleware<{
 				403,
 			);
 		}
-		const [allowedDomain] = await db()
-			.select({ id: developerAppDomains.id })
-			.from(developerAppDomains)
-			.where(
-				and(
-					eq(developerAppDomains.appId, row.appId),
-					eq(developerAppDomains.domain, origin),
-				),
-			)
-			.limit(1);
+		const [allowedDomain] = isOwnOrigin(origin)
+			? [{ id: "self" }]
+			: await db()
+					.select({ id: developerAppDomains.id })
+					.from(developerAppDomains)
+					.where(
+						and(
+							eq(developerAppDomains.appId, row.appId),
+							eq(developerAppDomains.domain, origin),
+						),
+					)
+					.limit(1);
 
 		if (!allowedDomain) {
 			return c.json(

@@ -12,11 +12,15 @@ import {
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
 	developerVideos,
+	organizations,
 } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { and, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
+import { canUseInfra } from "@/lib/infra-access";
+import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
 import { INFRA_APP_COOKIE, selectInfraApp } from "@/lib/infra-routes";
 import type { InfraStorageSnapshot } from "@/lib/infra-usage";
 
@@ -203,7 +207,41 @@ const getInfraAppsForUser = cache((userId: (typeof userSelectProps)["id"]) =>
 async function requireInfraUser() {
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
+	if (!canUseInfra(user.email)) notFound();
 	return user;
+}
+
+export async function getInfraOrganizations() {
+	const user = await requireInfraUser();
+	const rows = await db()
+		.select({ id: organizations.id, name: organizations.name })
+		.from(organizations)
+		.where(
+			and(
+				eq(organizations.ownerId, user.id),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(6);
+	return rows.sort(
+		(a, b) =>
+			Number(b.id === user.activeOrganizationId) -
+			Number(a.id === user.activeOrganizationId),
+	);
+}
+
+export type InfraProCredit = {
+	status: "available" | "claimed" | "not_pro";
+	nextDate: string;
+};
+
+export async function getInfraProCredit(): Promise<InfraProCredit> {
+	const user = await requireInfraUser();
+	const now = new Date();
+	const nextDate = nextProCreditDate(now).toISOString();
+	if (!userIsPro(user)) return { status: "not_pro", nextDate };
+	const claimed = await hasClaimedProCredit(user.id, now);
+	return { status: claimed ? "claimed" : "available", nextDate };
 }
 
 export async function getInfraApps() {

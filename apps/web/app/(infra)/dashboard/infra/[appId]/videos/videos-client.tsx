@@ -23,6 +23,7 @@ import {
 	TH,
 	TR,
 } from "../../_components/ui";
+import { UploadDrop } from "../../_components/upload-drop";
 
 type Video = typeof developerVideos.$inferSelect;
 
@@ -41,10 +42,12 @@ export function VideosClient({
 	appId,
 	videos,
 	userId,
+	publicKey,
 }: {
 	appId: string;
 	videos: Video[];
 	userId: string;
+	publicKey: string | null;
 }) {
 	const router = useRouter();
 	const filterId = useId();
@@ -113,6 +116,8 @@ export function VideosClient({
 					</form>
 				}
 			/>
+
+			{publicKey && <UploadDrop appId={appId} publicKey={publicKey} />}
 
 			{videos.length === 0 ? (
 				<div className="border-t border-[rgba(222,230,246,0.08)]">

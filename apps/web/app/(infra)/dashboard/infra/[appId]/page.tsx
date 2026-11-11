@@ -9,9 +9,9 @@ import {
 	formatMinutes,
 	utcMonthStart,
 } from "@/lib/infra-usage";
-import { CodeBlock, KeyRow } from "../_components/copy";
+import { AgentSetup } from "../_components/agent-setup";
+import { KeyRow } from "../_components/copy";
 import { GetStarted } from "../_components/get-started";
-import { listVideosCurl } from "../_components/infra-examples";
 import {
 	Block,
 	ButtonLink,
@@ -24,6 +24,7 @@ import {
 import {
 	getDeveloperAppVideos,
 	getDeveloperUsageSummary,
+	getInfraProCredit,
 	getInfraStorageChargesSince,
 	requireInfraApp,
 } from "../infra-data";
@@ -52,13 +53,15 @@ export default async function InfraOverviewPage({
 	const { app } = await requireInfraApp(appId);
 	const monthStart = utcMonthStart(new Date());
 
-	const [usage, monthStorageCharges, recentVideos] = await Promise.all([
-		getDeveloperUsageSummary(app.id),
-		app.creditAccount
-			? getInfraStorageChargesSince(app.creditAccount.id, monthStart)
-			: Promise.resolve(0),
-		getDeveloperAppVideos(app.id, { limit: 6 }),
-	]);
+	const [usage, monthStorageCharges, recentVideos, proCredit] =
+		await Promise.all([
+			getDeveloperUsageSummary(app.id),
+			app.creditAccount
+				? getInfraStorageChargesSince(app.creditAccount.id, monthStart)
+				: Promise.resolve(0),
+			getDeveloperAppVideos(app.id, { limit: 6 }),
+			getInfraProCredit(),
+		]);
 
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
 	const publicKey = app.apiKeys.find((k) => k.keyType === "public");
@@ -114,6 +117,7 @@ export default async function InfraOverviewPage({
 							publicKey={publicKeyValue}
 							isProduction={app.environment === "production"}
 							balanceMicroCredits={balance}
+							proCredit={proCredit}
 						/>
 					</section>
 				) : (
@@ -195,12 +199,9 @@ export default async function InfraOverviewPage({
 							Generate a new pair.
 						</p>
 					</Block>
-					<section className="min-w-0">
-						<h2 className="m-0 pb-4 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
-							List your videos
-						</h2>
-						<CodeBlock code={listVideosCurl()} label="curl example" />
-					</section>
+					<Block title="Use it with your agent">
+						<AgentSetup />
+					</Block>
 				</div>
 			</div>
 		</>

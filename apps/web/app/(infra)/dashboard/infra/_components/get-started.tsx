@@ -2,8 +2,10 @@ import clsx from "clsx";
 import Link from "next/link";
 import { infraAppPath } from "@/lib/infra-routes";
 import { formatCredits } from "@/lib/infra-usage";
+import type { InfraProCredit } from "../infra-data";
 import { CodeBlock } from "./copy";
 import { createVideoCurl } from "./infra-examples";
+import { ProCredit } from "./pro-credit";
 import { Step, StepNote, Steps } from "./steps";
 import { ButtonLink, MONO, TEXT_LINK } from "./ui";
 
@@ -18,25 +20,31 @@ export function GetStarted({
 	publicKey,
 	isProduction,
 	balanceMicroCredits,
+	proCredit,
+	uploadHere = false,
 }: {
 	appId: string;
 	publicKey: string;
 	isProduction: boolean;
 	balanceMicroCredits: number;
+	proCredit: InfraProCredit;
+	uploadHere?: boolean;
 }) {
 	const funded = balanceMicroCredits > 0;
 
 	return (
-		<Steps reached={funded ? 1 : 0} total={4}>
+		<Steps reached={funded ? 1 : 0} total={3}>
 			<Step title="Add credits" state={funded ? "done" : "current"}>
 				{funded ? (
 					<StepNote>
 						{formatCredits(balanceMicroCredits)} available for this app.
 					</StepNote>
+				) : proCredit.status === "available" ? (
+					<ProCredit appId={appId} credit={proCredit} />
 				) : (
 					<div className="flex flex-col items-start gap-4">
 						<StepNote>
-							Creating a video needs a balance. Credits start at $5.
+							Uploading a video needs a balance. Credits start at $5.
 						</StepNote>
 						<ButtonLink size="sm" href={infraAppPath(appId, "billing")}>
 							Add credits
@@ -44,8 +52,24 @@ export function GetStarted({
 					</div>
 				)}
 			</Step>
-			<Step title="Create a video" state={funded ? "current" : "next"}>
+			<Step title="Upload a video" state={funded ? "current" : "next"}>
 				<div className="flex flex-col gap-3">
+					<StepNote>
+						{uploadHere ? (
+							"Drop a file into the box above, or create one through the API:"
+						) : (
+							<>
+								Drop a file into{" "}
+								<Link
+									href={infraAppPath(appId, "videos")}
+									className={TEXT_LINK}
+								>
+									Videos
+								</Link>
+								, or create one through the API:
+							</>
+						)}
+					</StepNote>
 					<CodeBlock
 						code={createVideoCurl(publicKey, isProduction)}
 						label="create request"
@@ -53,20 +77,12 @@ export function GetStarted({
 					<StepNote>
 						{isProduction
 							? "Production apps check the Origin header, so replace it with one of this app's allowed domains."
-							: "Development apps accept this from anywhere, including your terminal."}
+							: "Development apps accept this from anywhere, including your terminal."}{" "}
+						Then send the file with{" "}
+						<Endpoint>upload/multipart/initiate</Endpoint>,{" "}
+						<Endpoint>presign-part</Endpoint> and <Endpoint>complete</Endpoint>.
 					</StepNote>
 				</div>
-			</Step>
-			<Step title="Upload the file in parts" state="next">
-				<StepNote>
-					Call{" "}
-					<Endpoint>
-						POST /api/developer/sdk/v1/upload/multipart/initiate
-					</Endpoint>{" "}
-					with the video id, then <Endpoint>presign-part</Endpoint> for each
-					part and <Endpoint>complete</Endpoint> with the duration, width and
-					height.
-				</StepNote>
 			</Step>
 			<Step title="Read it from your server" state="next">
 				<StepNote>

@@ -9,6 +9,7 @@ const typeLabels: Record<string, string> = {
 	storage_daily: "Storage",
 	refund: "Refund",
 	adjustment: "Adjustment",
+	pro_credit: "Cap Pro credit",
 };
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {

@@ -8,8 +8,13 @@ import {
 } from "@/lib/developer-pricing";
 import { formatCredits } from "@/lib/infra-usage";
 import { CreditTransactionTable } from "../../_components/credit-transaction-table";
+import { ProCredit } from "../../_components/pro-credit";
 import { Block, MONO, PageHeader } from "../../_components/ui";
-import { getDeveloperTransactions, requireInfraApp } from "../../infra-data";
+import {
+	getDeveloperTransactions,
+	getInfraProCredit,
+	requireInfraApp,
+} from "../../infra-data";
 import { TopUp } from "./top-up";
 
 export const metadata: Metadata = {
@@ -48,9 +53,12 @@ export default async function InfraBillingPage({
 }) {
 	const { appId } = await params;
 	const { app } = await requireInfraApp(appId);
-	const transactions = app.creditAccount
-		? await getDeveloperTransactions(app.creditAccount.id)
-		: [];
+	const [transactions, proCredit] = await Promise.all([
+		app.creditAccount
+			? getDeveloperTransactions(app.creditAccount.id)
+			: Promise.resolve([]),
+		getInfraProCredit(),
+	]);
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
 
 	return (
@@ -75,7 +83,12 @@ export default async function InfraBillingPage({
 					</p>
 					<div className="mt-9">
 						{app.creditAccount ? (
-							<TopUp appId={app.id} />
+							<>
+								<TopUp appId={app.id} />
+								<div className="mt-8 border-t border-[rgba(222,230,246,0.08)] pt-6">
+									<ProCredit appId={app.id} credit={proCredit} />
+								</div>
+							</>
 						) : (
 							<p className="m-0 text-[14px] leading-[1.55] text-[rgba(232,236,244,0.58)]">
 								This app has no credit account, so it cannot be topped up.
