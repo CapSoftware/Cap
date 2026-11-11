@@ -69,6 +69,24 @@ describe("planHlsLadder", () => {
 		]);
 	});
 
+	test("never plans the same size twice for an ultrawide source", () => {
+		for (const source of [
+			{ width: 7680, height: 2160 },
+			{ width: 5120, height: 1440 },
+			{ width: 2160, height: 7680 },
+		]) {
+			const sizes = planHlsLadder(source).map(
+				(rung) => `${rung.width}x${rung.height}`,
+			);
+			expect(new Set(sizes).size).toBe(sizes.length);
+		}
+		expect(planHlsLadder({ width: 7680, height: 2160 })[0]).toMatchObject({
+			name: "2160p",
+			width: 4096,
+			height: 1152,
+		});
+	});
+
 	test("labels an odd-sized source with its nearest tier", () => {
 		expect(planHlsLadder({ width: 1956, height: 1100 })[0]?.name).toBe("1080p");
 		expect(planHlsLadder({ width: 2312, height: 1300 })[0]?.name).toBe("1440p");

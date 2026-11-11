@@ -96,9 +96,18 @@ export function planHlsLadder(
 		if (!tier) continue;
 		const isTop = index === topIndex;
 		if (!isTop && tier.shortSide > topShort * 0.8) continue;
+		const fitted = fitShortSide(size, isTop ? topShort : tier.shortSide);
+		const previous = rungs[rungs.length - 1];
+		if (
+			previous &&
+			previous.width === fitted.width &&
+			previous.height === fitted.height
+		) {
+			continue;
+		}
 		rungs.push({
 			name: tier.name,
-			...fitShortSide(size, isTop ? topShort : tier.shortSide),
+			...fitted,
 			maxBitrateKbps: tier.maxBitrateKbps,
 		});
 	}
