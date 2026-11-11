@@ -1559,20 +1559,67 @@ mod tests {
     // desync for that frame and a collapsed hold for the viewer.
     #[test]
     fn gap_crossing_segment_cut_preserves_post_gap_pts() {
+        assert_gap_crossing_segment_cut_preserves_post_gap_pts(None);
+    }
+
+    // The same gap through each H.264 encoder a recording can pick. Encoders
+    // that reorder frames (B-frames) move the gap past the cut in dts order,
+    // and movenc then rewrites the cut keyframe's pts onto the pre-gap
+    // timeline; a recording encoder must not reorder.
+    #[test]
+    fn every_available_recording_encoder_preserves_gaps_across_segment_cuts() {
+        const ENCODERS: &[&[&str]] = &[
+            &["libx264"],
+            &["h264_vaapi"],
+            &["h264_nvenc"],
+            &["h264_qsv"],
+            &["h264_amf"],
+            &["h264_mf"],
+            &["h264_videotoolbox"],
+        ];
+        let tested: Vec<String> = ENCODERS
+            .iter()
+            .filter_map(|&priority| {
+                assert_gap_crossing_segment_cut_preserves_post_gap_pts(Some(priority))
+            })
+            .collect();
+        assert!(
+            tested.iter().any(|name| name == "libx264"),
+            "libx264 must always be covered (tested: {tested:?})"
+        );
+    }
+
+    /// Returns the encoder that ran, or `None` when `encoder_priority` names
+    /// an encoder this machine cannot open.
+    fn assert_gap_crossing_segment_cut_preserves_post_gap_pts(
+        encoder_priority: Option<&'static [&'static str]>,
+    ) -> Option<String> {
         ffmpeg::init().ok();
 
         let temp = tempfile::tempdir().unwrap();
         let base_path = temp.path().to_path_buf();
 
-        let mut encoder = SegmentedVideoEncoder::init(
+        let encoder = SegmentedVideoEncoder::init_with_options(
             base_path.clone(),
             test_video_info(),
             SegmentedVideoEncoderConfig {
                 segment_duration: Duration::from_millis(500),
                 ..Default::default()
             },
-        )
-        .unwrap();
+            false,
+            false,
+            encoder_priority,
+        );
+        let mut encoder = match (encoder, encoder_priority) {
+            (Ok(encoder), Some(priority)) if encoder.encoder.codec_name() != priority[0] => {
+                drop(encoder);
+                return None;
+            }
+            (Ok(encoder), _) => encoder,
+            (Err(_), Some(_)) => return None,
+            (Err(error), None) => panic!("default encoder failed to open: {error}"),
+        };
+        let encoder_name = encoder.encoder.codec_name();
 
         // ~30fps up to 0.4s, a 2.6s gap, then more frames. The post-gap
         // frame is forced to a keyframe so the dash muxer cuts the segment
@@ -1641,10 +1688,11 @@ mod tests {
         for (pts, expected) in pts_secs.iter().zip(&expected) {
             assert!(
                 (pts - expected).abs() < 0.04,
-                "encoded pts {pts:.3}s should match capture timestamp {expected:.3}s \
-                 (all pts: {pts_secs:?})"
+                "{encoder_name}: encoded pts {pts:.3}s should match capture timestamp \
+                 {expected:.3}s (all pts: {pts_secs:?})"
             );
         }
+        Some(encoder_name)
     }
 
     #[test]
