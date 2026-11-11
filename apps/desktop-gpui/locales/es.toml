@@ -2467,6 +2467,9 @@ upload_complete = "Subida completada"
 uploading = "Creando enlace para compartir"
 
 [editor.export.quality]
+gif_high = "Alta"
+gif_low = "Baja"
+gif_medium = "Media"
 larger = "Archivo más grande"
 maximum = "Máxima"
 potato = "Patata"
