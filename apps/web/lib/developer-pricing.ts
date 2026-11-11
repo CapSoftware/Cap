@@ -7,10 +7,6 @@ export const STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH =
 	(STORAGE_MICRO_CREDITS_PER_MINUTE_PER_MONTH * 1000) /
 	MICRO_CREDITS_PER_DOLLAR;
 
-export const DELIVERY_DOLLARS_PER_1000_MINUTES = 0.5;
-
-export const SPEECH_DOLLARS_PER_HOUR = 0.1;
-
 export function dailyStorageMicroCredits(totalMinutes: number) {
 	return Math.floor(
 		(totalMinutes * STORAGE_MICRO_CREDITS_PER_MINUTE_PER_MONTH) /

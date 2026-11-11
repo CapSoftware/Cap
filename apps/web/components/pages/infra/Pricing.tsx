@@ -1,53 +1,101 @@
 import { Calculator } from "./Calculator";
-import { ANCHORS, PRICE_ROWS, PRICES, usdWhole } from "./content";
+import {
+	ANCHORS,
+	PRICE_ROWS,
+	PRICES,
+	TIER_LABEL,
+	TIERS,
+	usd,
+	usdWhole,
+} from "./content";
 import { Section, SectionHeading } from "./shared";
+import { MONO } from "./theme";
+
+const ROW = "border-b border-[rgba(222,230,246,0.08)]";
+
+const FIGURE = `${MONO} text-[13.5px] tabular-nums text-[#E8ECF4]`;
 
 export const Pricing = () => (
 	<Section id={ANCHORS.pricing} className="pt-28 lg:pt-40">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p>
-					Encoding is free. No minimums, no seats, no plans. Credits are
-					prepaid, and Cap Pro subscribers get{" "}
+					Encoding is free at every resolution. No minimums, seats or plans.
+					Credits are prepaid, and Cap Pro subscribers get{" "}
 					{usdWhole(PRICES.proMonthlyCredit)} of usage every month.
 				</p>
 			</SectionHeading>
-			<table className="w-full min-w-0 border-collapse text-left">
-				<caption className="sr-only">Cap Infra prices</caption>
-				<thead className="sr-only">
-					<tr>
-						<th scope="col">Meter</th>
-						<th scope="col">Price</th>
-						<th scope="col">Unit</th>
-					</tr>
-				</thead>
-				<tbody>
-					{PRICE_ROWS.map((row) => (
-						<tr
-							key={row.meter}
-							className="border-b border-[rgba(222,230,246,0.08)] first:border-t"
-						>
-							<th
-								scope="row"
-								className="w-[34%] py-3.5 pr-4 align-baseline text-[14.5px] font-normal text-[#E8ECF4] sm:w-[28%]"
-							>
-								{row.meter}
+			<div className="min-w-0">
+				<table className="w-full table-fixed border-collapse text-left">
+					<caption className="sr-only">Cap Infra prices by resolution</caption>
+					<thead>
+						<tr className={ROW}>
+							<th scope="col" className="w-[40%] p-0 sm:w-[44%]">
+								<span className="sr-only">Meter</span>
 							</th>
-							<td className="w-[84px] py-3.5 pr-4 align-baseline text-[14.5px] tabular-nums text-[#E8ECF4]">
-								{row.price}
-							</td>
-							<td className="py-3.5 align-baseline text-[13.5px] leading-[1.45] text-[rgba(232,236,244,0.46)]">
-								{row.unit}
-								{row.note ? (
-									<span className="block text-[rgba(232,236,244,0.72)] sm:ml-2 sm:inline">
-										{row.note}
-									</span>
-								) : null}
-							</td>
+							{TIERS.map((tier, i) => (
+								<th
+									key={tier}
+									scope="col"
+									className="pb-3 text-right align-bottom text-[13px] font-normal leading-[1.4] text-[rgba(232,236,244,0.46)]"
+								>
+									{i === 0 ? (
+										<span className="hidden leading-[inherit] sm:inline">
+											Up to{" "}
+										</span>
+									) : null}
+									{TIER_LABEL[tier]}
+								</th>
+							))}
 						</tr>
-					))}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						{PRICE_ROWS.map((row) => (
+							<tr key={row.meter} className={ROW}>
+								<th
+									scope="row"
+									className="py-3.5 pr-4 align-top text-[14.5px] font-normal leading-[1.4] text-[#E8ECF4]"
+								>
+									{row.meter}
+									{row.unit ? (
+										<span className="block text-pretty text-[13px] text-[rgba(232,236,244,0.46)]">
+											{row.unit}
+										</span>
+									) : null}
+								</th>
+								{row.rates ? (
+									TIERS.map((tier) => (
+										<td
+											key={tier}
+											className={`${FIGURE} py-3.5 text-right align-top leading-[1.5]`}
+										>
+											{usd(row.rates?.[tier] ?? 0)}
+										</td>
+									))
+								) : (
+									<td colSpan={TIERS.length} className="py-3.5 align-top">
+										<span className="flex flex-col-reverse items-end gap-x-3 text-right text-[13.5px] leading-[1.5] text-[rgba(232,236,244,0.46)] sm:flex-row sm:items-baseline sm:justify-end">
+											{row.note ? (
+												<span className="text-pretty leading-[inherit]">
+													{row.note}
+												</span>
+											) : null}
+											<span className={`${FIGURE} leading-[inherit]`}>
+												{row.price}
+											</span>
+										</span>
+									</td>
+								)}
+							</tr>
+						))}
+					</tbody>
+				</table>
+				<p className="m-0 mt-4 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
+					Storage is billed on the resolution of the video, delivery on the
+					resolution each viewer watched. Videos are encoded up to 1080p by
+					default, and 1440p and 4K are a per-video setting.
+				</p>
+			</div>
 		</div>
 		<div className="mt-12 lg:mt-16">
 			<Calculator />

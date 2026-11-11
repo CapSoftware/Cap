@@ -3,7 +3,9 @@
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { type CSSProperties, useId, useState } from "react";
+import type { InfraResolutionTier } from "@/lib/infra-pricing";
 import { PRICES, usd, usdWhole } from "./content";
+import { TierSwitch, useTier } from "./TierSwitch";
 
 const STEPS = 1000;
 
@@ -13,11 +15,12 @@ type Meter = {
 	key: MeterKey;
 	label: string;
 	unit: string;
-	rate: string;
 	min: number;
 	max: number;
 	initial: number;
-	cost: (value: number) => number;
+	rate: (tier: InfraResolutionTier) => number;
+	per: number;
+	rateUnit: string;
 };
 
 const METERS: readonly Meter[] = [
@@ -25,31 +28,34 @@ const METERS: readonly Meter[] = [
 		key: "stored",
 		label: "Minutes stored",
 		unit: "min",
-		rate: `${usd(PRICES.storagePer1000Minutes)} per 1,000 minutes, per month`,
 		min: 100,
 		max: 10_000_000,
 		initial: 5_000,
-		cost: (value) => (value / 1000) * PRICES.storagePer1000Minutes,
+		rate: (tier) => PRICES.storagePer1000Minutes[tier],
+		per: 1000,
+		rateUnit: "per 1,000 minutes, per month",
 	},
 	{
 		key: "watched",
 		label: "Minutes watched per month",
 		unit: "min",
-		rate: `${usd(PRICES.deliveryPer1000Minutes)} per 1,000 minutes`,
 		min: 100,
 		max: 100_000_000,
 		initial: 50_000,
-		cost: (value) => (value / 1000) * PRICES.deliveryPer1000Minutes,
+		rate: (tier) => PRICES.deliveryPer1000Minutes[tier],
+		per: 1000,
+		rateUnit: "per 1,000 minutes",
 	},
 	{
 		key: "audio",
 		label: "Hours transcribed per month",
 		unit: "hr",
-		rate: `${usd(PRICES.speechPerHour)} per hour of audio`,
 		min: 1,
 		max: 100_000,
 		initial: 100,
-		cost: (value) => value * PRICES.speechPerHour,
+		rate: () => PRICES.speechPerHour,
+		per: 1,
+		rateUnit: "per hour of audio",
 	},
 ];
 
@@ -122,10 +128,12 @@ const SLIDER = [
 
 const MeterInput = ({
 	meter,
+	tier,
 	value,
 	onChange,
 }: {
 	meter: Meter;
+	tier: InfraResolutionTier;
 	value: number;
 	onChange: (value: number) => void;
 }) => {
@@ -138,7 +146,7 @@ const MeterInput = ({
 	} as CSSProperties;
 
 	return (
-		<div className="py-5 first:pt-0 last:pb-0">
+		<div className="py-5 last:pb-0">
 			<div className="flex items-start justify-between gap-x-4">
 				<div className="min-w-0 flex-1">
 					<label
@@ -148,7 +156,7 @@ const MeterInput = ({
 						{meter.label}
 					</label>
 					<p className="m-0 mt-0.5 text-[13px] text-[rgba(232,236,244,0.42)]">
-						{meter.rate}
+						{usd(meter.rate(tier))} {meter.rateUnit}
 					</p>
 				</div>
 				<div className="flex shrink-0 items-baseline border-b border-[rgba(222,230,246,0.16)] pb-1 transition-colors duration-200 focus-within:border-[rgba(232,236,244,0.7)]">
@@ -226,11 +234,12 @@ export const Calculator = () => {
 	}));
 	const [pro, setPro] = useState(false);
 	const proId = useId();
+	const tier = useTier();
 
 	const lines = METERS.map((meter) => ({
 		key: meter.key,
 		label: BREAKDOWN_LABEL[meter.key],
-		cost: meter.cost(values[meter.key]),
+		cost: (values[meter.key] / meter.per) * meter.rate(tier),
 	}));
 	const subtotal = lines.reduce((sum, line) => sum + line.cost, 0);
 	const credit = pro ? Math.min(PRICES.proMonthlyCredit, subtotal) : 0;
@@ -239,10 +248,20 @@ export const Calculator = () => {
 	return (
 		<div className="grid rounded-[12px] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.08)] lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)]">
 			<div className="divide-y divide-[rgba(222,230,246,0.07)] p-5 sm:p-7">
+				<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pb-5">
+					<div className="min-w-0">
+						<p className="m-0 text-[14.5px] text-[#E8ECF4]">Resolution</p>
+						<p className="m-0 mt-0.5 text-[13px] text-[rgba(232,236,244,0.42)]">
+							Sets the storage and delivery rates
+						</p>
+					</div>
+					<TierSwitch label="Resolution to estimate" />
+				</div>
 				{METERS.map((meter) => (
 					<MeterInput
 						key={meter.key}
 						meter={meter}
+						tier={tier}
 						value={values[meter.key]}
 						onChange={(next) =>
 							setValues((current) => ({ ...current, [meter.key]: next }))

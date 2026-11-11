@@ -1,16 +1,71 @@
 import {
-	DELIVERY_DOLLARS_PER_1000_MINUTES,
-	SPEECH_DOLLARS_PER_HOUR,
-	STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
-} from "@/lib/developer-pricing";
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_RESOLUTION_TIERS,
+	INFRA_SPEECH_DOLLARS_PER_HOUR,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+	type InfraResolutionTier,
+} from "@/lib/infra-pricing";
+
+export const PRICES = {
+	storagePer1000Minutes: INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+	deliveryPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	speechPerHour: INFRA_SPEECH_DOLLARS_PER_HOUR,
+	proMonthlyCredit: 5,
+} as const;
+
+export const TIERS = INFRA_RESOLUTION_TIERS;
+
+export const DEFAULT_TIER: InfraResolutionTier = "1080p";
+
+export const TIER_LABEL: Record<InfraResolutionTier, string> = {
+	"1080p": "1080p",
+	"1440p": "1440p",
+	"2160p": "4K",
+};
+
+export const TIER_RANGE: Record<InfraResolutionTier, string> = {
+	"1080p": "up to 1080p",
+	"1440p": "at 1440p",
+	"2160p": "at 4K",
+};
+
+export const usd = (value: number) =>
+	new Intl.NumberFormat("en-US", {
+		style: "currency",
+		currency: "USD",
+		minimumFractionDigits: 2,
+	}).format(value);
+
+export const usdRate = (value: number) =>
+	new Intl.NumberFormat("en-US", {
+		style: "currency",
+		currency: "USD",
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 3,
+	}).format(value);
+
+export const usdWhole = (value: number) =>
+	new Intl.NumberFormat("en-US", {
+		style: "currency",
+		currency: "USD",
+		maximumFractionDigits: 0,
+	}).format(value);
+
+const perTier = (rates: Record<InfraResolutionTier, number>) =>
+	`${usd(rates["1080p"])} up to 1080p, ${usd(rates["1440p"])} at 1440p and ${usd(rates["2160p"])} at 4K`;
+
+export const HEADLINE =
+	"The cheapest, fastest video infrastructure on the planet.";
 
 export const infraSeo = {
 	path: "/infra",
 	url: "https://cap.so/infra",
-	title: "Cap Infra: video and speech APIs",
-	description:
-		"Upload a video and get back adaptive HLS up to 4K, an MP4, a thumbnail and a transcript, served from a CDN. Speech to text for any file. Free encoding, usage-based pricing, no plans.",
+	title: "Cap Infra: the cheapest, fastest video infrastructure",
+	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a thumbnail and a transcript. Free encoding, storage from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} and delivery from ${usd(PRICES.deliveryPer1000Minutes[DEFAULT_TIER])} per 1,000 minutes, speech to text at ${usd(PRICES.speechPerHour)} per audio hour.`,
+	ogDescription: `${HEADLINE} Free encoding, delivery from ${usd(PRICES.deliveryPer1000Minutes[DEFAULT_TIER])} per 1,000 minutes.`,
 	keywords: [
+		"cheapest video API",
+		"video infrastructure",
 		"video API",
 		"video hosting API",
 		"video encoding API",
@@ -25,6 +80,8 @@ export const infraSeo = {
 } as const;
 
 export const ANCHORS = {
+	compare: "compare",
+	speed: "speed",
 	video: "video",
 	speech: "speech",
 	player: "player",
@@ -53,13 +110,6 @@ export const LINKS = {
 	privacy: "/privacy",
 	terms: "/terms",
 	github: "https://github.com/CapSoftware/Cap",
-} as const;
-
-export const PRICES = {
-	storagePer1000Minutes: STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
-	deliveryPer1000Minutes: DELIVERY_DOLLARS_PER_1000_MINUTES,
-	speechPerHour: SPEECH_DOLLARS_PER_HOUR,
-	proMonthlyCredit: 5,
 } as const;
 
 export const ENCODE_SECONDS_FOR_FIVE_MINUTES_OF_4K = 21;
@@ -100,24 +150,11 @@ export const clock = (totalSeconds: number) => {
 		: `${minutes}:${seconds}`;
 };
 
-export const usd = (value: number) =>
-	new Intl.NumberFormat("en-US", {
-		style: "currency",
-		currency: "USD",
-		minimumFractionDigits: 2,
-	}).format(value);
-
-export const usdWhole = (value: number) =>
-	new Intl.NumberFormat("en-US", {
-		style: "currency",
-		currency: "USD",
-		maximumFractionDigits: 0,
-	}).format(value);
-
 export type PriceRow = {
 	meter: string;
-	price: string;
-	unit: string;
+	unit?: string;
+	rates?: Record<InfraResolutionTier, number>;
+	price?: string;
 	note?: string;
 };
 
@@ -125,28 +162,28 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 	{
 		meter: "Encoding",
 		price: "Free",
-		unit: "every rendition, every upload",
+		note: "at every resolution",
 	},
 	{
 		meter: "Storage",
-		price: usd(PRICES.storagePer1000Minutes),
-		unit: "per 1,000 minutes stored, per month",
+		unit: "per 1,000 minutes, per month",
+		rates: PRICES.storagePer1000Minutes,
 	},
 	{
 		meter: "Delivery",
-		price: usd(PRICES.deliveryPer1000Minutes),
 		unit: "per 1,000 minutes watched",
+		rates: PRICES.deliveryPer1000Minutes,
 	},
 	{
 		meter: "Speech to text",
-		price: usd(PRICES.speechPerHour),
 		unit: "per hour of audio",
+		price: usd(PRICES.speechPerHour),
 		note: "free for videos hosted on Cap Infra",
 	},
 	{
 		meter: "Player",
 		price: "Included",
-		unit: "embed it anywhere",
+		note: "embed it anywhere",
 	},
 ];
 
@@ -347,7 +384,11 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "What does encoding cost?",
 		answer:
-			"Nothing. Every upload is encoded into an adaptive HLS ladder and an MP4 at no charge. You pay for the minutes you store and the minutes your viewers watch.",
+			"Nothing, at every resolution. Every upload is encoded into an adaptive HLS ladder and an MP4 at no charge. You pay for the minutes you store and the minutes your viewers watch.",
+	},
+	{
+		question: "How does resolution change the price?",
+		answer: `Storage is priced on the video's resolution, per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Delivery is billed on the resolution each viewer actually watched, per 1,000 minutes: ${perTier(PRICES.deliveryPer1000Minutes)}. Videos are encoded up to 1080p by default, and 1440p and 4K are a per-video setting.`,
 	},
 	{
 		question: "How do I pay?",
@@ -385,15 +426,14 @@ export const infraSoftwareSchema = {
 	"@id": "https://cap.so/infra#software",
 	name: "Cap Infra",
 	url: infraSeo.url,
-	description:
-		"Video and speech APIs from Cap. Upload, encode to adaptive HLS and MP4, generate thumbnails and transcripts, and serve from a CDN, priced by usage.",
+	description: infraSeo.description,
 	applicationCategory: "DeveloperApplication",
 	operatingSystem: "Web",
 	offers: {
 		"@type": "Offer",
 		price: 0,
 		priceCurrency: "USD",
-		description: "Usage-based pricing with free encoding.",
+		description: `Usage-based pricing with free encoding. Storage per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Delivery per 1,000 minutes watched: ${perTier(PRICES.deliveryPer1000Minutes)}. Speech to text: ${usd(PRICES.speechPerHour)} per audio hour.`,
 	},
 	publisher: {
 		"@type": "Organization",

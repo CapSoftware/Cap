@@ -14,8 +14,7 @@ export const metadata: Metadata = {
 		description: infraSeo.description,
 		path: infraSeo.path,
 		ogTitle: "Cap Infra",
-		ogDescription:
-			"Video and speech APIs on Cap's own GPUs. Free encoding, usage-based pricing.",
+		ogDescription: infraSeo.ogDescription,
 		ogTag: "Infra",
 	}),
 	keywords: [...infraSeo.keywords],
