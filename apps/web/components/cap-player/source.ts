@@ -80,14 +80,17 @@ export const attachSource = (
 		if (autoPlay) void video.play().catch(() => undefined);
 	};
 
-	const playFile = () => {
+	const position = () => ({
+		resumeAt: video.currentTime,
+		wasPlaying: !video.paused,
+	});
+
+	const playFile = ({ resumeAt, wasPlaying } = position()) => {
 		if (cancelled) return;
 		if (!source.mp4 || video.getAttribute("src") === source.mp4) {
 			onFatal();
 			return;
 		}
-		const resumeAt = video.currentTime;
-		const wasPlaying = !video.paused;
 		video.src = source.mp4;
 		if (resumeAt > 0) video.currentTime = resumeAt;
 		if (wasPlaying) void video.play().catch(() => undefined);
@@ -154,20 +157,21 @@ export const attachSource = (
 					hls.recoverMediaError();
 					return;
 				}
+				const reached = position();
 				hls.destroy();
 				detach = () => {
 					video.removeEventListener("error", onFatal);
 					release(video);
 				};
 				video.addEventListener("error", onFatal);
-				playFile();
+				playFile(reached);
 			});
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);
 			detach = () => hls.destroy();
 			start();
 		})
-		.catch(playFile);
+		.catch(() => playFile());
 
 	return () => {
 		cancelled = true;
