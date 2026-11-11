@@ -60,13 +60,25 @@ const toRow = (row: TranscriptSummaryRow): AudioTranscriptRow => ({
 	createdAt: row.createdAt.toISOString(),
 });
 
+const AUDIO_PAGE_SIZE = 50;
+const AUDIO_MAX_ROWS = 1000;
+
 export async function listAudioTranscripts(
 	appId: string,
-): Promise<{ ok: true; transcripts: AudioTranscriptRow[] } | ActionFailure> {
+	limit = AUDIO_PAGE_SIZE,
+): Promise<
+	| { ok: true; transcripts: AudioTranscriptRow[]; hasMore: boolean }
+	| ActionFailure
+> {
 	if (!(await ownsApp(appId))) return UNAUTHORIZED;
+	const rows = Number.isFinite(limit)
+		? Math.min(AUDIO_MAX_ROWS, Math.max(AUDIO_PAGE_SIZE, Math.floor(limit)))
+		: AUDIO_PAGE_SIZE;
 	try {
-		const { transcripts } = await listTranscripts(appId, { limit: 50 });
-		return { ok: true, transcripts: transcripts.map(toRow) };
+		const { transcripts, hasMore } = await listTranscripts(appId, {
+			limit: rows,
+		});
+		return { ok: true, transcripts: transcripts.map(toRow), hasMore };
 	} catch (error) {
 		console.error("[infra-audio] Transcripts unavailable", error);
 		return {

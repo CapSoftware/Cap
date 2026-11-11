@@ -34,6 +34,7 @@ import {
 } from "../../_components/ui";
 
 const POLL_INTERVAL_MS = 2500;
+const PAGE_STEP = 50;
 const PUT_ATTEMPTS = 3;
 const START_ATTEMPTS = 3;
 const CANCELLED = "Upload cancelled";
@@ -135,12 +136,14 @@ const isPending = (row: AudioTranscriptRow) =>
 export function AudioClient({
 	appId,
 	initialTranscripts,
+	initialHasMore,
 	available,
 	canTranscribe,
 	pricePerHour,
 }: {
 	appId: string;
 	initialTranscripts: AudioTranscriptRow[];
+	initialHasMore: boolean;
 	available: boolean;
 	canTranscribe: boolean;
 	pricePerHour: string;
@@ -148,6 +151,9 @@ export function AudioClient({
 	const input = useRef<HTMLInputElement>(null);
 	const controller = useRef<AbortController | null>(null);
 	const [transcripts, setTranscripts] = useState(initialTranscripts);
+	const [hasMore, setHasMore] = useState(initialHasMore);
+	const [loadingMore, setLoadingMore] = useState(false);
+	const pageSize = useRef(Math.max(PAGE_STEP, initialTranscripts.length));
 	const [upload, setUpload] = useState<Upload>({ phase: "idle" });
 	const [over, setOver] = useState(false);
 	const [reader, setReader] = useState<{
@@ -164,9 +170,21 @@ export function AudioClient({
 	useEffect(() => () => controller.current?.abort(), []);
 
 	const refresh = useCallback(async () => {
-		const result = await listAudioTranscripts(appId).catch(() => null);
-		if (result?.ok) setTranscripts(result.transcripts);
+		const result = await listAudioTranscripts(appId, pageSize.current).catch(
+			() => null,
+		);
+		if (result?.ok) {
+			setTranscripts(result.transcripts);
+			setHasMore(result.hasMore);
+		}
 	}, [appId]);
+
+	const showMore = async () => {
+		setLoadingMore(true);
+		pageSize.current += PAGE_STEP;
+		await refresh();
+		setLoadingMore(false);
+	};
 
 	const hasPending = transcripts.some(isPending);
 	useEffect(() => {
@@ -608,6 +626,19 @@ export function AudioClient({
 							))}
 						</tbody>
 					</table>
+				</div>
+			)}
+
+			{hasMore && (
+				<div>
+					<Button
+						variant="ghost"
+						size="sm"
+						loading={loadingMore}
+						onClick={() => void showMore()}
+					>
+						Show more
+					</Button>
 				</div>
 			)}
 

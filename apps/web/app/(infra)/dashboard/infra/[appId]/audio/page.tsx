@@ -23,6 +23,7 @@ export default async function InfraAudioPage({
 		<AudioClient
 			appId={app.id}
 			initialTranscripts={result.ok ? result.transcripts : []}
+			initialHasMore={result.ok ? result.hasMore : false}
 			available={result.ok}
 			canTranscribe={balance >= TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS}
 			pricePerHour={`$${SPEECH_DOLLARS_PER_HOUR.toFixed(2)}`}
