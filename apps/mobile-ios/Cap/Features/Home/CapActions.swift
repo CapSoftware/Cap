@@ -112,7 +112,7 @@ private struct CapContextMenu: ViewModifier {
 
 private struct CapDeleteConfirmation: ViewModifier {
     @Binding var pendingDelete: CapSummary?
-    var onDeleted: () -> Void = {}
+    var onDeleted: (CapSummary) -> Void = { _ in }
     @Environment(SessionModel.self) private var session
 
     func body(content: Content) -> some View {
@@ -124,7 +124,7 @@ private struct CapDeleteConfirmation: ViewModifier {
         ) { cap in
             Button("Delete Cap", role: .destructive) {
                 Task {
-                    if await CapActions.delete(cap, session: session) { onDeleted() }
+                    if await CapActions.delete(cap, session: session) { onDeleted(cap) }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -139,7 +139,7 @@ extension View {
         modifier(CapContextMenu(cap: cap, pendingDelete: pendingDelete))
     }
 
-    func capDeleteConfirmation(pendingDelete: Binding<CapSummary?>, onDeleted: @escaping () -> Void = {}) -> some View {
+    func capDeleteConfirmation(pendingDelete: Binding<CapSummary?>, onDeleted: @escaping (CapSummary) -> Void = { _ in }) -> some View {
         modifier(CapDeleteConfirmation(pendingDelete: pendingDelete, onDeleted: onDeleted))
     }
 }
