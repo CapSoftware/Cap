@@ -254,12 +254,12 @@ function VideosEmptyState({
 							1. Create a video with your public key
 						</p>
 						<CodeBlock
-							code={createVideoCurl(publicKey)}
+							code={createVideoCurl(publicKey, isProduction)}
 							label="create request"
 						/>
 						<p className="text-xs leading-5 text-gray-10">
 							{isProduction
-								? "Production apps only accept this from a browser on an allowed domain. "
+								? "Production apps check the Origin header, so replace it with one of this app's allowed domains. "
 								: "Development apps accept this from anywhere, including your terminal. "}
 							The app needs credits to create a video.
 						</p>
@@ -277,7 +277,7 @@ function VideosEmptyState({
 							</code>{" "}
 							for each part and{" "}
 							<code className="font-mono text-xs text-gray-11">complete</code>{" "}
-							with the duration.
+							with the duration, width and height.
 						</p>
 					</li>
 					<li className="flex flex-col gap-2">
