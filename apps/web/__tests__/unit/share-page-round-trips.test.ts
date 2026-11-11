@@ -84,7 +84,10 @@ vi.mock("@/lib/share-playback", () => ({
 		defaultStorage: true,
 	}),
 }));
-vi.mock("@/lib/share-web-url", () => ({ resolveShareWebUrl: vi.fn() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveShareWebUrl: vi.fn(),
+	resolveForeignShareRedirect: async () => null,
+}));
 vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => true }));
 vi.mock("@/app/s/[videoId]/_components/PasswordGate", () => ({
@@ -298,7 +301,7 @@ describe("share page database round trips", () => {
 		expect(result.header.spacesData).toHaveLength(4);
 		expect(result.header).toMatchObject({ canDownload: true, hasEdits: false });
 		expect({ roundTrips, queries: mocks.query.mock.calls.length }).toEqual({
-			roundTrips: 4,
+			roundTrips: 3,
 			queries: 20,
 		});
 	});

@@ -271,6 +271,8 @@ impl AudioRenderer {
             // it, so timeline-positioned music is aligned to the same grid.
             let frame_start = self.elapsed_samples;
             let (written, mut buf) = self.render_timeline_frame_raw(samples, project, timeline)?;
+            let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
+            crate::join_fade::apply_join_fades(&mut buf, frame_start, &joins);
 
             if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
@@ -320,6 +322,7 @@ impl AudioRenderer {
             self.cursor.samples += written;
             return Ok((written != 0).then_some(written));
         };
+        let joins = crate::join_fade::hard_cut_joins(timeline, Self::SAMPLE_RATE);
         while written < samples {
             sources.check_cancelled()?;
             let (mapping, span) = if !timeline.transitions.is_empty()
@@ -417,6 +420,11 @@ impl AudioRenderer {
                         );
                     }
                 }
+                crate::join_fade::apply_join_fades(
+                    output,
+                    self.elapsed_samples + span_offset,
+                    &joins,
+                );
                 emit(written + span_offset, output)?;
                 span_offset += count;
             }
@@ -1266,15 +1274,14 @@ fn mix_transition_audio_at(
     {
         let progress = (progress + (sample_offset + sample_index) as f64 * progress_per_sample)
             .clamp(0.0, 1.0);
-        let (outgoing_gain, incoming_gain) = match kind {
-            ClipTransitionType::CrossFade => {
-                let angle = progress * std::f64::consts::FRAC_PI_2;
-                (angle.cos() as f32, angle.sin() as f32)
-            }
-            ClipTransitionType::FadeThroughBlack => (
+        let (outgoing_gain, incoming_gain) = if kind.dips() {
+            (
                 (1.0 - progress * 2.0).max(0.0) as f32,
                 (progress * 2.0 - 1.0).max(0.0) as f32,
-            ),
+            )
+        } else {
+            let angle = progress * std::f64::consts::FRAC_PI_2;
+            (angle.cos() as f32, angle.sin() as f32)
         };
         output_frame[0] = (outgoing_frame[0] * outgoing_gain + incoming_frame[0] * incoming_gain)
             .clamp(-1.0, 1.0);
@@ -1529,9 +1536,9 @@ struct RetainSlot {
 }
 
 impl ProgressiveTimeline {
-    fn new(len: usize, primary_start: usize) -> Self {
-        Self {
-            samples: Self::allocate_samples(len),
+    fn new(len: usize, primary_start: usize) -> Option<Self> {
+        Some(Self {
+            samples: Self::allocate_samples(len)?,
             primary_start,
             primary_end: AtomicUsize::new(primary_start),
             wrap_end: AtomicUsize::new(0),
@@ -1546,16 +1553,31 @@ impl ProgressiveTimeline {
             created: std::time::Instant::now(),
             paused_at_nanos: AtomicU64::new(0),
             retired: Mutex::default(),
-        }
+        })
     }
 
-    /// `AtomicU32` has the same size, alignment and bit validity as `u32`
-    /// (documented guarantee), so a zeroed `u32` allocation — which the
+    /// `AtomicU32` is valid when all-zero, so a zeroed allocation (which the
     /// allocator can hand out as untouched zero pages, unlike constructing
-    /// millions of atomics one by one — can be reinterpreted directly.
-    fn allocate_samples(len: usize) -> Box<[AtomicU32]> {
-        let raw = vec![0u32; len].into_boxed_slice();
-        unsafe { Box::from_raw(Box::into_raw(raw) as *mut [AtomicU32]) }
+    /// millions of atomics one by one) can be used directly.
+    ///
+    /// Returns `None` instead of aborting when the allocator cannot provide
+    /// the buffer: on a low-memory Windows machine the full-timeline buffer
+    /// of a ~10 minute recording (~250 MB) failed and `vec!` aborted the
+    /// whole process on play. Callers fall back to the bounded streaming
+    /// renderer.
+    fn allocate_samples(len: usize) -> Option<Box<[AtomicU32]>> {
+        if len == 0 {
+            return Some(Box::default());
+        }
+        let layout = std::alloc::Layout::array::<AtomicU32>(len).ok()?;
+        if progressive_allocation_blocked(layout.size()) {
+            return None;
+        }
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<AtomicU32>();
+        if ptr.is_null() {
+            return None;
+        }
+        Some(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) })
     }
 
     /// Whether every sample in `[from, to)` is already rendered (or will
@@ -1661,6 +1683,26 @@ impl ProgressiveTimeline {
 }
 
 const MAX_PROGRESSIVE_BUFFER_BYTES: usize = 512 * 1024 * 1024;
+
+#[cfg(any(test, feature = "test-hooks"))]
+static PROGRESSIVE_ALLOCATION_LIMIT_BYTES: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Makes every progressive playback buffer larger than `bytes` fail to
+/// allocate, as on a machine short of memory. `None` restores the default.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn set_progressive_audio_allocation_limit(bytes: Option<usize>) {
+    PROGRESSIVE_ALLOCATION_LIMIT_BYTES.store(bytes.unwrap_or(usize::MAX), Ordering::SeqCst);
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+fn progressive_allocation_blocked(bytes: usize) -> bool {
+    bytes > PROGRESSIVE_ALLOCATION_LIMIT_BYTES.load(Ordering::SeqCst)
+}
+
+#[cfg(not(any(test, feature = "test-hooks")))]
+fn progressive_allocation_blocked(_bytes: usize) -> bool {
+    false
+}
 
 fn output_sample_index(secs: f64, sample_rate: u32, channels: usize, limit: usize) -> usize {
     if !(secs.is_finite() && secs > 0.0) {
@@ -1944,6 +1986,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         hotkeys: _,
         timeline,
         overlay_order: _,
+        overlay_order_with_shapes: _,
         captions: _,
         keyboard: _,
         clips,
@@ -1954,6 +1997,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         color_correction: _,
         text_size_version: _,
         text_anim_version: _,
+        markers: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
         let TimelineConfiguration {
@@ -1968,6 +2012,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
             audio_segments,
             style_segments: _,
             image_segments: _,
+            shape_segments: _,
             camera3d_segments: _,
         } = timeline;
         let segments = segments
@@ -2167,7 +2212,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         );
         let estimated_memory_bytes = progressive_buffer_bytes(estimated_output_samples);
 
-        let mode = if estimated_memory_bytes <= MAX_PROGRESSIVE_BUFFER_BYTES {
+        let (segments, music) = if estimated_memory_bytes <= MAX_PROGRESSIVE_BUFFER_BYTES {
             let plan = cache.and_then(|_| {
                 ProgressiveAudioBuffer::<T>::cache_plan(
                     segments.clone(),
@@ -2182,44 +2227,59 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             let cached = cache
                 .zip(plan.as_ref())
                 .and_then(|(cache, plan)| ProgressiveAudioBuffer::from_cache(cache, plan));
-            PrerenderedAudioBufferMode::Progressive(match cached {
-                Some(cached) => cached,
-                None => {
-                    let fresh = ProgressiveAudioBuffer::new(
-                        segments,
-                        music,
-                        project,
-                        output_info,
-                        duration_secs,
-                        start_playhead_secs,
-                        cache.filter(|_| plan.as_ref().is_some_and(|plan| plan.shift == 0)),
-                    );
-                    match cache {
-                        Some(cache) => fresh.publish_in_cache(cache, plan),
-                        None => fresh,
-                    }
-                }
-            })
-        } else {
-            if let Some(cache) = cache {
-                cache.clear();
+            if let Some(cached) = cached {
+                return Self {
+                    mode: PrerenderedAudioBufferMode::Progressive(cached),
+                };
             }
+            match ProgressiveAudioBuffer::new(
+                segments,
+                music,
+                project,
+                output_info,
+                duration_secs,
+                start_playhead_secs,
+                cache.filter(|_| plan.as_ref().is_some_and(|plan| plan.shift == 0)),
+            ) {
+                Ok(fresh) => {
+                    return Self {
+                        mode: PrerenderedAudioBufferMode::Progressive(match cache {
+                            Some(cache) => fresh.publish_in_cache(cache, plan),
+                            None => fresh,
+                        }),
+                    };
+                }
+                Err(inputs) => {
+                    warn!(
+                        duration_secs = duration_secs,
+                        estimated_memory_mb = estimated_memory_bytes / (1024 * 1024),
+                        "Could not allocate the playback audio buffer, using bounded streaming audio renderer"
+                    );
+                    inputs
+                }
+            }
+        } else {
             info!(
                 duration_secs = duration_secs,
                 estimated_memory_mb = estimated_memory_bytes / (1024 * 1024),
                 max_memory_mb = MAX_PROGRESSIVE_BUFFER_BYTES / (1024 * 1024),
                 "Using bounded streaming audio renderer for long playback"
             );
-            PrerenderedAudioBufferMode::Streaming(Box::new(StreamingAudioBuffer::new(
+            (segments, music)
+        };
+
+        if let Some(cache) = cache {
+            cache.clear();
+        }
+        Self {
+            mode: PrerenderedAudioBufferMode::Streaming(Box::new(StreamingAudioBuffer::new(
                 segments,
                 music,
                 project.clone(),
                 output_info,
                 start_playhead_secs,
-            )))
-        };
-
-        Self { mode }
+            ))),
+        }
     }
 
     pub(crate) fn bounded(
@@ -2322,6 +2382,41 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             PrerenderedAudioBufferMode::Streaming(source) => source.fill(buffer),
         }
     }
+
+    pub(crate) fn read_frame(&self) -> usize {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => {
+                buffer.read_position / buffer.channels
+            }
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.read_position / buffer.channels,
+        }
+    }
+
+    pub(crate) fn sample_rate(&self) -> u32 {
+        match &self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => buffer.sample_rate,
+            PrerenderedAudioBufferMode::Streaming(buffer) => buffer.sample_rate,
+        }
+    }
+}
+
+impl<T: FromSampleBytes + cpal::FromSample<f32>> crate::preview_stretch::StretchSource
+    for PrerenderedAudioBuffer<T>
+{
+    fn read_frame(&self) -> usize {
+        PrerenderedAudioBuffer::read_frame(self)
+    }
+
+    fn read(&mut self, out: &mut [f32]) {
+        match &mut self.mode {
+            PrerenderedAudioBufferMode::Progressive(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+            PrerenderedAudioBufferMode::Streaming(source) => {
+                source.fill_with(out, 0.0, std::convert::identity)
+            }
+        }
+    }
 }
 
 impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
@@ -2340,7 +2435,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         duration_secs: f64,
         start_playhead_secs: f64,
         cache: Option<&PlaybackAudioCache>,
-    ) -> Self {
+    ) -> Result<Self, (Vec<AudioSegment>, MusicTracks)> {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
         let estimated_output_samples = progressive_buffer_samples(
@@ -2354,14 +2449,6 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             AudioData::SAMPLE_FORMAT,
             output_info.sample_rate,
             output_info.channels as u16,
-        );
-
-        info!(
-            duration_secs = duration_secs,
-            sample_rate = output_info.sample_rate,
-            channels = output_info.channels,
-            start_playhead_secs = start_playhead_secs,
-            "Starting progressive audio pre-render"
         );
 
         let pass1_start_secs = Self::pass1_start_secs(start_playhead_secs, duration_secs);
@@ -2382,10 +2469,19 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         );
         let ready_at_index = start_index.saturating_add(Self::ready_window_samples(output_info));
 
-        let timeline = Arc::new(ProgressiveTimeline::new(
-            estimated_output_samples,
-            primary_start,
-        ));
+        let Some(timeline) = ProgressiveTimeline::new(estimated_output_samples, primary_start)
+        else {
+            return Err((segments, music));
+        };
+        let timeline = Arc::new(timeline);
+
+        info!(
+            duration_secs = duration_secs,
+            sample_rate = output_info.sample_rate,
+            channels = output_info.channels,
+            start_playhead_secs = start_playhead_secs,
+            "Starting progressive audio pre-render"
+        );
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         // A fast worker may finish before publication, so give it its retention owner first.
@@ -2414,7 +2510,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             timeline.retained.store(false, Ordering::Release);
         }
 
-        Self {
+        Ok(Self {
             render: Arc::new(ProgressiveRender { timeline }),
             ready_rx: Some(ready_rx),
             shift_from: usize::MAX,
@@ -2423,7 +2519,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             sample_rate: output_info.sample_rate,
             channels: output_info.channels,
             _format: std::marker::PhantomData,
-        }
+        })
     }
 
     fn pass1_start_secs(start_playhead_secs: f64, duration_secs: f64) -> f64 {
@@ -2595,6 +2691,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     }
 
     pub fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, <T as cpal::Sample>::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let timeline = &self.render.timeline;
         let samples = &timeline.samples;
         let available = samples.len().saturating_sub(self.read_position);
@@ -2617,18 +2717,16 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                         idx < wrap_end
                     };
                 *slot = if rendered {
-                    <T as cpal::Sample>::from_sample(f32::from_bits(
-                        samples[idx].load(Ordering::Relaxed),
-                    ))
+                    convert(f32::from_bits(samples[idx].load(Ordering::Relaxed)))
                 } else {
-                    T::EQUILIBRIUM
+                    silence
                 };
             }
             self.read_position += to_copy;
         }
 
         if to_copy < buffer.len() {
-            buffer[to_copy..].fill(T::EQUILIBRIUM);
+            buffer[to_copy..].fill(silence);
         }
     }
 }
@@ -2860,18 +2958,22 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
     }
 
     fn fill(&mut self, buffer: &mut [T]) {
+        self.fill_with(buffer, T::EQUILIBRIUM, T::from_sample);
+    }
+
+    fn fill_with<U: Copy>(&mut self, buffer: &mut [U], silence: U, convert: impl Fn(f32) -> U) {
         let generation = self.timeline.published_generation.load(Ordering::Acquire);
         let start = self.timeline.published_start.load(Ordering::Acquire);
         let end = self.timeline.published_end.load(Ordering::Acquire);
         for (offset, sample) in buffer.iter_mut().enumerate() {
             let position = self.read_position + offset;
             *sample = if generation == self.generation && position >= start && position < end {
-                T::from_sample(f32::from_bits(
+                convert(f32::from_bits(
                     self.timeline.samples[position % self.timeline.samples.len()]
                         .load(Ordering::Relaxed),
                 ))
             } else {
-                T::EQUILIBRIUM
+                silence
             };
         }
         self.read_position = self.read_position.saturating_add(buffer.len());
@@ -3504,6 +3606,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3570,6 +3673,68 @@ mod tests {
             &buffer.mode,
             PrerenderedAudioBufferMode::Streaming(_)
         ));
+    }
+
+    struct ProgressiveAllocationLimit;
+
+    impl ProgressiveAllocationLimit {
+        fn set(bytes: usize) -> Self {
+            set_progressive_audio_allocation_limit(Some(bytes));
+            Self
+        }
+    }
+
+    impl Drop for ProgressiveAllocationLimit {
+        fn drop(&mut self) {
+            set_progressive_audio_allocation_limit(None);
+        }
+    }
+
+    #[test]
+    fn failed_progressive_allocation_falls_back_to_streaming_audio() {
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        let duration = 600.0;
+        let bytes = progressive_buffer_bytes(progressive_buffer_samples(duration, 48_000, 2));
+        assert!(bytes <= MAX_PROGRESSIVE_BUFFER_BYTES);
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let cache = PlaybackAudioCache::default();
+        let seeded = fixture.cached(&cache, output_info, 0.0);
+        assert!(matches!(
+            &seeded.mode,
+            PrerenderedAudioBufferMode::Progressive(_)
+        ));
+        assert!(lock(&cache.entry).is_some());
+        drop(seeded);
+
+        let _limit = ProgressiveAllocationLimit::set(bytes / 2);
+        let mut buffer = PrerenderedAudioBuffer::<f32>::new_cached(
+            fixture.segments.clone(),
+            fixture.music.clone(),
+            &fixture.project,
+            output_info,
+            duration,
+            0.0,
+            &cache,
+        );
+        assert!(matches!(
+            &buffer.mode,
+            PrerenderedAudioBufferMode::Streaming(_)
+        ));
+        assert!(lock(&cache.entry).is_none());
+
+        let samples = (fixture.duration() * 48_000.0) as usize * 2;
+        let mut actual = vec![0.0f32; samples];
+        for block in actual.chunks_mut(1024) {
+            assert!(buffer.wait_until_ready(std::time::Duration::from_secs(5)));
+            buffer.fill(block);
+        }
+        assert!(mean_abs(&actual) > 0.01);
+        assert_bit_identical(
+            &actual,
+            &fixture.reference(output_info, 0.0)[..samples],
+            "streaming fallback",
+        );
     }
 
     #[test]
@@ -3640,6 +3805,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -3928,6 +4094,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4044,6 +4211,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4275,6 +4443,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4317,6 +4486,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4460,6 +4630,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -4864,6 +5035,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -5230,7 +5402,7 @@ mod tests {
         let output_info = stereo_48k();
         let len = progressive_buffer_samples(fixture.duration(), 48_000, 2);
         let primary_start = output_sample_index(4.0, 48_000, 2, len);
-        let timeline = ProgressiveTimeline::new(len, primary_start);
+        let timeline = ProgressiveTimeline::new(len, primary_start).unwrap();
         timeline
             .primary_end
             .store(primary_start + 1_000, Ordering::Release);
@@ -5493,7 +5665,8 @@ mod tests {
             fixture.duration(),
             0.0,
             Some(&cache),
-        );
+        )
+        .unwrap_or_else(|_| panic!("progressive buffer allocation failed"));
         fresh.wait_until_fully_rendered();
         let timeline = fresh.render.timeline.clone();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

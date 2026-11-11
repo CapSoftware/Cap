@@ -185,6 +185,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Deletion is still finishing",
         ),
         (
+            tr::dialog::delete_recording::open_in_editor(),
+            "This recording is open in the editor. Close the editor and try again.",
+        ),
+        (
             tr::dialog::delete_recording::outside_library(),
             "This recording is outside the recordings library. Its files were not changed.",
         ),
@@ -352,6 +356,31 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::area::fill_body(),
             "Grow the area to cover the display, keeping its ratio.",
         ),
+        (
+            tr::overlay::area::fit_window_hint(),
+            "Or click a window to fit the area to it",
+        ),
+        (tr::overlay::area::drag_to_move(), "Drag to move"),
+        (tr::overlay::area::locked(), "Locked"),
+        (tr::overlay::area::lock_title(), "Lock area"),
+        (
+            tr::overlay::area::lock_body(),
+            "Keep this area for next time, and stop a stray drag from changing it.",
+        ),
+        (
+            tr::overlay::area::lock_needs_area(),
+            "Draw an area first, then lock it.",
+        ),
+        (tr::overlay::area::unlock_title(), "Unlock area"),
+        (
+            tr::overlay::area::unlock_body(),
+            "Let the area be moved, resized or drawn again.",
+        ),
+        (tr::overlay::area::locked_title(), "Area locked"),
+        (
+            tr::overlay::area::locked_body(),
+            "Click to unlock it, so it can be moved, resized or drawn again.",
+        ),
         (tr::overlay::window::size_title(), "Change window size"),
         (
             tr::overlay::window::size_body(),
@@ -374,7 +403,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Wayland doesn't let apps resize other apps' windows.",
         ),
         (tr::overlay::window::focus_title(), "Focus mode"),
-        (tr::overlay::window::focus_on(), "Recording only this window"),
+        (
+            tr::overlay::window::focus_on(),
+            "Recording only this window",
+        ),
         (tr::overlay::window::focus_off(), "Record only this window"),
         (tr::overlay::window::focus_enable(), "Enable Focus mode"),
         (tr::overlay::window::focus_disable(), "Turn off Focus mode"),
@@ -804,6 +836,12 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language",
         ),
         (tr::dialog::quit::still_open(), "Cap is still open"),
+        (
+            tr::dialog::quit::files_kept(),
+            "Everything recorded so far stays in the recording's folder.",
+        ),
+        (tr::dialog::quit::keep_open(), "Keep Cap Open"),
+        (tr::dialog::quit::quit_anyway(), "Quit Anyway"),
         (
             tr::dialog::quit::pending(),
             "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.",

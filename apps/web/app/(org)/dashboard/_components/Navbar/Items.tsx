@@ -7,6 +7,7 @@ import {
 	CommandGroup,
 	CommandInput,
 	CommandItem,
+	commandScore,
 	Dialog,
 	DialogContent,
 	DialogFooter,
@@ -18,12 +19,9 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import {
-	faBuilding,
-	faCircleInfo,
-	faLink,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
@@ -38,6 +36,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
@@ -149,6 +148,16 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const formRef = useRef<HTMLFormElement | null>(null);
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
+	const organizationSearchText = useMemo(
+		() =>
+			new Map(
+				(orgData ?? []).map(({ organization }) => [
+					organization.id.toLowerCase(),
+					organization.name.trim().toLowerCase(),
+				]),
+			),
+		[orgData],
+	);
 	const isOwner = activeOrg?.organization.ownerId === user.id;
 	const currentMember = activeOrg?.members.find(
 		(member) => member.userId === user.id,
@@ -217,7 +226,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							<PopoverTrigger suppressHydrationWarning asChild>
 								<motion.div
 									transition={{
-										type: "easeInOut",
+										ease: "easeInOut",
 										duration: 0.2,
 									}}
 									className={clsx(
@@ -310,7 +319,14 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											sidebarCollapsed ? "ml-3" : "mx-auto",
 										)}
 									>
-										<Command>
+										<Command
+											filter={(value, search) =>
+												commandScore(
+													organizationSearchText.get(value) ?? value,
+													search,
+												)
+											}
+										>
 											<CommandInput placeholder="Search organizations..." />
 											<CommandEmpty>No organizations found</CommandEmpty>
 											<CommandGroup>
@@ -327,6 +343,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 																	: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 															)}
 															key={`${organization.organization.name}-organization-${organization.organization.id}`}
+															value={organization.organization.id}
 															onSelect={async () => {
 																await updateActiveOrganization(
 																	organization.organization.id,

@@ -296,7 +296,7 @@ pub async fn prepare_instant_upload(
     } else {
         "desktopSegments"
     };
-    let config = create_or_get_video_with_mode(
+    let created = create_or_get_video_with_mode(
         false,
         None,
         Some(project_name),
@@ -313,9 +313,11 @@ pub async fn prepare_instant_upload(
         error => format!("Could not create the shareable link: {error}"),
     })?;
 
+    let link = created.link();
+    let config = created.config;
     Ok(VideoUploadInfo {
         id: config.id.clone(),
-        link: format!("{}/s/{}", auth::server_url(), config.id),
+        link,
         config,
     })
 }
@@ -520,7 +522,10 @@ impl InstantUpload {
         manifest: SegmentUploadManifest,
     ) -> Result<(), String> {
         let screenshot = self.screenshot_upload(project_path);
-        self.authorize_manifest(manifest)?;
+        if let Err(error) = self.authorize_manifest(manifest) {
+            self.finish_segments().await?;
+            return Err(error);
+        }
         let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
         screenshot?;
         segments
@@ -1364,7 +1369,22 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
-    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+    check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
+    let auth_state = crate::store::store_section("auth");
+    let Ok(context) = auth::UploadRequestContext::for_upload(
+        &auth::server_url(),
+        auth_state.get("user_id").and_then(Value::as_str),
+    ) else {
+        return Ok(UploadResult::NotAuthenticated);
+    };
+    context
+        .run(upload_exported_video_inner(
+            project_path,
+            organization_id,
+            progress,
+            cancel,
+            false,
+        ))
         .await
         .map(|(result, _)| result)
 }
@@ -1448,13 +1468,15 @@ async fn upload_exported_video_inner(
     })
     .await
     {
-        Ok(config) => config,
+        Ok(created) => created,
         Err(AuthApiError::InvalidAuthentication) => {
             return Ok((UploadResult::NotAuthenticated, None));
         }
         Err(AuthApiError::UpgradeRequired) => return Ok((UploadResult::UpgradeRequired, None)),
         Err(error) => return Err(error.to_string()),
     };
+    let created_link = s3_config.share_url;
+    let s3_config = s3_config.config;
     if s3_config.id != video_id {
         return Err("Server did not preserve the reserved upload identity".into());
     }
@@ -1485,6 +1507,7 @@ async fn upload_exported_video_inner(
                 .sharing
                 .as_ref()
                 .map(|sharing| sharing.link.clone())
+                .or(created_link)
                 .unwrap_or(link);
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
@@ -1565,7 +1588,7 @@ async fn create_or_get_video(
     name: Option<String>,
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
-) -> Result<S3UploadMeta, AuthApiError> {
+) -> Result<CreatedVideo, AuthApiError> {
     create_or_get_video_with_mode(
         is_screenshot,
         video_id,
@@ -1584,7 +1607,7 @@ async fn create_or_get_video_with_mode(
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
     recording_mode: &str,
-) -> Result<S3UploadMeta, AuthApiError> {
+) -> Result<CreatedVideo, AuthApiError> {
     let mut path = format!(
         "/api/desktop/video/create?recordingMode={}",
         urlencoding(recording_mode)
@@ -1626,8 +1649,52 @@ async fn create_or_get_video_with_mode(
         .text()
         .await
         .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
-    serde_json::from_str::<S3UploadMeta>(&text)
+    parse_created_video(&text)
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
+}
+
+struct CreatedVideo {
+    config: S3UploadMeta,
+    share_url: Option<String>,
+}
+
+impl CreatedVideo {
+    fn link(&self) -> String {
+        self.share_url
+            .clone()
+            .unwrap_or_else(|| format!("{}/s/{}", auth::server_url(), self.config.id))
+    }
+}
+
+fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct CreateVideoResponse {
+        id: String,
+        #[serde(default)]
+        share_url: Option<String>,
+    }
+
+    let response = serde_json::from_str::<CreateVideoResponse>(body)?;
+    let share_url = response
+        .share_url
+        .filter(|share_url| is_share_url_for(share_url, &response.id));
+    Ok(CreatedVideo {
+        config: S3UploadMeta { id: response.id },
+        share_url,
+    })
+}
+
+fn is_share_url_for(share_url: &str, video_id: &str) -> bool {
+    reqwest::Url::parse(share_url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| !host.is_empty())
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none()
+            && url.path() == format!("/s/{video_id}")
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 #[derive(Debug)]
@@ -2578,11 +2645,13 @@ async fn upload_screenshot_bytes(
     content_type: &str,
     video_id: Option<String>,
 ) -> Result<UploadedItem, AuthApiError> {
-    let s3_config = create_or_get_video(true, video_id, None, None, None).await?;
+    let created = create_or_get_video(true, video_id, None, None, None).await?;
+    let link = created.link();
+    let s3_config = created.config;
     let subpath = screenshot_upload_subpath(content_type);
     presigned_put_bytes(&s3_config.id, subpath, image_bytes).await?;
     Ok(UploadedItem {
-        link: format!("{}/s/{}", auth::server_url(), s3_config.id),
+        link,
         id: s3_config.id,
     })
 }
@@ -2683,6 +2752,50 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn created_video_uses_a_custom_domain_share_link() {
+        let created = parse_created_video(
+            r#"{"id":"abc123","share_url":"https://videos.team.test/s/abc123","user_id":"u"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(
+            created.share_url.as_deref(),
+            Some("https://videos.team.test/s/abc123")
+        );
+    }
+
+    #[test]
+    fn created_video_without_a_share_link_keeps_the_default() {
+        let created = parse_created_video(r#"{"id":"abc123","user_id":"u"}"#).unwrap();
+        assert_eq!(created.config.id, "abc123");
+        assert_eq!(created.share_url, None);
+
+        let created = parse_created_video(r#"{"id":"abc123","share_url":null}"#).unwrap();
+        assert_eq!(created.share_url, None);
+    }
+
+    #[test]
+    fn created_video_ignores_share_links_for_other_pages() {
+        for share_url in [
+            "",
+            "not a url",
+            "http://videos.team.test/s/abc123",
+            "https://videos.team.test/s/other",
+            "https://videos.team.test/s/abc123/extra",
+            "https://videos.team.test/c/abc123",
+            "https://videos.team.test/s/abc123?x=1",
+            "https://videos.team.test/s/abc123#x",
+            "https://user:pass@videos.team.test/s/abc123",
+            "https://videos.team.test:8443/s/abc123",
+            "javascript:alert(1)//s/abc123",
+        ] {
+            let body = serde_json::json!({ "id": "abc123", "share_url": share_url }).to_string();
+            let created = parse_created_video(&body).unwrap();
+            assert_eq!(created.share_url, None, "{share_url}");
+        }
+    }
 
     #[tokio::test]
     async fn presigned_transfer_errors_never_expose_secret_urls() {
@@ -2809,6 +2922,22 @@ mod tests {
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
+    }
+
+    #[tokio::test]
+    async fn lost_completion_authorization_cannot_accept_a_successful_worker() {
+        let authorization = CompletionAuthorization::new();
+        drop(authorization.required);
+        let mut upload =
+            upload_with_task(tokio::spawn(async { Ok(()) }), Some(authorization.control));
+        upload.completion_permit = Some(authorization.permit);
+
+        let error = upload
+            .finish_with_screenshot(Path::new("unused.cap"), SegmentUploadManifest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Instant completion authorization was lost");
+        upload.abort_segments().await;
     }
 
     #[tokio::test]

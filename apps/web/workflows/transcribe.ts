@@ -49,6 +49,7 @@ import {
 } from "@/lib/media-client";
 import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
 import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
+import { fetchStorageUrl } from "@/lib/storage-fetch";
 import {
 	getTranscriptionProvider,
 	isTranscriptionConfigured,
@@ -632,11 +633,11 @@ async function resolveVideoSourceUrl(
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
 		.limit(1);
 
-	const candidateKeys = [
-		sourceKeyOverride,
-		`${userId}/${videoId}/result.mp4`,
-		upload[0]?.rawFileKey,
-	].filter(
+	const candidateKeys = (
+		sourceKeyOverride
+			? [sourceKeyOverride]
+			: [`${userId}/${videoId}/result.mp4`, upload[0]?.rawFileKey]
+	).filter(
 		(value, index, values): value is string =>
 			Boolean(value) && values.indexOf(value) === index,
 	);
@@ -645,7 +646,7 @@ async function resolveVideoSourceUrl(
 		const url = await resolvedBucket
 			.getInternalSignedObjectUrl(key)
 			.pipe(runWorkflowPromise);
-		const response = await fetch(url, {
+		const response = await fetchStorageUrl(url, {
 			method: "GET",
 			headers: { range: "bytes=0-0" },
 		});
@@ -783,7 +784,7 @@ async function runTranscription(
 	language: AiGenerationLanguage,
 	label: string,
 ): Promise<{ result: AssemblyAIEditResult; audioDurationSeconds: number }> {
-	const audioResponse = await fetch(audioUrl);
+	const audioResponse = await fetchStorageUrl(audioUrl);
 	if (!audioResponse.ok) {
 		throw new Error(
 			`Audio URL not accessible: ${audioResponse.status} ${audioResponse.statusText}`,

@@ -9,8 +9,8 @@ use serde::Serialize;
 
 use crate::{OutputFormat, write_json};
 
-// Production bundle identifier; matches tauri.prod.conf.json. Dev builds use `so.cap.desktop.dev`,
-// which the user can reach with an explicit `--dir`.
+// The desktop app's bundle identifier (`identifier` in apps/desktop-gpui/tauri.conf.json). Dev
+// builds of 0.6.0 and earlier used `so.cap.desktop.dev`, which the user can reach with `--dir`.
 const DESKTOP_BUNDLE_IDENTIFIER: &str = "so.cap.desktop";
 
 fn library_dirs(app_data: &Path) -> Vec<PathBuf> {

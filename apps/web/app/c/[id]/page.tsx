@@ -1,16 +1,14 @@
 import { buttonVariants, Logo } from "@cap/ui";
-import {
-	faArrowLeft,
-	faArrowUpRightFromSquare,
-	faFolder,
-	faLock,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons/faArrowUpRightFromSquare";
+import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { PublicCapCard } from "@/components/PublicCapCard";
 import {
 	GRID_COLUMN_CLASS,
@@ -24,6 +22,7 @@ import {
 } from "@/lib/public-collections";
 import {
 	getPublicCollectionHref,
+	getPublicCollectionLoginHref,
 	parsePublicCollectionPage,
 } from "@/lib/public-collections-policy";
 import type { SharePageBranding } from "@/lib/share-branding";
@@ -118,7 +117,10 @@ export default async function PublicCollectionPage(
 				description={
 					<>
 						The owner has restricted access. Please{" "}
-						<Link href="/login" className="text-gray-12 underline">
+						<Link
+							href={getPublicCollectionLoginHref(params.id, page)}
+							className="text-gray-12 underline"
+						>
 							sign in
 						</Link>{" "}
 						with an authorized email address to view.

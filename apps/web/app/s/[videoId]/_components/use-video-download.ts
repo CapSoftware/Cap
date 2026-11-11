@@ -7,6 +7,7 @@ import {
 	getVideoDownloadInfo,
 	type VideoDownloadVariant,
 } from "@/actions/videos/download";
+import { startBrowserDownload } from "@/lib/start-browser-download";
 
 /**
  * Fetches a signed URL and saves it to disk, with a toast for the wait.
@@ -29,19 +30,7 @@ export function useVideoDownload(videoId: Video.VideoId) {
 					throw new Error(result.error);
 				}
 
-				const { downloadUrl, filename } = result;
-				const response = await fetch(downloadUrl);
-				if (!response.ok) throw new Error("Failed to download video");
-				const blob = await response.blob();
-				const blobUrl = window.URL.createObjectURL(blob);
-				const link = document.createElement("a");
-				link.href = blobUrl;
-				link.download = filename;
-				link.style.display = "none";
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
-				window.URL.revokeObjectURL(blobUrl);
+				startBrowserDownload(result.downloadUrl);
 			};
 
 			const promise = run();

@@ -206,6 +206,10 @@ fps_30 = "30 FPS"
 fps_60 = "60 FPS (सुझाया गया)"
 label = "अधिकतम कैप्चर फ़्रेम रेट"
 
+[settings.general.recording.marker_sound]
+description = "Studio रिकॉर्डिंग के दौरान मार्कर जोड़ने पर एक छोटी आवाज़ चलाता है। आपका माइक्रोफ़ोन या सिस्टम ऑडियो इसे रिकॉर्ड कर सकता है।"
+label = "मार्कर के लिए आवाज़ चलाएँ"
+
 [settings.general.storage]
 choose_folder = "फ़ोल्डर चुनें"
 default_location = "डिफ़ॉल्ट (Application Support)"
@@ -382,6 +386,10 @@ quarter = "एक-चौथाई"
 
 [settings.shortcuts]
 blocked_while_recording = "जब तक यह रिकॉर्डिंग अपनी स्टॉप कुंजी इस्तेमाल कर रही है, शॉर्टकट नहीं बदले जा सकते। पहले रिकॉर्डिंग रोकें।"
+cancelling_description = "शॉर्टकट या Cap आइकन से शुरू किए गए स्क्रीनशॉट और रिकॉर्डिंग के लिए।"
+cancelling_title = "रद्द करना"
+closing_editor_description = "स्क्रीनशॉट एडिटर और वीडियो एडिटर के लिए।"
+closing_editor_title = "एडिटर बंद करना"
 needs_modifier_macos = "⌘, ⌃ या ⌥ शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
 needs_modifier_other = "Ctrl, Alt या Win शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
 record_shortcut = "शॉर्टकट सेट करें"
@@ -409,7 +417,23 @@ title = "Studio रिकॉर्डिंग के बाद"
 hint = "शेयर लिंक हमेशा कॉपी होता है"
 title = "Instant रिकॉर्डिंग के बाद"
 
+[settings.shortcuts.on_cancel]
+hint = "Esc या पिकर बंद करना"
+title = "रद्द करने पर"
+
+[settings.shortcuts.on_editor_close]
+hint = "आख़िरी एडिटर बंद होने के बाद"
+title = "एडिटर बंद करने पर"
+
 [settings.shortcuts.outcome]
+cancel_show_cap = "Cap दिखाएँ"
+cancel_show_cap_hint = "रिकॉर्डर पर वापस"
+cancel_stay_hidden = "छिपा रहे"
+cancel_stay_hidden_hint = "जब तक Cap पहले से खुला न हो"
+editor_close_show_cap = "Cap दिखाएँ"
+editor_close_show_cap_hint = "रिकॉर्डर पर वापस"
+editor_close_stay_hidden = "छिपा रहे"
+editor_close_stay_hidden_hint = "जब तक आप Cap न खोलें"
 instant_copy_link = "सिर्फ़ लिंक कॉपी करें"
 instant_copy_link_hint = "कुछ नहीं खुलता"
 instant_open_link = "लिंक खोलें"
@@ -431,6 +455,7 @@ studio_show_cap = "Cap दिखाएँ"
 studio_show_cap_hint = "रिकॉर्डर पर वापस"
 
 [settings.shortcuts.label]
+add_marker = "मार्कर जोड़ें"
 cycle_mode = "रिकॉर्डिंग मोड बदलें"
 fallback = "शॉर्टकट"
 open_picker = "रिकॉर्डिंग पिकर खोलें"
@@ -447,6 +472,7 @@ start_studio = "Studio रिकॉर्डिंग शुरू करें"
 stop = "रिकॉर्डिंग रोकें"
 
 [settings.shortcuts.effect]
+add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें"
 cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें"
 instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें"
 instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें"
@@ -479,6 +505,7 @@ studio = "चुनी गई स्क्रीन या विंडो क�
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें"
 
 [settings.shortcuts.sentence]
+add_marker = "Studio रिकॉर्डिंग में इस पल को मार्क करें।"
 cycle_mode = "Studio, Instant और स्क्रीनशॉट मोड के बीच बदलें।"
 instant_copy = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करें।"
 instant_copy_and_open = "चुनी गई स्क्रीन या विंडो को Instant मोड में रिकॉर्ड करें, फिर रोकने पर शेयर लिंक कॉपी करके खोलें।"
@@ -544,26 +571,9 @@ terms_title = "याद रखे गए शब्द"
 title = "ट्रांसक्रिप्शन"
 
 [settings.experimental]
-developer = "डेवलपर"
-developer_description = "सिर्फ़ डेवलपमेंट बिल्ड में दिखता है।"
 muxer = "अलग प्रोसेस में मक्सर"
 muxer_description = "फ़्रैगमेंटेड-MP4 मक्सर को अलग सबप्रोसेस में चलाता है ताकि मक्सर क्रैश होने से आपकी रिकॉर्डिंग न रुके। इसके लिए बंडल की गई cap-muxer बाइनरी ज़रूरी है।"
-native_app = "नेटिव ऐप इस्तेमाल करें"
-native_app_description = "बंद करने पर यह ऐप बंद होगा और डेवलपमेंट हार्नेस में क्लासिक Tauri ऐप फिर से खुलेगा। रिकॉर्डिंग और सेटिंग्स साझा रहती हैं।"
 reliability = "विश्वसनीयता"
-
-[settings.experimental.switch]
-busy = "क्लासिक ऐप पर जाने से पहले अपनी रिकॉर्डिंग, एक्सपोर्ट, अपलोड, इम्पोर्ट या ट्रांसक्रिप्शन का काम पूरा करें।"
-check_failed = "यह जाँच नहीं हो सकी कि क्लासिक Cap ऐप खुला या नहीं: {error}"
-data_stays = "आपकी रिकॉर्डिंग और सेटिंग्स ठीक वहीं रहती हैं जहाँ वे हैं।"
-failed = "क्लासिक Cap ऐप नहीं खुल सका।"
-not_found = "वापस जाने के लिए क्लासिक Cap ऐप नहीं मिला।"
-open_failed = "क्लासिक Cap ऐप नहीं खुल सका: {error}"
-opening = "क्लासिक Cap ऐप खुल रहा है"
-opening_detail = "क्लासिक Cap ऐप तैयार होने पर यह विंडो बंद हो जाएगी।"
-save_failed = "आपकी ऐप पसंद सेव नहीं हो सकी। Cap अभी भी खुला है।"
-switching = "क्लासिक Cap ऐप पर वापस जा रहे हैं।"
-timed_out = "क्लासिक ऐप नहीं खुला। डेव टर्मिनल में बिल्ड की गड़बड़ियाँ देखें, फिर दोबारा कोशिश करें।"
 
 [settings.feedback]
 app_version = "ऐप वर्ज़न"
@@ -960,7 +970,6 @@ name = "अपलोड तैयार होने पर मुझे बत�
 description = "शेयर लिंक Slack, Discord या अपने वेबहुक पर भेजें।"
 name = "कुछ शेयर करने पर Slack को बताएँ"
 
-
 [main]
 delete_recording_confirm = "क्या आप वाकई यह रिकॉर्डिंग हटाना चाहते हैं?"
 delete_screenshot_confirm = "क्या आप वाकई यह स्क्रीनशॉट हटाना चाहते हैं?"
@@ -1071,9 +1080,7 @@ studio = "Studio मोड"
 studio_description = "आपके कंप्यूटर पर सहेजता है और रोकने पर एडिटर खोलता है। रिकॉर्डिंग क्वालिटी सेटिंग्स में चुनें।"
 
 [main.mode.info]
-instant = "लिंक के साथ तुरंत शेयर करें। आपकी रिकॉर्डिंग रिकॉर्ड करते-करते अपलोड होती है, ताकि पूरा होते ही आप उसे शेयर कर सकें।"
-screenshot = "तुरंत स्क्रीनशॉट लें और उन पर एनोटेशन जोड़ें। झटपट कैप्चर, बग रिपोर्ट और विज़ुअल बातचीत के लिए बढ़िया।"
-studio = "बाद में एडिट करने के लिए सबसे अच्छी क्वालिटी में लोकल रिकॉर्ड करें। इफ़ेक्ट और ट्रांज़िशन के साथ बढ़िया कंटेंट बनाने के लिए एकदम सही।"
+current = "मौजूदा"
 title = "रिकॉर्डिंग मोड"
 
 [main.mode.name]
@@ -1103,6 +1110,11 @@ recover = "रिकवर करें"
 segments = { one = "{count} सेगमेंट", other = "{count} सेगमेंट" }
 segments_with_duration = { one = "{count} सेगमेंट · {duration}", other = "{count} सेगमेंट · {duration}" }
 title = "अधूरी रिकॉर्डिंग"
+
+[main.recovery.error]
+nothing_saved = "यह रिकॉर्डिंग रुकने से पहले कोई वीडियो सेव नहीं हुआ, इसलिए रिकवर करने के लिए कुछ नहीं है। इसकी फ़ाइलें अब भी {path} में हैं।"
+rebuild_failed = "Cap इस रिकॉर्डिंग को दोबारा नहीं बना सका ({error})। कुछ भी डिलीट नहीं हुआ, और मूल फ़ाइलें {path} में हैं।"
+storage = "इस रिकॉर्डिंग को रिकवर करने के लिए पर्याप्त खाली जगह नहीं है ({error})। कुछ जगह खाली करें और फिर से रिकवर करें दबाएँ। कुछ भी डिलीट नहीं हुआ, और फ़ाइलें {path} में हैं।"
 
 [main.sign_in]
 message = "Instant मोड रिकॉर्ड करते-करते अपलोड करता है, ताकि रोकते ही आपका शेयर करने लायक लिंक तैयार हो।"
@@ -1138,6 +1150,7 @@ window = "विंडो"
 [controls]
 disk_full_resume = "फिर से शुरू करने के लिए डिस्क में जगह कम है। जगह खाली करके फिर कोशिश करें, या सहेजने के लिए रोकें दबाएँ।"
 low_storage = "स्टोरेज कम है। आपकी रिकॉर्डिंग सहेजने के लिए Cap जल्द ही रुक जाएगा।"
+paused_for_sleep = "आपका Mac स्लीप में चला गया, इसलिए रिकॉर्डिंग रोक दी गई। तैयार होने पर फिर से शुरू करें, या सहेजने के लिए रोकें दबाएँ।"
 
 [controls.confirm]
 delete = "हटाएँ"
@@ -1161,6 +1174,9 @@ pausing = "पॉज़…"
 resuming = "फिर शुरू…"
 saving = "सहेज रहा…"
 starting = "शुरू हो रहा"
+
+[controls.marker]
+add = "मार्कर जोड़ें"
 
 [camera]
 waiting_title = "कैमरा एक्सेस का इंतज़ार है"
@@ -1411,6 +1427,7 @@ failed_title = "रिकॉर्डिंग डिलीट नहीं ह�
 finishing_body = "यह डिलीट पूरा करने से पहले Cap रिकॉर्डिंग की सफ़ाई पूरी होने का इंतज़ार कर रहा है।"
 finishing_title = "डिलीट अभी पूरा हो रहा है"
 in_use = "यह रिकॉर्डिंग अभी इस्तेमाल में है। इसका अपलोड पूरा या रद्द करें और फिर कोशिश करें: {error}"
+open_in_editor = "यह रिकॉर्डिंग एडिटर में खुली है। एडिटर बंद करें और फिर कोशिश करें।"
 outside_library = "यह रिकॉर्डिंग रिकॉर्डिंग लाइब्रेरी से बाहर है। इसकी फ़ाइलें नहीं बदली गईं।"
 recording_active = "यह प्रोजेक्ट डिलीट करने से पहले रिकॉर्डिंग पूरी या रद्द करें।"
 retained_title = "रिकॉर्डिंग रखी गई"
@@ -1482,6 +1499,16 @@ reset_title = "चयन रीसेट करें"
 reset_body = "क्षेत्र हटाएँ ताकि आप नया बना सकें।"
 fill_title = "पूरा डिस्प्ले भरें"
 fill_body = "अनुपात बनाए रखते हुए क्षेत्र को पूरे डिस्प्ले तक बढ़ाएँ।"
+fit_window_hint = "या क्षेत्र को किसी विंडो के बराबर करने के लिए उस विंडो पर क्लिक करें"
+drag_to_move = "खिसकाने के लिए खींचें"
+locked = "लॉक है"
+lock_title = "क्षेत्र लॉक करें"
+lock_body = "इस क्षेत्र को अगली बार के लिए रखें, और गलती से खींचने पर इसे बदलने से रोकें।"
+lock_needs_area = "पहले एक क्षेत्र बनाएँ, फिर उसे लॉक करें।"
+unlock_title = "क्षेत्र अनलॉक करें"
+unlock_body = "क्षेत्र को फिर से खिसकाने, उसका साइज़ बदलने या नया बनाने दें।"
+locked_title = "क्षेत्र लॉक है"
+locked_body = "अनलॉक करने के लिए क्लिक करें, ताकि इसे खिसकाया, इसका साइज़ बदला या फिर से बनाया जा सके।"
 
 [overlay.camera_only]
 description = "सिर्फ़ अपने कैमरा और माइक्रोफ़ोन से रिकॉर्ड करें"
@@ -1996,6 +2023,62 @@ edit_cursor = "कर्सर एडिट करें"
 help = "बदलाव सिर्फ़ इस सेगमेंट के दौरान लागू होते हैं। किसी ग्रुप की ग्लोबल सेटिंग्स कॉपी करने के लिए उसे चालू करें।"
 reset_crop = "क्रॉप रीसेट करें"
 
+[editor.panel.style_presets]
+apply = "लागू करें"
+create = "सेव करें"
+create_title = "स्टाइल प्रीसेट सेव करें"
+custom = "कस्टम स्टाइल"
+default_badge = "डिफ़ॉल्ट"
+delete = "हटाएँ"
+delete_confirm = "\"{name}\" हटाएँ? जो आइटम पहले से यह स्टाइल इस्तेमाल करते हैं, उनमें यह बनी रहेगी।"
+delete_title = "स्टाइल प्रीसेट हटाएँ"
+empty = "अभी तक कोई सेव किया गया प्रीसेट नहीं"
+empty_help = "किसी भी प्रोजेक्ट में दोबारा इस्तेमाल करने के लिए स्टाइल सेव करें।"
+font_missing = "{font} इस कंप्यूटर पर इंस्टॉल नहीं है, इसलिए इसकी जगह {fallback} इस्तेमाल होता है।"
+move_down = "नीचे ले जाएँ"
+move_up = "ऊपर ले जाएँ"
+remove_default = "डिफ़ॉल्ट से हटाएँ"
+rename = "नाम बदलें"
+rename_title = "स्टाइल प्रीसेट का नाम बदलें"
+save = "स्टाइल को प्रीसेट के रूप में सेव करें"
+save_failed = "प्रीसेट सेव नहीं हो सके। Cap अपनी सेटिंग्स फ़ाइल में नहीं लिख पा रहा है।"
+set_default = "डिफ़ॉल्ट बनाएँ"
+tooltip = "स्टाइल प्रीसेट"
+update = "मौजूदा स्टाइल से अपडेट करें"
+
+[editor.panel.style_presets.captions]
+default_name = "मेरी कैप्शन स्टाइल"
+use_for_new = "नए कैप्शन के लिए इस्तेमाल करें"
+used_for_new = "नए कैप्शन यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.mask]
+applied_all = "सभी मास्क पर लागू किया गया ({number})"
+apply_all = "सभी मास्क पर लागू करें ({number})"
+default_name = "मेरी मास्क स्टाइल"
+use_for_new = "नए मास्क के लिए इस्तेमाल करें"
+used_for_new = "नए मास्क यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.shape]
+applied_all = "सभी शेप पर लागू किया गया ({number})"
+apply_all = "सभी शेप पर लागू करें ({number})"
+default_name = "मेरी शेप स्टाइल"
+use_for_new = "नए शेप के लिए इस्तेमाल करें"
+used_for_new = "नए शेप यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.style]
+applied_all = "सभी स्टाइल सेगमेंट पर लागू किया गया ({number})"
+apply_all = "सभी स्टाइल सेगमेंट पर लागू करें ({number})"
+default_name = "मेरी स्टाइल"
+use_for_new = "नए स्टाइल सेगमेंट के लिए इस्तेमाल करें"
+used_for_new = "नए स्टाइल सेगमेंट यह स्टाइल इस्तेमाल करते हैं"
+
+[editor.panel.style_presets.text_segment]
+applied_all = "सभी टेक्स्ट सेगमेंट पर लागू किया गया ({number})"
+apply_all = "सभी टेक्स्ट सेगमेंट पर लागू करें ({number})"
+default_name = "मेरी टेक्स्ट स्टाइल"
+use_for_new = "नए टेक्स्ट के लिए इस्तेमाल करें"
+used_for_new = "नया टेक्स्ट यह स्टाइल इस्तेमाल करता है"
+
 [editor.panel.text_animation]
 bounce = "बाउंस"
 fade = "फ़ेड"
@@ -2100,6 +2183,9 @@ mixed = "मिश्रित"
 mode = "ज़ूम मोड"
 positions_mixed = "सेगमेंट अलग-अलग जगहों पर ज़ूम करते हैं। सभी को एक ही जगह ले जाने के लिए ड्रैग करें।"
 title = "ज़ूम {number}"
+
+[editor.side_panel]
+style = "स्टाइल"
 
 [editor.sidebar]
 desktop_import_failed = "आपका डेस्कटॉप वॉलपेपर इम्पोर्ट नहीं हो सका"
@@ -2252,19 +2338,21 @@ purple = "बैंगनी"
 [editor.canvas]
 camera = "कैमरा"
 camera_follows_zoom = "कैमरे का आकार ज़ूम के साथ बदलता है; हिलाने के लिए खींचें"
+captions = "कैप्शन"
 edit_zoom = "ज़ूम एडिट करें"
 image = "इमेज"
 mask = "मास्क"
 screen = "स्क्रीन"
 screen_locked = "ज़ूम चालू रहने तक स्क्रीन लॉक रहती है"
+shape = "शेप"
 text_item = "टेक्स्ट"
 
 [editor.clips]
 append_error = "क्लिप नहीं जोड़ी जा सकी: {message}"
 append_error_title = "रिकॉर्डिंग त्रुटि"
-back = "एडिटर पर वापस जाएँ"
 cap_filter = "Cap रिकॉर्डिंग"
 clip = "क्लिप {number}"
+count = { one = "{count} क्लिप", other = "{count} क्लिप" }
 empty_description = "कोई क्लिप रिकॉर्ड या इम्पोर्ट करें, वह यहाँ दिखेगी।"
 empty_title = "अभी कोई क्लिप नहीं"
 import = "इम्पोर्ट करें"
@@ -2275,6 +2363,7 @@ import_mp4 = "MP4 वीडियो…"
 importing = "इम्पोर्ट हो रहा है…"
 mp4_filter = "MP4 वीडियो"
 prepare_controls_failed = "रिकॉर्डिंग कंट्रोल तैयार नहीं हो सके: {error}"
+record = "रिकॉर्ड करें"
 record_new = "नई क्लिप रिकॉर्ड करें"
 save_before_recording_failed = "रिकॉर्डिंग से पहले मौजूदा प्रोजेक्ट सेव नहीं हो सका: {error}"
 split = "हिस्सा {number}"
@@ -2388,6 +2477,9 @@ upload_complete = "अपलोड पूरा हुआ"
 uploading = "शेयर करने लायक लिंक बन रहा है"
 
 [editor.export.quality]
+gif_high = "उच्च"
+gif_low = "निम्न"
+gif_medium = "मध्यम"
 larger = "बड़ी फ़ाइल"
 maximum = "अधिकतम"
 potato = "न्यूनतम"
@@ -2509,7 +2601,10 @@ language_label = "भाषा"
 model_downloaded = "{model} मॉडल डाउनलोड हो गया"
 model_label = "मॉडल"
 position = "पोज़िशन"
+refining_word_timings = "शब्दों का समय सुधारा जा रहा है…"
 regenerate = "कैप्शन दोबारा बनाएँ"
+reset_position = "पोज़िशन रीसेट करें"
+show_filler_words = "भराव शब्द दिखाएँ"
 size_label = "आकार"
 style = "स्टाइल"
 text_color = "टेक्स्ट रंग"
@@ -2664,6 +2759,43 @@ system_sans_serif = "सिस्टम Sans-Serif"
 system_serif = "सिस्टम Serif"
 system_monospace = "सिस्टम Monospace"
 
+[editor.shape]
+title = "शेप {number}"
+stroke = "स्ट्रोक"
+width = "चौड़ाई"
+fill = "फ़िल"
+fill_opacity = "फ़िल अपारदर्शिता"
+corner_radius = "कोने की गोलाई"
+arrowhead = "तीर का सिरा"
+number = "संख्या"
+look = "रूप"
+shadow = "छाया"
+animation = "एनिमेशन"
+draw = "शेप बनाएं"
+toolbar = "शेप"
+draw_hint = "बनाने के लिए प्रीव्यू पर ड्रैग करें। रखने के लिए क्लिक करें।"
+decrease = "घटाएं"
+increase = "बढ़ाएं"
+
+[editor.shape.kinds]
+arrow = "तीर"
+line = "रेखा"
+rectangle = "आयत"
+ellipse = "दीर्घवृत्त"
+highlight = "हाइलाइट"
+badge = "चरण"
+
+[editor.shape.heads]
+filled = "भरा हुआ"
+open = "खुला"
+double = "दोहरा"
+
+[editor.shape.animations]
+none = "कोई नहीं"
+fade = "फ़ेड"
+scale = "स्केल"
+draw = "ड्रॉ"
+
 [editor.timeline]
 add_shot = "शॉट जोड़ें"
 add_shot_with_look = "शॉट जोड़ें · {look} · {seconds} सेकंड"
@@ -2687,6 +2819,7 @@ keyboard = "टाइप करते समय स्क्रीन पर क
 mask = "स्क्रीन के निजी हिस्सों को धुंधला या काला करें।"
 scene = "अपनी स्क्रीन और कैमरे के बीच लेआउट बदलें।"
 scene_unavailable = "सीन इस्तेमाल करने के लिए कैमरे के साथ रिकॉर्ड करें।"
+shape = "अपनी रिकॉर्डिंग पर तीर, बॉक्स, गोले और हाइलाइट बनाएं।"
 style = "समय के साथ बैकग्राउंड, कैमरा और कर्सर सेटिंग्स बदलें।"
 text_overlay = "कैनवास पर कस्टम टेक्स्ट ओवरले और टाइटल जोड़ें।"
 three_d = "सीन को 3D पर्सपेक्टिव में झुकाएँ।"
@@ -2700,6 +2833,7 @@ image = "इमेज ट्रैक हटाएँ।"
 keyboard = "कीबोर्ड ट्रैक हटाएँ।"
 mask = "मास्क ट्रैक हटाएँ।"
 scene = "सीन ट्रैक हटाएँ।"
+shape = "शेप ट्रैक हटाएं।"
 style = "स्टाइल ट्रैक हटाएँ।"
 text_track = "टेक्स्ट ट्रैक हटाएँ।"
 three_d = "3D ट्रैक हटाएँ।"
@@ -2733,10 +2867,64 @@ image = "इमेज"
 keyboard = "कीबोर्ड"
 mask = "मास्क"
 scene = "सीन"
+shape = "शेप"
 style = "स्टाइल"
 text_track = "टेक्स्ट"
 video = "वीडियो"
 zoom = "ज़ूम"
+
+[editor.transcript]
+cleanup = "साफ़ करें"
+cleanup_tooltip = "फ़िलर शब्द हटाएँ और ठहराव छोटे करें"
+delete_matches = "सभी हटाएँ"
+delete_matches_tooltip = "हर मिलान को वीडियो से काटें"
+empty_description = "इस कंप्यूटर पर इस रिकॉर्डिंग को ट्रांसक्राइब करें, फिर उसका टेक्स्ट बदलकर वीडियो एडिट करें।"
+empty_title = "अभी कोई ट्रांसक्रिप्ट नहीं"
+hint = "किसी शब्द पर जाने के लिए उस पर क्लिक करें। शब्द चुनें और डिलीट कुंजी दबाएँ, वे वीडियो से कट जाएँगे।"
+next_match = "अगला मिलान"
+no_audio = "इस रिकॉर्डिंग में ट्रांसक्राइब करने के लिए कोई ऑडियो नहीं है।"
+previous_match = "पिछला मिलान"
+restore_blocked = "यह हिस्सा टाइमलाइन में काटा गया था। इसे वापस लाने के लिए पूर्ववत करें या क्लिप का किनारा खींचें।"
+restore_hint = { one = "{count} शब्द वापस लाने के लिए क्लिक करें", other = "{count} शब्द वापस लाने के लिए क्लिक करें" }
+restore_transition = "इसे वापस लाने के लिए इस कट के पास का ट्रांज़िशन हटाएँ।"
+search = "खोजें"
+search_count = "{total} में से {current}"
+search_none = "कोई मिलान नहीं"
+search_placeholder = "ट्रांसक्रिप्ट में खोजें"
+seconds = "{value} सेकंड"
+selection = { one = "{count} शब्द चुना गया, {seconds} सेकंड", other = "{count} शब्द चुने गए, {seconds} सेकंड" }
+selection_cut = { one = "{count} कटा हुआ शब्द चुना गया। वापस लाने के लिए डिलीट कुंजी दबाएँ।", other = "{count} कटे हुए शब्द चुने गए। वापस लाने के लिए डिलीट कुंजी दबाएँ।" }
+skipped_hold = { one = "{count} कट छोड़ा गया क्योंकि फ़ुलस्क्रीन टेक्स्ट कार्ड उस फ़्रेम को रोके हुए है", other = "{count} कट छोड़े गए क्योंकि फ़ुलस्क्रीन टेक्स्ट कार्ड उन फ़्रेम को रोके हुए हैं" }
+skipped_last_clip = "आखिरी क्लिप को काटा नहीं जा सकता।"
+skipped_transition = { one = "{count} कट छोड़ा गया क्योंकि वह ट्रांज़िशन को छूता है", other = "{count} कट छोड़े गए क्योंकि वे ट्रांज़िशन को छूते हैं" }
+title = "ट्रांसक्रिप्ट"
+transcribe = "ट्रांसक्राइब करें"
+transcribing = "ट्रांसक्राइब हो रहा है…"
+words = { one = "{count} शब्द", other = "{count} शब्द" }
+
+[editor.transcript.fillers]
+discourse = "फ़िलर वाक्यांश"
+discourse_hint = "like, you know, so"
+false_start = "अधूरी शुरुआत"
+false_start_hint = "we should, we need"
+hesitation = "हिचक"
+hesitation_hint = "um, uh, hmm"
+keep = "इसे रखें"
+listen = "सुनें"
+none = "इन श्रेणियों में कोई फ़िलर शब्द नहीं बचा"
+remove = "इसे हटाएँ"
+remove_all = { one = "{count} हटाएँ", other = "{count} हटाएँ" }
+repetition = "दोहराए गए शब्द"
+repetition_hint = "the the, I I"
+title = "फ़िलर शब्द"
+
+[editor.transcript.pauses]
+apply = "छोटा करें"
+keep = "इतना करें"
+longer_than = "इससे लंबे ठहराव"
+none = "इतने लंबे ठहराव नहीं हैं"
+summary = { one = "{count} ठहराव, {seconds} सेकंड बचेंगे", other = "{count} ठहराव, {seconds} सेकंड बचेंगे" }
+title = "ठहराव"
 
 [editor.window]
 audio_filter = "ऑडियो"
@@ -2807,8 +2995,6 @@ split_hint = "प्लेहेड को इस क्लिप के अं�
 volume = "वॉल्यूम"
 transition = "ट्रांज़िशन"
 transition_none = "कोई नहीं"
-transition_crossfade = "क्रॉसफ़ेड"
-transition_fade = "फ़ेड"
 transition_seconds = "{seconds} सेकंड"
 
 [editor.window.clip_menu.merge_blocker]
@@ -2840,7 +3026,6 @@ window_title_placeholder = "विंडो टाइटल"
 windows_description = "विंडो कंट्रोल के साथ टाइटल बार"
 
 [editor.window.header]
-captions = "कैप्शन"
 delete_recording = "रिकॉर्डिंग हटाएँ"
 export = "एक्सपोर्ट"
 open_bundle = "रिकॉर्डिंग बंडल खोलें"
@@ -2903,9 +3088,29 @@ save_failed = "{path} का रिकॉर्डिंग टाइटल स�
 clear_all = "सब साफ़ करें"
 delete = "हटाएँ"
 
+[editor.window.transition]
+title = "ट्रांज़िशन"
+add = "ट्रांज़िशन जोड़ें"
+duration = "अवधि"
+seconds_unit = "सेकंड"
+remove = "ट्रांज़िशन हटाएँ"
+cross_fade = "क्रॉस डिज़ॉल्व"
+fade_through_black = "काले में फ़ेड"
+fade_through_white = "सफ़ेद में फ़ेड"
+push_left = "बाईं ओर पुश"
+push_right = "दाईं ओर पुश"
+push_up = "ऊपर पुश"
+push_down = "नीचे पुश"
+wipe_left = "बाईं ओर वाइप"
+wipe_right = "दाईं ओर वाइप"
+wipe_up = "ऊपर वाइप"
+wipe_down = "नीचे वाइप"
+zoom = "ज़ूम"
+
 [editor.window.transport]
 done_splitting = "विभाजन पूरा"
 play_pause = "वीडियो चलाएँ/रोकें"
+speed = "प्रीव्यू की स्पीड"
 split = "विभाजित करें"
 split_tooltip = "विभाजित करने के लिए किसी सेगमेंट पर क्लिक करें। खत्म करने के लिए Esc दबाएँ।"
 zoom_in = "ज़ूम इन"
@@ -2916,6 +3121,21 @@ generate = "बनाएँ"
 generating = "बनाया जा रहा है…"
 no_clicks = "ज़ूम करने के लिए कोई क्लिक नहीं मिला। जोड़ने के लिए लेन पर खींचें।"
 prompt = "ज़ूम अपने आप जोड़ें"
+
+[editor.markers]
+add = "मार्कर जोड़ें"
+button = { one = "{count} मार्कर", other = "{count} मार्कर" }
+default_name = "मार्कर {number}"
+delete = "मार्कर हटाएँ"
+done = "हो गया"
+edit = "मार्कर संपादित करें"
+empty = "अभी कोई मार्कर नहीं है। प्लेहेड को मार्क करने के लिए M दबाएँ, या रिकॉर्ड करते समय मार्कर जोड़ें।"
+hidden = { one = "{count} मार्कर काटे गए हिस्से में है।", other = "{count} मार्कर काटे गए हिस्सों में हैं।" }
+next = "अगला मार्कर"
+previous = "पिछला मार्कर"
+split = "मार्कर पर क्लिप विभाजित करें"
+stack = { one = "{count} मार्कर। देखने के लिए क्लिक करें।", other = "{count} मार्कर पास-पास हैं। देखने के लिए क्लिक करें।" }
+title = "मार्कर"
 
 [ui]
 coming_soon = "जल्द आ रहा है"
@@ -2931,6 +3151,7 @@ mask = { one = "{count} मास्क सेगमेंट चुना ग�
 scene = { one = "{count} सीन सेगमेंट चुना गया", other = "{count} सीन सेगमेंट चुने गए" }
 segments = { one = "{count} सेगमेंट चुना गया", other = "{count} सेगमेंट चुने गए" }
 select_all = "सभी चुनें"
+shape = { one = "{count} शेप चुना गया", other = "{count} शेप चुने गए" }
 style = { one = "{count} स्टाइल सेगमेंट चुना गया", other = "{count} स्टाइल सेगमेंट चुने गए" }
 text_segments = { one = "{count} टेक्स्ट सेगमेंट चुना गया", other = "{count} टेक्स्ट सेगमेंट चुने गए" }
 three_d = { one = "{count} 3D सेगमेंट चुना गया", other = "{count} 3D सेगमेंट चुने गए" }
@@ -2940,7 +3161,10 @@ zoom_some = { one = "{total} में से {count} चुना गया", o
 
 [dialog.quit]
 canceled = "बाहर निकलना रद्द किया गया: {error}। Cap खुला रहेगा ताकि आप रिकॉर्डिंग पूरी या रिकवर कर सकें।"
+files_kept = "अब तक रिकॉर्ड की गई हर चीज़ रिकॉर्डिंग के फ़ोल्डर में रहती है।"
+keep_open = "Cap खुला रखें"
 pending = "रिकॉर्डिंग अभी बंद हो रही है, इसलिए बाहर निकलना रद्द किया गया। Cap खुला रहेगा। उपलब्ध होते ही रोकें का इस्तेमाल करें, फिर दोबारा बाहर निकलने की कोशिश करें।"
+quit_anyway = "फिर भी बंद करें"
 still_open = "Cap अभी भी खुला है"
 unconfirmed = "रिकॉर्डिंग बंद होने की पुष्टि नहीं हो सकी, इसलिए बाहर निकलना रद्द किया गया। Cap खुला रहेगा। रोकें का इस्तेमाल करें, फिर दोबारा बाहर निकलने की कोशिश करें।"
 

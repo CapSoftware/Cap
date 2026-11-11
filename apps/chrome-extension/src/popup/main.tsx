@@ -19,6 +19,7 @@ import {
 	loadSettings,
 	MEDIA_ACCESS_KEY,
 	type MediaAccessState,
+	SETTINGS_KEY,
 	saveSettings,
 	updateMediaAccessState,
 } from "../shared/storage";
@@ -283,7 +284,11 @@ function App() {
 					if (disposed || !cachedAuth) return;
 					applySettings(cachedSettings);
 					setAuth(cachedAuth);
-					setBootstrap(cachedBootstrap);
+					setBootstrap(
+						cachedBootstrap?.user.id === cachedAuth.userId
+							? cachedBootstrap
+							: null,
+					);
 					setMediaAccess(cachedMediaAccess);
 					setBootstrapped(true);
 				},
@@ -344,15 +349,22 @@ function App() {
 			changes: Record<string, chrome.storage.StorageChange>,
 			areaName: string,
 		) => {
-			if (areaName !== "local" || !changes[MEDIA_ACCESS_KEY]) return;
-			void loadMediaAccessState()
-				.then(setMediaAccess)
-				.catch(() => undefined);
+			if (areaName !== "local") return;
+			if (changes[MEDIA_ACCESS_KEY]) {
+				void loadMediaAccessState()
+					.then(setMediaAccess)
+					.catch(() => undefined);
+			}
+			if (changes[SETTINGS_KEY]) {
+				void loadSettings()
+					.then(applySettings)
+					.catch(() => undefined);
+			}
 		};
 
 		chrome.storage.onChanged.addListener(handleStorageChange);
 		return () => chrome.storage.onChanged.removeListener(handleStorageChange);
-	}, []);
+	}, [applySettings]);
 
 	// Recordings whose upload failed (or that a crash stranded) wait in local
 	// storage; surface a small recovery link so they are discoverable from
@@ -525,8 +537,14 @@ function App() {
 
 	const handleModeChange = (recordingMode: RecordingMode) => {
 		setMode(recordingMode);
+		const next = rememberRecordingMode(settingsRef.current, recordingMode);
+		// Camera mode records the camera itself, so pick one rather than
+		// leaving Start disabled until the user finds the camera list.
+		const firstCamera = cameraDevices[0]?.deviceId;
 		void updateSettings(
-			rememberRecordingMode(settingsRef.current, recordingMode),
+			recordingMode === "camera" && !next.webcam.deviceId && firstCamera
+				? rememberCameraSelection(next, firstCamera, cameraDevices)
+				: next,
 		);
 	};
 
@@ -686,6 +704,11 @@ function App() {
 								onStart={() => void start()}
 								onStop={() => void stop()}
 							/>
+							{!recordingActive && cameraRequired && (
+								<p className="mt-2 text-center text-xs text-gray-11">
+									Choose a camera above to record in Camera mode.
+								</p>
+							)}
 						</div>
 						{recordingBarStatus && (
 							<div className="cap-fade-up">

@@ -15,6 +15,7 @@ import {
 } from "@/lib/loom-import-upload";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { integer } from "@/utils/zod";
 
 const baseSchema = z.object({
 	videoId: z.string().min(1),
@@ -32,17 +33,17 @@ const baseSchema = z.object({
 });
 
 const signPartSchema = baseSchema.extend({
-	partNumber: z.number().int().min(1),
-	contentLength: z.number().int().min(1),
+	partNumber: integer().min(1),
+	contentLength: integer().min(1),
 });
 
 const completeSchema = baseSchema.extend({
 	parts: z
 		.array(
 			z.object({
-				partNumber: z.number().int().min(1),
+				partNumber: integer().min(1),
 				etag: z.string().min(1),
-				size: z.number().int().min(1),
+				size: integer().min(1),
 			}),
 		)
 		.min(1),
@@ -272,12 +273,17 @@ export async function POST(
 			}
 
 			const result = await multipartContext.bucket.multipart
-				.complete(payload.data.key, payload.data.uploadId, {
-					MultipartUpload: { Parts: parts },
-					...(multipartContext.fenced || multipartContext.loom
-						? { IfNoneMatch: "*" }
-						: {}),
-				})
+				.complete(
+					payload.data.key,
+					payload.data.uploadId,
+					{
+						MultipartUpload: { Parts: parts },
+						...(multipartContext.fenced || multipartContext.loom
+							? { IfNoneMatch: "*" }
+							: {}),
+					},
+					{ retryWithoutUnsupportedIfNoneMatch: multipartContext.fenced },
+				)
 				.pipe(runPromise);
 
 			return NextResponse.json({

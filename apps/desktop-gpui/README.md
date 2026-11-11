@@ -3,9 +3,9 @@
 Cap's desktop app, rewritten in [gpui](https://www.gpui.rs/). No Tauri, no
 webview — the whole UI is drawn by gpui and every pixel is Rust.
 
-This is the app that ships as **Cap**, from 0.6.1 on. The Tauri app in
-`apps/desktop` last shipped in 0.6.0 and is kept only for the dev harness; see
-[Shipping and updates](#shipping-and-updates).
+This is the app that ships as **Cap**, from 0.6.1 on, and the only desktop app
+in this repository. It replaced the Tauri app, which last shipped in 0.6.0; see
+[Shipping and updates](#shipping-and-updates) and [The Tauri app](#the-tauri-app).
 
 The main recording window uses a fixed 330×432 layout with device controls
 and recording and screenshot browsers. The expanded view is no longer available.
@@ -43,8 +43,10 @@ behind a plain-slice function and call that from the app.
 ./dev.sh
 ```
 
-`bun run dev:desktop` (from the repo root) starts this loop automatically next
-to the Tauri app, output prefixed `[gpui]`; set `CAP_GPUI_DEV=0` to opt out
+`bun run dev:desktop` from the repo root runs `bun run cap-setup`, checks out
+the patched gpui next to the repository (`scripts/prepare-gpui-dependency.sh`)
+and starts this loop. The loop needs macOS (BSD `stat` and `md5`); on Windows
+and Linux the same command builds and runs the app once
 (`scripts/dev-desktop.mjs`).
 
 Native Rust cannot hot-reload, so this is the Solid-dev-server feel rebuilt
@@ -67,15 +69,17 @@ by hand: switching between `./dev.sh` and `cargo build` rebuilds nothing.
 
 ### Why it is a separate workspace
 
-`Cargo.toml` declares its own `[workspace]`. The root workspace carries
-`[patch.crates-io]` entries — a vendored `wgpu-hal`, a forked `tao` — that exist
-only for the Tauri app and that gpui's tree does not want. Nesting a second
-workspace here leaves the root `Cargo.lock`, the `cargo hakari` workspace-hack
-and CI completely untouched.
+`Cargo.toml` declares its own `[workspace]`. gpui's dependency tree is enormous
+and pins its own git revisions of the wgpu and font stacks, and the root
+workspace's `[patch.crates-io]` entries (forked `reqwest` and `cidre`) are not
+ones that tree wants. Nesting a second workspace keeps the root `Cargo.lock`
+and the `cargo hakari` workspace-hack independent of it. The vendored
+`wgpu-hal` is patched in both workspaces.
 
 `rust-toolchain.toml` pins `stable` rather than the root's 1.88.0, because
-gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
-nearest toolchain file wins, so the Tauri app is unaffected.
+gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). CI and
+release builds use 1.95.0 explicitly. The nearest toolchain file wins, so the
+CLI and the shared crates keep building on 1.88.0.
 
 ## Shipping and updates
 
@@ -118,7 +122,11 @@ byte of what gets installed:
 - `packaging/windows/installer-hooks.nsh` gives the NSIS installer a 128 MB
   LZMA window, so `cap-cli.exe` compresses against `Cap.exe`. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
 deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
-update in place would otherwise leave behind.
+update in place would otherwise leave behind. Before copying files, and before
+uninstalling, it also ends this install's `cap mcp serve` processes (the
+stateless MCP servers AI assistants keep alive), which would otherwise hold the
+FFmpeg DLLs open and fail the update. Other `cap-cli.exe` work, such as a
+detached recording, is never ended.
 
 ### The native updater
 
@@ -144,12 +152,22 @@ while a recording, export, upload, import or transcription is running.
 
 ### The Tauri app
 
-Releases no longer build the Tauri app. 0.6.0 was its last version, and the
-website's [all versions](https://cap.so/download/versions) page keeps it
-downloadable. In a debug build started from `target/`, Settings → Experimental
-still has the **Cap GPUI** switch that hands the session back to the Tauri
-app running under `bun run dev:desktop`, through the dev supervisor
-(`store::request_classic_reopen` and `cap-classic.pending`).
+0.6.0 was the last release of the Tauri app, and the website's
+[all versions](https://cap.so/download/versions) page keeps it downloadable.
+Its source (`apps/desktop`, with the shared Solid UI in `packages/ui-solid`)
+was removed from the repository after 0.6.2 and stays browsable at
+[`cap-v0.6.2`](https://github.com/CapSoftware/Cap/tree/cap-v0.6.2/apps/desktop).
+
+This app was built as a 1:1 port of it, so these notes and many comments in
+`src/` cite its files: `*.tsx` routes and components, `apps/desktop/...`,
+`packages/ui-solid/...`, often with line numbers. Those references all point
+at that tag.
+
+The formats it defined are still live: the `store` file in the app-data
+directory (its `general_settings`, `auth` and other sections), the
+`so.cap.desktop` identifier, the `cap-desktop` deep-link scheme and the
+updater key and endpoint. 0.6.0 installs update
+straight into this app and keep their recordings and settings.
 
 ## What is implemented
 
@@ -707,6 +725,7 @@ drives a start/stop through the button code paths — the end-to-end check uses
 it because unprivileged synthetic clicks are dropped. Add
 `CAP_GPUI_AUTO_PAUSE=1` to pause for the middle third: two segments whose
 summed duration is ~⅔ of wall time is the proof the pause reached the engine.
+`CAP_GPUI_AUTO_DELETE=1` ends the recording with the bar's Delete instead.
 `CAP_GPUI_AUTO_CAMERA=1` selects the first camera at startup the way a click
 would, opening the preview bubble; combined with `CAP_GPUI_AUTO_RECORD` it
 verifies the camera track end to end.
@@ -1046,7 +1065,7 @@ Settings-specific deviations:
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
 | **Several settings persist without a consumer** | `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel write the same store keys as Tauri; the machinery that would obey them is not built yet. Theme is applied. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
-| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (kept in lockstep with the Tauri app by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
+| **Version is this crate's** | The sidebar footer shows the crate version from `CARGO_PKG_VERSION` (the bundled CLI is kept in lockstep with it by `scripts/sync-desktop-versions.mjs`), not `getVersion()`. "Check for updates" runs the native updater and shows its download progress in place. |
 
 ## Mode select
 
@@ -1992,6 +2011,7 @@ steps and side effects are the call site's.
 | | Uppercase / Active Word Highlight (+ Highlight Color, Style) | toggles, then a hex field and a select | — | `captions.settings.{uppercase,activeWordHighlight,highlightColor,highlightStyle}` |
 | | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `captions.settings.{backgroundColor,backgroundOpacity}` |
 | | Position / Animation / Font Weight | three selects | — | `captions.settings.{position,fontWeight}`, `{fade,linger,wordTransition}Duration` |
+| | Manual position → Horizontal / Vertical / Reset Position | shown while Position is Manual: slider plus a typed percentage per axis, and a reset to bottom centre. The caption on the preview is also a canvas element then: hover, select, drag with centre, thirds and safe-margin guides, arrow keys nudge 1px (10 with Shift) | 0–100 `%` | `captions.settings.manualPosition`, the caption box's centre as a fraction of the output frame |
 
 Two things in these tabs are honest dead ends rather than key paths, and both
 say so in the UI:

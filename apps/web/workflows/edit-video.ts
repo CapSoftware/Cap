@@ -579,6 +579,7 @@ export async function queueTranscriptionRegeneration(
 ): Promise<void> {
 	"use step";
 
+	if (!serverEnv().ASSEMBLY_API_KEY) return;
 	try {
 		const result = await transcribeVideo(
 			videoId as Video.VideoId,

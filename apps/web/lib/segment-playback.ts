@@ -1,16 +1,27 @@
 import { Video } from "@cap/web-domain";
-import { readCompletedRecordingManifest } from "./desktop-recording-verification";
+import { isCompletedRecordingManifest } from "./desktop-recording-verification";
 
 export function getSegmentPlaybackState(
 	manifest: Video.SegmentManifestType,
 ): "ready" | "uploading" | "incomplete" {
 	if (!manifest.is_complete) return "uploading";
-	try {
-		readCompletedRecordingManifest(JSON.stringify(manifest));
-		return "ready";
-	} catch {
-		return "incomplete";
-	}
+	return isCompletedRecordingManifest(manifest) ? "ready" : "incomplete";
+}
+
+// The desktop rewrites the manifest with every uploaded segment, so a progress
+// manifest this old belongs to a recording whose upload stopped. Long enough
+// to ride out a paused recording, short enough that an open viewer stops
+// reloading a playlist that will never grow.
+export const ABANDONED_SEGMENT_UPLOAD_MS = 30 * 60 * 1000;
+
+export function isAbandonedSegmentUpload(
+	manifestLastModified: Date | undefined,
+	now: number,
+): boolean {
+	if (!manifestLastModified) return false;
+	const modifiedAt = manifestLastModified.getTime();
+	if (!Number.isFinite(modifiedAt)) return false;
+	return now - modifiedAt > ABANDONED_SEGMENT_UPLOAD_MS;
 }
 
 type SegmentEntry = { index: number; duration: number };

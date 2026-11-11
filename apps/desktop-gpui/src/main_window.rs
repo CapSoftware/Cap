@@ -33,6 +33,10 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
+/// How long the mode panel's doodles take to draw in. After this they render
+/// still, so an open panel stops asking for frames.
+const MODE_INFO_DRAW_DURATION: std::time::Duration = std::time::Duration::from_millis(1900);
+
 /// `h-9` on `.cap-window-header`.
 const HEADER_HEIGHT: f32 = 36.;
 
@@ -190,14 +194,6 @@ impl Mode {
             Self::Instant => tr::main::mode::header::instant(),
             Self::Studio => tr::main::mode::header::studio(),
             Self::Screenshot => tr::main::mode::header::screenshot(),
-        }
-    }
-
-    fn panel_description(self) -> &'static str {
-        match self {
-            Self::Instant => tr::main::mode::info::instant(),
-            Self::Studio => tr::main::mode::info::studio(),
-            Self::Screenshot => tr::main::mode::info::screenshot(),
         }
     }
 }
@@ -970,6 +966,10 @@ pub struct MainWindow {
     selected_display: Option<DisplayOption>,
     selected_window: Option<WindowOption>,
     panel: Option<Panel>,
+    mode_info_opened_at: std::time::Instant,
+    mode_info_preview: Option<Mode>,
+    mode_info_focus: [gpui::FocusHandle; 3],
+    mode_info_focused: Option<Mode>,
     /// Live filter text for the device and target panels -- a mirror of
     /// `search_input`'s value, kept as a plain `String` because every list in
     /// the panel filters against it from a `&self` method.
@@ -1266,6 +1266,10 @@ impl MainWindow {
             selected_display: None,
             selected_window: None,
             panel: None,
+            mode_info_opened_at: std::time::Instant::now(),
+            mode_info_preview: None,
+            mode_info_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            mode_info_focused: None,
             search: String::new(),
             search_input,
             _search_events: search_events,
@@ -1363,7 +1367,7 @@ impl MainWindow {
                     }
                 }
                 // `CAP_GPUI_AUTO_PANEL=display|window|camera|microphone|
-                // recordings|screenshots`: open that panel the way a click
+                // recordings|screenshots|modes`: open that panel the way a click
                 // does. Same reason as `CAP_GPUI_AUTO_CAMERA` above -- the
                 // chrome screenshots need the panel on screen and synthetic
                 // clicks are dropped.
@@ -1382,6 +1386,7 @@ impl MainWindow {
                     Ok("screenshots") => {
                         this.open_panel(Panel::Library(LibraryKind::Screenshots), window, cx)
                     }
+                    Ok("modes") => this.open_panel(Panel::ModeInfo, window, cx),
                     _ => {}
                 }
                 // `if (!targetMode) scheduleTargetListPrewarm()` on
@@ -2129,6 +2134,7 @@ impl MainWindow {
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+        let delete = std::env::var("CAP_GPUI_AUTO_DELETE").is_ok_and(|v| v == "1");
 
         let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
             || mode == Mode::Screenshot;
@@ -2262,6 +2268,24 @@ impl MainWindow {
                 tracing::error!("auto-record could not start");
                 return;
             }
+            // Delete does nothing until the capture is running, so its
+            // seconds count from there.
+            if delete {
+                let mut waited = 0;
+                while !cx
+                    .update(|_, cx| matches!(session.read(cx).phase, Phase::Recording { .. }))
+                    .unwrap_or(false)
+                {
+                    if waited == 300 {
+                        tracing::error!("auto-record never reached Recording to delete");
+                        return;
+                    }
+                    waited += 1;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |cx: &gpui::AsyncApp| {
@@ -2278,9 +2302,40 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
-            tracing::info!("auto-record stop requested");
+            // Where the start put the main window, and where the end of the
+            // recording leaves it (`mainWindowRecordingStartBehaviour`).
+            let log_main_window = |when: &str, cx: &mut gpui::AsyncWindowContext| {
+                if let Ok((visible, minimized)) = cx.update(|window, _| {
+                    (
+                        crate::platform::window_is_visible(window),
+                        crate::platform::window_is_minimized(window),
+                    )
+                }) {
+                    tracing::info!(visible, minimized, "auto-record main window {when}");
+                }
+            };
+            log_main_window("while recording", cx);
             let app: &gpui::AsyncApp = cx;
-            app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            if delete {
+                tracing::info!("auto-record delete requested");
+                app.update(|cx| session.update(cx, |session, cx| session.delete(cx)));
+            } else {
+                tracing::info!("auto-record stop requested");
+                app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
+            }
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let app: &gpui::AsyncApp = cx;
+                if app.update(|cx| session.read(cx).phase == Phase::Idle) {
+                    break;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            log_main_window("after the recording", cx);
         })
         .detach();
     }
@@ -2939,6 +2994,15 @@ impl Render for MainWindow {
             ui::keyboard_nav::leave(window, cx);
         }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
+        let mode_info_focused = [Mode::Instant, Mode::Studio, Mode::Screenshot]
+            .into_iter()
+            .zip(&self.mode_info_focus)
+            .find(|(_, focus)| self.keyboard_nav && focus.is_focused(window))
+            .map(|(mode, _)| mode);
+        if mode_info_focused.is_some() && mode_info_focused != self.mode_info_focused {
+            self.mode_info_preview = None;
+        }
+        self.mode_info_focused = mode_info_focused;
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
@@ -4368,6 +4432,17 @@ impl MainWindow {
         if let Panel::Device(menu) = panel {
             self.start_input_poll(menu, window, cx);
         }
+        if panel == Panel::ModeInfo {
+            self.mode_info_opened_at = std::time::Instant::now();
+            self.mode_info_preview = None;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(MODE_INFO_DRAW_DURATION)
+                    .await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -4862,7 +4937,12 @@ impl MainWindow {
         let studio = item.mode == library::RecordingMode::Studio;
         let sharing = item.sharing.clone();
         let mode = item.mode;
-        let opens_editor = item.opens_editor();
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        let opens_editor = item.opens_editor(active.as_deref());
         let subtitle = item.upload.as_ref().map_or_else(
             || item.mode.label().to_string(),
             |upload| {
@@ -4910,7 +4990,12 @@ impl MainWindow {
             .items_center()
             .justify_between()
             .gap(px(2.));
-        if item.opens_editor() {
+        let active = self
+            .session
+            .read(cx)
+            .active_project_dir()
+            .map(std::path::Path::to_path_buf);
+        if item.opens_editor(active.as_deref()) {
             let editor = path.clone();
             row = row.child(self.library_action(
                 "lib-rec-edit",
@@ -4968,6 +5053,11 @@ impl MainWindow {
             tr::settings::screenshots::open_folder(),
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
+        // The recording being captured or finalized owns its folder; the
+        // delete itself refuses it too.
+        if library::is_recording_in_progress(&path) {
+            return row;
+        }
         row.child(self.library_action(
             "lib-rec-delete",
             "icons/trash.svg",
@@ -5156,6 +5246,14 @@ impl MainWindow {
             ) {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
             }) else {
@@ -5164,6 +5262,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))
@@ -6100,90 +6199,177 @@ impl MainWindow {
             .on_click(on_click)
     }
 
-    /// `ModeInfoPanel`. Its copy is deliberately not the copy in `MODE_BUTTONS`
-    /// -- the hover cards and this panel describe the modes differently, so
-    /// both sets of strings are carried.
     fn render_mode_info(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let paper = crate::onboarding_window::Paper::new(&theme);
         let effective_mode = self.effective_mode(cx);
         let locked = self.session.read(cx).editor_recording_target().is_some();
+        let opened_at = self.mode_info_opened_at;
+        let still = cx.reduce_motion() || opened_at.elapsed() >= MODE_INFO_DRAW_DURATION;
+        let shown = self
+            .mode_info_preview
+            .or(self.mode_info_focused)
+            .unwrap_or(effective_mode);
+        let detail = crate::onboarding_window::mode_detail(shown);
 
-        div().flex().flex_col().gap(px(8.)).w_full().children(
-            [Mode::Instant, Mode::Studio, Mode::Screenshot].map(|mode| {
-                let selected = mode == effective_mode;
+        let cards = div().flex().flex_row().gap(px(6.)).w_full().children(
+            [Mode::Instant, Mode::Studio, Mode::Screenshot]
+                .into_iter()
+                .enumerate()
+                .map(|(index, mode)| {
+                    let selected = mode == effective_mode;
+                    let hover_border: Hsla = if theme.is_dark() {
+                        theme.gray_8
+                    } else {
+                        theme.gray_7
+                    }
+                    .into();
 
-                div()
-                    .id(SharedString::from(mode.panel_title()))
-                    .when(locked && !selected, |this| this.opacity(0.5))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.))
-                    .p(px(12.))
-                    .w_full()
-                    .rounded(px(12.))
-                    .border_2()
-                    .border_color(if selected {
-                        Hsla::from(theme.blue_9)
-                    } else if theme.is_dark() {
-                        theme.body_border(5)
-                    } else {
-                        theme.body_border(4)
-                    })
-                    .bg(if selected {
-                        theme.tile_selected_bg()
-                    } else if theme.is_dark() {
-                        theme.body_fill(3)
-                    } else {
-                        theme.body_fill(2)
-                    })
-                    .child(
-                        svg()
-                            .path(mode.icon())
-                            .size(px(20.))
-                            .flex_shrink_0()
-                            .text_color(if selected {
-                                theme.blue_11
+                    div()
+                        .id(SharedString::from(mode.panel_title()))
+                        .when(self.keyboard_nav, |this| {
+                            ui::keyboard_nav::stop(this.track_focus(&self.mode_info_focus[index]))
+                        })
+                        .role(gpui::Role::Button)
+                        .aria_label(mode.display_name())
+                        .aria_selected(selected)
+                        .when(locked && !selected, |this| this.opacity(0.5))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .flex_auto()
+                        .gap(px(2.))
+                        .pt(px(10.))
+                        .pb(px(12.))
+                        .px(px(4.))
+                        .rounded(px(16.))
+                        .border(px(1.5))
+                        .border_color(if selected { paper.accent } else { paper.track })
+                        .bg(paper.card)
+                        .when(!selected, |this| {
+                            this.hover(move |style| style.border_color(hover_border))
+                        })
+                        .child(crate::doodle::doodle(
+                            crate::onboarding_window::mode_doodle(mode),
+                            paper.palette(),
+                            opened_at + std::time::Duration::from_millis(index as u64 * 150),
+                            still,
+                            64.,
+                            56.,
+                        ))
+                        .child(
+                            div()
+                                .whitespace_nowrap()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(paper.ink)
+                                .child(mode.display_name()),
+                        )
+                        .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                            let preview = if *hovered {
+                                Some(mode)
+                            } else if this.mode_info_preview == Some(mode) {
+                                None
                             } else {
-                                theme.gray_12
-                            }),
-                    )
+                                return;
+                            };
+                            if this.mode_info_preview != preview {
+                                this.mode_info_preview = preview;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.set_mode(mode, cx);
+                            this.close_panel(cx);
+                        }))
+                }),
+        );
+
+        let features =
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(9.))
+                .children(detail.features.iter().enumerate().map(|(index, feature)| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(9.))
+                        .child(crate::doodle::doodle(
+                            &crate::onboarding_doodles::TICK,
+                            paper.palette(),
+                            opened_at + std::time::Duration::from_millis(500 + index as u64 * 120),
+                            still,
+                            16.,
+                            16.,
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.5))
+                                .text_color(paper.ink)
+                                .child(feature()),
+                        )
+                }));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .w_full()
+            .child(cards)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .px(px(6.))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(2.))
-                            .flex_1()
-                            .min_w_0()
+                            .gap(px(3.))
                             .child(
                                 div()
-                                    .text_size(px(14.))
-                                    // `text-sm font-semibold`
-                                    // (`ModeInfoPanel.tsx:106`). `font-semibold`
-                                    // renders 700: no 600 face is loaded over
-                                    // there (`ui-solid/vite.js:31-33`).
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(if selected {
-                                        theme.blue_11
-                                    } else {
-                                        theme.gray_12
-                                    })
-                                    .child(mode.display_name()),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .text_size(px(15.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(paper.ink)
+                                            .child((detail.title)()),
+                                    )
+                                    .when(shown == effective_mode, |this| {
+                                        this.child(
+                                            div()
+                                                .px(px(7.))
+                                                .py(px(1.))
+                                                .rounded_full()
+                                                .bg(Hsla {
+                                                    a: 0.12,
+                                                    ..paper.accent
+                                                })
+                                                .text_size(px(11.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(paper.accent)
+                                                .child(tr::main::mode::info::current()),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(theme.gray_11)
-                                    .child(mode.panel_description()),
+                                    .text_color(paper.soft)
+                                    .child((detail.tagline)()),
                             ),
                     )
-                    .hover(|style| style.bg(theme.body_hover_fill(4)))
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.set_mode(mode, cx);
-                        this.close_panel(cx);
-                    }))
-            }),
-        )
+                    .child(features),
+            )
     }
 
     fn render_access_banner(
@@ -6453,7 +6639,9 @@ impl MainWindow {
     /// single silhouette, whereas `img()` rasterises through resvg and keeps
     /// the colour. `img()` also renders at `SMOOTH_SVG_SCALE_FACTOR` (2x), so
     /// the 103px-wide source becomes a 206px raster -- more than the 168 device
-    /// pixels an 84px lockup needs on a 2x display.
+    /// pixels an 84px lockup needs on a 2x display. Keep the SVG's declared
+    /// size at 1x: the sprite sampler has no mipmaps, so a 4x source shrinks
+    /// about 5x on screen and its edges alias.
     ///
     /// The app ships two files rather than recolouring one, so this picks the
     /// same way it does.

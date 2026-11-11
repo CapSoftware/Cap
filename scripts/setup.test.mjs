@@ -33,7 +33,6 @@ test(
 			"package.json",
 			"scripts/setup.js",
 			"scripts/linux-bundle-config.mjs",
-			"apps/desktop/src-tauri/tauri.conf.json",
 			"apps/desktop-gpui/tauri.conf.json",
 		]) {
 			const destination = path.join(fixture, file);
@@ -65,11 +64,17 @@ test(
 		}
 
 		let failNative = true;
+		let networkFailures = 0;
 		const requests = [];
 		const server = createServer((request, response) => {
 			requests.push(request.url);
 			if (failNative && request.url === nativeUrl) {
 				response.writeHead(503).end("Service Unavailable\n");
+				return;
+			}
+			if (request.url === nativeUrl && networkFailures > 0) {
+				networkFailures--;
+				request.socket.destroy();
 				return;
 			}
 			const archive = archives.get(request.url);
@@ -127,7 +132,19 @@ globalThis.fetch = (input, options) => {
 		assert.match(failed.stderr, /HTTP 503/);
 
 		failNative = false;
-		for (const expectedRequests of [[nativeUrl, onnxUrl], []]) {
+		networkFailures = 3;
+		requests.length = 0;
+		const disconnected = await runSetup();
+		assert.equal(disconnected.code, 1, disconnected.stderr);
+		assert.deepEqual(requests, [nativeUrl, nativeUrl, nativeUrl]);
+		assert.equal(existsSync(cache), false);
+		assert.match(disconnected.stderr, /UND_ERR_SOCKET/);
+
+		networkFailures = 2;
+		for (const expectedRequests of [
+			[nativeUrl, nativeUrl, nativeUrl, onnxUrl],
+			[],
+		]) {
 			requests.length = 0;
 			const result = await runSetup();
 			assert.equal(result.code, 0, result.stderr);
@@ -149,22 +166,15 @@ globalThis.fetch = (input, options) => {
 						contents,
 					);
 				}
-				for (const directory of [
-					"apps/desktop/src-tauri",
-					"apps/desktop-gpui",
-				]) {
-					const config = JSON.parse(
-						readFileSync(
-							path.join(fixture, directory, "tauri.linux.conf.json"),
-							"utf8",
-						),
-					);
-					const source = config.bundle.linux.deb.files[`/usr/lib/cap/${name}`];
-					assert.equal(
-						readFileSync(path.resolve(fixture, directory, source), "utf8"),
-						contents,
-					);
-				}
+				const gpui = path.join(fixture, "apps/desktop-gpui");
+				const config = JSON.parse(
+					readFileSync(path.join(gpui, "tauri.linux.conf.json"), "utf8"),
+				);
+				const source = config.bundle.linux.deb.files[`/usr/lib/cap/${name}`];
+				assert.equal(
+					readFileSync(path.resolve(gpui, source), "utf8"),
+					contents,
+				);
 			}
 			const cargo = readFileSync(
 				path.join(fixture, ".cargo/config.toml"),

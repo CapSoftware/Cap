@@ -1,8 +1,9 @@
 import { db } from "@cap/database";
 import { organizations, videos, videoUploads } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { User, Video } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import { start } from "workflow/api";
+import { isMediaProcessingSuspended } from "@/lib/media-processing-policy";
 import { isTranscriptionConfigured } from "@/lib/stt";
 import { transcribeVideoWorkflow } from "@/workflows/transcribe";
 
@@ -57,6 +58,13 @@ export async function transcribeVideo(
 		return {
 			success: false,
 			message: "userId or videoId not supplied",
+		};
+	}
+
+	if (await isMediaProcessingSuspended(userId as User.UserId)) {
+		return {
+			success: false,
+			message: "Transcription is unavailable for this account",
 		};
 	}
 

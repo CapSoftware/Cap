@@ -14,7 +14,7 @@ export const uuidFormat = (uuid: string) => {
 };
 
 export const CAP_LOGO_URL =
-	"https://raw.githubusercontent.com/CapSoftware/cap/main/apps/desktop/src-tauri/icons/Square310x310Logo.png";
+	"https://raw.githubusercontent.com/CapSoftware/cap/main/apps/desktop-gpui/icons/Square310x310Logo.png";
 
 export const saveLatestVideoId = (videoId: string) => {
 	try {

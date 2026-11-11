@@ -175,16 +175,24 @@ impl Step {
     }
 }
 
-struct ModeDetail {
+pub(crate) struct ModeDetail {
     mode: Mode,
-    title: fn() -> &'static str,
-    tagline: fn() -> &'static str,
+    pub(crate) title: fn() -> &'static str,
+    pub(crate) tagline: fn() -> &'static str,
     description: fn() -> &'static str,
     icon: &'static str,
-    features: [fn() -> &'static str; 4],
+    pub(crate) features: [fn() -> &'static str; 4],
 }
 
-const MODES: [ModeDetail; 3] = [
+pub(crate) fn mode_detail(mode: Mode) -> &'static ModeDetail {
+    match mode {
+        Mode::Instant => &MODES[0],
+        Mode::Studio => &MODES[1],
+        Mode::Screenshot => &MODES[2],
+    }
+}
+
+static MODES: [ModeDetail; 3] = [
     ModeDetail {
         mode: Mode::Instant,
         title: tr::onboarding::modes::instant::title,
@@ -790,7 +798,7 @@ impl OnboardingWindow {
     }
 }
 
-fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
+pub(crate) fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
     match mode {
         Mode::Instant => &crate::onboarding_doodles::UPLOAD,
         Mode::Studio => &crate::onboarding_doodles::TRACKS,

@@ -10,7 +10,11 @@ import { Database } from "../Database.ts";
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
 	"id" | "createdAt" | "updatedAt"
-> & { password?: string; importSource?: Video.ImportSource };
+> &
+	Pick<typeof Db.videos.$inferInsert, "isScreenshot" | "settings"> & {
+		password?: string;
+		importSource?: Video.ImportSource;
+	};
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {
@@ -21,28 +25,60 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 *
 		 * The password is returned separately as the `Video` class is client-safe
 		 */
+		const decodeRow = (v: typeof Db.videos.$inferSelect) =>
+			[
+				Video.Video.decodeSync({
+					...v,
+					bucketId: v.bucket,
+					storageIntegrationId: v.storageIntegrationId,
+					createdAt: v.createdAt.toISOString(),
+					updatedAt: v.updatedAt.toISOString(),
+					metadata: v.metadata as any,
+				}),
+				Option.fromNullable(v.password),
+			] as const;
+
 		const getById = (id: Video.VideoId) =>
 			Effect.gen(function* () {
 				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
-				return Option.fromNullable(video).pipe(
-					Option.map(
-						(v) =>
-							[
-								Video.Video.decodeSync({
-									...v,
-									bucketId: v.bucket,
-									storageIntegrationId: v.storageIntegrationId,
-									createdAt: v.createdAt.toISOString(),
-									updatedAt: v.updatedAt.toISOString(),
-									metadata: v.metadata as any,
-								}),
-								Option.fromNullable(video?.password),
-							] as const,
-					),
-				);
+				return Option.fromNullable(video).pipe(Option.map(decodeRow));
+			});
+
+		const getByIds = (ids: ReadonlyArray<Video.VideoId>) =>
+			ids.length === 0
+				? Effect.succeed([])
+				: db
+						.use((db) =>
+							db
+								.select()
+								.from(Db.videos)
+								.where(Dz.inArray(Db.videos.id, [...new Set(ids)])),
+						)
+						.pipe(Effect.map((rows) => rows.map(decodeRow)));
+
+		const isLinkOpenToAnyone = (id: Video.VideoId) =>
+			db.use(async (database) => {
+				const [row] = await database
+					.select({
+						videoSettings: Db.videos.settings,
+						organizationSettings: Db.organizations.settings,
+					})
+					.from(Db.videos)
+					.innerJoin(
+						Db.organizations,
+						Dz.eq(Db.videos.orgId, Db.organizations.id),
+					)
+					.where(Dz.eq(Db.videos.id, id))
+					.limit(1);
+				return row
+					? Video.isLinkOpenToAnyone(
+							row.videoSettings,
+							row.organizationSettings,
+						)
+					: false;
 			});
 
 		const hasViewerGrant = (id: Video.VideoId, email: string) =>
@@ -185,7 +221,15 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, hasViewerGrant, prepareDelete, delete: delete_, create };
+		return {
+			getById,
+			getByIds,
+			hasViewerGrant,
+			isLinkOpenToAnyone,
+			prepareDelete,
+			delete: delete_,
+			create,
+		};
 	}),
 	dependencies: [Database.Default],
 }) {}

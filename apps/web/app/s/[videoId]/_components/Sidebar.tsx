@@ -233,6 +233,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							onEditingStateChange={setSummaryEditingState}
 							onSeek={onSeek}
 							isSummaryDisabled={videoSettings?.disableSummary}
+							areChaptersDisabled={
+								videoSettings?.disableChapters ??
+								data.orgSettings?.disableChapters
+							}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
 						/>

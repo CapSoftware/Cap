@@ -1,12 +1,13 @@
 use crate::{
     ProjectConfiguration, RenderingError,
-    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, TextLayer},
+    layers::{CaptionsLayer, ImageLayer, KeyboardLayer, ShapeLayer, TextLayer},
     readiness,
 };
 
 pub(super) struct OverlayLayers {
     pub(super) text: TextLayer,
     pub(super) images: ImageLayer,
+    pub(super) shapes: ShapeLayer,
     pub(super) captions: CaptionsLayer,
     pub(super) keyboard: KeyboardLayer,
 }
@@ -16,6 +17,7 @@ impl OverlayLayers {
         Self {
             text: readiness::measure("layers.text", || TextLayer::new(device, queue)),
             images: readiness::measure("layers.images", || ImageLayer::new(device)),
+            shapes: readiness::measure("layers.shapes", || ShapeLayer::new(device)),
             captions: readiness::measure("layers.captions", || CaptionsLayer::new(device, queue)),
             keyboard: readiness::measure("layers.keyboard", || KeyboardLayer::new(device, queue)),
         }
@@ -30,10 +32,11 @@ impl OverlayLayers {
             || project.keyboard.is_some()
             || !project.annotations.is_empty()
             || !project.hidden_text_segments.is_empty()
-            || !project.overlay_order.is_empty()
+            || project.has_overlay_order()
             || project.timeline.as_ref().is_some_and(|timeline| {
                 !timeline.text_segments.is_empty()
                     || !timeline.image_segments.is_empty()
+                    || !timeline.shape_segments.is_empty()
                     || !timeline.caption_segments.is_empty()
                     || !timeline.keyboard_segments.is_empty()
             })
@@ -81,7 +84,7 @@ mod tests {
 
     #[test]
     fn every_declared_overlay_source_requires_the_bundle() {
-        let mutations: [fn(&mut ProjectConfiguration); 9] =
+        let mutations: [fn(&mut ProjectConfiguration); 11] =
             [
                 |project| project.captions = Some(Default::default()),
                 |project| project.keyboard = Some(Default::default()),
@@ -91,6 +94,20 @@ mod tests {
                         kind: cap_project::OverlayTrackKind::Mask,
                         track: 0,
                     });
+                },
+                |project| {
+                    project.set_overlay_order(vec![cap_project::OverlayTrack {
+                        kind: cap_project::OverlayTrackKind::Shape,
+                        track: 0,
+                    }]);
+                },
+                |project| {
+                    project.timeline.as_mut().unwrap().shape_segments.push(
+                        cap_project::ShapeSegment {
+                            enabled: false,
+                            ..Default::default()
+                        },
+                    );
                 },
                 |project| {
                     project.annotations.push(

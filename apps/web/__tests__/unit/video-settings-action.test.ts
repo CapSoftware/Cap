@@ -2,10 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	updates: [] as unknown[],
+	stripeSubscriptionStatus: "active" as string | null,
+}));
+
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
 }));
 
 vi.mock("@cap/database/auth/session", () => ({
-	getCurrentUser: async () => ({ id: "owner" }),
+	getCurrentUser: async () => ({
+		id: "owner",
+		stripeSubscriptionStatus: mocks.stripeSubscriptionStatus,
+		thirdPartyStripeSubscriptionId: null,
+	}),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -40,6 +49,7 @@ const patchOf = (value: unknown): Record<string, unknown> => {
 describe("updateVideoSettings", () => {
 	beforeEach(() => {
 		mocks.updates = [];
+		mocks.stripeSubscriptionStatus = "active";
 	});
 
 	it("merges only known viewer settings", async () => {
@@ -56,6 +66,61 @@ describe("updateVideoSettings", () => {
 		expect(patchOf(settings)).toEqual({
 			disableComments: true,
 			defaultPlaybackSpeed: 1.5,
+		});
+	});
+
+	it("keeps Pro-only settings unchanged for free owners", async () => {
+		mocks.stripeSubscriptionStatus = null;
+
+		await updateVideoSettings("video" as Video.VideoId, {
+			disableComments: true,
+			disableSummary: true,
+			disableChapters: true,
+			disableTranscript: true,
+		});
+
+		const settings = (mocks.updates[0] as { settings: unknown }).settings;
+		expect(patchOf(settings)).toEqual({ disableComments: true });
+	});
+
+	it.each([true, false])(
+		"saves the download choice %s for any owner",
+		async (disableDownloads) => {
+			mocks.stripeSubscriptionStatus = null;
+
+			await updateVideoSettings("video" as Video.VideoId, {
+				disableDownloads,
+			});
+
+			const settings = (mocks.updates[0] as { settings: unknown }).settings;
+			expect(patchOf(settings)).toEqual({ disableDownloads });
+		},
+	);
+
+	it("ignores a download value that is not a boolean", async () => {
+		await updateVideoSettings(
+			"video" as Video.VideoId,
+			{ disableDownloads: "yes" } as unknown as Parameters<
+				typeof updateVideoSettings
+			>[1],
+		);
+
+		const settings = (mocks.updates[0] as { settings: unknown }).settings;
+		expect(patchOf(settings)).toEqual({});
+	});
+
+	it("saves Pro-only settings for Pro owners", async () => {
+		await updateVideoSettings("video" as Video.VideoId, {
+			disableSummary: true,
+			disableChapters: false,
+			disableTranscript: true,
+		});
+
+		const settings = (mocks.updates[0] as { settings: unknown }).settings;
+		expect(patchOf(settings)).toEqual({
+			disableSummary: true,
+			disableChapters: false,
+			disableTranscript: true,
 		});
 	});
 });
