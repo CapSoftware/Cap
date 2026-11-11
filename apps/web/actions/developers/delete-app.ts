@@ -41,6 +41,6 @@ export async function deleteDeveloperApp(appId: string) {
 			.where(eq(developerApps.id, appId));
 	});
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }
