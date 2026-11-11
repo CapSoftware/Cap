@@ -281,6 +281,7 @@ pub struct EditorInstance {
     pub preview_layers: std::sync::Mutex<Option<RendererLayers>>,
     runtime_handle: tokio::runtime::Handle,
     audio_output: Arc<crate::AudioOutput>,
+    preview_speed: crate::PreviewSpeedHandle,
 }
 
 impl EditorInstance {
@@ -506,6 +507,7 @@ impl EditorInstance {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    shape_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -690,6 +692,7 @@ impl EditorInstance {
             playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
+            preview_speed: crate::PreviewSpeedHandle::default(),
         });
 
         this.state.lock().await.preview_task =
@@ -816,6 +819,7 @@ impl EditorInstance {
             preview_layers: std::sync::Mutex::new(None),
             runtime_handle: self.runtime_handle.clone(),
             audio_output: self.audio_output.clone(),
+            preview_speed: self.preview_speed.clone(),
         });
         next.state.lock().await.preview_task =
             Some(next.clone().spawn_preview_renderer(preview_rx));
@@ -981,6 +985,7 @@ impl EditorInstance {
                 project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
+                preview_speed: self.preview_speed.clone(),
             };
             let playback_handle = if let Some(adoption) = adoption {
                 playback
@@ -1051,6 +1056,16 @@ impl EditorInstance {
             prev.stop();
         }
         Ok(owned_handle)
+    }
+
+    /// Sets how fast the preview plays. A running playback picks it up on its
+    /// next frame without restarting; export and the project never see it.
+    pub fn set_preview_speed(&self, speed: crate::PreviewSpeed) {
+        self.preview_speed.set(speed);
+    }
+
+    pub fn preview_speed(&self) -> crate::PreviewSpeed {
+        self.preview_speed.get()
     }
 
     /// True while a playback engine is live. Epoch-guarded against restart

@@ -82,10 +82,14 @@ fn set_capture_hidden(window: &crate::platform::NativeWindow, hidden: bool) -> b
 /// they are left out too, or the capture would keep them where they were
 /// and show them there after they move. One already left out (a Studio
 /// camera is) stays that way.
+///
+/// `stay_hidden` is asked once the capture is done: an overlay that became a
+/// recording's outline meanwhile must stay out of captures.
 pub async fn capture(
     window: Option<crate::platform::NativeWindow>,
     above: Vec<crate::platform::NativeWindow>,
     display: DisplayId,
+    stay_hidden: impl FnOnce(&mut AsyncApp) -> bool,
     cx: &mut AsyncApp,
 ) -> Option<Arc<RenderImage>> {
     #[cfg(any(target_os = "macos", windows))]
@@ -109,7 +113,9 @@ pub async fn capture(
         cx.background_executor().timer(EXCLUDE_SETTLE).await;
         let started = std::time::Instant::now();
         let image = capture_bgra(display, cx).await;
-        set_capture_hidden(&window, false);
+        if !stay_hidden(cx) {
+            set_capture_hidden(&window, false);
+        }
         for window in &above {
             set_capture_hidden(window, false);
         }
@@ -123,7 +129,7 @@ pub async fn capture(
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
-        let _ = (window, above, display, cx);
+        let _ = (window, above, display, stay_hidden, cx);
         None
     }
 }

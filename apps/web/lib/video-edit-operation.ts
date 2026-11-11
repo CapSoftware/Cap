@@ -17,7 +17,7 @@ export interface EditOperation {
 }
 
 const stateSchema = z.object({
-	token: z.string().uuid(),
+	token: z.guid(),
 	startedAt: z.string().datetime(),
 	ownerId: z.string(),
 	bucket: z.string().nullable(),

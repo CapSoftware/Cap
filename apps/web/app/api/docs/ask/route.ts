@@ -3,7 +3,11 @@ import type { NextRequest } from "next/server";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { runWithAiProviders } from "@/lib/ai/run";
 import { buildDocsAskContext, buildDocsAskSystemPrompt } from "@/lib/docs-ask";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import {
+	isRateLimited,
+	RATE_LIMIT_IDS,
+	rateLimitClientAddress,
+} from "@/lib/rate-limit";
 import { getAllDocs } from "@/utils/docs";
 
 export const dynamic = "force-dynamic";
@@ -96,8 +100,7 @@ export async function POST(request: NextRequest) {
 			: undefined,
 	);
 
-	const ip =
-		request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+	const ip = rateLimitClientAddress(request.headers) ?? "unknown";
 	if (
 		isLocallyRateLimited(ip) ||
 		(await isRateLimited(RATE_LIMIT_IDS.DOCS_ASK, {

@@ -1,0 +1,52 @@
+{
+	"cap": {
+		"id": "cap_1",
+		"shareUrl": "https://cap.so/s/cap_1",
+		"title": "Launch walkthrough",
+		"createdAt": "2026-10-28T09:15:00.000Z",
+		"updatedAt": "2026-10-28T10:15:00.000Z",
+		"ownerId": "user_123",
+		"ownerName": "Richie",
+		"durationSeconds": 125.4,
+		"thumbnailUrl": null,
+		"folderId": null,
+		"public": true,
+		"protected": false,
+		"viewCount": 1200,
+		"commentCount": 1,
+		"reactionCount": 1,
+		"upload": null,
+		"ownedByCurrentUser": false
+	},
+	"summary": "A quick tour of the launch.",
+	"chapters": [
+		{ "title": "Intro", "start": 0 },
+		{ "title": "Demo", "start": 42.5 }
+	],
+	"transcriptionStatus": "COMPLETE",
+	"comments": [
+		{
+			"id": "c_1",
+			"videoId": "cap_1",
+			"type": "text",
+			"content": "Looks great",
+			"timestamp": 12.5,
+			"parentCommentId": null,
+			"createdAt": "2026-10-28T11:00:00.000Z",
+			"updatedAt": "2026-10-28T11:00:00.000Z",
+			"author": { "id": "user_9", "name": "Sam", "imageUrl": null }
+		},
+		{
+			"id": "c_2",
+			"videoId": "cap_1",
+			"type": "emoji",
+			"content": "🔥",
+			"timestamp": null,
+			"parentCommentId": null,
+			"createdAt": "2026-10-28T11:01:00.000Z",
+			"updatedAt": "2026-10-28T11:01:00.000Z",
+			"author": { "id": "user_9", "name": null, "imageUrl": null }
+		}
+	],
+	"shareUrl": "https://cap.so/s/cap_1"
+}

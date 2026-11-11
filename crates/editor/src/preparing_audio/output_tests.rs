@@ -26,6 +26,7 @@ fn sources(duration: f64, loader: Option<ProgressiveAudio>) -> PreparingAudioSou
                 audio_segments: vec![],
                 style_segments: vec![],
                 image_segments: vec![],
+                shape_segments: Vec::new(),
                 camera3d_segments: vec![],
             }),
             clips: vec![ClipConfiguration::default()],

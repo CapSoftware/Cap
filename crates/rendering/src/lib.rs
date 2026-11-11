@@ -56,10 +56,13 @@ mod readiness;
 mod recorded_cursor_assets;
 mod scene;
 mod segment_timing;
+mod shape;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
 mod transition;
+#[cfg(test)]
+mod transition_render_tests;
 pub mod yuv_converter;
 mod zoom;
 mod zoom_spring;
@@ -75,7 +78,8 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
 pub use layers::{
-    BackgroundTextureCache, clean_background_path, last_caption_center, new_font_system,
+    BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
+    new_font_system,
 };
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
@@ -85,6 +89,9 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use transition::{
+    TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
+};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -218,6 +225,8 @@ use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
 use mask::interpolate_masks;
 use scene::*;
+pub use shape::PreparedShape;
+use shape::prepare_shapes;
 use takeover::InterpolatedTakeover;
 pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
@@ -309,18 +318,109 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
     #[cfg(target_os = "windows")]
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = match DX12_SHADER_COMPILER.get() {
+        Some((compiler, _)) => dx12_instance(compiler.clone()),
+        None => {
+            let bundled = bundled_dxc_compiler();
+            let uses_dxc = !matches!(bundled, wgpu::Dx12Compiler::Fxc);
+            let (instance, compiler) = dx12_instance_with_fxc_fallback(bundled);
+            let fxc_fallback = uses_dxc && matches!(compiler, wgpu::Dx12Compiler::Fxc);
+            let _ = DX12_SHADER_COMPILER.set((compiler, fxc_fallback));
+            instance
+        }
+    };
+
+    instance
+}
+
+/// The compiler the first instance ended up on, so later instances skip a
+/// DXC that already failed to load, and whether that is the FXC fallback.
+#[cfg(target_os = "windows")]
+static DX12_SHADER_COMPILER: std::sync::OnceLock<(wgpu::Dx12Compiler, bool)> =
+    std::sync::OnceLock::new();
+
+/// WARP crashes on the first frame rendered with FXC-compiled shaders, so the
+/// FXC fallback only renders on hardware adapters.
+#[cfg(not(target_arch = "wasm32"))]
+fn software_adapters_unusable() -> bool {
+    #[cfg(target_os = "windows")]
+    let unusable = DX12_SHADER_COMPILER
+        .get()
+        .is_some_and(|(_, fxc_fallback)| *fxc_fallback);
+    #[cfg(not(target_os = "windows"))]
+    let unusable = false;
+
+    unusable
+}
+
+#[cfg(target_os = "windows")]
+fn dx12_instance_descriptor(shader_compiler: wgpu::Dx12Compiler) -> wgpu::InstanceDescriptor {
+    wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
         backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: bundled_dxc_compiler(),
-            },
+            dx12: wgpu::Dx12BackendOptions { shader_compiler },
             ..Default::default()
         },
         ..Default::default()
-    });
+    }
+}
 
-    instance
+#[cfg(target_os = "windows")]
+fn dx12_instance(shader_compiler: wgpu::Dx12Compiler) -> wgpu::Instance {
+    wgpu::Instance::new(&dx12_instance_descriptor(shader_compiler))
+}
+
+/// wgpu drops a backend that fails to initialise and only logs it at debug
+/// level, so a DXC that will not load leaves an instance with no DX12 adapters
+/// at all, not even WARP. FXC ships with Windows, so rebuild on it instead.
+#[cfg(target_os = "windows")]
+fn dx12_instance_with_fxc_fallback(
+    compiler: wgpu::Dx12Compiler,
+) -> (wgpu::Instance, wgpu::Dx12Compiler) {
+    let instance = dx12_instance(compiler.clone());
+    // SAFETY: the raw instance is only checked for presence, never used.
+    let has_dx12 = unsafe { instance.as_hal::<wgpu_hal::api::Dx12>() }.is_some();
+    if has_dx12 || matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+        return (instance, compiler);
+    }
+
+    tracing::warn!(
+        error = dx12_init_error(compiler),
+        "DX12 with bundled DXC failed to initialise; retrying with FXC"
+    );
+    (
+        dx12_instance(wgpu::Dx12Compiler::Fxc),
+        wgpu::Dx12Compiler::Fxc,
+    )
+}
+
+/// wgpu does not surface why a backend failed, so initialise the DX12 backend
+/// directly once more to get the error for the log.
+#[cfg(target_os = "windows")]
+fn dx12_init_error(compiler: wgpu::Dx12Compiler) -> String {
+    use wgpu_hal::Instance as _;
+
+    let desc = dx12_instance_descriptor(compiler);
+    let hal_desc = wgpu_hal::InstanceDescriptor {
+        name: "wgpu",
+        flags: desc.flags,
+        backend_options: desc.backend_options,
+    };
+    // SAFETY: the same call wgpu-core makes in `Instance::new`; the instance,
+    // if any, is dropped straight away.
+    match unsafe { wgpu_hal::dx12::Instance::init(&hal_desc) } {
+        Ok(_) => "unknown".to_string(),
+        Err(error) => {
+            let mut message = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                message.push_str(": ");
+                message.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            message
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2592,6 +2692,9 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     if force_software_adapter {
         tracing::warn!("Forcing software WGPU adapter");
     }
+    let usable = |adapter: &wgpu::Adapter| {
+        !software_adapters_unusable() || !is_software_wgpu_adapter(&adapter.get_info())
+    };
 
     let adapter_phase = readiness::Phase::start("wgpu.adapter");
     let preferred = if force_software_adapter {
@@ -2615,7 +2718,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     let device_phase = readiness::Phase::start("wgpu.device");
     let mut last_error = None;
     let mut created = None;
-    if let Some(adapter) = preferred {
+    if let Some(adapter) = preferred.filter(usable) {
         match try_rendering_device(adapter).await {
             Ok(found) => created = Some(found),
             Err(error) => last_error = Some(error),
@@ -2625,7 +2728,11 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     // without compute shaders, a broken install). Only then are the others
     // enumerated, hardware first, then the fallback adapter.
     if created.is_none() {
-        for adapter in other_wgpu_adapters(&instance, force_software_adapter).await {
+        for adapter in other_wgpu_adapters(&instance, force_software_adapter)
+            .await
+            .into_iter()
+            .filter(usable)
+        {
             match try_rendering_device(adapter).await {
                 Ok(found) => {
                     created = Some(found);
@@ -3135,6 +3242,9 @@ pub struct ProjectUniforms {
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
+    /// Shape-track marks for this frame, drawn in output-frame space like
+    /// text: zoom, crop, scenes and the 3D camera never move them.
+    pub shapes: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).
     pub camera3d: Option<Camera3DFrame>,
@@ -3653,6 +3763,9 @@ pub struct FrameLayout {
     pub display: [f32; 4],
     pub camera: Option<[f32; 4]>,
     pub output_size: [u32; 2],
+    /// Only the caption layer measures its box, so this is filled in after
+    /// the frame renders and stays `None` from [`ProjectUniforms::frame_layout`].
+    pub caption: Option<CaptionFrameBox>,
 }
 
 /// Unzoomed placement of the display card in output-frame pixels. Without a
@@ -3682,6 +3795,7 @@ impl ProjectUniforms {
             display: self.display_outer_bounds,
             camera: self.camera.as_ref().map(|c| c.target_bounds),
             output_size: [self.output_size.0, self.output_size.1],
+            caption: None,
         }
     }
 
@@ -5403,6 +5517,18 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let shapes = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_shapes(
+                    XY::new(output_size.0, output_size.1),
+                    timeline_time,
+                    &timeline.shape_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -5431,6 +5557,7 @@ impl ProjectUniforms {
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
+            shapes,
             camera3d,
             camera3d_zoom,
             screen_color_grade,
@@ -8218,6 +8345,10 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
+    pub fn caption_frame_box(&self) -> Option<CaptionFrameBox> {
+        self.overlays.as_ref()?.captions.frame_box()
+    }
+
     pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
@@ -8602,8 +8733,14 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8776,8 +8913,14 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays.shapes.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.shapes,
+            );
 
-            if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.project.has_overlay_order() {
                 overlays.text.prepare(
                     &constants.device,
                     &constants.queue,
@@ -8828,20 +8971,98 @@ impl RendererLayers {
         uniforms: &ProjectUniforms,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.render_parts(
+            device,
+            queue,
+            encoder,
+            session,
+            uniforms,
+            render_display,
+            LayerParts::ALL,
+        )
+    }
+
+    /// What one side of a layered transition draws: its own content on a
+    /// transparent frame, with its masks, so a blurred region moves with the
+    /// footage it hides. Masks and a focus blur read and cover the
+    /// background too (a pixelated cell at a clip's edge samples it), so a
+    /// side with either keeps its background to stay identical to its plain
+    /// frames. When a mask is ordered above a text or
+    /// image overlay it has to cover that overlay as well, which only a whole
+    /// frame can show correctly, so the overlays travel with the clips then.
+    fn transition_side_parts(&self, uniforms: &ProjectUniforms) -> LayerParts {
+        let background = self.camera3d.blur_kind().is_some() || !uniforms.masks.is_empty();
+        LayerParts {
+            background,
+            content: true,
+            masks: true,
+            overlays: self.masks_cover_overlays(uniforms),
+        }
+    }
+
+    fn masks_cover_overlays(&self, uniforms: &ProjectUniforms) -> bool {
+        let Some(overlays) = &self.overlays else {
+            return false;
+        };
+        if uniforms.masks.is_empty() || !uniforms.project.has_overlay_order() {
+            return false;
+        }
+        let mut overlay_below = false;
+        for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+            match overlay.kind {
+                OverlayTrackKind::Image => {
+                    overlay_below |= overlays.images.has_track(overlay.track)
+                }
+                OverlayTrackKind::Text => overlay_below |= overlays.text.has_track(overlay.track),
+                OverlayTrackKind::Shape => {
+                    overlay_below |= overlays.shapes.has_track(overlay.track)
+                }
+                OverlayTrackKind::Mask => {
+                    if overlay_below
+                        && uniforms
+                            .masks
+                            .iter()
+                            .any(|mask| mask.track == overlay.track)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_parts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
 
         let session_views = [session.current_texture_view(), session.other_texture_view()];
         self.background_blur.retain_views(session_views);
         self.background_color_grade.retain_views(session_views);
         self.camera3d.retain_views(session_views);
-        self.mask.begin_frame(session_views);
-
-        if render_display {
-            self.display.copy_to_texture(encoder);
+        if parts.masks {
+            self.mask.begin_frame(session_views);
         }
-        self.camera.copy_to_texture(encoder);
-        self.camera_only.copy_to_texture(encoder);
-        self.background.render_surface(encoder);
+
+        if parts.content {
+            if render_display {
+                self.display.copy_to_texture(encoder);
+            }
+            self.camera.copy_to_texture(encoder);
+            self.camera_only.copy_to_texture(encoder);
+        }
+        if parts.background {
+            self.background.render_surface(encoder);
+        }
 
         let mut passes = LayerPasses {
             encoder,
@@ -8849,6 +9070,38 @@ impl RendererLayers {
             #[cfg(test)]
             split: self.split_layer_passes,
         };
+        if parts.background {
+            self.render_background(device, &mut passes, session, uniforms);
+        } else if parts.content {
+            passes.pass(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+        }
+        if parts.content {
+            self.render_content(device, &mut passes, session, uniforms, render_display);
+        }
+        if parts.masks || parts.overlays {
+            self.render_overlays(
+                device,
+                queue,
+                &mut passes,
+                session,
+                uniforms,
+                render_display,
+                parts,
+            );
+        }
+        Ok(())
+    }
+
+    fn render_background(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+    ) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
@@ -8915,6 +9168,18 @@ impl RendererLayers {
 
             session.swap_textures();
         }
+    }
+
+    fn render_content(
+        &mut self,
+        device: &wgpu::Device,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+    ) {
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
@@ -9012,19 +9277,39 @@ impl RendererLayers {
             }
             None => {}
         }
+    }
 
-        if uniforms.project.overlay_order.is_empty() {
-            if !uniforms.masks.is_empty() {
+    #[allow(clippy::too_many_arguments)]
+    fn render_overlays(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        passes: &mut LayerPasses<'_>,
+        session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
+        render_display: bool,
+        parts: LayerParts,
+    ) {
+        let load = wgpu::LoadOp::Load;
+
+        if !uniforms.project.has_overlay_order() {
+            if parts.masks {
                 for mask in &uniforms.masks {
                     self.mask
                         .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
-            if let Some(overlays) = &self.overlays {
+            if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
                 if render_display && overlays.images.has_content() {
                     overlays
                         .images
+                        .render(passes.pass(session.current_texture_view(), load));
+                }
+
+                if overlays.shapes.has_content() {
+                    overlays
+                        .shapes
                         .render(passes.pass(session.current_texture_view(), load));
                 }
 
@@ -9037,7 +9322,7 @@ impl RendererLayers {
         } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
-                    OverlayTrackKind::Mask => {
+                    OverlayTrackKind::Mask if parts.masks => {
                         for mask in uniforms
                             .masks
                             .iter()
@@ -9048,25 +9333,40 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
+                        if parts.overlays
+                            && render_display
+                            && overlays.images.has_track(overlay.track) =>
                     {
                         overlays.images.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text
+                        if parts.overlays && overlays.text.has_track(overlay.track) =>
+                    {
                         overlays.text.render_track(
                             passes.pass(session.current_texture_view(), load),
                             overlay.track,
                         );
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Shape
+                        if parts.overlays && overlays.shapes.has_track(overlay.track) =>
+                    {
+                        overlays.shapes.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
+                    }
+                    OverlayTrackKind::Mask
+                    | OverlayTrackKind::Text
+                    | OverlayTrackKind::Image
+                    | OverlayTrackKind::Shape => {}
                 }
             }
         }
 
-        if let Some(overlays) = &self.overlays {
+        if let Some(overlays) = self.overlays.as_ref().filter(|_| parts.overlays) {
             if overlays.keyboard.has_content() {
                 overlays
                     .keyboard
@@ -9079,8 +9379,37 @@ impl RendererLayers {
                     .render(passes.pass(session.current_texture_view(), load));
             }
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayerParts {
+    background: bool,
+    content: bool,
+    masks: bool,
+    /// Every overlay but masks: images, text, keyboard and captions.
+    overlays: bool,
+}
+
+impl LayerParts {
+    const ALL: Self = Self {
+        background: true,
+        content: true,
+        masks: true,
+        overlays: true,
+    };
+    const BACKGROUND: Self = Self {
+        background: true,
+        content: false,
+        masks: false,
+        overlays: false,
+    };
+    const OVERLAYS: Self = Self {
+        background: false,
+        content: false,
+        masks: false,
+        overlays: true,
+    };
 }
 
 /// Lets consecutive layer draws into the same texture share one render pass.
@@ -9217,6 +9546,13 @@ async fn produce_transition_texture(
     session: &mut RenderSession,
     compositor: &TransitionCompositor,
 ) -> Result<wgpu::CommandEncoder, RenderingError> {
+    let parameters = TransitionParameters {
+        kind: transition.0,
+        progress: transition.1,
+        opaque: outgoing.render_display || incoming.render_display,
+    };
+    let layered = parameters.composite().is_layered();
+
     let mut outgoing_encoder =
         constants
             .device
@@ -9233,13 +9569,19 @@ async fn produce_transition_texture(
             outgoing.render_display,
         )
         .await?;
-    layers.render(
+    let outgoing_parts = if layered {
+        layers.transition_side_parts(&outgoing.uniforms)
+    } else {
+        LayerParts::ALL
+    };
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut outgoing_encoder,
         session,
         &outgoing.uniforms,
         outgoing.render_display,
+        outgoing_parts,
     )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
@@ -9265,25 +9607,69 @@ async fn produce_transition_texture(
         .await;
     layers.camera_blur_unavailable |= outgoing_camera_blur_unavailable;
     incoming_prepare?;
-    layers.render(
+
+    if !layered {
+        layers.render(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+        )?;
+        compositor.capture_incoming_and_render(
+            &constants.queue,
+            &mut incoming_encoder,
+            session.current_texture(),
+            session.current_texture_view(),
+            parameters,
+        );
+        return Ok(incoming_encoder);
+    }
+
+    // Both sides take the outgoing side's parts: masks, 3D blur and overlay
+    // order are timeline state shared by the two, and a background drawn
+    // into the sides must not be drawn again underneath them.
+    let incoming_parts = outgoing_parts;
+    layers.render_parts(
         &constants.device,
         &constants.queue,
         &mut incoming_encoder,
         session,
         &incoming.uniforms,
         incoming.render_display,
+        incoming_parts,
     )?;
-    compositor.capture_incoming_and_render(
+    compositor.capture_incoming(&mut incoming_encoder, session.current_texture());
+    if !incoming_parts.background {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::BACKGROUND,
+        )?;
+    }
+    compositor.render_layers(
         &constants.queue,
         &mut incoming_encoder,
-        session.current_texture(),
         session.current_texture_view(),
-        TransitionParameters {
-            kind: transition.0,
-            progress: transition.1,
-            opaque: outgoing.render_display || incoming.render_display,
-        },
+        parameters,
+        incoming_parts.background,
     );
+    if !incoming_parts.overlays {
+        layers.render_parts(
+            &constants.device,
+            &constants.queue,
+            &mut incoming_encoder,
+            session,
+            &incoming.uniforms,
+            incoming.render_display,
+            LayerParts::OVERLAYS,
+        )?;
+    }
 
     Ok(incoming_encoder)
 }
@@ -11394,5 +11780,74 @@ mod per_frame_cache_tests {
         assert_eq!(layers.mask.uniform_buffer_count(), 3);
         assert!(layers.mask.bind_groups_created() <= 6);
         assert!(layers.background_color_grade.bind_groups_created() <= 2);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod dx12_compiler_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn unloadable_dxc_falls_back_to_fxc() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dxc_path = dir.path().join("dxcompiler.dll");
+        let dxil_path = dir.path().join("dxil.dll");
+        std::fs::write(&dxc_path, b"").expect("write dxcompiler.dll");
+        std::fs::write(&dxil_path, b"").expect("write dxil.dll");
+        let broken = wgpu::Dx12Compiler::DynamicDxc {
+            dxc_path: dxc_path.to_string_lossy().into_owned(),
+            dxil_path: dxil_path.to_string_lossy().into_owned(),
+            max_shader_model: wgpu::DxcShaderModel::V6_7,
+        };
+
+        assert!(
+            dx12_instance(broken.clone())
+                .enumerate_adapters(wgpu::Backends::all())
+                .is_empty(),
+            "a DXC that fails to load should drop the DX12 backend"
+        );
+        println!("dx12 init error: {}", dx12_init_error(broken.clone()));
+
+        let (instance, compiler) = dx12_instance_with_fxc_fallback(broken);
+        assert!(matches!(compiler, wgpu::Dx12Compiler::Fxc));
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("FXC instance has a DX12 adapter");
+        let (device, queue) =
+            pollster::block_on(request_rendering_device(&adapter)).expect("device on FXC");
+
+        // FXC compiles at pipeline creation, so build every production
+        // rendering pipeline on the fallback device.
+        device.push_error_scope(wgpu::ErrorFilter::Internal);
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let started = Instant::now();
+        let _layers = RendererLayers::new(&device, &queue);
+        let _transitions = TransitionCompositor::new(&device);
+        let compile_time = started.elapsed();
+        let validation = pollster::block_on(device.pop_error_scope());
+        let internal = pollster::block_on(device.pop_error_scope());
+        assert!(
+            validation.is_none() && internal.is_none(),
+            "pipeline on FXC failed: {validation:?} {internal:?}"
+        );
+
+        let info = adapter.get_info();
+        println!(
+            "device created on FXC: adapter={} backend={:?} type={:?} pipelines={compile_time:?}",
+            info.name, info.backend, info.device_type
+        );
+    }
+
+    #[test]
+    fn loadable_bundled_dxc_is_kept() {
+        let compiler = bundled_dxc_compiler();
+        if matches!(compiler, wgpu::Dx12Compiler::Fxc) {
+            println!("no bundled DXC next to the test binary; nothing to check");
+            return;
+        }
+
+        let (instance, kept) = dx12_instance_with_fxc_fallback(compiler);
+        assert!(matches!(kept, wgpu::Dx12Compiler::DynamicDxc { .. }));
+        assert!(!instance.enumerate_adapters(wgpu::Backends::DX12).is_empty());
     }
 }

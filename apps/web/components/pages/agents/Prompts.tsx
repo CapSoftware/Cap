@@ -9,7 +9,6 @@ import {
 	grainBg,
 	H_SECTION,
 	MODE_THEME,
-	MONO,
 } from "@/components/pages/HomeTwo/theme";
 import { examplePrompts } from "./content";
 import { CopyLabelButton } from "./copy";
@@ -44,8 +43,7 @@ export const Prompts = () => (
 							<div>
 								<span
 									className={classNames(
-										MONO,
-										"inline-flex items-center gap-2 text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.55)]",
+										"inline-flex items-center gap-2 text-[12.5px] leading-none text-[rgba(17,17,17,0.55)]",
 									)}
 								>
 									<span
