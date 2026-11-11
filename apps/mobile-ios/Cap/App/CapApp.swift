@@ -161,35 +161,12 @@ struct MainTabView: View {
         CapsLayout(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
     }
 
+    private var openRoutes: [Route] {
+        homePath + analyticsPath + settingsPath
+    }
+
     var body: some View {
-        TabView(selection: $tab) {
-            Tab("Caps", systemImage: "play.rectangle.on.rectangle.fill", value: AppTab.caps) {
-                switch capsLayout {
-                case .stack:
-                    NavigationStack(path: $homePath) {
-                        HomeView()
-                            .navigationDestination(for: Route.self, destination: destination)
-                    }
-                case .split:
-                    LibrarySplitView(path: $homePath, destination: destination)
-                }
-            }
-            Tab("Record", systemImage: "record.circle", value: AppTab.record) {
-                Color.clear
-            }
-            Tab("Analytics", systemImage: "chart.xyaxis.line", value: AppTab.analytics) {
-                NavigationStack(path: $analyticsPath) {
-                    AnalyticsScreen(scope: .organization)
-                        .navigationDestination(for: Route.self, destination: destination)
-                }
-            }
-            Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) {
-                NavigationStack(path: $settingsPath) {
-                    SettingsView()
-                        .navigationDestination(for: Route.self, destination: destination)
-                }
-            }
-        }
+        tabs
         .tabBarMinimizeBehavior(.onScrollDown)
         .onChange(of: tab) { previous, selected in
             // The Record tab opens the recorder over whatever was showing; it is never a page itself.
@@ -225,8 +202,6 @@ struct MainTabView: View {
             if coordinator.showsHomeOnReturn { coordinator.showHome() }
         }
         .environment(session)
-        .environment(\.capsLayout, capsLayout)
-        .onChange(of: homePath + analyticsPath + settingsPath) { _, routes in capModels.keep(routes) }
         .toasts(session.toasts)
         .task { await session.start() }
         #if DEBUG
@@ -278,6 +253,39 @@ struct MainTabView: View {
         }
     }
     #endif
+
+    private var tabs: some View {
+        TabView(selection: $tab) {
+            Tab("Caps", systemImage: "play.rectangle.on.rectangle.fill", value: AppTab.caps) {
+                switch capsLayout {
+                case .stack:
+                    NavigationStack(path: $homePath) {
+                        HomeView()
+                            .navigationDestination(for: Route.self, destination: destination)
+                    }
+                case .split:
+                    LibrarySplitView(path: $homePath, destination: destination)
+                }
+            }
+            Tab("Record", systemImage: "record.circle", value: AppTab.record) {
+                Color.clear
+            }
+            Tab("Analytics", systemImage: "chart.xyaxis.line", value: AppTab.analytics) {
+                NavigationStack(path: $analyticsPath) {
+                    AnalyticsScreen(scope: .organization)
+                        .navigationDestination(for: Route.self, destination: destination)
+                }
+            }
+            Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) {
+                NavigationStack(path: $settingsPath) {
+                    SettingsView()
+                        .navigationDestination(for: Route.self, destination: destination)
+                }
+            }
+        }
+        .environment(\.capsLayout, capsLayout)
+        .onChange(of: openRoutes) { _, routes in capModels.keep(routes) }
+    }
 
     @ViewBuilder
     private func destination(_ route: Route) -> some View {
