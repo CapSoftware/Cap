@@ -70,6 +70,7 @@ struct PoolStats {
     frames_received: AtomicU64,
     frames_converted: AtomicU64,
     frames_dropped: AtomicU64,
+    frames_finished: AtomicU64,
 }
 
 impl Default for PoolStats {
@@ -78,6 +79,7 @@ impl Default for PoolStats {
             frames_received: AtomicU64::new(0),
             frames_converted: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
+            frames_finished: AtomicU64::new(0),
         }
     }
 }
@@ -220,6 +222,7 @@ impl AsyncConverterPool {
             Ok(()) => Ok(()),
             Err(flume::TrySendError::Full(_)) => {
                 self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                self.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
                 let dropped = self.stats.frames_dropped.load(Ordering::Relaxed);
                 if dropped.is_multiple_of(30) {
                     warn!(
@@ -287,10 +290,11 @@ impl AsyncConverterPool {
                     drained += 1;
                 }
                 Err(flume::RecvTimeoutError::Timeout) => {
-                    let stats = self.stats();
-                    let pending = stats
+                    let pending = self
+                        .stats
                         .frames_received
-                        .saturating_sub(stats.frames_converted + stats.frames_dropped);
+                        .load(Ordering::Relaxed)
+                        .saturating_sub(self.stats.frames_finished.load(Ordering::Relaxed));
                     if pending == 0 {
                         break;
                     }
@@ -435,6 +439,7 @@ fn worker_loop(ctx: WorkerContext) {
                         let conversion_duration = convert_start.elapsed();
                         local_converted += 1;
                         ctx.stats.frames_converted.fetch_add(1, Ordering::Relaxed);
+                        ctx.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
 
                         let converted = ConvertedFrame {
                             frame: converted,
@@ -498,10 +503,8 @@ fn worker_loop(ctx: WorkerContext) {
                         }
                     }
                     Err(e) => {
-                        // Count conversion errors as dropped so they are
-                        // subtracted from drain_with_timeout's pending count
-                        // instead of looking like they are still in flight.
                         ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        ctx.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
                         local_errors += 1;
                         if local_errors % 10 == 1 {
                             warn!(
@@ -725,6 +728,37 @@ mod tests {
         let (sequences, dropped) = drained_sequences(DropStrategy::DropNewest, 2);
         assert_eq!(sequences, vec![0, 1]);
         assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn drain_keeps_waiting_after_converted_frames_were_dropped() {
+        let config = ConverterPoolConfig {
+            worker_count: 1,
+            input_capacity: 8,
+            output_capacity: 1,
+            drop_strategy: DropStrategy::DropNewest,
+            frame_pool_capacity: 0,
+        };
+        let mut pool =
+            AsyncConverterPool::new(Arc::new(SlowConverter(Duration::from_millis(100))), config);
+
+        for sequence in 0..3u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+            wait_for_converted(&pool, sequence + 1, sequence);
+        }
+        for sequence in 3..6u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+        }
+
+        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&sequences);
+        pool.drain_with_timeout(
+            move |frame| sink.lock().unwrap().push(frame.sequence),
+            Duration::from_secs(5),
+        );
+
+        assert_eq!(*sequences.lock().unwrap(), vec![0, 3, 4, 5]);
+        assert_eq!(pool.stats().frames_dropped, 2);
     }
 
     #[test]
