@@ -307,7 +307,7 @@ describe("developer SDK multipart completion billing", () => {
 		mocks.storedDuration = null;
 		mocks.creditTransactions = [];
 		mocks.videoUpdates = [];
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 1_000 }];
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 20_000_000 }];
 		expect((await complete({ durationInSecs: 99_999 })).status).toBe(200);
 
 		expect(mocks.creditTransactions).toEqual([
@@ -320,10 +320,45 @@ describe("developer SDK multipart completion billing", () => {
 		]);
 	});
 
-	it("accepts part ETags with or without quotes", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 1_000 }];
+	it("bounds a declared duration by what the uploaded bytes could hold", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 4_000 }];
+		const response = await complete({ durationInSecs: FOUR_HOURS_SECS });
+
+		expect(response.status).toBe(200);
+		expect(mocks.creditTransactions).toEqual([
+			expect.objectContaining({
+				amountMicroCredits: -microCreditsFor(4),
+				metadata: { durationSeconds: 4, totalBytes: 4_000 },
+			}),
+		]);
+		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([4]);
+	});
+
+	it("accepts the longest duration the uploaded bytes could hold", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 60_000 }];
+		expect((await complete({ durationInSecs: 60 })).status).toBe(200);
+		expect(mocks.creditTransactions).toEqual([
+			expect.objectContaining({ amountMicroCredits: -microCreditsFor(60) }),
+		]);
+	});
+
+	it("refuses a request that repeats a part, without billing", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 50_000_000 }];
+		const repeated = { partNumber: 1, etag: "etag-1", size: 50_000_000 };
 		const response = await complete({
-			parts: [{ partNumber: 1, etag: "etag-1", size: 1_000 }],
+			parts: [repeated, repeated, repeated, repeated],
+			durationInSecs: 5,
+		});
+
+		expect(response.status).toBe(400);
+		expect(mocks.creditTransactions).toEqual([]);
+		expect(mocks.events).toEqual([]);
+	});
+
+	it("accepts part ETags with or without quotes", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000 }];
+		const response = await complete({
+			parts: [{ partNumber: 1, etag: "etag-1", size: 10_000 }],
 			durationInSecs: 3,
 		});
 

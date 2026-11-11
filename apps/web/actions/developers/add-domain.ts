@@ -39,6 +39,6 @@ export async function addDeveloperDomain(appId: string, domain: string) {
 		domain: trimmed,
 	});
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

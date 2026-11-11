@@ -1929,12 +1929,14 @@ export type DeveloperCreditTransactionType =
 	| "video_create"
 	| "storage_daily"
 	| "refund"
-	| "adjustment";
+	| "adjustment"
+	| "pro_credit";
 
 export type DeveloperCreditReferenceType =
 	| "developer_video"
 	| "stripe_payment_intent"
-	| "manual";
+	| "manual"
+	| "pro_monthly_credit";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -1943,7 +1945,14 @@ export const developerCreditTransactions = mysqlTable(
 		accountId: nanoId("accountId").notNull(),
 		type: varchar("type", {
 			length: 16,
-			enum: ["topup", "video_create", "storage_daily", "refund", "adjustment"],
+			enum: [
+				"topup",
+				"video_create",
+				"storage_daily",
+				"refund",
+				"adjustment",
+				"pro_credit",
+			],
 		})
 			.notNull()
 			.$type<DeveloperCreditTransactionType>(),
@@ -1957,7 +1966,12 @@ export const developerCreditTransactions = mysqlTable(
 		referenceId: varchar("referenceId", { length: 255 }),
 		referenceType: varchar("referenceType", {
 			length: 32,
-			enum: ["developer_video", "stripe_payment_intent", "manual"],
+			enum: [
+				"developer_video",
+				"stripe_payment_intent",
+				"manual",
+				"pro_monthly_credit",
+			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),

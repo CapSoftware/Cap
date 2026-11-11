@@ -31,7 +31,7 @@ vi.mock("@cap/web-backend", async () => {
 			Effect.sync(() => mocks.complete(...args)),
 		abort: (...args: unknown[]) => Effect.sync(() => mocks.abort(...args)),
 		listParts: () =>
-			Effect.succeed([{ PartNumber: 1, ETag: '"etag-1"', Size: 1024 }]),
+			Effect.succeed([{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 }]),
 	};
 	return {
 		provideOptionalAuth: <T>(effect: T) => effect,
@@ -76,7 +76,7 @@ function post(path: string, body: Record<string, unknown>) {
 
 const completeBody = {
 	uploadId: "upload-1",
-	parts: [{ partNumber: 1, etag: "etag-1", size: 1024 }],
+	parts: [{ partNumber: 1, etag: "etag-1", size: 1_048_576 }],
 	durationInSecs: 12,
 };
 
