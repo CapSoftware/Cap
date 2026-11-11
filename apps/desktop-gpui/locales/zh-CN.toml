@@ -2467,6 +2467,9 @@ upload_complete = "上传完成"
 uploading = "正在创建分享链接"
 
 [editor.export.quality]
+gif_high = "高"
+gif_low = "低"
+gif_medium = "中"
 larger = "文件更大"
 maximum = "最高"
 potato = "最低"
