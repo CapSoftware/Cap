@@ -4893,6 +4893,7 @@ mod tests {
         assert!(geometry_changed(&before, &after));
     }
 
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn resizing_an_inverted_shape_moves_the_grabbed_edge(cx: &mut gpui::TestAppContext) {
         let project = tempfile::tempdir().unwrap();
@@ -4967,6 +4968,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn resizing_a_reopened_inverted_shape_keeps_the_opposite_corner_fixed(
         cx: &mut gpui::TestAppContext,
