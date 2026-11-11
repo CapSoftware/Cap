@@ -4,6 +4,7 @@ export const PLAIN = {
 	horizon: 0.68,
 	slabBase: 0.7349,
 	slitTop: 0.5977,
+	slab: { left: 0.3742, top: 0.497, right: 0.6258 },
 	lit: { x: 0.47, y: 0.56, w: 0.06, h: 0.44 },
 	placeholder:
 		"data:image/webp;base64,UklGRlAAAABXRUJQVlA4IEQAAACwAwCdASogABAAPu1qrU8ppiQiMAgBMB2JZwABHoQQWxKGRah2AAD+/ZuLySEmHHFjwEf2wGqJEj3RcriqZwBjjFAAAA==",

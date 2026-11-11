@@ -11,15 +11,24 @@
 	padding: 112px 0 468px;
 }
 
-.art {
-	--front: var(--slit-top);
+.art,
+.stage {
 	position: absolute;
-	z-index: -1;
 	left: 50%;
 	bottom: 0;
 	height: 500px;
 	aspect-ratio: 2 / 1;
 	translate: -50% 0;
+}
+
+.stage {
+	z-index: 1;
+	pointer-events: none;
+}
+
+.art {
+	--front: var(--slit-top);
+	z-index: -1;
 	background-size: 100% 100%;
 	-webkit-mask-image:
 		linear-gradient(
@@ -68,6 +77,20 @@
 
 .base {
 	inset: 0;
+}
+
+.dust {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 1.8s ease;
+}
+
+.dust[data-on="true"] {
+	opacity: 1;
 }
 
 .litBox {
@@ -222,7 +245,8 @@
 		padding-bottom: 572px;
 	}
 
-	.art {
+	.art,
+	.stage {
 		height: 620px;
 	}
 }
@@ -233,9 +257,13 @@
 		padding: 0;
 	}
 
-	.art {
+	.art,
+	.stage {
 		left: 67%;
 		height: 104%;
+	}
+
+	.art {
 		-webkit-mask-image:
 			linear-gradient(
 				to bottom,

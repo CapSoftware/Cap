@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { ART_PATH, NIGHT, PLAIN, PLATES } from "./art";
 import { LADDER } from "./content";
+import { HeroDust } from "./Dust";
 import styles from "./scene.module.css";
 import { MONO } from "./theme";
 
@@ -59,6 +60,7 @@ export const HeroArt = () => (
 				fetchPriority="high"
 			/>
 		</picture>
+		<HeroDust />
 		<div className={styles.litBox}>
 			<picture>
 				<source
