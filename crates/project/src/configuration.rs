@@ -3876,6 +3876,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: None,
+            voice_eq: None,
         };
         let mut timeline: TimelineConfiguration =
             serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] }))
