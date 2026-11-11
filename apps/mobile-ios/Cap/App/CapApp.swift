@@ -54,7 +54,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        Self.orientations
+        if let window, Self.isLargeScreen(window.traitCollection) { return .allButUpsideDown }
+        return Self.orientations
+    }
+
+    /// The open iPhone Duo is regular both ways in any orientation, so Cap turns with it like an iPad app.
+    /// A phone is compact in at least one direction and stays portrait outside fullscreen video.
+    static func isLargeScreen(_ traits: UITraitCollection) -> Bool {
+        traits.horizontalSizeClass == .regular && traits.verticalSizeClass == .regular
     }
 
     static func allowLandscape(_ allowed: Bool, in scene: UIWindowScene?) {
@@ -63,7 +70,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         for window in scene.windows {
             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
-        if !allowed {
+        if !allowed, !isLargeScreen(scene.traitCollection) {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
         }
     }
