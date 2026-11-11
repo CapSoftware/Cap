@@ -50,7 +50,7 @@ extension Route {
 struct CapSelection {
     let selected: CapID?
     let select: (CapID) -> Void
-    let deselect: () -> Void
+    let deselect: (CapID) -> Void
 }
 
 private struct CapSelectionKey: EnvironmentKey {
@@ -154,8 +154,9 @@ struct LibrarySplitView<Destination: View>: View {
         path = next.path
     }
 
-    private func deselect() {
+    private func deselect(_ id: CapID) {
         var next = CapsPath(path)
+        guard next.cap?.capID == id else { return }
         next.cap = nil
         next.trailing = []
         path = next.path

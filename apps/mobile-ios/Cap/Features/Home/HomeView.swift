@@ -152,7 +152,7 @@ struct LibraryContent: View {
         }
         .task { await library.loadIfNeeded() }
         .capDeleteConfirmation(pendingDelete: $pendingDelete) { cap in
-            if let selection, selection.selected == CapID(cap.id) { selection.deselect() }
+            if let selection, let id = CapID(cap.id) { selection.deselect(id) }
         }
     }
 

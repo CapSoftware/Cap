@@ -146,7 +146,7 @@ struct CapDetailView: View {
     /// Beside the library the Cap is the detail column's root, which dismiss can't pop.
     private func close() {
         if let selection, selection.selected == model.id {
-            selection.deselect()
+            selection.deselect(model.id)
         } else {
             dismiss()
         }
