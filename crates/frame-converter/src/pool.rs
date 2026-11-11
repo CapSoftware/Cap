@@ -1,5 +1,6 @@
 use crate::{ConversionConfig, ConvertError, FrameConverter, VideoFramePool, create_converter};
 use ffmpeg::frame;
+use parking_lot::Mutex;
 use std::{
     sync::{
         Arc,
@@ -138,6 +139,7 @@ impl AsyncConverterPool {
         let (output_tx, output_rx) = flume::bounded(config.output_capacity);
         let shutdown = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(PoolStats::default());
+        let output_order = Arc::new(Mutex::new(None));
 
         let mut workers = Vec::with_capacity(config.worker_count);
         let factory = Arc::new(factory);
@@ -147,6 +149,7 @@ impl AsyncConverterPool {
             let input_rx = input_rx.clone();
             let output_tx = output_tx.clone();
             let output_rx = output_rx.clone();
+            let output_order = Arc::clone(&output_order);
             let shutdown = Arc::clone(&shutdown);
             let stats = Arc::clone(&stats);
             let drop_strategy = config.drop_strategy;
@@ -168,6 +171,7 @@ impl AsyncConverterPool {
                         input_rx,
                         output_tx,
                         output_rx,
+                        output_order,
                         shutdown,
                         stats,
                         drop_strategy,
@@ -336,6 +340,7 @@ struct WorkerContext {
     input_rx: flume::Receiver<InputFrame>,
     output_tx: flume::Sender<ConvertedFrame>,
     output_rx: flume::Receiver<ConvertedFrame>,
+    output_order: Arc<Mutex<Option<u64>>>,
     shutdown: Arc<AtomicBool>,
     stats: Arc<PoolStats>,
     drop_strategy: DropStrategy,
@@ -373,12 +378,8 @@ fn handle_full_output(
     }
 
     match output_rx.try_recv() {
-        // With multiple workers, a delayed conversion can finish after newer
-        // frames were queued; put the newer frame back and drop the stale one.
-        Ok(queued) if queued.sequence > frame.sequence => FullOutputOutcome {
-            evicted: try_send_frame(output_tx, queued),
-            rejected: Some(frame),
-        },
+        // Callers hold `output_order`, so queued frames are in sequence order
+        // and the head is always the oldest.
         Ok(queued) => FullOutputOutcome {
             evicted: Some(queued),
             rejected: try_send_frame(output_tx, frame),
@@ -435,13 +436,37 @@ fn worker_loop(ctx: WorkerContext) {
                         local_converted += 1;
                         ctx.stats.frames_converted.fetch_add(1, Ordering::Relaxed);
 
-                        match ctx.output_tx.try_send(ConvertedFrame {
+                        let converted = ConvertedFrame {
                             frame: converted,
                             sequence,
                             submit_time,
                             conversion_duration,
-                        }) {
-                            Ok(()) => {}
+                        };
+
+                        let mut newest_queued = match ctx.drop_strategy {
+                            DropStrategy::DropOldest => Some(ctx.output_order.lock()),
+                            DropStrategy::DropNewest => None,
+                        };
+
+                        // Workers can finish out of submission order. A frame
+                        // older than one already queued would only be skipped
+                        // by the FIFO consumer, so drop it before it displaces
+                        // a newer frame or rotates the queue.
+                        let stale = match newest_queued.as_deref() {
+                            Some(Some(newest)) => sequence < *newest,
+                            _ => false,
+                        };
+                        if stale {
+                            drop(newest_queued);
+                            ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                            if let Some(ref pool) = ctx.frame_pool {
+                                pool.put(converted.frame);
+                            }
+                            continue;
+                        }
+
+                        let delivered = match ctx.output_tx.try_send(converted) {
+                            Ok(()) => true,
                             Err(flume::TrySendError::Full(rejected_frame)) => {
                                 let outcome = handle_full_output(
                                     &ctx.output_tx,
@@ -449,6 +474,7 @@ fn worker_loop(ctx: WorkerContext) {
                                     ctx.drop_strategy,
                                     rejected_frame,
                                 );
+                                let delivered = outcome.rejected.is_none();
                                 for frame in
                                     [outcome.evicted, outcome.rejected].into_iter().flatten()
                                 {
@@ -457,6 +483,7 @@ fn worker_loop(ctx: WorkerContext) {
                                         pool.put(frame.frame);
                                     }
                                 }
+                                delivered
                             }
                             Err(flume::TrySendError::Disconnected(dropped_frame)) => {
                                 if let Some(ref pool) = ctx.frame_pool {
@@ -464,6 +491,10 @@ fn worker_loop(ctx: WorkerContext) {
                                 }
                                 break;
                             }
+                        };
+
+                        if delivered && let Some(newest) = newest_queued.as_mut() {
+                            **newest = Some(sequence);
                         }
                     }
                     Err(e) => {
@@ -518,6 +549,25 @@ mod tests {
 
         fn name(&self) -> &'static str {
             "slow-test"
+        }
+
+        fn backend(&self) -> ConverterBackend {
+            ConverterBackend::Passthrough
+        }
+    }
+
+    struct PtsDelayConverter;
+
+    impl FrameConverter for PtsDelayConverter {
+        fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+            if input.pts() == Some(0) {
+                thread::sleep(Duration::from_millis(300));
+            }
+            Ok(input)
+        }
+
+        fn name(&self) -> &'static str {
+            "pts-delay-test"
         }
 
         fn backend(&self) -> ConverterBackend {
@@ -617,16 +667,35 @@ mod tests {
     }
 
     #[test]
-    fn drop_oldest_drops_a_stale_frame_instead_of_a_newer_queued_one() {
-        let (output_tx, output_rx) = flume::bounded(1);
-        output_tx.send(converted_frame(2)).unwrap();
-        let stale = rejected_by_full_queue(&output_tx, converted_frame(1));
+    fn drop_oldest_drops_a_late_frame_instead_of_reordering_the_queue() {
+        let config = ConverterPoolConfig {
+            worker_count: 2,
+            input_capacity: 8,
+            output_capacity: 8,
+            drop_strategy: DropStrategy::DropOldest,
+            frame_pool_capacity: 0,
+        };
+        let mut pool = AsyncConverterPool::new(Arc::new(PtsDelayConverter), config);
 
-        let outcome = handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, stale);
+        let mut delayed = test_frame();
+        delayed.set_pts(Some(0));
+        pool.submit(delayed, 0).unwrap();
+        for sequence in 1..3u64 {
+            let mut frame = test_frame();
+            frame.set_pts(Some(sequence as i64));
+            pool.submit(frame, sequence).unwrap();
+        }
 
-        assert!(outcome.evicted.is_none());
-        assert_eq!(outcome.rejected.unwrap().sequence, 1);
-        assert_eq!(output_rx.recv().unwrap().sequence, 2);
+        wait_for_converted(&pool, 3, 1);
+        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&sequences);
+        pool.drain_with_timeout(
+            move |frame| sink.lock().unwrap().push(frame.sequence),
+            Duration::from_secs(5),
+        );
+
+        assert_eq!(*sequences.lock().unwrap(), vec![1, 2]);
+        assert_eq!(pool.stats().frames_dropped, 1);
     }
 
     #[test]
