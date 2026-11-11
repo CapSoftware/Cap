@@ -35,10 +35,14 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type {
-	VideoCallToAction,
-	VideoEditSpec,
-	VideoMetadata,
+import {
+	DEVELOPER_VIDEO_RESOLUTION_TIERS,
+	DEVELOPER_VIDEO_STATUSES,
+	type DeveloperVideoProcessingState,
+	type DeveloperVideoRendition,
+	type VideoCallToAction,
+	type VideoEditSpec,
+	type VideoMetadata,
 } from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
@@ -1883,6 +1887,23 @@ export const developerVideos = mysqlTable(
 			enum: ["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"],
 		}),
 		metadata: json("metadata"),
+		status: varchar("status", {
+			length: 16,
+			enum: DEVELOPER_VIDEO_STATUSES,
+		})
+			.notNull()
+			.default("uploading"),
+		playbackId: varchar("playbackId", { length: 64 }),
+		maxResolutionTier: varchar("maxResolutionTier", {
+			length: 8,
+			enum: DEVELOPER_VIDEO_RESOLUTION_TIERS,
+		})
+			.notNull()
+			.default("1080p"),
+		renditions: json("renditions").$type<DeveloperVideoRendition[]>(),
+		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
+		errorReason: varchar("errorReason", { length: 512 }),
+		processing: json("processing").$type<DeveloperVideoProcessingState>(),
 		deletedAt: timestamp("deletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -1891,6 +1912,7 @@ export const developerVideos = mysqlTable(
 		index("app_created_idx").on(table.appId, table.createdAt),
 		index("app_user_idx").on(table.appId, table.externalUserId),
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
+		uniqueIndex("playback_id_idx").on(table.playbackId),
 	],
 );
 
