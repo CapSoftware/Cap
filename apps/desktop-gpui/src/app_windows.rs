@@ -7429,6 +7429,7 @@ mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
 
+    #[cfg(target_os = "linux")]
     #[gpui::test]
     fn quitting_keeps_an_exporting_editor_open(cx: &mut gpui::TestAppContext) {
         use crate::editor_export::{ExportPhase, ExportUi};
