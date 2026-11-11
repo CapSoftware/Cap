@@ -1,13 +1,13 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faCircleInfo } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCircleInfo } from "@fortawesome/free-solid-svg-icons/faCircleInfo";
 import NumberFlow from "@number-flow/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useCurrency } from "hooks/useCurrency";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import { WhenVisible } from "@/components/ui/WhenVisible";
 import { homepageCopy } from "../../../../data/homepage-copy";

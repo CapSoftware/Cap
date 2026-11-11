@@ -10,7 +10,6 @@ import {
 	VideosPolicy,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
@@ -43,6 +42,7 @@ import {
 import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import {
 	getMultipartFileKey,
 	getSubpath,

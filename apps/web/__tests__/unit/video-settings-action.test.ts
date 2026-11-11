@@ -83,6 +83,32 @@ describe("updateVideoSettings", () => {
 		expect(patchOf(settings)).toEqual({ disableComments: true });
 	});
 
+	it.each([true, false])(
+		"saves the download choice %s for any owner",
+		async (disableDownloads) => {
+			mocks.stripeSubscriptionStatus = null;
+
+			await updateVideoSettings("video" as Video.VideoId, {
+				disableDownloads,
+			});
+
+			const settings = (mocks.updates[0] as { settings: unknown }).settings;
+			expect(patchOf(settings)).toEqual({ disableDownloads });
+		},
+	);
+
+	it("ignores a download value that is not a boolean", async () => {
+		await updateVideoSettings(
+			"video" as Video.VideoId,
+			{ disableDownloads: "yes" } as unknown as Parameters<
+				typeof updateVideoSettings
+			>[1],
+		);
+
+		const settings = (mocks.updates[0] as { settings: unknown }).settings;
+		expect(patchOf(settings)).toEqual({});
+	});
+
 	it("saves Pro-only settings for Pro owners", async () => {
 		await updateVideoSettings("video" as Video.VideoId, {
 			disableSummary: true,

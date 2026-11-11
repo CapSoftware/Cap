@@ -2272,7 +2272,7 @@ describe("committed source access", () => {
 		const first = inventory.roots[0];
 		if (!first) throw new Error("Missing inventory page");
 		const page = z
-			.object({ entries: z.array(z.record(z.unknown())) })
+			.object({ entries: z.array(z.record(z.string(), z.unknown())) })
 			.passthrough()
 			.parse(JSON.parse(storage.object(first.key).body ?? ""));
 		page.entries[0] = { ...page.entries[0], size: -1 };

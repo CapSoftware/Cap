@@ -6,12 +6,12 @@ import {
 } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { STRIPE_DEVELOPER_CREDITS_PRODUCT_ID, stripe } from "@cap/utils";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
 
 const app = new Hono()

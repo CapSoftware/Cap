@@ -1,13 +1,18 @@
-import { Button, Label } from "@cap/ui";
+import { Button, Label, Switch } from "@cap/ui";
 import type { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useDashboardContext } from "../../../Contexts";
 
 export const AccessEmailDomain = () => {
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, organizationSettings } = useDashboardContext();
+	const savedLinkOverride =
+		organizationSettings?.allowPublicLinkOverride === true;
+	const [linkOverride, setLinkOverride] = useState(savedLinkOverride);
+	const [linkOverrideLoading, setLinkOverrideLoading] = useState(false);
+	const linkOverrideId = useId();
 	const [emailDomain, setEmailDomain] = useState(
 		activeOrganization?.organization.allowedEmailDomain || null,
 	);
@@ -29,6 +34,26 @@ export const AccessEmailDomain = () => {
 			toast.error("An error occurred while updating settings");
 		} finally {
 			setSaveLoading(false);
+		}
+	};
+
+	const handleLinkOverrideChange = async (checked: boolean) => {
+		setLinkOverride(checked);
+		setLinkOverrideLoading(true);
+		try {
+			await updateOrganizationDetails({
+				allowPublicLinkOverride: checked,
+				organizationId: activeOrganization?.organization
+					.id as Organisation.OrganisationId,
+			});
+			toast.success("Settings updated successfully");
+			router.refresh();
+		} catch (error) {
+			console.error("Error updating settings:", error);
+			setLinkOverride(!checked);
+			toast.error("An error occurred while updating settings");
+		} finally {
+			setLinkOverrideLoading(false);
 		}
 	};
 
@@ -84,6 +109,25 @@ export const AccessEmailDomain = () => {
 						{saveLoading ? null : "Save"}
 					</Button>
 				</div>
+				{activeOrganization?.organization.allowedEmailDomain?.trim() && (
+					<div className="flex gap-4 justify-between items-center pt-1">
+						<div className="space-y-1">
+							<Label htmlFor={linkOverrideId}>
+								Let members open individual videos
+							</Label>
+							<p className="text-sm text-gray-10">
+								A video's owner can switch its link to anyone with the link.
+								Every other video stays restricted.
+							</p>
+						</div>
+						<Switch
+							id={linkOverrideId}
+							checked={linkOverride}
+							disabled={linkOverrideLoading}
+							onCheckedChange={handleLinkOverrideChange}
+						/>
+					</div>
+				)}
 			</div>
 		</div>
 	);

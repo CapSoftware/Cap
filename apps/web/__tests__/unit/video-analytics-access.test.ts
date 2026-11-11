@@ -61,6 +61,7 @@ const makeDeps = (): VideosPolicyDeps => ({
 			),
 		hasViewerGrant: (_, email) =>
 			Effect.succeed(email === mocks.scenario.viewerGrantEmail),
+		isLinkOpenToAnyone: () => Effect.succeed(false),
 	},
 	orgsRepo: {
 		membershipForVideo: () =>
