@@ -235,15 +235,13 @@ app.post(
 					400,
 				);
 			}
-			if (clampedDuration > totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND) {
-				return c.json(
-					{ error: "Duration is longer than the uploaded file can hold" },
-					400,
-				);
-			}
+			const plausibleDuration = Math.min(
+				clampedDuration,
+				totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
+			);
 			const sizeBasedMinDuration = totalBytes / BILLED_BYTES_PER_SECOND;
 			const billingDuration = Math.min(
-				Math.max(clampedDuration, sizeBasedMinDuration),
+				Math.max(plausibleDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
 			);
 			const durationMinutes = billingDuration / 60;

@@ -12,6 +12,7 @@ import { handle } from "hono/vercel";
 import type Stripe from "stripe";
 import { z } from "zod";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import { canUseInfra } from "@/lib/infra-access";
 import { infraAppPath } from "@/lib/infra-routes";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
@@ -33,6 +34,10 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const { appId, amountCents } = c.req.valid("json");
+
+		if (!canUseInfra(user.email)) {
+			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
+		}
 
 		const [app] = await db()
 			.select()

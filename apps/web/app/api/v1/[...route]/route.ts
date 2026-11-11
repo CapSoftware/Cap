@@ -127,6 +127,7 @@ import {
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { canUseInfra } from "@/lib/infra-access";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
@@ -4271,6 +4272,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "billing:write", requestId);
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
+								requestId,
+								"Cap Infra credits are not available yet",
+							);
+						}
 						if (
 							!Number.isSafeInteger(payload.amountCents) ||
 							payload.amountCents < 500 ||
