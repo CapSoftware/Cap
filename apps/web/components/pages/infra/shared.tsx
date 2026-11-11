@@ -1,10 +1,11 @@
 import { classNames } from "@cap/utils/helpers";
 import { Geist, Geist_Mono } from "next/font/google";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { CodePanel } from "./CodePanel";
-import type { CodeSample } from "./content";
+import { type CodeSample, LINKS } from "./content";
 import { highlight } from "./highlight";
-import { BODY, H_SECTION } from "./theme";
+import { BODY, BTN_GHOST, BTN_PRIMARY, H_SECTION } from "./theme";
 
 export const infraSans = Geist({
 	subsets: ["latin"],
@@ -94,4 +95,27 @@ export const Section = ({
 	>
 		<div className="mx-auto max-w-[1120px]">{children}</div>
 	</section>
+);
+
+export const Actions = ({
+	secondary,
+	className,
+}: {
+	secondary: { label: string; href: string };
+	className?: string;
+}) => (
+	<div className={classNames("flex flex-wrap gap-2.5", className)}>
+		<Link href={LINKS.start} className={BTN_PRIMARY}>
+			Start building
+		</Link>
+		{secondary.href.startsWith("#") ? (
+			<a href={secondary.href} className={BTN_GHOST}>
+				{secondary.label}
+			</a>
+		) : (
+			<Link href={secondary.href} className={BTN_GHOST}>
+				{secondary.label}
+			</Link>
+		)}
+	</div>
 );

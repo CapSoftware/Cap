@@ -54,13 +54,17 @@ export const usdWhole = (value: number) =>
 const perTier = (rates: Record<InfraResolutionTier, number>) =>
 	`${usd(rates["1080p"])} up to 1080p, ${usd(rates["1440p"])} at 1440p and ${usd(rates["2160p"])} at 4K`;
 
-export const HEADLINE =
-	"The cheapest, fastest video infrastructure on the planet.";
+export const HEADLINE = "Cheap, fast & reliable video infrastructure.";
+
+export const HEADLINE_LINES = [
+	"Cheap, fast & reliable",
+	"video infrastructure.",
+] as const;
 
 export const infraSeo = {
 	path: "/infra",
 	url: "https://cap.so/infra",
-	title: "Cap Infra: the cheapest, fastest video infrastructure",
+	title: "Cap Infra: cheap, fast & reliable video infrastructure",
 	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a thumbnail and a transcript. Free encoding, storage from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} and delivery from ${usd(PRICES.deliveryPer1000Minutes[DEFAULT_TIER])} per 1,000 minutes, speech to text at ${usd(PRICES.speechPerHour)} per audio hour.`,
 	ogDescription: `${HEADLINE} Free encoding, delivery from ${usd(PRICES.deliveryPer1000Minutes[DEFAULT_TIER])} per 1,000 minutes.`,
 	keywords: [
@@ -80,6 +84,7 @@ export const infraSeo = {
 } as const;
 
 export const ANCHORS = {
+	agents: "agents",
 	compare: "compare",
 	speed: "speed",
 	video: "video",
@@ -90,21 +95,24 @@ export const ANCHORS = {
 } as const;
 
 export const NAV_LINKS = [
+	{ label: "Agents", href: `#${ANCHORS.agents}` },
 	{ label: "Video", href: `#${ANCHORS.video}` },
 	{ label: "Speech", href: `#${ANCHORS.speech}` },
 	{ label: "Player", href: `#${ANCHORS.player}` },
 	{ label: "Pricing", href: `#${ANCHORS.pricing}` },
 ] as const;
 
-export const TRUST = [
-	"SOC 2 Type II, ISO 27001 and HIPAA compliant.",
-	"BAA available.",
-	"Open source.",
-] as const;
+export const COMPLIANCE = "SOC 2 Type II, ISO 27001 and HIPAA compliant.";
+
+export const BAA = "BAA available.";
+
+export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
 export const LINKS = {
 	start: "/dashboard/infra",
 	docs: "/docs",
+	agentDocs: "/docs/agents",
+	trust: "https://trust.cap.so",
 	signIn: "/login",
 	home: "/",
 	privacy: "/privacy",
@@ -112,34 +120,26 @@ export const LINKS = {
 	github: "https://github.com/CapSoftware/Cap",
 } as const;
 
-export const ENCODE_SECONDS_FOR_FIVE_MINUTES_OF_4K = 21;
+export const SPEED_VIDEO_MINUTES = 30;
 
-export const TRANSCRIBE_SECONDS_FOR_ONE_HOUR_OF_AUDIO = 24;
+export const SPEED_SECONDS_TO_PLAYABLE = 5;
 
-export type Measurement = {
-	key: string;
-	source: string;
-	sourceSeconds: number;
-	result: string;
-	seconds: number;
-};
+export const SPEED_MINUTES_TO_FULLY_PROCESSED = 2;
 
-export const MEASUREMENTS: readonly Measurement[] = [
-	{
-		key: "encode",
-		source: "Five minutes of 4K video",
-		sourceSeconds: 5 * 60,
-		result: "Encoded to all five renditions",
-		seconds: ENCODE_SECONDS_FOR_FIVE_MINUTES_OF_4K,
-	},
-	{
-		key: "transcribe",
-		source: "One hour of audio",
-		sourceSeconds: 60 * 60,
-		result: "Transcribed",
-		seconds: TRANSCRIBE_SECONDS_FOR_ONE_HOUR_OF_AUDIO,
-	},
-];
+export const SPEED_SPEECH_SECONDS_PER_AUDIO_HOUR = 24;
+
+export const SPEED_VIDEO = {
+	source: `${SPEED_VIDEO_MINUTES} minutes of 4K video`,
+	sourceSeconds: SPEED_VIDEO_MINUTES * 60,
+	playableSeconds: SPEED_SECONDS_TO_PLAYABLE,
+	processedSeconds: SPEED_MINUTES_TO_FULLY_PROCESSED * 60,
+} as const;
+
+export const SPEED_SPEECH = {
+	source: "One hour of audio",
+	sourceSeconds: 60 * 60,
+	seconds: SPEED_SPEECH_SECONDS_PER_AUDIO_HOUR,
+} as const;
 
 export const clock = (totalSeconds: number) => {
 	const hours = Math.floor(totalSeconds / 3600);
@@ -201,7 +201,7 @@ export const PLAYBACK = {
 } as const;
 
 export type CodeSample = {
-	id: "curl" | "ts" | "embed" | "direct" | "cli";
+	id: "curl" | "ts" | "embed" | "direct";
 	label: string;
 	code: string;
 };
@@ -335,17 +335,14 @@ export const PLAYER: readonly CodeSample[] = [
 	},
 ];
 
-export const AGENT_COMMANDS: readonly CodeSample[] = [
-	{
-		id: "cli",
-		label: "Cap CLI",
-		code: `cap developers create "Acme"
-cap developers keys rotate <app>
-cap developers videos list <app>
-cap developers credits purchase <app> --amount-cents 2000
-cap mcp serve`,
-	},
-];
+export const AGENT_STEPS = [
+	"Copy the prompt.",
+	"Paste it into your agent.",
+	"Ask for what you want.",
+] as const;
+
+export const AGENT_TOOLS =
+	"Works in Claude Code, Codex, Cursor and any agent that can run shell commands.";
 
 export const VIDEO_OUTPUTS = [
 	{

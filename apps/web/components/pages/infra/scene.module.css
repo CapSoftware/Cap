@@ -436,6 +436,31 @@
 		0 0 28px 4px rgba(190, 210, 255, 0.28);
 }
 
+.reach {
+	position: absolute;
+	left: 0;
+	top: 0;
+	height: 1px;
+	width: calc(var(--reach) * 100%);
+	background: rgba(232, 236, 244, 0.72);
+}
+
+.reach::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	top: -4px;
+	width: 1px;
+	height: 9px;
+	background: rgba(232, 236, 244, 0.8);
+}
+
+.atReach {
+	position: absolute;
+	left: calc(var(--reach) * 100%);
+	translate: -50% 0;
+}
+
 .rate {
 	position: relative;
 	flex: 1 1 0;

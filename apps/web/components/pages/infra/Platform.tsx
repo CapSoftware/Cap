@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import {
-	AGENT_COMMANDS,
 	ANCHORS,
 	type CodeSample,
 	CREATE_TRANSCRIPT,
@@ -69,16 +68,6 @@ export const Platform = () => (
 			<p>
 				Every video has direct HLS and MP4 URLs that work in any player. Or drop
 				in the Cap player embed and build nothing.
-			</p>
-		</Row>
-		<Row
-			title="Bring your agent."
-			samples={AGENT_COMMANDS}
-			label="Cap CLI commands"
-		>
-			<p>
-				Apps, keys, videos and credits can all be managed from the Cap CLI and
-				the Cap MCP server.
 			</p>
 		</Row>
 	</Section>
