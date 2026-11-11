@@ -5299,10 +5299,7 @@ impl MainWindow {
                 tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            cx.update(|_, cx| {
-                cx.defer(move |cx| app_windows::screenshot_deleted_from_library(key, cx))
-            })
-            .ok();
+            app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }

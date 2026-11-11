@@ -1357,10 +1357,7 @@ impl SettingsWindow {
                 tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            cx.update(|_, cx| {
-                cx.defer(move |cx| crate::app_windows::screenshot_deleted_from_library(key, cx))
-            })
-            .ok();
+            crate::app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }

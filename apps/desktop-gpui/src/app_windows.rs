@@ -7671,6 +7671,13 @@ pub(crate) fn screenshot_deleted_from_library(key: Option<PathBuf>, cx: &mut App
     }
 }
 
+/// Runs [`screenshot_deleted_from_library`] once a library delete finishes.
+/// It goes through the app, not the window that started the delete, so it
+/// still runs when that window (Settings, say) closed while the delete ran.
+pub(crate) fn finish_library_screenshot_delete(key: Option<PathBuf>, cx: &gpui::AsyncApp) {
+    cx.update(|cx| cx.defer(move |cx| screenshot_deleted_from_library(key, cx)));
+}
+
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -8094,6 +8101,20 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    struct DeleteOrigin;
+
+    #[cfg(target_os = "linux")]
+    impl gpui::Render for DeleteOrigin {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::Empty
+        }
+    }
+
     /// A screenshot deleted from a library list (Settings passes the image,
     /// the main window the bundle) closes an editor still open on it, which
     /// would otherwise keep saving edits into a folder that no longer exists.
@@ -8125,7 +8146,20 @@ mod tests {
             });
             std::fs::remove_dir_all(&bundle).unwrap();
 
-            cx.update(|cx| screenshot_deleted_from_library(deleted, cx));
+            // The window the delete came from closes before the delete
+            // finishes; the editor must still close.
+            let origin = cx.add_window(|_, _| DeleteOrigin);
+            origin
+                .update(cx, |_, window, cx| {
+                    window
+                        .spawn(cx, async move |cx| {
+                            finish_library_screenshot_delete(deleted, cx)
+                        })
+                        .detach();
+                    window.remove_window();
+                })
+                .unwrap();
+            cx.run_until_parked();
 
             assert!(
                 handle.update(cx, |_, _, _| ()).is_err(),
