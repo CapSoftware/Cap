@@ -1,23 +1,15 @@
 import Link from "next/link";
-import { ANCHORS, CREATE_VIDEO, CREATE_VIDEO_RESPONSE, LINKS } from "./content";
-import { Plain } from "./Plain";
-import { Code } from "./shared";
+import { LINKS } from "./content";
+import { HeroArt } from "./Plain";
+import styles from "./scene.module.css";
 import { BODY, BTN_GHOST, BTN_PRIMARY, H_DISPLAY } from "./theme";
 
 export const Hero = () => (
-	<section>
-		<Plain
-			horizon="78%"
-			slab={{
-				width: "clamp(240px, 40vw, 600px)",
-				height: "clamp(96px, 12vw, 180px)",
-			}}
-			className="h-[clamp(760px,100svh,980px)]"
-		>
-			<div className="relative mx-auto flex max-w-[980px] flex-col items-center px-5 pt-[112px] text-center sm:pt-[132px]">
-				<h1
-					className={`${H_DISPLAY} bg-[linear-gradient(180deg,#FFFFFF_0%,#ECE8E1_45%,rgba(236,232,225,0.62)_100%)] bg-clip-text text-[clamp(40px,6.4vw,84px)] text-transparent`}
-				>
+	<section className={styles.hero}>
+		<HeroArt />
+		<div className="mx-auto flex h-full max-w-[1184px] flex-col px-5 sm:px-8 lg:justify-center lg:pb-[16vh]">
+			<div className="max-w-[520px]">
+				<h1 className={`${H_DISPLAY} m-0 text-[clamp(36px,4vw,52px)]`}>
 					<span className="block leading-[inherit] tracking-[inherit]">
 						Upload a video.
 					</span>
@@ -26,28 +18,20 @@ export const Hero = () => (
 					</span>
 				</h1>
 				<p
-					className={`${BODY} mt-6 max-w-[560px] text-pretty text-[16.5px] leading-[1.6] sm:text-[18px]`}
+					className={`${BODY} mt-5 max-w-[400px] text-pretty text-[16px] leading-[1.6]`}
 				>
-					Cap Infra turns every upload into adaptive HLS, an MP4, a thumbnail
-					and a transcript, served from a CDN. It runs on the same GPUs that
-					process every Cap recording, and encoding is free.
+					Video and speech APIs on Cap's own GPUs. Every upload comes back as
+					adaptive HLS up to 4K, an MP4, a thumbnail and a transcript.
 				</p>
-				<div className="mt-9 flex w-full flex-col gap-3 min-[420px]:w-auto min-[420px]:flex-row">
+				<div className="mt-8 flex flex-wrap gap-2.5">
 					<Link href={LINKS.start} className={BTN_PRIMARY}>
 						Start building
 					</Link>
-					<a href={`#${ANCHORS.pricing}`} className={BTN_GHOST}>
-						See pricing
-					</a>
+					<Link href={LINKS.docs} className={BTN_GHOST}>
+						Read the docs
+					</Link>
 				</div>
 			</div>
-		</Plain>
-		<div className="relative z-10 mx-auto -mt-[150px] max-w-[880px] px-4 sm:-mt-[170px] sm:px-5">
-			<Code
-				samples={CREATE_VIDEO}
-				response={CREATE_VIDEO_RESPONSE}
-				label="Create a video"
-			/>
 		</div>
 	</section>
 );

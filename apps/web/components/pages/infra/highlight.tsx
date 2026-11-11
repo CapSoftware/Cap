@@ -4,12 +4,11 @@ const TOKEN =
 	/("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|<\/?[a-z]+|\/?>|\b[a-z]+(?==")|(?<=^|\s)-{1,2}[A-Za-z][\w-]*|\b(?:const|await|curl)\b|\b\d+(?:\.\d+)?\b)/g;
 
 const COLORS = {
-	key: "#9C9890",
-	string: "#F4F1EB",
-	number: "#D8C7A8",
+	key: "rgba(232,236,244,0.5)",
+	string: "#E8ECF4",
+	number: "#B9CBF2",
 	keyword: "#FFFFFF",
-	plain: "#B9B5AD",
-	muted: "rgba(236,232,225,0.45)",
+	plain: "rgba(232,236,244,0.68)",
 } as const;
 
 const colorOf = (token: string, rest: string) => {
@@ -57,5 +56,3 @@ export const highlight = (code: string): ReactNode[] => {
 	}
 	return out;
 };
-
-export const CODE_MUTED = COLORS.muted;

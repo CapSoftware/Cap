@@ -9,7 +9,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { CopyIconButton } from "@/components/pages/agents/copy";
-import { GLASS_PANEL, MONO } from "./theme";
+import { MONO } from "./theme";
 
 export type PanelTab = {
 	id: string;
@@ -19,7 +19,7 @@ export type PanelTab = {
 };
 
 const listeners = new Set<() => void>();
-let preferred = "curl";
+const preferred = new Map<string, string>();
 
 const subscribe = (listener: () => void) => {
 	listeners.add(listener);
@@ -28,32 +28,36 @@ const subscribe = (listener: () => void) => {
 	};
 };
 
-const setPreferred = (id: string) => {
-	preferred = id;
+const setPreferred = (group: string, id: string) => {
+	preferred.set(group, id);
 	for (const listener of listeners) listener();
 };
 
-const usePreferred = () =>
+const usePreferred = (group: string) =>
 	useSyncExternalStore(
 		subscribe,
-		() => preferred,
-		() => "curl",
+		() => preferred.get(group),
+		() => undefined,
 	);
 
-const PRE = `${MONO} m-0 overflow-x-auto px-5 py-4 text-[12px] leading-[1.75] [tab-size:2] sm:text-[13px]`;
+const PRE = `${MONO} m-0 overflow-x-auto px-4 py-3.5 text-[12.5px] leading-[1.7] [tab-size:2]`;
 
 export const CodePanel = ({
 	tabs,
 	response,
+	responseLabel = "Response",
 	label,
+	group = "language",
 	className,
 }: {
 	tabs: readonly PanelTab[];
 	response?: ReactNode;
+	responseLabel?: string;
 	label: string;
+	group?: string;
 	className?: string;
 }) => {
-	const preferredId = usePreferred();
+	const preferredId = usePreferred(group);
 	const baseId = useId();
 	const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const active = tabs.find((tab) => tab.id === preferredId) ?? tabs[0];
@@ -68,77 +72,79 @@ export const CodePanel = ({
 		const next = (activeIndex + step + tabs.length) % tabs.length;
 		const tab = tabs[next];
 		if (!tab) return;
-		setPreferred(tab.id);
+		setPreferred(group, tab.id);
 		tabRefs.current[next]?.focus();
 	};
 
 	return (
 		<div
 			className={classNames(
-				"min-w-0 overflow-hidden rounded-[16px] text-[#ECE8E1]",
-				GLASS_PANEL,
+				"min-w-0 overflow-hidden rounded-[10px] bg-[rgba(222,230,246,0.022)] text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.08)]",
+				response ? "grid lg:grid-cols-2" : "",
 				className,
 			)}
 		>
-			<div className="flex items-center justify-between gap-3 border-b border-[rgba(236,232,225,0.08)] py-2 pl-2 pr-2">
+			<div className="min-w-0">
+				<div className="flex h-10 items-center justify-between gap-3 border-b border-[rgba(222,230,246,0.07)] pl-4 pr-1.5">
+					{switchable ? (
+						<div role="tablist" aria-label={label} className="flex gap-4">
+							{tabs.map((tab, i) => {
+								const selected = tab.id === active.id;
+								return (
+									<button
+										key={tab.id}
+										ref={(node) => {
+											tabRefs.current[i] = node;
+										}}
+										type="button"
+										role="tab"
+										id={`${baseId}-tab-${tab.id}`}
+										aria-selected={selected}
+										aria-controls={`${baseId}-panel`}
+										tabIndex={selected ? 0 : -1}
+										onClick={() => setPreferred(group, tab.id)}
+										onKeyDown={onKeyDown}
+										className={classNames(
+											"relative h-10 text-[13px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]",
+											selected
+												? "text-[#E8ECF4] after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-[#E8ECF4]"
+												: "text-[rgba(232,236,244,0.42)] hover:text-[rgba(232,236,244,0.8)]",
+										)}
+									>
+										{tab.label}
+									</button>
+								);
+							})}
+						</div>
+					) : (
+						<p className="m-0 text-[13px] leading-10 text-[rgba(232,236,244,0.42)]">
+							{active.label}
+						</p>
+					)}
+					<CopyIconButton text={active.code} label={label} dark />
+				</div>
 				{switchable ? (
-					<div role="tablist" aria-label={label} className="flex gap-1">
-						{tabs.map((tab, i) => {
-							const selected = tab.id === active.id;
-							return (
-								<button
-									key={tab.id}
-									ref={(node) => {
-										tabRefs.current[i] = node;
-									}}
-									type="button"
-									role="tab"
-									id={`${baseId}-tab-${tab.id}`}
-									aria-selected={selected}
-									aria-controls={`${baseId}-panel`}
-									tabIndex={selected ? 0 : -1}
-									onClick={() => setPreferred(tab.id)}
-									onKeyDown={onKeyDown}
-									className={classNames(
-										"h-8 rounded-[9px] px-3 text-[13px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-										selected
-											? "bg-white/[0.09] text-white"
-											: "text-white/50 hover:bg-white/[0.05] hover:text-white/85",
-									)}
-								>
-									{tab.label}
-								</button>
-							);
-						})}
+					<div
+						id={`${baseId}-panel`}
+						role="tabpanel"
+						aria-labelledby={`${baseId}-tab-${active.id}`}
+					>
+						<pre className={PRE}>
+							<code>{active.content}</code>
+						</pre>
 					</div>
 				) : (
-					<p className="m-0 px-3 text-[13px] leading-8 text-white/60">
-						{active.label}
-					</p>
-				)}
-				<CopyIconButton text={active.code} label={label} dark />
-			</div>
-			{switchable ? (
-				<div
-					id={`${baseId}-panel`}
-					role="tabpanel"
-					aria-labelledby={`${baseId}-tab-${active.id}`}
-				>
 					<pre className={PRE}>
 						<code>{active.content}</code>
 					</pre>
-				</div>
-			) : (
-				<pre className={PRE}>
-					<code>{active.content}</code>
-				</pre>
-			)}
+				)}
+			</div>
 			{response ? (
-				<div className="border-t border-[rgba(236,232,225,0.08)] bg-black/30">
-					<p className="m-0 px-5 pt-3.5 text-[12.5px] text-white/45">
-						Response
+				<div className="min-w-0 border-t border-[rgba(222,230,246,0.07)] lg:border-l lg:border-t-0">
+					<p className="m-0 flex h-10 items-center border-b border-[rgba(222,230,246,0.07)] px-4 text-[13px] text-[rgba(232,236,244,0.42)]">
+						{responseLabel}
 					</p>
-					<pre className={classNames(PRE, "pt-2")}>
+					<pre className={PRE}>
 						<code>{response}</code>
 					</pre>
 				</div>

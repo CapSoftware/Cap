@@ -1,19 +1,17 @@
 import { Faq } from "./Faq";
 import { FinalCta } from "./FinalCta";
 import { Hero } from "./Hero";
-import { Player } from "./Player";
+import { Performance } from "./Performance";
+import { Platform } from "./Platform";
 import { Pricing } from "./Pricing";
-import { Speech } from "./Speech";
 import { Video } from "./Video";
 
 export const InfraPage = () => (
 	<main>
 		<Hero />
-		<div className="pt-24 lg:pt-32">
-			<Video />
-		</div>
-		<Speech />
-		<Player />
+		<Video />
+		<Performance />
+		<Platform />
 		<Pricing />
 		<Faq />
 		<FinalCta />

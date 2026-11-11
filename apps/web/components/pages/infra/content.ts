@@ -39,6 +39,12 @@ export const NAV_LINKS = [
 	{ label: "Pricing", href: `#${ANCHORS.pricing}` },
 ] as const;
 
+export const TRUST = [
+	"SOC 2 Type II, ISO 27001 and HIPAA compliant.",
+	"BAA available.",
+	"Open source.",
+] as const;
+
 export const LINKS = {
 	start: "/dashboard/infra",
 	docs: "/docs",
@@ -55,6 +61,44 @@ export const PRICES = {
 	speechPerHour: SPEECH_DOLLARS_PER_HOUR,
 	proMonthlyCredit: 5,
 } as const;
+
+export const ENCODE_SECONDS_FOR_FIVE_MINUTES_OF_4K = 21;
+
+export const TRANSCRIBE_SECONDS_FOR_ONE_HOUR_OF_AUDIO = 24;
+
+export type Measurement = {
+	key: string;
+	source: string;
+	sourceSeconds: number;
+	result: string;
+	seconds: number;
+};
+
+export const MEASUREMENTS: readonly Measurement[] = [
+	{
+		key: "encode",
+		source: "Five minutes of 4K video",
+		sourceSeconds: 5 * 60,
+		result: "Encoded to all five renditions",
+		seconds: ENCODE_SECONDS_FOR_FIVE_MINUTES_OF_4K,
+	},
+	{
+		key: "transcribe",
+		source: "One hour of audio",
+		sourceSeconds: 60 * 60,
+		result: "Transcribed",
+		seconds: TRANSCRIBE_SECONDS_FOR_ONE_HOUR_OF_AUDIO,
+	},
+];
+
+export const clock = (totalSeconds: number) => {
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = String(totalSeconds % 60).padStart(2, "0");
+	return hours > 0
+		? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`
+		: `${minutes}:${seconds}`;
+};
 
 export const usd = (value: number) =>
 	new Intl.NumberFormat("en-US", {
@@ -81,7 +125,7 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 	{
 		meter: "Encoding",
 		price: "Free",
-		unit: "Every rendition, every upload",
+		unit: "every rendition, every upload",
 	},
 	{
 		meter: "Storage",
@@ -97,12 +141,12 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 		meter: "Speech to text",
 		price: usd(PRICES.speechPerHour),
 		unit: "per hour of audio",
-		note: "Free for videos hosted on Cap Infra",
+		note: "free for videos hosted on Cap Infra",
 	},
 	{
 		meter: "Player",
 		price: "Included",
-		unit: "Embed it anywhere",
+		unit: "embed it anywhere",
 	},
 ];
 
@@ -120,12 +164,12 @@ export const PLAYBACK = {
 } as const;
 
 export type CodeSample = {
-	id: "curl" | "ts" | "html";
+	id: "curl" | "ts" | "embed" | "direct" | "cli";
 	label: string;
 	code: string;
 };
 
-export const CREATE_VIDEO: readonly CodeSample[] = [
+const CREATE_VIDEO: readonly CodeSample[] = [
 	{
 		id: "curl",
 		label: "curl",
@@ -150,14 +194,7 @@ const { data } = await res.json();`,
 	},
 ];
 
-export const CREATE_VIDEO_RESPONSE = `{
-  "data": {
-    "id": "${SAMPLE_ID}",
-    "status": "processing"
-  }
-}`;
-
-export const GET_VIDEO: readonly CodeSample[] = [
+const GET_VIDEO: readonly CodeSample[] = [
 	{
 		id: "curl",
 		label: "curl",
@@ -189,6 +226,33 @@ export const GET_VIDEO_RESPONSE = `{
   }
 }`;
 
+export const VIDEO_FLOW: readonly CodeSample[] = [
+	{
+		id: "curl",
+		label: "curl",
+		code: `${CREATE_VIDEO[0]?.code}
+
+${GET_VIDEO[0]?.code}`,
+	},
+	{
+		id: "ts",
+		label: "TypeScript",
+		code: `const created = await fetch("${API_BASE}/videos", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer csk_...",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ url: "https://example.com/video.mp4" }),
+}).then((res) => res.json());
+
+const video = await fetch(
+  \`${API_BASE}/videos/\${created.data.id}\`,
+  { headers: { Authorization: "Bearer csk_..." } },
+).then((res) => res.json());`,
+	},
+];
+
 export const CREATE_TRANSCRIPT: readonly CodeSample[] = [
 	{
 		id: "curl",
@@ -214,21 +278,18 @@ const { data } = await res.json();`,
 	},
 ];
 
-export const EMBED: readonly CodeSample[] = [
+export const PLAYER: readonly CodeSample[] = [
 	{
-		id: "html",
+		id: "embed",
 		label: "Cap player",
 		code: `<iframe
   src="https://cap.so/embed/${SAMPLE_ID}"
   allowfullscreen
 ></iframe>`,
 	},
-];
-
-export const DIRECT: readonly CodeSample[] = [
 	{
-		id: "html",
-		label: "Your own player",
+		id: "direct",
+		label: "Your player",
 		code: `<video
   controls
   src="${PLAYBACK.mp4}"
@@ -237,36 +298,42 @@ export const DIRECT: readonly CodeSample[] = [
 	},
 ];
 
+export const AGENT_COMMANDS: readonly CodeSample[] = [
+	{
+		id: "cli",
+		label: "Cap CLI",
+		code: `cap developers create "Acme"
+cap developers keys rotate <app>
+cap developers videos list <app>
+cap developers credits purchase <app> --amount-cents 2000
+cap mcp serve`,
+	},
+];
+
 export const VIDEO_OUTPUTS = [
 	{
 		name: "Adaptive HLS",
-		detail: "Renditions from 360p up to 4K, never above the source resolution.",
+		detail: "Five renditions from 360p to 4K, never above the source.",
 	},
 	{
 		name: "MP4",
-		detail: "A single file for downloads, previews and simple players.",
+		detail: "One file for downloads and simple players.",
 	},
 	{
 		name: "Thumbnail",
-		detail: "Ready for your poster frames and listings.",
+		detail: "A poster frame for listings and previews.",
 	},
 	{
-		name: "Transcript and captions",
-		detail: "Generated automatically, with captions as WebVTT.",
+		name: "Transcript",
+		detail: "Generated for every video, with WebVTT captions.",
 	},
 	{
 		name: "Signed webhooks",
-		detail: "Know the moment a video is ready or a transcript completes.",
+		detail: "Sent the moment a video or transcript is ready.",
 	},
 ] as const;
 
-export const LADDER = [
-	{ label: "4K", scale: 1 },
-	{ label: "1440p", scale: 0.86 },
-	{ label: "1080p", scale: 0.72 },
-	{ label: "720p", scale: 0.58 },
-	{ label: "360p", scale: 0.44 },
-] as const;
+export const LADDER = ["4K", "1440p", "1080p", "720p", "360p"] as const;
 
 export const UPLOAD_SOURCES = [
 	"the dashboard",
@@ -308,7 +375,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "Is Cap Infra compliant for sensitive video?",
 		answer:
-			"Cap is SOC 2 Type II, ISO 27001 and HIPAA compliant, and a BAA is available. Cap Infra runs on Cap's own GPUs, the same pipeline that processes every Cap recording.",
+			"Cap is SOC 2 Type II, ISO 27001 and HIPAA compliant, and a BAA is available. Cap is open source, and the pipeline runs on Cap's own GPUs.",
 	},
 ];
 

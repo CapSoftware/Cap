@@ -1,31 +1,44 @@
 import { classNames } from "@cap/utils/helpers";
-import { DM_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import type { ReactNode } from "react";
 import { CodePanel } from "./CodePanel";
 import type { CodeSample } from "./content";
 import { highlight } from "./highlight";
 import { BODY, H_SECTION } from "./theme";
 
-export const infraMono = DM_Mono({
+export const infraSans = Geist({
+	subsets: ["latin"],
+	weight: ["400", "500"],
+	display: "swap",
+	variable: "--font-infra-sans",
+});
+
+export const infraMono = Geist_Mono({
 	subsets: ["latin"],
 	weight: ["400"],
 	display: "swap",
-	variable: "--font-ht-mono",
+	preload: false,
+	variable: "--font-infra-mono",
 });
 
 export const Code = ({
 	samples,
 	response,
+	responseLabel,
 	label,
+	group,
 	className,
 }: {
 	samples: readonly CodeSample[];
 	response?: string;
+	responseLabel?: string;
 	label: string;
+	group?: string;
 	className?: string;
 }) => (
 	<CodePanel
 		label={label}
+		group={group}
 		className={className}
 		tabs={samples.map((sample) => ({
 			id: sample.id,
@@ -34,6 +47,7 @@ export const Code = ({
 			content: highlight(sample.code),
 		}))}
 		response={response ? highlight(response) : undefined}
+		responseLabel={responseLabel}
 	/>
 );
 
@@ -51,13 +65,13 @@ export const SectionHeading = ({
 	<div className={className}>
 		<h2
 			id={id}
-			className={`${H_SECTION} scroll-mt-24 text-balance text-[clamp(32px,4vw,50px)]`}
+			className={`${H_SECTION} m-0 text-balance text-[clamp(26px,2.7vw,34px)]`}
 		>
 			{title}
 		</h2>
 		{children ? (
 			<div
-				className={`${BODY} mt-5 max-w-[500px] text-pretty text-[16px] leading-[1.6] sm:text-[17px] [&_p]:leading-[1.6]`}
+				className={`${BODY} mt-4 max-w-[440px] text-pretty text-[15.5px] leading-[1.6] [&_p]:m-0 [&_p]:leading-[1.6]`}
 			>
 				{children}
 			</div>
@@ -76,11 +90,8 @@ export const Section = ({
 }) => (
 	<section
 		id={id}
-		className={classNames(
-			"scroll-mt-16 border-t border-[rgba(236,232,225,0.07)] px-5 py-20 lg:py-28",
-			className,
-		)}
+		className={classNames("scroll-mt-14 px-5 sm:px-8", className)}
 	>
-		<div className="mx-auto max-w-[1160px]">{children}</div>
+		<div className="mx-auto max-w-[1120px]">{children}</div>
 	</section>
 );
