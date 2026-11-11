@@ -290,12 +290,15 @@ export async function completeDeveloperVideoUpload(
 
 		const outcome = await db().transaction(async (tx) => {
 			const [locked] = await tx
-				.select({ duration: developerVideos.duration })
+				.select({
+					duration: developerVideos.duration,
+					deletedAt: developerVideos.deletedAt,
+				})
 				.from(developerVideos)
 				.where(eq(developerVideos.id, video.id))
 				.limit(1)
 				.for("update");
-			if (!locked) return { state: "missing" as const };
+			if (!locked || locked.deletedAt) return { state: "missing" as const };
 			if (locked.duration !== null) return { state: "superseded" as const };
 
 			const debit =
@@ -333,12 +336,12 @@ export async function completeDeveloperVideoUpload(
 			};
 		});
 
+		kept = outcome.state === "stored";
 		if (outcome.state === "missing") return NOT_FOUND;
 		if (outcome.state === "insufficient") return INSUFFICIENT;
 
 		const completed = await findVideo(appId, video.id);
 		if (!completed) return NOT_FOUND;
-		kept = outcome.state === "stored";
 		return {
 			ok: true,
 			video: completed,

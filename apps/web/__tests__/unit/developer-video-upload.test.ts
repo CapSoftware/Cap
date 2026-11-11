@@ -25,6 +25,7 @@ const context = vi.hoisted(() => ({
 		fps: number;
 	},
 	probedUrls: [] as string[],
+	onProbe: null as null | (() => void),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -83,6 +84,7 @@ vi.mock("@/lib/media-client", () => ({
 	isMediaServerConfigured: () => context.mediaServer,
 	probeVideoViaMediaServer: async (url: string) => {
 		context.probedUrls.push(url);
+		context.onProbe?.();
 		if (!context.probe) throw new Error("probe unavailable");
 		return context.probe;
 	},
@@ -137,6 +139,7 @@ beforeEach(() => {
 	context.mediaServer = true;
 	context.probe = { duration: 120, width: 1920, height: 1080, fps: 30 };
 	context.probedUrls = [];
+	context.onProbe = null;
 	fake().seed(developerCreditAccounts, {
 		id: "account-1",
 		appId: "app-1",
@@ -423,6 +426,23 @@ describe("completing a developer video upload", () => {
 			code: "file_too_large",
 		});
 		expect(context.objects.size).toBe(0);
+	});
+
+	it("charges nothing for a video deleted while it was completing", async () => {
+		const id = await createAndUpload();
+		context.onProbe = () => {
+			const row = videos()[0];
+			if (row) row.deletedAt = new Date();
+		};
+
+		expect(await completeDeveloperVideoUpload("app-1", id, {})).toMatchObject({
+			ok: false,
+			status: 404,
+		});
+		expect(ledger()).toHaveLength(0);
+		expect(account()?.balanceMicroCredits).toBe(1_000_000);
+		expect(context.objects.size).toBe(0);
+		expect(videos()[0]?.duration).toBeNull();
 	});
 
 	it("does not complete another app's video", async () => {
