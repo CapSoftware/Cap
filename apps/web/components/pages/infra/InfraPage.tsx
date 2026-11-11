@@ -1,3 +1,4 @@
+import { Compare } from "./Compare";
 import { Faq } from "./Faq";
 import { FinalCta } from "./FinalCta";
 import { Hero } from "./Hero";
@@ -9,8 +10,9 @@ import { Video } from "./Video";
 export const InfraPage = () => (
 	<main>
 		<Hero />
-		<Video />
+		<Compare />
 		<Performance />
+		<Video />
 		<Platform />
 		<Pricing />
 		<Faq />
