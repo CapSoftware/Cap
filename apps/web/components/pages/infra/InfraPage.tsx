@@ -1,3 +1,4 @@
+import { Agent } from "./Agent";
 import { Compare } from "./Compare";
 import { Faq } from "./Faq";
 import { FinalCta } from "./FinalCta";
@@ -10,6 +11,7 @@ import { Video } from "./Video";
 export const InfraPage = () => (
 	<main>
 		<Hero />
+		<Agent />
 		<Compare />
 		<Performance />
 		<Video />
