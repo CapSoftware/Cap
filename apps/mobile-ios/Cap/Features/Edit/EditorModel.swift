@@ -348,6 +348,7 @@ final class EditorModel {
 
     func togglePlay() {
         if rebuildPending {
+            if !isPlaying, outputTime >= timeline.outputDuration - 0.05 { outputTime = 0 }
             isPlaying.toggle()
             return
         }
