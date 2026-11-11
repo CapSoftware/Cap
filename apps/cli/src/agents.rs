@@ -17,15 +17,22 @@ const BUNDLED_SKILL: &str = include_str!("../skill/cap/SKILL.md");
 static CAP_DEMO_SKILL: include_dir::Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/skill/cap-demo");
 
+// The cap-trim companion skill ships the same way.
+static CAP_TRIM_SKILL: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/skill/cap-trim");
+
 // Flatten every embedded file (recursively) so each becomes its own install
 // change. include_dir gives direct files via `files()` and nested dirs via
 // `dirs()`; file paths are already relative to the embedded root.
-fn collect_demo_files<'a>(dir: &'a include_dir::Dir<'a>, out: &mut Vec<&'a include_dir::File<'a>>) {
+fn collect_skill_files<'a>(
+    dir: &'a include_dir::Dir<'a>,
+    out: &mut Vec<&'a include_dir::File<'a>>,
+) {
     for file in dir.files() {
         out.push(file);
     }
     for sub in dir.dirs() {
-        collect_demo_files(sub, out);
+        collect_skill_files(sub, out);
     }
 }
 
@@ -125,6 +132,57 @@ fn cap_demo_skill_dir(target: AgentTarget) -> Result<PathBuf, String> {
         AgentTarget::Claude => home.join(".claude/skills/cap-demo"),
         AgentTarget::Cursor => home.join(".cursor/skills/cap-demo"),
     })
+}
+
+fn cap_trim_skill_dir(target: AgentTarget) -> Result<PathBuf, String> {
+    let home = home_dir()?;
+    Ok(match target {
+        AgentTarget::Codex => std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"))
+            .join("skills/cap-trim"),
+        AgentTarget::Claude => home.join(".claude/skills/cap-trim"),
+        AgentTarget::Cursor => home.join(".cursor/skills/cap-trim"),
+    })
+}
+
+/// One install change per embedded file of a companion skill.
+fn companion_skill_changes(
+    name: &str,
+    dir: PathBuf,
+    files: &include_dir::Dir<'static>,
+) -> Result<Vec<PlannedChange>, String> {
+    let mut embedded = Vec::new();
+    collect_skill_files(files, &mut embedded);
+    embedded.sort_by(|a, b| a.path().cmp(b.path()));
+
+    let mut changes = Vec::new();
+    for file in embedded {
+        let relative = file.path();
+        let dest = dir.join(relative);
+        let expected = read_optional(&dest)?;
+        let bytes = file.contents();
+        let action = if expected.as_deref() == Some(bytes) {
+            "unchanged"
+        } else if expected.is_some() {
+            "replace"
+        } else {
+            "create"
+        };
+        let content = (action != "unchanged").then(|| bytes.to_vec());
+        changes.push(PlannedChange {
+            component: "skill",
+            path: dest,
+            action,
+            value: json!({
+                "name": name,
+                "file": relative.to_string_lossy(),
+            }),
+            expected,
+            content,
+        });
+    }
+    Ok(changes)
 }
 
 fn mcp_path(target: AgentTarget) -> Result<PathBuf, String> {
@@ -293,36 +351,17 @@ impl InstallArgs {
                 content,
             });
 
-            // Ship the cap-demo companion skill as one change per embedded file.
-            let demo_dir = cap_demo_skill_dir(self.target)?;
-            let mut demo_files = Vec::new();
-            collect_demo_files(&CAP_DEMO_SKILL, &mut demo_files);
-            demo_files.sort_by(|a, b| a.path().cmp(b.path()));
-            for file in demo_files {
-                let relative = file.path();
-                let dest = demo_dir.join(relative);
-                let expected = read_optional(&dest)?;
-                let bytes = file.contents();
-                let action = if expected.as_deref() == Some(bytes) {
-                    "unchanged"
-                } else if expected.is_some() {
-                    "replace"
-                } else {
-                    "create"
-                };
-                let content = (action != "unchanged").then(|| bytes.to_vec());
-                changes.push(PlannedChange {
-                    component: "skill",
-                    path: dest,
-                    action,
-                    value: json!({
-                        "name": "cap-demo",
-                        "file": relative.to_string_lossy(),
-                    }),
-                    expected,
-                    content,
-                });
-            }
+            // Ship the companion skills as one change per embedded file.
+            changes.extend(companion_skill_changes(
+                "cap-demo",
+                cap_demo_skill_dir(self.target)?,
+                &CAP_DEMO_SKILL,
+            )?);
+            changes.extend(companion_skill_changes(
+                "cap-trim",
+                cap_trim_skill_dir(self.target)?,
+                &CAP_TRIM_SKILL,
+            )?);
         }
         if self.includes_mcp() {
             let path = mcp_path(self.target)?;
