@@ -58,7 +58,7 @@ jobs:
         timeout-minutes: 6
         run: |
           New-Item -ItemType Directory -Force C:\work | Out-Null
-          foreach ($v in @("062", "nightly")) {
+          foreach ($v in @("062")) {
             $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap-cli.exe")[0].FullName
             if (-not $cli) { $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap.exe")[0].FullName }
             Write-Host "== $v CLI $cli"
@@ -66,7 +66,7 @@ jobs:
             $targets = & $cli targets screens 2>&1 | Out-String
             $screen = [regex]::Match($targets, "id:\s*(\d+)").Groups[1].Value
             Write-Host "screen=$screen"
-            $p = Start-Process -FilePath $cli -ArgumentList @("record", "--screen", $screen, "--duration", "8", "--path", "C:\work\rec$v.cap") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "C:\work\rec$v.out" -RedirectStandardError "C:\work\rec$v.err"
+            $p = Start-Process -FilePath $cli -ArgumentList @("record", "--screen", $screen, "--duration", "4", "--path", "C:\work\rec$v.cap") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "C:\work\rec$v.out" -RedirectStandardError "C:\work\rec$v.err"
             Write-Host ("record $v exit=0x{0:X8}" -f $p.ExitCode)
             Get-Content "C:\work\rec$v.out" -Tail 15
             Get-Content "C:\work\rec$v.err" -Tail 25
@@ -74,37 +74,8 @@ jobs:
           }
           exit 0
 
-      - name: CLI exports
-        timeout-minutes: 20
-        run: |
-          New-Item -ItemType Directory -Force C:\out | Out-Null
-          $cases = @(
-            @{ n = "default"; a = @() },
-            @{ n = "1080p60max"; a = @("--resolution", "1920x1080", "--fps", "60", "--quality", "maximum") },
-            @{ n = "720p30web"; a = @("--resolution", "1280x720", "--fps", "30", "--quality", "web") },
-            @{ n = "gif"; a = @("--format", "gif") }
-          )
-          foreach ($v in @("062", "nightly")) {
-            $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap-cli.exe")[0].FullName
-            foreach ($src in @("062", "nightly")) {
-              $proj = "C:\work\rec$src.cap"
-              if (-not (Test-Path "$proj\recording-meta.json")) { Write-Host "skip $src project, not recorded"; continue }
-              foreach ($c in $cases) {
-                $ext = if ($c.n -eq "gif") { "gif" } else { "mp4" }
-                $out = "C:\out\cli-$v-from$src-$($c.n).$ext"
-                $cliArgs = @("export", $proj, "--output", $out) + $c.a
-                $sw = [Diagnostics.Stopwatch]::StartNew()
-                $p = Start-Process -FilePath $cli -ArgumentList $cliArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$out.out" -RedirectStandardError "$out.err"
-                $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
-                Write-Host ("RESULT cli app={0} project={1} case={2} exit=0x{3:X8} size={4} secs={5:N1}" -f $v, $src, $c.n, $p.ExitCode, $size, $sw.Elapsed.TotalSeconds)
-                if ($p.ExitCode -ne 0) { Get-Content "$out.err" -Tail 20; Get-Content "$out.out" -Tail 5 }
-              }
-            }
-          }
-          exit 0
-
       - name: GUI editor exports
-        timeout-minutes: 25
+        timeout-minutes: 40
         run: |
           foreach ($v in @("062", "nightly")) {
             foreach ($kind in @("mp4", "gif")) {
@@ -123,7 +94,7 @@ jobs:
               $env:CAP_GPUI_AUTO_EDITOR = "C:\work\rec062.cap"
               $env:CAP_GPUI_AUTO_EXPORT = $out
               $p = Start-Process -FilePath $exe -PassThru
-              $deadline = (Get-Date).AddSeconds(240)
+              $deadline = (Get-Date).AddSeconds(480)
               $state = "timeout"
               while ((Get-Date) -lt $deadline) {
                 if ($p.HasExited) { $state = "exited"; break }
@@ -139,6 +110,25 @@ jobs:
             }
           }
           Remove-Item Env:CAP_GPUI_AUTO_EXPORT, Env:CAP_GPUI_AUTO_EDITOR, Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
+          exit 0
+
+      - name: CLI exit crash under cdb
+        timeout-minutes: 20
+        run: |
+          New-Item -ItemType Directory -Force C:\out | Out-Null
+          $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
+          Write-Host "cdb exists=$(Test-Path $cdb)"
+          foreach ($v in @("nightly", "062")) {
+            $cli = "C:\cap$v\cap-cli.exe"
+            foreach ($i in 1..2) {
+              $out = "C:\out\cdb-$v-$i.mp4"
+              $cmd = 'sxe -c2 "r; kn 40; lm; q" av; sxd -c "" ld; g'
+              $p = Start-Process -FilePath $cdb -ArgumentList @("-G", "-lines", "-c", "`"$cmd`"", $cli, "export", "C:\work\rec062.cap", "--output", $out) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$out.cdb" -RedirectStandardError "$out.err"
+              $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
+              Write-Host ("RESULT cdb app={0} run={1} exit=0x{2:X8} size={3}" -f $v, $i, $p.ExitCode, $size)
+              Select-String -Path "$out.cdb" -Pattern "Access violation|second chance|^[0-9a-f]{2} [0-9a-f`]+ [0-9a-f`]+ |Exported video|ExitProcess|exit code" | Select-Object -First 50 | ForEach-Object { $_.Line }
+            }
+          }
           exit 0
 
       - name: Default log directory and dumps
@@ -159,6 +149,7 @@ jobs:
           name: evidence-${{ matrix.runner }}
           path: |
             C:\out\*.err
+            C:\out\*.cdb
             C:\out\*.out
             C:\work\*.out
             C:\work\*.err
