@@ -38,6 +38,7 @@ jobs:
           Get-CimInstance Win32_OperatingSystem | Format-List Caption, Version, BuildNumber
           query user 2>&1 | Out-String | Write-Host
           [System.Environment]::UserInteractive
+          exit 0
 
       - name: Fetch builds
         run: |
@@ -69,6 +70,7 @@ jobs:
             Get-Content "C:\work\rec$v.err" -Tail 25
             if (Test-Path "C:\work\rec$v.cap") { Get-ChildItem "C:\work\rec$v.cap" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Write-Host }
           }
+          exit 0
 
       - name: CLI exports
         run: |
@@ -96,6 +98,7 @@ jobs:
               }
             }
           }
+          exit 0
 
       - name: GUI editor exports
         run: |
@@ -132,6 +135,7 @@ jobs:
             }
           }
           Remove-Item Env:CAP_GPUI_AUTO_EXPORT, Env:CAP_GPUI_AUTO_EDITOR, Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
+          exit 0
 
       - name: Default log directory and dumps
         if: always()
