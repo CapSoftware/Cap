@@ -138,6 +138,60 @@ describe("Cap selection keyboard shortcuts", () => {
 		},
 	);
 
+	it.each(["dialog", "alertdialog"])(
+		"ignores Delete and Backspace on a button inside a %s",
+		(role) => {
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", role);
+			const button = document.createElement("button");
+			dialog.append(button);
+			container.append(dialog);
+			button.focus();
+			for (const key of ["Backspace", "Delete"]) {
+				const event = new KeyboardEvent("keydown", {
+					key,
+					bubbles: true,
+					cancelable: true,
+				});
+				button.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+			}
+			expect(mocks.mutate).not.toHaveBeenCalled();
+		},
+	);
+
+	it("ignores Backspace in a contenteditable element", () => {
+		const editor = document.createElement("div");
+		editor.contentEditable = "true";
+		Object.defineProperty(editor, "isContentEditable", { value: true });
+		editor.tabIndex = 0;
+		container.append(editor);
+		editor.focus();
+		editor.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Backspace",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+		expect(mocks.mutate).not.toHaveBeenCalled();
+	});
+
+	it("deletes once when Delete is held down", () => {
+		selection.focus();
+		for (const repeat of [false, true, true]) {
+			selection.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "Delete",
+					repeat,
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		}
+		expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith([data[0]?.id]);
+	});
+
 	it.each(["Backspace", "Delete"])(
 		"still deletes the selected Cap with %s outside editing controls",
 		(key) => {
