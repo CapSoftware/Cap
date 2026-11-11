@@ -30,6 +30,7 @@ export const DEVELOPER_VIDEO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 export const DEVELOPER_VIDEO_MAX_DURATION_SECONDS = 4 * 60 * 60;
 export const DEVELOPER_VIDEO_MIN_BALANCE_MICRO_CREDITS = 5_000;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
+const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
 export type DeveloperVideoFailure = {
 	ok: false;
@@ -91,7 +92,10 @@ export function developerVideoBilling(input: {
 		input.measuredSeconds !== null
 			? input.measuredSeconds
 			: Math.max(
-					input.claimedSeconds ?? 0,
+					Math.min(
+						input.claimedSeconds ?? 0,
+						input.totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
+					),
 					input.totalBytes / BILLED_BYTES_PER_SECOND,
 				);
 	const billingSeconds = Math.min(

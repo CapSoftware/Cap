@@ -167,6 +167,33 @@ describe("developer video billing", () => {
 			developerVideoBilling({
 				measuredSeconds: null,
 				claimedSeconds: 600,
+				totalBytes: 6_000_000,
+			}).billingSeconds,
+		).toBe(600);
+	});
+
+	it("bounds a claim the file is too small to hold", () => {
+		expect(
+			developerVideoBilling({
+				measuredSeconds: null,
+				claimedSeconds: 4 * 3600,
+				totalBytes: 30_000,
+			}),
+		).toEqual({ billingSeconds: 30, microCredits: 2_500 });
+		expect(
+			developerVideoBilling({
+				measuredSeconds: null,
+				claimedSeconds: 600,
+				totalBytes: 1_000,
+			}).billingSeconds,
+		).toBe(1);
+	});
+
+	it("never bounds a measured length by the file size", () => {
+		expect(
+			developerVideoBilling({
+				measuredSeconds: 600,
+				claimedSeconds: null,
 				totalBytes: 1_000,
 			}).billingSeconds,
 		).toBe(600);
