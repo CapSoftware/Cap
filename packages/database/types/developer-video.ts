@@ -53,6 +53,7 @@ export interface DeveloperVideoProcessingState {
 	hls: DeveloperVideoPartState;
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;
+	unavailableChecks: number;
 	poster: { output: string } | null;
 	bytes: {
 		source: number;

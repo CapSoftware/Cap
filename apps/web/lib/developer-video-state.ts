@@ -16,7 +16,12 @@ const HLS_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 const UNCONFIRMED_START_MS = 2 * 60 * 1000;
 
 export type DeveloperVideoPartOutcome =
-	| { type: "complete"; bytes: number; posterBytes?: number }
+	| {
+			type: "complete";
+			bytes: number;
+			posterBytes?: number;
+			duration?: number;
+	  }
 	| { type: "failed"; reason: string }
 	| { type: "unavailable"; reason: string; now: number };
 
@@ -37,6 +42,7 @@ export function createDeveloperVideoProcessingState(input: {
 		hls: { state: "pending" },
 		mp4: { state: "pending" },
 		attempts: { hls: 0, mp4: 0 },
+		unavailableChecks: 0,
 		poster: null,
 		bytes: { source: 0, hls: 0, mp4: 0, poster: 0 },
 	};
@@ -128,6 +134,10 @@ export function settlePart(
 		return {
 			...state,
 			[part]: { state: "complete", output: token },
+			probe:
+				state.probe && state.probe.duration === null && outcome.duration
+					? { ...state.probe, duration: outcome.duration }
+					: state.probe,
 			poster: state.poster ?? (outcome.posterBytes ? { output: token } : null),
 			bytes: {
 				...state.bytes,
@@ -137,13 +147,19 @@ export function settlePart(
 		};
 	}
 	if (outcome.type === "unavailable") {
+		const checks = state.unavailableChecks + 1;
 		return {
 			...state,
 			[part]: {
 				state: "unavailable",
 				reason: developerVideoFailureReason(outcome.reason),
-				retryAt: outcome.now + hlsRetryDelayMs(state.attempts[part]),
+				retryAt: outcome.now + hlsRetryDelayMs(checks),
 			},
+			attempts: {
+				...state.attempts,
+				[part]: Math.max(0, state.attempts[part] - 1),
+			},
+			unavailableChecks: checks,
 		};
 	}
 	return {

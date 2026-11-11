@@ -306,6 +306,103 @@ describe("developer video webhook", () => {
 	});
 });
 
+describe("developer video measured facts", () => {
+	const unmeasured = (overrides = {}) =>
+		developerVideo({
+			duration: 999,
+			processing: processingState({
+				probe: { duration: null, width: 1920, height: 1080, fps: null },
+				hls: runningPart("t-hls"),
+				mp4: runningPart("t-mp4"),
+				...overrides,
+			}),
+		});
+
+	it("takes the duration from the encoded MP4 when the source had none", async () => {
+		mocks.store.video = unmeasured();
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", metadata: { duration: 40.8 } },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(video().processing?.mp4.state).toBe("complete");
+		expect(video().processing?.probe?.duration).toBe(40.8);
+		expect(video()).toMatchObject({ duration: 40.8, fps: null });
+	});
+
+	it("takes the duration from the stored rendition playlist when the source had none", async () => {
+		mocks.store.video = unmeasured();
+		mocks.readText.mockImplementation(async (key: string) =>
+			key.endsWith("/master.m3u8")
+				? master
+				: "#EXTM3U\n#EXTINF:4.000000,\n1080p.m4s\n#EXTINF:2.500000,\n1080p.m4s\n",
+		);
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", ladder },
+			"hls",
+			"t-hls",
+		);
+
+		expect(mocks.readText).toHaveBeenCalledWith(
+			`${ENCODE}/t-hls/hls/1080p.m3u8`,
+		);
+		expect(video().processing?.hls.state).toBe("complete");
+		expect(video().duration).toBe(6.5);
+	});
+
+	it("does not accept an output it cannot measure, so a ready video never keeps a declared duration", async () => {
+		mocks.store.video = unmeasured({
+			hls: { state: "failed", reason: "encoder crashed" },
+			attempts: { hls: 2, mp4: 2 },
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete" },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(video().processing?.mp4).toEqual({
+			state: "failed",
+			reason: "Encoded output has no measurable duration",
+		});
+		expect(video().status).toBe("errored");
+	});
+
+	it("restores measured values when the row is written again after processing", async () => {
+		mocks.store.video = developerVideo({
+			status: "ready",
+			duration: 999,
+			width: 111,
+			height: 222,
+			fps: 5,
+			processing: processingState({
+				hls: { state: "complete", output: "hls-out" },
+				mp4: { state: "complete", output: "mp4-out" },
+			}),
+		});
+
+		expect(
+			await claimDeveloperVideoProcessing("video-1", { uploadCompleted: true }),
+		).toBeNull();
+		expect(video()).toMatchObject({
+			status: "ready",
+			duration: 12,
+			width: 1920,
+			height: 1080,
+			fps: 30,
+		});
+
+		mocks.store.updates = [];
+		await claimDeveloperVideoProcessing("video-1", { uploadCompleted: true });
+
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+});
+
 describe("developer video dispatch", () => {
 	it("claims a completed upload and gives it a playback id", async () => {
 		mocks.store.video = developerVideo({
@@ -458,6 +555,8 @@ describe("developer video dispatch", () => {
 			"unavailable",
 		);
 		expect(video().processing?.hls).toMatchObject({ state: "unavailable" });
+		expect(video().processing?.attempts.hls).toBe(0);
+		expect(video().processing?.unavailableChecks).toBe(1);
 		expect(video().status).toBe("processing");
 	});
 

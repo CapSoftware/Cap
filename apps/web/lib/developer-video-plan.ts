@@ -208,6 +208,15 @@ export function hlsMasterVariantPlaylists(master: string): string[] {
 	return playlists;
 }
 
+export function hlsPlaylistDuration(playlist: string): number {
+	let seconds = 0;
+	for (const line of playlist.split(/\r?\n/)) {
+		const match = line.trim().match(/^#EXTINF:([0-9.]+)/);
+		if (match?.[1]) seconds += Number(match[1]);
+	}
+	return seconds;
+}
+
 export function ladderMatchesMaster(
 	renditions: DeveloperVideoRendition[],
 	master: string,

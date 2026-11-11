@@ -178,6 +178,71 @@ describe("developer video processing state", () => {
 		).toBe("ready");
 	});
 
+	it("does not spend an encode attempt on an endpoint that is not there", () => {
+		const unavailable = (from = fresh(), now = 10_000) => {
+			const next = settlePart(running("hls", "t", from), "hls", "t", {
+				type: "unavailable",
+				reason: "not deployed",
+				now,
+			});
+			if (!next) throw new Error("part did not settle");
+			return next;
+		};
+		const once = unavailable();
+
+		expect(once.attempts.hls).toBe(0);
+		expect(once.unavailableChecks).toBe(1);
+
+		const retried = retryUnavailableHls(once);
+		if (!retried) throw new Error("hls was not retried");
+		const twice = unavailable(retried, 20_000);
+
+		expect(twice.attempts.hls).toBe(0);
+		expect(twice.hls).toMatchObject({
+			state: "unavailable",
+			retryAt: 20_000 + hlsRetryDelayMs(2),
+		});
+
+		const available = retryUnavailableHls(twice);
+		if (!available) throw new Error("hls was not retried");
+		const firstFailure = settlePart(
+			running("hls", "e1", available),
+			"hls",
+			"e1",
+			{ type: "failed", reason: "encoder crashed" },
+		);
+
+		expect(firstFailure?.hls).toEqual({ state: "pending" });
+
+		const secondFailure =
+			firstFailure &&
+			settlePart(running("hls", "e2", firstFailure), "hls", "e2", {
+				type: "failed",
+				reason: "encoder crashed",
+			});
+
+		expect(secondFailure?.hls).toEqual({
+			state: "failed",
+			reason: "encoder crashed",
+		});
+	});
+
+	it("takes the duration from the encoded output only when the probe had none", () => {
+		const settle = (probeDuration: number | null) =>
+			settlePart(
+				running("mp4", "t", {
+					...fresh(),
+					probe: { duration: probeDuration, width: 1280, height: 720, fps: 30 },
+				}),
+				"mp4",
+				"t",
+				{ type: "complete", bytes: 10, duration: 41.5 },
+			);
+
+		expect(settle(null)?.probe?.duration).toBe(41.5);
+		expect(settle(12)?.probe?.duration).toBe(12);
+	});
+
 	it("is errored with the reason when nothing could be produced", () => {
 		const failed = failUnfinishedParts(fresh(), "Uploaded file has no video");
 

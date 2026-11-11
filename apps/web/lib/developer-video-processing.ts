@@ -14,6 +14,7 @@ import {
 	DEVELOPER_VIDEO_MASTER_PLAYLIST,
 	developerVideoKeys,
 	developerVideoSourceExtension,
+	hlsPlaylistDuration,
 	ladderMatchesMaster,
 	parseDeveloperVideoLadder,
 	planDeveloperVideoEncode,
@@ -115,9 +116,19 @@ function probedColumns(
 	return {
 		width: probe.width,
 		height: probe.height,
+		fps: probe.fps,
 		...(probe.duration === null ? {} : { duration: probe.duration }),
-		...(probe.fps === null ? {} : { fps: probe.fps }),
 	};
+}
+
+function measuredColumnsToRestore(
+	video: DeveloperVideoRow,
+): DeveloperVideoUpdate | null {
+	const measured = probedColumns(video.processing?.probe ?? null);
+	const drifted = Object.entries(measured).some(
+		([column, value]) => video[column as keyof DeveloperVideoRow] !== value,
+	);
+	return drifted ? measured : null;
 }
 
 function processingUpdate(
@@ -179,7 +190,7 @@ export async function claimDeveloperVideoProcessing(
 			claimed = { action, encodeId: processing.encodeId };
 			return { processing };
 		}
-		return null;
+		return measuredColumnsToRestore(video);
 	});
 	return claimed;
 }
@@ -436,6 +447,27 @@ interface DeveloperVideoProgressPayload {
 	error?: unknown;
 	message?: unknown;
 	ladder?: unknown;
+	metadata?: unknown;
+}
+
+const UNMEASURED_OUTPUT = {
+	outcome: {
+		type: "failed" as const,
+		reason: "Encoded output has no measurable duration",
+	},
+};
+
+function positiveNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? value
+		: undefined;
+}
+
+function outputDuration(payload: DeveloperVideoProgressPayload) {
+	const metadata = payload.metadata;
+	return metadata && typeof metadata === "object" && "duration" in metadata
+		? positiveNumber(metadata.duration)
+		: undefined;
 }
 
 async function completedOutcome(
@@ -451,6 +483,7 @@ async function completedOutcome(
 	const keys = developerVideoKeys(video, processing.encodeId, token);
 	const poster = await headDeveloperVideoObject(keys.poster);
 	const posterBytes = poster?.bytes ?? 0;
+	const needsDuration = processing.probe?.duration == null;
 
 	if (part === "mp4") {
 		const output = await headDeveloperVideoObject(keys.mp4);
@@ -459,8 +492,15 @@ async function completedOutcome(
 				outcome: { type: "failed", reason: "Encoded MP4 was not stored" },
 			};
 		}
+		const duration = needsDuration ? outputDuration(payload) : undefined;
+		if (needsDuration && !duration) return UNMEASURED_OUTPUT;
 		return {
-			outcome: { type: "complete", bytes: output.bytes, posterBytes },
+			outcome: {
+				type: "complete",
+				bytes: output.bytes,
+				posterBytes,
+				duration,
+			},
 		};
 	}
 
@@ -481,8 +521,17 @@ async function completedOutcome(
 			},
 		};
 	}
+	let duration: number | undefined;
+	if (needsDuration) {
+		const top = ladder.renditions[0];
+		const playlist = top
+			? await readDeveloperVideoText(`${keys.hlsPrefix}${top.name}.m3u8`)
+			: null;
+		duration = positiveNumber(playlist ? hlsPlaylistDuration(playlist) : 0);
+		if (!duration) return UNMEASURED_OUTPUT;
+	}
 	return {
-		outcome: { type: "complete", bytes: ladder.bytes, posterBytes },
+		outcome: { type: "complete", bytes: ladder.bytes, posterBytes, duration },
 		renditions: ladder.renditions,
 	};
 }
