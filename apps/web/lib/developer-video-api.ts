@@ -1,0 +1,72 @@
+import type { developerVideos } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
+import {
+	DEVELOPER_VIDEO_MASTER_PLAYLIST,
+	DEVELOPER_VIDEO_MP4_FILE,
+	DEVELOPER_VIDEO_POSTER_FILE,
+} from "./developer-video-plan";
+
+type DeveloperVideoRow = typeof developerVideos.$inferSelect;
+
+export interface DeveloperVideoOutputs {
+	hls: boolean;
+	mp4: boolean;
+	poster: boolean;
+}
+
+export function developerVideoOutputs(
+	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
+): DeveloperVideoOutputs {
+	const processing = video.processing;
+	if (video.status !== "ready" || !video.playbackId || !processing) {
+		return { hls: false, mp4: false, poster: false };
+	}
+	return {
+		hls: processing.hls.state === "complete",
+		mp4: processing.mp4.state === "complete",
+		poster: processing.bytes.poster > 0,
+	};
+}
+
+export function developerPlaybackBaseUrl(): string {
+	const configured = serverEnv().INFRA_PLAYBACK_URL;
+	const base = configured || `${serverEnv().WEB_URL}/api/developer/playback`;
+	return base.replace(/\/+$/, "");
+}
+
+export function developerVideoPlaybackUrls(
+	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
+): { hlsUrl: string | null; mp4Url: string | null; posterUrl: string | null } {
+	const outputs = developerVideoOutputs(video);
+	const base = `${developerPlaybackBaseUrl()}/${video.playbackId}`;
+	return {
+		hlsUrl: outputs.hls ? `${base}/${DEVELOPER_VIDEO_MASTER_PLAYLIST}` : null,
+		mp4Url: outputs.mp4 ? `${base}/${DEVELOPER_VIDEO_MP4_FILE}` : null,
+		posterUrl: outputs.poster ? `${base}/${DEVELOPER_VIDEO_POSTER_FILE}` : null,
+	};
+}
+
+export function serializeDeveloperVideo(video: DeveloperVideoRow) {
+	const { processing: _processing, ...fields } = video;
+	return {
+		...fields,
+		renditions: video.renditions ?? [],
+		...developerVideoPlaybackUrls(video),
+	};
+}
+
+export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
+	return {
+		id: video.id,
+		duration: video.duration,
+		width: video.width,
+		height: video.height,
+		transcriptionStatus: video.transcriptionStatus,
+		ready: video.status === "ready",
+		status: video.status,
+		errorReason: video.errorReason,
+		playbackId: video.playbackId,
+		renditions: video.renditions ?? [],
+		...developerVideoPlaybackUrls(video),
+	};
+}
