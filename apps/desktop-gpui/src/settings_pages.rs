@@ -7221,6 +7221,16 @@ impl SettingsWindow {
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
         let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
+        let compatibility_message = if rule.actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::Notify { .. } | Action::RecognizeTextToClipboard
+            )
+        }) {
+            tr::settings::automations::compatibility_unsupported()
+        } else {
+            tr::settings::automations::compatibility_checked()
+        };
         if let Some(editor) = &self.pages.rule_editor {
             for (field, input) in &editor.fields {
                 if let Some(placeholder) = translated_placeholder(*field, rule) {
@@ -7445,7 +7455,7 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::compatibility_checked()),
+                        .child(compatibility_message),
                 )
             })
             .child(footer)

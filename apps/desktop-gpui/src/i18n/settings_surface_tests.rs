@@ -934,7 +934,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::title(), "Automations"),
         (
             tr::settings::automations::description(),
-            "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet.",
+            "Rules are shared with the Cap CLI. Cap runs enabled rules automatically.",
         ),
         (tr::settings::automations::templates_title(), "Templates"),
         (
@@ -988,11 +988,15 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::delete(), "Delete"),
         (
             tr::settings::automations::dangerous(),
-            "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust.",
+            "This automation runs commands or sends network requests with your permissions. Only use values you trust.",
         ),
         (
             tr::settings::automations::compatibility_checked(),
-            "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run.",
+            "Compatibility checked: every action in this automation runs in Cap. No actions were run.",
+        ),
+        (
+            tr::settings::automations::compatibility_unsupported(),
+            "Compatibility checked: notifications and text recognition don't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
         (
             tr::settings::automations::condition_never_matches(),
