@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Caps, type VideoData } from "@/app/(org)/dashboard/caps/Caps";
+import type { CapCardProps } from "@/app/(org)/dashboard/caps/components/CapCard/CapCard";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -45,17 +46,15 @@ vi.mock("@/app/(org)/dashboard/caps/components", () => ({
 }));
 vi.mock("@/app/(org)/dashboard/caps/components/CapCard/CapCard", () => ({
 	CapCard: ({
+		cap,
 		onSelectToggle,
 		isSelected,
-	}: {
-		onSelectToggle: () => void;
-		isSelected: boolean;
-	}) =>
+	}: Pick<CapCardProps, "cap" | "onSelectToggle" | "isSelected">) =>
 		createElement("button", {
 			type: "button",
 			"aria-label": "Select Cap",
 			"aria-pressed": isSelected,
-			onClick: onSelectToggle,
+			onClick: () => onSelectToggle?.(cap.id),
 		}),
 }));
 vi.mock("@/app/(org)/dashboard/caps/components/CapPagination", () => ({

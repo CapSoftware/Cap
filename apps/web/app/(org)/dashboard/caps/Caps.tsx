@@ -9,7 +9,7 @@ import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
@@ -71,6 +71,8 @@ export type VideoData = {
 	settings?: Partial<Record<ViewerSettingKey, boolean>> | null;
 }[];
 
+const moveLocation = { type: "personal" } as const;
+
 export const Caps = ({
 	data,
 	count,
@@ -94,7 +96,6 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
-	const moveLocation = { type: "personal" } as const;
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -106,7 +107,7 @@ export const Caps = ({
 		analyticsQuery.data || {};
 	const isLoadingAnalytics = analyticsEnabled && analyticsQuery.isLoading;
 
-	const handleCapSelection = (capId: Video.VideoId) => {
+	const handleCapSelection = useCallback((capId: Video.VideoId) => {
 		setSelectedCaps((prev) => {
 			const newSelection = prev.includes(capId)
 				? prev.filter((id) => id !== capId)
@@ -116,7 +117,7 @@ export const Caps = ({
 
 			return newSelection;
 		});
-	};
+	}, []);
 
 	const rpc = useRpcClient() as {
 		VideoDelete: (id: Video.VideoId) => Effect.Effect<void, unknown, never>;
@@ -190,6 +191,17 @@ export const Caps = ({
 		},
 		onError: (_error: unknown) => toast.error("Failed to delete cap"),
 	});
+
+	const handleDelete = useCallback(
+		(capId: Video.VideoId) => {
+			if (selectedCaps.length > 0) {
+				deleteCaps(selectedCaps);
+			} else {
+				deleteCap(capId);
+			}
+		},
+		[selectedCaps, deleteCaps, deleteCap],
+	);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -306,18 +318,12 @@ export const Caps = ({
 										key={video.id}
 										cap={video}
 										analytics={videoAnalytics ?? 0}
-										onDelete={() => {
-											if (selectedCaps.length > 0) {
-												deleteCaps(selectedCaps);
-											} else {
-												deleteCap(video.id);
-											}
-										}}
+										onDelete={handleDelete}
 										userId={user?.id}
 										isLoadingAnalytics={isLoadingAnalytics}
 										isSelected={selectedCaps.includes(video.id)}
 										anyCapSelected={anyCapSelected}
-										onSelectToggle={() => handleCapSelection(video.id)}
+										onSelectToggle={handleCapSelection}
 										canMove
 										moveLocation={moveLocation}
 										moveRootLabel="My Caps"
