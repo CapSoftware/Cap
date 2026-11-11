@@ -344,7 +344,7 @@ struct WorkerContext {
 
 struct FullOutputOutcome {
     evicted: Option<ConvertedFrame>,
-    dropped: Option<ConvertedFrame>,
+    rejected: Option<ConvertedFrame>,
 }
 
 fn try_send_frame(
@@ -368,24 +368,30 @@ fn handle_full_output(
     if matches!(drop_strategy, DropStrategy::DropNewest) {
         return FullOutputOutcome {
             evicted: None,
-            dropped: Some(frame),
+            rejected: Some(frame),
         };
     }
 
     match output_rx.try_recv() {
-        Ok(oldest) => FullOutputOutcome {
-            evicted: Some(oldest),
-            dropped: try_send_frame(output_tx, frame),
+        // With multiple workers, a delayed conversion can finish after newer
+        // frames were queued; put the newer frame back and drop the stale one.
+        Ok(queued) if queued.sequence > frame.sequence => FullOutputOutcome {
+            evicted: try_send_frame(output_tx, queued),
+            rejected: Some(frame),
+        },
+        Ok(queued) => FullOutputOutcome {
+            evicted: Some(queued),
+            rejected: try_send_frame(output_tx, frame),
         },
         // The consumer drained the queue between the failed send and this
         // receive, so the frame fits after all; retry rather than drop it.
         Err(flume::TryRecvError::Empty) => FullOutputOutcome {
             evicted: None,
-            dropped: try_send_frame(output_tx, frame),
+            rejected: try_send_frame(output_tx, frame),
         },
         Err(flume::TryRecvError::Disconnected) => FullOutputOutcome {
             evicted: None,
-            dropped: Some(frame),
+            rejected: Some(frame),
         },
     }
 }
@@ -444,7 +450,7 @@ fn worker_loop(ctx: WorkerContext) {
                                     rejected_frame,
                                 );
                                 for frame in
-                                    [outcome.evicted, outcome.dropped].into_iter().flatten()
+                                    [outcome.evicted, outcome.rejected].into_iter().flatten()
                                 {
                                     ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
                                     if let Some(ref pool) = ctx.frame_pool {
@@ -606,7 +612,20 @@ mod tests {
             handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
 
         assert_eq!(outcome.evicted.unwrap().sequence, 1);
-        assert!(outcome.dropped.is_none());
+        assert!(outcome.rejected.is_none());
+        assert_eq!(output_rx.recv().unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn drop_oldest_drops_a_stale_frame_instead_of_a_newer_queued_one() {
+        let (output_tx, output_rx) = flume::bounded(1);
+        output_tx.send(converted_frame(2)).unwrap();
+        let stale = rejected_by_full_queue(&output_tx, converted_frame(1));
+
+        let outcome = handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, stale);
+
+        assert!(outcome.evicted.is_none());
+        assert_eq!(outcome.rejected.unwrap().sequence, 1);
         assert_eq!(output_rx.recv().unwrap().sequence, 2);
     }
 
@@ -621,7 +640,7 @@ mod tests {
             handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
 
         assert!(outcome.evicted.is_none());
-        assert!(outcome.dropped.is_none());
+        assert!(outcome.rejected.is_none());
         assert_eq!(output_rx.recv().unwrap().sequence, 2);
     }
 
