@@ -7,10 +7,16 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { infraAppPath } from "@/lib/infra-routes";
+import {
+	isDefinitiveRejection,
+	partBytesFor,
+	retryAfterMs,
+} from "@/lib/infra-upload";
 import { Button, LIT, MONO, TEXT_LINK } from "./ui";
 
-const PART_BYTES = 16 * 1024 * 1024;
 const PART_ATTEMPTS = 3;
+const COMPLETE_ATTEMPTS = 3;
+const RATE_LIMIT_ATTEMPTS = 6;
 const SDK = "/api/developer/sdk/v1";
 
 class UploadError extends Error {
@@ -22,31 +28,69 @@ class UploadError extends Error {
 	}
 }
 
+const CANCELLED = "Upload cancelled";
+
 type Upload =
 	| { phase: "idle" }
-	| { phase: "working"; name: string; progress: number; label: string }
+	| {
+			phase: "working";
+			name: string;
+			progress: number;
+			label: string;
+			locked: boolean;
+	  }
 	| { phase: "failed"; message: string; needsCredits: boolean };
 
-async function call<T>(path: string, publicKey: string, body: unknown) {
-	const res = await fetch(`${SDK}${path}`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${publicKey}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify(body),
+function pause(ms: number, signal: AbortSignal) {
+	return new Promise<void>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(new UploadError(CANCELLED));
+			return;
+		}
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(new UploadError(CANCELLED));
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
 	});
-	const data = (await res.json().catch(() => ({}))) as T & {
-		error?: string;
-		message?: string;
-	};
-	if (!res.ok) {
-		throw new UploadError(
-			data.message ?? data.error ?? "The upload could not be started",
-			res.status,
-		);
+}
+
+async function call<T>(
+	path: string,
+	publicKey: string,
+	body: unknown,
+	signal?: AbortSignal,
+) {
+	for (let attempt = 1; ; attempt++) {
+		const res = await fetch(`${SDK}${path}`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${publicKey}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+			signal,
+		});
+		if (res.status === 429 && signal && attempt < RATE_LIMIT_ATTEMPTS) {
+			await pause(retryAfterMs(res.headers.get("Retry-After")), signal);
+			continue;
+		}
+		const data = (await res.json().catch(() => ({}))) as T & {
+			error?: string;
+			message?: string;
+		};
+		if (!res.ok) {
+			throw new UploadError(
+				data.message ?? data.error ?? "The upload could not be started",
+				res.status,
+			);
+		}
+		return data;
 	}
-	return data;
 }
 
 function readVideo(file: File) {
@@ -74,6 +118,10 @@ function readVideo(file: File) {
 					);
 					return;
 				}
+				if (!videoWidth || !videoHeight) {
+					reject(new UploadError("That file has no video in it."));
+					return;
+				}
 				resolve({ duration, width: videoWidth, height: videoHeight });
 			};
 			video.onerror = () => {
@@ -96,6 +144,10 @@ function putPart(
 	signal: AbortSignal,
 ) {
 	return new Promise<string>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(new UploadError(CANCELLED));
+			return;
+		}
 		const xhr = new XMLHttpRequest();
 		const abort = () => xhr.abort();
 		signal.addEventListener("abort", abort, { once: true });
@@ -108,9 +160,13 @@ function putPart(
 		};
 		xhr.onerror = () => {
 			signal.removeEventListener("abort", abort);
-			reject(new UploadError("The connection dropped during the upload"));
+			reject(
+				new UploadError(
+					"The file could not reach storage. Check your connection and try again.",
+				),
+			);
 		};
-		xhr.onabort = () => reject(new UploadError("Upload cancelled"));
+		xhr.onabort = () => reject(new UploadError(CANCELLED));
 		xhr.open("PUT", url);
 		xhr.send(part);
 	});
@@ -134,71 +190,107 @@ export function UploadDrop({
 	const start = async (file: File) => {
 		if (upload.phase === "working") return;
 		const abort = new AbortController();
+		const { signal } = abort;
 		controller.current = abort;
 		const name = file.name.replace(/\.[^.]+$/, "") || "Untitled";
-		const show = (progress: number, label: string) =>
-			setUpload({ phase: "working", name: file.name, progress, label });
+		const show = (progress: number, label: string, locked = false) =>
+			setUpload({ phase: "working", name: file.name, progress, label, locked });
+		const stopIfCancelled = () => {
+			if (signal.aborted) throw new UploadError(CANCELLED);
+		};
 		let videoId: string | null = null;
 		let uploadId: string | null = null;
+		let outcome: "open" | "unconfirmed" | "done" = "open";
 
 		try {
 			show(0, "Reading the file");
 			const meta = await readVideo(file);
+			stopIfCancelled();
 			const created = await call<{ videoId: string }>(
 				"/videos/create",
 				publicKey,
 				{ name: name.slice(0, 255) },
+				signal,
 			);
 			videoId = created.videoId;
 			const initiated = await call<{ uploadId: string }>(
 				"/upload/multipart/initiate",
 				publicKey,
 				{ videoId, contentType: file.type || "video/mp4" },
+				signal,
 			);
 			uploadId = initiated.uploadId;
 
+			const partBytes = partBytesFor(file.size);
 			const parts: { partNumber: number; etag: string; size: number }[] = [];
-			const total = Math.max(1, Math.ceil(file.size / PART_BYTES));
+			const total = Math.max(1, Math.ceil(file.size / partBytes));
 			for (let index = 0; index < total; index++) {
-				const blob = file.slice(index * PART_BYTES, (index + 1) * PART_BYTES);
-				const sent = index * PART_BYTES;
+				const blob = file.slice(index * partBytes, (index + 1) * partBytes);
+				const sent = index * partBytes;
 				let etag: string | null = null;
 				for (let attempt = 1; !etag; attempt++) {
-					if (abort.signal.aborted) throw new UploadError("Upload cancelled");
+					stopIfCancelled();
 					try {
 						const { presignedUrl } = await call<{ presignedUrl: string }>(
 							"/upload/multipart/presign-part",
 							publicKey,
 							{ videoId, uploadId, partNumber: index + 1 },
+							signal,
 						);
+						stopIfCancelled();
 						etag = await putPart(
 							presignedUrl,
 							blob,
 							(loaded) =>
 								show((sent + loaded) / Math.max(1, file.size), "Uploading"),
-							abort.signal,
+							signal,
 						);
 					} catch (error) {
-						if (abort.signal.aborted || attempt >= PART_ATTEMPTS) throw error;
+						if (signal.aborted || attempt >= PART_ATTEMPTS) throw error;
+						await pause(1000 * attempt, signal);
 					}
 				}
 				parts.push({ partNumber: index + 1, etag, size: blob.size });
 			}
 
-			show(1, "Finishing");
-			await call("/upload/multipart/complete", publicKey, {
-				videoId,
-				uploadId,
-				parts,
-				durationInSecs: meta.duration,
-				...(meta.width && meta.height
-					? { width: meta.width, height: meta.height }
-					: {}),
-			});
+			stopIfCancelled();
+			show(1, "Finishing", true);
+			outcome = "unconfirmed";
+			for (let attempt = 1; outcome !== "done"; attempt++) {
+				try {
+					await call("/upload/multipart/complete", publicKey, {
+						videoId,
+						uploadId,
+						parts,
+						durationInSecs: meta.duration,
+						width: meta.width,
+						height: meta.height,
+					});
+					outcome = "done";
+				} catch (error) {
+					const status = error instanceof UploadError ? error.status : 0;
+					if (isDefinitiveRejection(status)) {
+						outcome = "open";
+						throw error;
+					}
+					if (attempt >= COMPLETE_ATTEMPTS) throw error;
+					await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+				}
+			}
 			setUpload({ phase: "idle" });
 			toast.success(`Uploaded ${file.name}`);
 			router.refresh();
 		} catch (error) {
+			if (outcome === "unconfirmed") {
+				setUpload({
+					phase: "failed",
+					needsCredits: false,
+					message:
+						"The file is uploaded but the server has not confirmed it. Check the list below before trying again.",
+				});
+				router.refresh();
+				return;
+			}
 			if (videoId && uploadId) {
 				await call("/upload/multipart/abort", publicKey, {
 					videoId,
@@ -206,7 +298,7 @@ export function UploadDrop({
 				}).catch(() => {});
 			}
 			if (videoId) await deleteDeveloperVideo(appId, videoId).catch(() => {});
-			if (abort.signal.aborted) {
+			if (signal.aborted) {
 				setUpload({ phase: "idle" });
 				return;
 			}
@@ -290,6 +382,7 @@ export function UploadDrop({
 						<Button
 							variant="quiet"
 							size="sm"
+							disabled={upload.locked}
 							onClick={() => controller.current?.abort()}
 						>
 							Cancel

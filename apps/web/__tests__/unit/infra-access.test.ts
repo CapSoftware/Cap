@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const env = vi.hoisted(() => ({ NEXT_PUBLIC_IS_CAP: true as boolean }));
+const env = vi.hoisted(() => ({
+	NEXT_PUBLIC_IS_CAP: "true" as string | undefined,
+}));
 
 vi.mock("@cap/env", () => ({ buildEnv: env }));
 
@@ -8,7 +10,7 @@ import { canUseInfra } from "@/lib/infra-access";
 
 describe("Cap Infra preview access", () => {
 	beforeEach(() => {
-		env.NEXT_PUBLIC_IS_CAP = true;
+		env.NEXT_PUBLIC_IS_CAP = "true";
 	});
 
 	it("lets a preview account in, whatever the letter case", () => {
@@ -25,7 +27,9 @@ describe("Cap Infra preview access", () => {
 	});
 
 	it("stays open on self-hosted deployments", () => {
-		env.NEXT_PUBLIC_IS_CAP = false;
-		expect(canUseInfra("someone@example.com")).toBe(true);
+		for (const value of ["false", "", undefined]) {
+			env.NEXT_PUBLIC_IS_CAP = value;
+			expect(canUseInfra("someone@example.com")).toBe(true);
+		}
 	});
 });

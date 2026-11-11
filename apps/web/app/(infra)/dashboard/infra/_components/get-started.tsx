@@ -80,7 +80,9 @@ export function GetStarted({
 							: "Development apps accept this from anywhere, including your terminal."}{" "}
 						Then send the file with{" "}
 						<Endpoint>upload/multipart/initiate</Endpoint>,{" "}
-						<Endpoint>presign-part</Endpoint> and <Endpoint>complete</Endpoint>.
+						<Endpoint>presign-part</Endpoint> and <Endpoint>complete</Endpoint>,
+						passing the duration, width and height to{" "}
+						<Endpoint>complete</Endpoint>.
 					</StepNote>
 				</div>
 			</Step>

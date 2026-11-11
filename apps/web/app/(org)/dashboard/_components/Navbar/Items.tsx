@@ -75,7 +75,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const showDeveloperDashboard =
-		buildEnv.NEXT_PUBLIC_IS_CAP && canUseInfra(user.email);
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" && canUseInfra(user.email);
 	const showMigrationQueue =
 		buildEnv.NEXT_PUBLIC_IS_CAP &&
 		user.email.toLowerCase() === MESSENGER_ADMIN_EMAIL;
