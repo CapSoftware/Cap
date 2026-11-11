@@ -262,8 +262,10 @@ export const VIDEO_OUTPUTS = [
 
 export const LADDER = [
 	{ label: "4K", scale: 1 },
-	{ label: "1080p", scale: 0.74 },
-	{ label: "360p", scale: 0.46 },
+	{ label: "1440p", scale: 0.86 },
+	{ label: "1080p", scale: 0.72 },
+	{ label: "720p", scale: 0.58 },
+	{ label: "360p", scale: 0.44 },
 ] as const;
 
 export const UPLOAD_SOURCES = [

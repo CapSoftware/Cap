@@ -35,6 +35,10 @@ export const FinalCta = () => (
 					</Link>
 				</div>
 				<p className={`${MUTED} mt-8 text-[13.5px] leading-[1.5]`}>
+					Bring your agent. Apps, keys, videos and credits are all in the Cap
+					CLI and MCP.
+				</p>
+				<p className={`${MUTED} mt-2 text-[13.5px] leading-[1.5]`}>
 					SOC 2 Type II, ISO 27001 and HIPAA compliant. BAA available.
 				</p>
 			</div>
