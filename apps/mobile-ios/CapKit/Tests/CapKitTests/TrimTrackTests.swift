@@ -63,6 +63,12 @@ import Testing
         #expect(handle == .handle(.start))
         let freed = track.touch(from: 90, at: 100, clip: clip, earliestStart: 10, latestEnd: 30, playhead: 180)
         #expect(freed == .handle(.start))
+        let insideEarlierClip = track.touch(from: 57.6, at: 67.6, clip: clip, earliestStart: 10, latestEnd: 30, playhead: 180)
+        #expect(insideEarlierClip == .scrub)
+        let insideLaterClip = track.touch(from: 262, at: 252, clip: clip, earliestStart: 10, latestEnd: 34, playhead: 180)
+        #expect(insideLaterClip == .scrub)
+        let cutAfter = track.touch(from: 240, at: 230, clip: clip, earliestStart: 10, latestEnd: 34, playhead: 180)
+        #expect(cutAfter == .handle(.end))
     }
 
     @Test func aHeldHandleSitsUnderTheFinger() {

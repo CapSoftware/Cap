@@ -84,8 +84,12 @@ public struct TrimTrack: Sendable, Hashable {
     ) -> TrimTouch {
         let start = self.position(for: clip.start)
         let end = self.position(for: clip.end)
-        let startFloor = min(self.position(for: earliestStart), start) - Self.handleWidth
-        let endCeiling = max(self.position(for: latestEnd), end) + Self.handleWidth
+        // A handle owns the cut video on its own side and its own drawn width, and nothing of a neighbouring kept
+        // clip beyond that. Only the ends of the video have a spare handle slot outside them.
+        let leading = earliestStart <= 0 ? Self.handleWidth : 0
+        let trailing = latestEnd >= duration ? Self.handleWidth : 0
+        let startFloor = min(self.position(for: earliestStart) - leading, start - Self.handleWidth)
+        let endCeiling = max(self.position(for: latestEnd) + trailing, end + Self.handleWidth)
         if origin >= startFloor, origin <= start { return .handle(.start) }
         if origin <= endCeiling, origin >= end { return .handle(.end) }
         var best: (edge: TrimEdge, distance: Double)?
