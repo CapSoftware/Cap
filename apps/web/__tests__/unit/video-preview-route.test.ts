@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { describe, expect, it, vi } from "vitest";
 
-// No preview GIF exists, so the route takes the `fallback=og` branch.
 vi.mock("@/lib/server", () => ({
 	runPromise: async () => null,
 }));
