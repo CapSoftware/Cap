@@ -17,7 +17,7 @@ import clsx from "clsx";
 import { Check, Globe2, Lock, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import {
@@ -324,8 +324,17 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
 	const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
 
+	// Reset to the saved settings once each time the dialog opens. Inviting or
+	// removing a viewer refreshes the page, which hands in a new sharedSpaces
+	// array; resetting on that would drop the edits the user has not saved.
+	const initializedForOpen = useRef(false);
 	useEffect(() => {
-		if (isOpen && sharedSpaces) {
+		if (!isOpen) {
+			initializedForOpen.current = false;
+			return;
+		}
+		if (sharedSpaces && !initializedForOpen.current) {
+			initializedForOpen.current = true;
 			const spaceIds = new Set(sharedSpaces.map((space) => space.id));
 			setSelectedSpaces(spaceIds);
 			setInitialSelectedSpaces(spaceIds);
