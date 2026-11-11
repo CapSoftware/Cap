@@ -35,10 +35,19 @@ pub struct RefinementRequest {
     /// The source ranges the first pass transcribed, so refinement hears the
     /// same audio even after the timeline has been cut.
     pub ranges: Vec<[f64; 2]>,
+    /// The words-per-caption size the first pass used, so refined captions
+    /// are chunked the same way. Requests saved before the setting existed
+    /// read as the default.
+    #[serde(default = "default_segment_words")]
+    pub segment_words: usize,
+}
+
+fn default_segment_words() -> usize {
+    cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT
 }
 
 impl RefinementRequest {
-    pub fn new(model: &str, language: &str, ranges: &[Range<f64>]) -> Self {
+    pub fn new(model: &str, language: &str, ranges: &[Range<f64>], segment_words: usize) -> Self {
         Self {
             model: model.to_string(),
             language: language.to_string(),
@@ -46,6 +55,7 @@ impl RefinementRequest {
                 .iter()
                 .map(|range| [range.start, range.end])
                 .collect(),
+            segment_words,
         }
     }
 }
@@ -403,8 +413,17 @@ pub fn refine_blocking(
                 tuning: &TUNING,
                 stop,
             };
-            Ok(refine_groups(&pass, groups, recover, aligner)
-                .map(|groups| keep_caption_identities(input, groups, &request.language, offsets)))
+            Ok(
+                refine_groups(&pass, groups, recover, aligner).map(|groups| {
+                    keep_caption_identities(
+                        input,
+                        groups,
+                        &request.language,
+                        request.segment_words,
+                        offsets,
+                    )
+                }),
+            )
         },
     )?;
     Ok(segments
@@ -420,6 +439,7 @@ fn keep_caption_identities(
     input: &[CaptionSegment],
     groups: Vec<Vec<CaptionWord>>,
     language: &str,
+    segment_words: usize,
     offsets: &[TranscriptionAudioOffset],
 ) -> Vec<CaptionSegment> {
     let mut used: std::collections::HashSet<String> =
@@ -434,7 +454,7 @@ fn keep_caption_identities(
         let Some(group) = groups.next() else {
             break;
         };
-        for (chunk, part) in caption_segments_from_groups(vec![group], language)
+        for (chunk, part) in caption_segments_from_groups(vec![group], language, segment_words)
             .into_iter()
             .enumerate()
         {
@@ -482,6 +502,7 @@ mod tests {
                 [9.0, 400.0],
                 [500.0, 600.0],
             ],
+            segment_words: cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
         };
         assert_eq!(
             sanitized_ranges(&request, &[10.0]).unwrap(),
@@ -519,6 +540,7 @@ mod tests {
             &input,
             vec![grown, vec![word("done", 9.0, 9.4)]],
             "en",
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
             &offsets,
         );
         let ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();
@@ -553,6 +575,7 @@ mod tests {
             &input,
             vec![grown, vec![word("then", 6.0, 6.2)]],
             "en",
+            cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
             &offsets,
         );
         let mut ids: Vec<&str> = refined.iter().map(|segment| segment.id.as_str()).collect();

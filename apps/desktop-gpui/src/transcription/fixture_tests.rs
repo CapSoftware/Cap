@@ -265,8 +265,15 @@ fn make_caption_demo_project() {
         .expect("ffmpeg");
     assert!(encode.success());
     let durations = [duration];
-    let transcript =
-        transcribe_blocking(&out, &model, "en", None, &durations).expect("transcription");
+    let transcript = transcribe_blocking(
+        &out,
+        &model,
+        "en",
+        cap_project::TARGET_CAPTION_WORDS_PER_SEGMENT,
+        None,
+        &durations,
+    )
+    .expect("transcription");
     save_refinement_request(&out, &transcript.refinement).expect("refinement request");
     let mut config = ProjectConfiguration::load(&out).unwrap_or_default();
     apply_caption_result(&mut config, transcript.segments, "en", &durations, duration);
