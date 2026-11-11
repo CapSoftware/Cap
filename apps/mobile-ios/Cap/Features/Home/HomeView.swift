@@ -69,6 +69,7 @@ struct LibraryContent: View {
     let folderId: String?
 
     @Environment(SessionModel.self) private var session
+    @Environment(\.capSelection) private var selection
     @State private var pendingDelete: CapSummary?
     private let recent = RecentRecordings.shared
 
@@ -78,7 +79,7 @@ struct LibraryContent: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: selection == nil ? 22 : 8) {
                 if folderId == nil, !recordingsInProgress.isEmpty {
                     RecentRecordingsList(recent: recent, items: recordingsInProgress)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -101,8 +102,18 @@ struct LibraryContent: View {
                     }
                     ForEach(library.caps) { cap in
                         if let capId = CapID(cap.id) {
-                            NavigationLink(value: Route.cap(capId)) {
-                                CapCard(cap: cap)
+                            Group {
+                                if let selection {
+                                    Button { selection.select(capId) } label: {
+                                        CapRow(cap: cap, isSelected: selection.selected == capId)
+                                    }
+                                    .padding(.horizontal, -8)
+                                    .accessibilityIdentifier("cap-row")
+                                } else {
+                                    NavigationLink(value: Route.cap(capId)) {
+                                        CapCard(cap: cap)
+                                    }
+                                }
                             }
                             .buttonStyle(.plain)
                             .capContextMenu(cap: cap, pendingDelete: $pendingDelete)
@@ -315,6 +326,7 @@ extension View {
 
 struct ScopeBar: View {
     @Environment(SessionModel.self) private var session
+    @Environment(\.capSelection) private var selection
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -345,7 +357,8 @@ struct ScopeBar: View {
                 }
             }
             .scrollIndicators(.hidden)
-            .onAppear { proxy.scrollTo(session.scope, anchor: .center) }
+            // The library column is narrow: scroll only as far as the selected scope needs, so the first chip stays whole.
+            .onAppear { proxy.scrollTo(session.scope, anchor: selection == nil ? .center : nil) }
             .onChange(of: session.scope) { _, scope in
                 withAnimation(.snappy) { proxy.scrollTo(scope, anchor: .center) }
             }

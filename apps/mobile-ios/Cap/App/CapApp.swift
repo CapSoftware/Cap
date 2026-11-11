@@ -148,18 +148,30 @@ enum Route: Hashable {
 struct MainTabView: View {
     let session: SessionModel
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var tab: AppTab = .caps
     @State private var homePath: [Route] = []
     @State private var analyticsPath: [Route] = []
     @State private var settingsPath: [Route] = []
     @State private var recorder: RecorderRequest?
+    @State private var capModels = CapDetailModels()
+
+    private var capsLayout: CapsLayout {
+        CapsLayout(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
+    }
 
     var body: some View {
         TabView(selection: $tab) {
             Tab("Caps", systemImage: "play.rectangle.on.rectangle.fill", value: AppTab.caps) {
-                NavigationStack(path: $homePath) {
-                    HomeView()
-                        .navigationDestination(for: Route.self, destination: destination)
+                switch capsLayout {
+                case .stack:
+                    NavigationStack(path: $homePath) {
+                        HomeView()
+                            .navigationDestination(for: Route.self, destination: destination)
+                    }
+                case .split:
+                    LibrarySplitView(path: $homePath, destination: destination)
                 }
             }
             Tab("Record", systemImage: "record.circle", value: AppTab.record) {
@@ -213,6 +225,8 @@ struct MainTabView: View {
             if coordinator.showsHomeOnReturn { coordinator.showHome() }
         }
         .environment(session)
+        .environment(\.capsLayout, capsLayout)
+        .onChange(of: homePath + analyticsPath + settingsPath) { _, routes in capModels.keep(routes) }
         .toasts(session.toasts)
         .task { await session.start() }
         #if DEBUG
@@ -269,9 +283,9 @@ struct MainTabView: View {
     private func destination(_ route: Route) -> some View {
         switch route {
         case let .cap(id):
-            CapDetailView(target: ShareTarget(id: id))
+            CapDetailView(model: capModels.model(for: route, target: ShareTarget(id: id)))
         case let .share(target):
-            CapDetailView(target: target)
+            CapDetailView(model: capModels.model(for: route, target: target))
         case let .folder(folder, scope):
             FolderView(folder: folder, scope: scope)
         case let .capAnalytics(id, title):

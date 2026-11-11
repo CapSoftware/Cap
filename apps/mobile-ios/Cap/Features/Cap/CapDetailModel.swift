@@ -42,7 +42,15 @@ final class CapDetailModel {
         }
     }
 
+    enum Section: Hashable {
+        case comments, summary, transcript
+    }
+
     let id: CapID
+    /// Lives here rather than in the view so folding or unfolding the phone keeps the open tab.
+    var section: Section = .comments
+    /// How many Cap screens show this model. The layout swap shows the new one before the old one goes.
+    @ObservationIgnored var presentations = 0
     private(set) var content: Content = .loading {
         didSet { rebuildThreadsIfNeeded() }
     }

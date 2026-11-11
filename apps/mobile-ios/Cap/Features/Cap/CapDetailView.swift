@@ -6,8 +6,8 @@ struct CapDetailView: View {
 
     @Environment(SessionModel.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.capsLayout) private var layout
     @State private var model: CapDetailModel
-    @State private var section: DetailSection = .comments
     @State private var showingRename = false
     @State private var renameText = ""
     @State private var showingPassword = false
@@ -20,21 +20,33 @@ struct CapDetailView: View {
     @State private var openingEditor = false
     private let upgrade = WebUpgrade.shared
 
-    init(target: ShareTarget) {
-        self.target = target
-        _model = State(initialValue: CapDetailModel(target: target))
+    init(model: CapDetailModel) {
+        target = ShareTarget(id: model.id)
+        _model = State(initialValue: model)
+        _showingFullscreen = State(initialValue: model.isFullscreen)
     }
 
-    enum DetailSection: Hashable {
-        case comments, summary, transcript
+    typealias DetailSection = CapDetailModel.Section
+
+    private var section: DetailSection {
+        get { model.section }
+        nonmutating set { model.section = newValue }
     }
 
     var body: some View {
         content
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .tabBar)
+            .toolbar(layout == .stack ? .hidden : .automatic, for: .tabBar)
             .task { await model.load(session: session) }
-            .onDisappear { model.pauseForDisappear() }
+            .onAppear { model.presentations += 1 }
+            .onDisappear {
+                model.presentations -= 1
+                // Folding or unfolding rebuilds this screen around the same model; only pause if nothing shows it now.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if model.presentations == 0 { model.pauseForDisappear() }
+                }
+            }
             // Mirrored into view state: a binding straight into the model isn't observed by the presenter.
             .onChange(of: model.isFullscreen) { _, value in
                 if showingFullscreen != value { showingFullscreen = value }
@@ -198,6 +210,8 @@ struct CapDetailView: View {
             PlayerStage(model: model, detail: detail)
                 .padding(.horizontal, CapTheme.spacing)
                 .padding(.top, 4)
+                // A wide, short column would otherwise give the height to the scroll view and shrink the video.
+                .layoutPriority(layout == .split ? 1 : 0)
 
             if model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
                 PlayerTimeline(model: model, comments: detail.comments, chapters: detail.viewer.settings.disableChapters ? [] : detail.chapters) { marker in
