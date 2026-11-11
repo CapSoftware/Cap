@@ -151,7 +151,9 @@ struct LibraryContent: View {
             _ = await (caps, bootstrap)
         }
         .task { await library.loadIfNeeded() }
-        .capDeleteConfirmation(pendingDelete: $pendingDelete)
+        .capDeleteConfirmation(pendingDelete: $pendingDelete) { cap in
+            if let selection, selection.selected == CapID(cap.id) { selection.deselect() }
+        }
     }
 
     @ViewBuilder

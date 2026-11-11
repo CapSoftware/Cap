@@ -50,6 +50,7 @@ extension Route {
 struct CapSelection {
     let selected: CapID?
     let select: (CapID) -> Void
+    let deselect: () -> Void
 }
 
 private struct CapSelectionKey: EnvironmentKey {
@@ -131,13 +132,22 @@ struct LibrarySplitView<Destination: View>: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .environment(\.capSelection, CapSelection(selected: parts.cap?.capID) { id in
-            var next = CapsPath(path)
-            guard next.cap?.capID != id || !next.trailing.isEmpty else { return }
-            next.cap = .cap(id)
-            next.trailing = []
-            path = next.path
-        })
+        .environment(\.capSelection, CapSelection(selected: parts.cap?.capID, select: select, deselect: deselect))
+    }
+
+    private func select(_ id: CapID) {
+        var next = CapsPath(path)
+        guard next.cap?.capID != id || !next.trailing.isEmpty else { return }
+        next.cap = .cap(id)
+        next.trailing = []
+        path = next.path
+    }
+
+    private func deselect() {
+        var next = CapsPath(path)
+        next.cap = nil
+        next.trailing = []
+        path = next.path
     }
 
     private var libraryPath: Binding<[Route]> {

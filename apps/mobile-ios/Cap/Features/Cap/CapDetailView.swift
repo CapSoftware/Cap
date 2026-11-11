@@ -7,6 +7,7 @@ struct CapDetailView: View {
     @Environment(SessionModel.self) private var session
     @Environment(\.dismiss) private var dismiss
     @Environment(\.capsLayout) private var layout
+    @Environment(\.capSelection) private var selection
     @State private var model: CapDetailModel
     @State private var showingRename = false
     @State private var renameText = ""
@@ -125,13 +126,22 @@ struct CapDetailView: View {
             }
             .confirmationDialog("Block \(model.cap?.ownerName.isEmpty == false ? model.cap!.ownerName : "this user")?", isPresented: $showingBlock, titleVisibility: .visible) {
                 Button("Block", role: .destructive) {
-                    Task { if await model.blockOwner() { dismiss() } }
+                    Task { if await model.blockOwner() { close() } }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You won't see their Caps or comments in Cap for iPhone.")
             }
-            .capDeleteConfirmation(pendingDelete: $pendingDelete) { dismiss() }
+            .capDeleteConfirmation(pendingDelete: $pendingDelete) { _ in close() }
+    }
+
+    /// Beside the library the Cap is the detail column's root, which dismiss can't pop.
+    private func close() {
+        if let selection, selection.selected == model.id {
+            selection.deselect()
+        } else {
+            dismiss()
+        }
     }
 
     @ViewBuilder
