@@ -31,6 +31,6 @@ export async function deleteDeveloperVideo(appId: string, videoId: string) {
 			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
 		);
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

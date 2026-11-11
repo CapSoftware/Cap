@@ -10,13 +10,14 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { UPLOAD_MICRO_CREDITS_PER_MINUTE } from "@/lib/developer-pricing";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
-const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MAX_DURATION_SECS = 4 * 60 * 60;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
+const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
 type StoredPart = { PartNumber?: number; ETag?: string; Size?: number };
 
@@ -29,8 +30,11 @@ function storedBytesForParts(
 	const storedByNumber = new Map(
 		storedParts.map((part) => [part.PartNumber, part]),
 	);
+	const seen = new Set<number>();
 	let totalBytes = 0;
 	for (const requested of requestedParts) {
+		if (seen.has(requested.partNumber)) return null;
+		seen.add(requested.partNumber);
 		const stored = storedByNumber.get(requested.partNumber);
 		if (
 			stored?.Size === undefined ||
@@ -231,14 +235,18 @@ app.post(
 					400,
 				);
 			}
+			const plausibleDuration = Math.min(
+				clampedDuration,
+				totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
+			);
 			const sizeBasedMinDuration = totalBytes / BILLED_BYTES_PER_SECOND;
 			const billingDuration = Math.min(
-				Math.max(clampedDuration, sizeBasedMinDuration),
+				Math.max(plausibleDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
 			);
 			const durationMinutes = billingDuration / 60;
 			const microCreditsToDebit = Math.floor(
-				durationMinutes * MICRO_CREDITS_PER_MINUTE,
+				durationMinutes * UPLOAD_MICRO_CREDITS_PER_MINUTE,
 			);
 
 			if (microCreditsToDebit > 0) {

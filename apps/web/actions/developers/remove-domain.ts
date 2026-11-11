@@ -33,6 +33,6 @@ export async function removeDeveloperDomain(appId: string, domainId: string) {
 			),
 		);
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

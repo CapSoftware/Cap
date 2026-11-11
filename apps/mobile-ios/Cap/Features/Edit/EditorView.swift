@@ -9,6 +9,8 @@ struct EditorView: View {
 
     @State private var confirmingDiscard = false
     @State private var confirmingRestore = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     enum EditorOutcome { case cancelled, saved, restored }
 
@@ -109,25 +111,50 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, 16)
 
-            EditorTimeline(model: model)
-                .padding(.horizontal, 15)
-
-            HStack(spacing: 10) {
-                toolButton("Undo", systemImage: "arrow.uturn.backward", enabled: model.canUndo, action: model.undo)
-                toolButton("Redo", systemImage: "arrow.uturn.forward", enabled: model.canRedo, action: model.redo)
-                Spacer()
-                if model.state.hasEdits {
-                    toolButton("Restore original", systemImage: "clock.arrow.circlepath", enabled: !model.isSaving) {
-                        confirmingRestore = true
-                    }
+            if wide {
+                HStack(spacing: 10) {
+                    historyTools
+                    EditorTimeline(model: model)
+                        .padding(.horizontal, 6)
+                    clipTools
                 }
-                toolButton("Split", systemImage: "scissors", enabled: model.canSplit, action: model.split)
-                toolButton("Delete", systemImage: "trash", enabled: model.canDelete, action: model.deleteSelected)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            } else {
+                EditorTimeline(model: model)
+                    .padding(.horizontal, 15)
+
+                HStack(spacing: 10) {
+                    historyTools
+                    Spacer()
+                    clipTools
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
         }
         .sensoryFeedback(.impact(weight: .medium), trigger: model.timeline.clips.count)
+    }
+
+    private var wide: Bool {
+        horizontalSizeClass == .regular && verticalSizeClass == .regular
+    }
+
+    @ViewBuilder
+    private var historyTools: some View {
+        toolButton("Undo", systemImage: "arrow.uturn.backward", enabled: model.canUndo, action: model.undo)
+        toolButton("Redo", systemImage: "arrow.uturn.forward", enabled: model.canRedo, action: model.redo)
+    }
+
+    @ViewBuilder
+    private var clipTools: some View {
+        if model.state.hasEdits {
+            toolButton("Restore original", systemImage: "clock.arrow.circlepath", enabled: !model.isSaving) {
+                confirmingRestore = true
+            }
+        }
+        toolButton("Split", systemImage: "scissors", enabled: model.canSplit, action: model.split)
+        toolButton("Delete", systemImage: "trash", enabled: model.canDelete, action: model.deleteSelected)
     }
 
     private func toolButton(_ title: String, systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {

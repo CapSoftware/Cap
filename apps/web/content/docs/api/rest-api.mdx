@@ -17,14 +17,14 @@ These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with
 
 ### Getting Your API Keys
 
-API keys are managed through the Developer dashboard, not the general Settings page.
+API keys are managed in Cap Infra, not the general Settings page.
 
-1. Go to [Cap.so/dashboard/developers](https://cap.so/dashboard/developers).
-2. Click **Create App** and give it a name and environment (development or production).
+1. Go to [cap.so/dashboard/infra](https://cap.so/dashboard/infra).
+2. Create an app and give it a name and environment (development or production).
 3. Two keys are generated for each app:
    - **Public key** (`cpk_...`) -- Safe to use in client-side code. Used with the SDK API.
    - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API.
-4. Store both keys securely. You can regenerate them from the app settings, which revokes the previous pair.
+4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair.
 
 ### Using Your Keys
 
@@ -71,7 +71,7 @@ All error responses return a JSON object with an `error` string. Authentication,
   "error": "Invalid secret key",
   "code": "invalid_secret_key",
   "message": "Invalid secret key",
-  "hint": "Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/developers.",
+  "hint": "Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
   "docs": "https://cap.so/docs/api/rest-api"
 }
 ```
@@ -489,6 +489,6 @@ The full video object returned by list and get endpoints:
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
 - **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true` before displaying the video.
 - **Store your keys securely.** Use environment variables or a secrets manager.
-- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in the Developer dashboard.
-- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and set up auto top-up in the Developer dashboard to avoid service interruptions.
+- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
+- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and top up from your app's Billing page in Cap Infra to avoid service interruptions.
 - **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.

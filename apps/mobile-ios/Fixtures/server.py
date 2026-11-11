@@ -339,6 +339,7 @@ class H(BaseHTTPRequestHandler):
                         c["linkRestricted"] = c["linkAccess"] != "anyone"
                 return self.send(200, c)
             if sub == "/title": c["title"] = self.body().get("title", c["title"]); return self.send(200, c)
+            if sub == "" and self.command == "DELETE": return self.send(200, {"success": True})
             if sub == "":
                 v = viewer(cid); lst = comments_for(cid)
                 if v["settings"]["disableComments"]: lst = [x for x in lst if x["type"] != "text"]

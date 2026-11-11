@@ -12,13 +12,8 @@ import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { buildEnv, serverEnv } from "@cap/env";
-import {
-	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID,
-	STRIPE_PLAN_IDS,
-	stripe,
-	userIsPro,
-} from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import {
 	AgentManagement,
 	collectPasswordHashes,
@@ -129,8 +124,10 @@ import {
 	logCustomStorageAttempt,
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
+import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { canUseInfra } from "@/lib/infra-access";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
@@ -4275,6 +4272,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "billing:write", requestId);
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
+								requestId,
+								"Cap Infra credits are not available yet",
+							);
+						}
 						if (
 							!Number.isSafeInteger(payload.amountCents) ||
 							payload.amountCents < 500 ||
@@ -4337,12 +4340,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													{
 														price_data: {
 															currency: "usd",
-															product:
-																STRIPE_DEVELOPER_CREDITS_PRODUCT_ID[
-																	buildEnv.NEXT_PUBLIC_IS_CAP
-																		? "production"
-																		: "development"
-																],
+															product: developerCreditsProductId(),
 															unit_amount: payload.amountCents,
 														},
 														quantity: 1,

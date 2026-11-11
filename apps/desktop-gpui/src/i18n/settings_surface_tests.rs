@@ -290,6 +290,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "For screenshots and recordings started from a shortcut or the tray.",
         ),
         (
+            tr::settings::shortcuts::closing_editor_title(),
+            "Closing the editor",
+        ),
+        (
+            tr::settings::shortcuts::closing_editor_description(),
+            "For the screenshot editor and the video editor.",
+        ),
+        (
             tr::settings::shortcuts::while_recording_title(),
             "While recording",
         ),
@@ -413,6 +421,30 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (
             tr::settings::shortcuts::outcome::cancel_stay_hidden_hint(),
             "Unless Cap was open",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::title(),
+            "When you close the editor",
+        ),
+        (
+            tr::settings::shortcuts::on_editor_close::hint(),
+            "After the last one closes",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap(),
+            "Show Cap",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_show_cap_hint(),
+            "Back to the recorder",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden(),
+            "Stay hidden",
+        ),
+        (
+            tr::settings::shortcuts::outcome::editor_close_stay_hidden_hint(),
+            "Until you open Cap",
         ),
         (
             tr::settings::shortcuts::label::screenshot_area(),
