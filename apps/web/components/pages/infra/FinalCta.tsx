@@ -9,7 +9,10 @@ export const FinalCta = () => (
 		<NightArt />
 		<div className="mx-auto flex max-w-[720px] flex-col items-center px-5 pb-[300px] text-center sm:pb-[340px] lg:pb-[400px]">
 			<h2 className={`${H_DISPLAY} m-0 text-[clamp(32px,4vw,48px)]`}>
-				Fast video infrastructure.
+				The cheapest, fastest{" "}
+				<span className="leading-[inherit] tracking-[inherit] sm:block">
+					video infrastructure.
+				</span>
 			</h2>
 			<div className="mt-8 flex flex-wrap justify-center gap-2.5">
 				<Link href={LINKS.start} className={BTN_PRIMARY}>

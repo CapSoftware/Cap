@@ -1,11 +1,11 @@
 import type { CSSProperties } from "react";
-import { clock, MEASUREMENTS } from "./content";
+import { ANCHORS, clock, MEASUREMENTS } from "./content";
 import styles from "./scene.module.css";
 import { Section, SectionHeading } from "./shared";
 import { MONO } from "./theme";
 
 export const Performance = () => (
-	<Section className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.speed} className="pt-28 lg:pt-40">
 		<div className="grid gap-x-16 gap-y-12 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Ready in seconds.">
 				<p>
