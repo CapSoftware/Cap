@@ -12,6 +12,7 @@ const context = vi.hoisted(() => ({
 	},
 	ids: 0,
 	speechConfigured: true,
+	hosted: true,
 	start: vi.fn(),
 	objectSize: null as number | null,
 	deleted: [] as string[],
@@ -65,6 +66,11 @@ vi.mock("@cap/env", () => ({
 	NODE_ENV: "production",
 }));
 
+vi.mock("@/lib/infra-access", () => ({
+	canUseInfra: (email: string | null | undefined) =>
+		!context.hosted || email === "richie@cap.so",
+}));
+
 vi.mock("workflow/api", () => ({ start: context.start }));
 
 vi.mock("@/workflows/developer-transcribe", () => ({
@@ -92,8 +98,10 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 }));
 
 import {
+	developerApps,
 	developerCreditAccounts,
 	developerTranscripts,
+	users,
 } from "@cap/database/schema";
 import {
 	createTranscriptFromUrl,
@@ -142,6 +150,7 @@ beforeEach(() => {
 	fake().reset();
 	context.ids = 0;
 	context.speechConfigured = true;
+	context.hosted = true;
 	context.start.mockReset();
 	context.start.mockResolvedValue(undefined);
 	context.objectSize = null;
@@ -151,6 +160,74 @@ beforeEach(() => {
 		id: "account-1",
 		appId: "app-1",
 		balanceMicroCredits: 100_000,
+	});
+	fake().seed(users, { id: "owner-1", email: "richie@cap.so" });
+	fake().seed(users, { id: "owner-9", email: "someone@example.com" });
+	for (const id of ["app-1", "app-2", "app-without-credits"]) {
+		fake().seed(developerApps, { id, ownerId: "owner-1", deletedAt: null });
+	}
+	fake().seed(developerApps, {
+		id: "app-outside-preview",
+		ownerId: "owner-9",
+		deletedAt: null,
+	});
+	fake().seed(developerCreditAccounts, {
+		id: "account-9",
+		appId: "app-outside-preview",
+		balanceMicroCredits: 100_000,
+	});
+});
+
+describe("preview access", () => {
+	it("refuses to spend credits for an owner outside the preview", async () => {
+		const fromUrlResult = await createTranscriptFromUrl(
+			"app-outside-preview",
+			{ url: URL_A },
+			guards,
+		);
+		const uploadResult = await createTranscriptUpload("app-outside-preview", {
+			fileName: "a.mp3",
+			contentLength: 1024,
+		});
+
+		for (const result of [fromUrlResult, uploadResult]) {
+			expect(result).toMatchObject({
+				ok: false,
+				status: 403,
+				code: "infra_not_available",
+			});
+		}
+		expect(transcripts()).toHaveLength(0);
+		expect(context.start).not.toHaveBeenCalled();
+		expect(context.presigned).toHaveLength(0);
+	});
+
+	it("refuses to start an upload once the owner leaves the preview", async () => {
+		const created = await createTranscriptUpload("app-1", {
+			fileName: "a.mp3",
+			contentLength: 1024,
+		});
+		if (!created.ok) throw new Error("create failed");
+		context.objectSize = 1024;
+		const app = fake()
+			.rows(developerApps)
+			.find((row) => row.id === "app-1");
+		if (app) app.ownerId = "owner-9";
+
+		expect(
+			await startTranscriptUpload("app-1", created.transcript.id),
+		).toMatchObject({ ok: false, status: 403 });
+		expect(context.start).not.toHaveBeenCalled();
+	});
+
+	it("is open to every account on a self-hosted install", async () => {
+		context.hosted = false;
+		const result = await createTranscriptFromUrl(
+			"app-outside-preview",
+			{ url: URL_A },
+			guards,
+		);
+		expect(result.ok).toBe(true);
 	});
 });
 

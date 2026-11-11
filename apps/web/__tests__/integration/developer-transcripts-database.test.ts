@@ -35,6 +35,7 @@ vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
 	NODE_ENV: "production",
 }));
+vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
 vi.mock("workflow/api", () => ({ start: fixture.start }));
 vi.mock("@/workflows/developer-transcribe", () => ({
 	developerTranscribeWorkflow: "developer-transcribe-workflow",

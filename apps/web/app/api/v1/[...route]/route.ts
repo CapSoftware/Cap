@@ -431,6 +431,7 @@ const developerMediaFailure = (
 			code: "INSUFFICIENT_CREDITS",
 		});
 	}
+	if (failure.status === 403) return forbidden(requestId, failure.message);
 	if (failure.status === 404) {
 		return new Agent.AgentNotFoundError({
 			...commonError(requestId, failure.message),
@@ -4549,6 +4550,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
+								requestId,
+								"Cap Infra is not available for this account yet",
+							);
+						}
 						const idempotencyKey =
 							yield* requireMutationIdempotencyKey(requestId);
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
@@ -4576,6 +4583,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
+								requestId,
+								"Cap Infra is not available for this account yet",
+							);
+						}
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const result = yield* Effect.tryPromise(() =>
 							completeDeveloperVideoUpload(path.appId, path.videoId, payload),

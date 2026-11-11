@@ -3,7 +3,9 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
 	type DeveloperTranscriptStatus,
+	developerApps,
 	developerTranscripts,
+	users,
 } from "@cap/database/schema";
 import {
 	and,
@@ -39,6 +41,7 @@ import {
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
 } from "@/lib/developer-transcripts";
+import { canUseInfra } from "@/lib/infra-access";
 import {
 	assertPublicMediaUrl,
 	PublicMediaFetchError,
@@ -47,7 +50,7 @@ import { developerTranscribeWorkflow } from "@/workflows/developer-transcribe";
 
 export type TranscriptFailure = {
 	ok: false;
-	status: 400 | 402 | 404 | 409 | 503;
+	status: 400 | 402 | 403 | 404 | 409 | 503;
 	code: string;
 	message: string;
 	hint: string;
@@ -88,6 +91,13 @@ const IDEMPOTENCY_KEY_RETIRED = fail(
 	"idempotency_conflict",
 	"Idempotency key belongs to a transcript that was deleted",
 	"Use a new Idempotency-Key for a new transcript.",
+);
+
+const NOT_AVAILABLE = fail(
+	403,
+	"infra_not_available",
+	"Cap Infra is not available for this account yet",
+	"Cap Infra is in preview. Contact hello@cap.so for access.",
 );
 
 const SPEECH_UNAVAILABLE = fail(
@@ -262,7 +272,24 @@ async function dispatchTranscript(
 	}
 }
 
+async function appOwnerCanUseInfra(appId: string) {
+	if (canUseInfra(null)) return true;
+	const [app] = await db()
+		.select({ ownerId: developerApps.ownerId })
+		.from(developerApps)
+		.where(and(eq(developerApps.id, appId), isNull(developerApps.deletedAt)))
+		.limit(1);
+	if (!app) return false;
+	const [owner] = await db()
+		.select({ email: users.email })
+		.from(users)
+		.where(eq(users.id, app.ownerId))
+		.limit(1);
+	return canUseInfra(owner?.email);
+}
+
 async function startGate(appId: string): Promise<TranscriptFailure | null> {
+	if (!(await appOwnerCanUseInfra(appId))) return NOT_AVAILABLE;
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
 	if (!(await hasMinimumTranscriptBalance(appId))) return INSUFFICIENT_CREDITS;
 	return null;

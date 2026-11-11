@@ -13,6 +13,7 @@ import {
 	type TranscriptUploadTarget,
 } from "@/lib/developer-transcript-store";
 import type { TranscriptSummaryRow } from "@/lib/developer-transcripts";
+import { canUseInfra } from "@/lib/infra-access";
 
 export type AudioTranscriptRow = {
 	id: string;
@@ -34,7 +35,7 @@ const UNAUTHORIZED: ActionFailure = {
 
 async function ownsApp(appId: string) {
 	const user = await getCurrentUser();
-	if (!user) return false;
+	if (!user || !canUseInfra(user.email)) return false;
 	const [app] = await db()
 		.select({ id: developerApps.id })
 		.from(developerApps)

@@ -411,6 +411,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
 					"409": response("Conflict"),
 					"503": response("Unavailable"),
 					...restErrors,
@@ -434,6 +435,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
 					"409": response("Conflict"),
 					"503": response("Unavailable"),
 					...restErrors,
@@ -456,6 +458,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
 					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"503": response("Unavailable"),
@@ -895,7 +898,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			Forbidden: json(
 				ref("Error"),
-				"A production app was called without an allowed Origin.",
+				"A production app was called without an allowed Origin, or the account cannot use this feature yet.",
 			),
 			NotFound: json(
 				ref("Error"),
