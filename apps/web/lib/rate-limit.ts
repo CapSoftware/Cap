@@ -23,9 +23,11 @@ export function firewallRequestHeaders(source: Headers): Headers {
  *
  * Each `ruleId` should also exist as a Rate Limit rule in the Vercel Firewall
  * dashboard with a `@vercel/firewall` condition matching the id. When the
- * firewall answers (allowed, limited or blocked) its decision is final. When it
- * cannot answer (non-production, rule not configured, missing client address
- * or any firewall error) the request is counted against a fixed-window limit
+ * firewall answers on Vercel (allowed, limited or blocked) its decision is final.
+ * Self-hosted ingress may return 403 for the Vercel-only endpoint, which the SDK
+ * treats as a block. Off Vercel, or when the firewall cannot answer (non-production,
+ * rule not configured, missing client address or any firewall error), the request
+ * is counted against a fixed-window limit
  * kept in this process (`FALLBACK_RATE_LIMITS`). That fallback is per instance,
  * so it is a backstop, not a replacement for the dashboard rule.
  *
@@ -72,7 +74,9 @@ async function checkFirewallRateLimit(
 	headersList: Headers,
 	key: string | undefined,
 ): Promise<boolean | undefined> {
-	if (process.env.NODE_ENV !== "production") return undefined;
+	if (process.env.NODE_ENV !== "production" || process.env.VERCEL !== "1") {
+		return undefined;
+	}
 
 	try {
 		const request = new Request("https://cap.so/api/rate-limit", {
