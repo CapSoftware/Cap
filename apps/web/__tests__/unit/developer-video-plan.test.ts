@@ -94,12 +94,16 @@ describe("developer video encode plan", () => {
 	});
 
 	it("keeps every output under the video's own prefix", () => {
-		const keys = developerVideoKeys({ appId: "app-1", id: "video-1" }, "e1");
+		const keys = developerVideoKeys(
+			{ appId: "app-1", id: "video-1" },
+			"e1",
+			"a1",
+		);
 
 		expect(keys).toEqual({
-			hlsPrefix: "developer/app-1/video-1/e1/hls/",
-			mp4: "developer/app-1/video-1/e1/video.mp4",
-			poster: "developer/app-1/video-1/e1/poster.jpg",
+			hlsPrefix: "developer/app-1/video-1/e1/a1/hls/",
+			mp4: "developer/app-1/video-1/e1/a1/video.mp4",
+			poster: "developer/app-1/video-1/e1/a1/poster.jpg",
 		});
 	});
 

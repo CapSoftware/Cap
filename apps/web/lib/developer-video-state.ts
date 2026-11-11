@@ -13,6 +13,7 @@ const NEVER_STARTED_GRACE_MS = 2 * 60 * 1000;
 const STALE_PROCESSING_MS = 6 * 60 * 60 * 1000;
 const HLS_RETRY_BASE_MS = 15 * 60 * 1000;
 const HLS_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
+const UNCONFIRMED_START_MS = 2 * 60 * 1000;
 
 export type DeveloperVideoPartOutcome =
 	| { type: "complete"; bytes: number; posterBytes?: number }
@@ -36,7 +37,8 @@ export function createDeveloperVideoProcessingState(input: {
 		hls: { state: "pending" },
 		mp4: { state: "pending" },
 		attempts: { hls: 0, mp4: 0 },
-		bytes: { source: 0, hls: 0, mp4: 0, poster: 0 },
+		poster: null,
+		bytes: { source: 0, hls: 0, mp4: 0 },
 	};
 }
 
@@ -47,11 +49,17 @@ export function hlsRetryDelayMs(attempts: number): number {
 	);
 }
 
-export function canDispatchPart(part: DeveloperVideoPartState): boolean {
-	return (
-		part.state === "pending" ||
-		(part.state === "running" && part.jobId === null)
-	);
+export type DeveloperVideoPartAction = "dispatch" | "wait" | "done";
+
+export function developerVideoPartAction(
+	part: DeveloperVideoPartState,
+	now: number,
+): DeveloperVideoPartAction {
+	if (part.state === "pending") return "dispatch";
+	if (part.state !== "running") return "done";
+	return part.jobId === null && now - part.startedAt >= UNCONFIRMED_START_MS
+		? "dispatch"
+		: "wait";
 }
 
 export function beginPart(
@@ -60,7 +68,7 @@ export function beginPart(
 	input: { token: string; now: number },
 ): DeveloperVideoProcessingState | null {
 	const current = state[part];
-	if (!canDispatchPart(current)) return null;
+	if (developerVideoPartAction(current, input.now) !== "dispatch") return null;
 	return {
 		...state,
 		[part]: {
@@ -119,12 +127,13 @@ export function settlePart(
 	if (outcome.type === "complete") {
 		return {
 			...state,
-			[part]: { state: "complete" },
-			bytes: {
-				...state.bytes,
-				[part]: outcome.bytes,
-				poster: outcome.posterBytes || state.bytes.poster,
-			},
+			[part]: { state: "complete", output: token },
+			poster:
+				state.poster ??
+				(outcome.posterBytes
+					? { output: token, bytes: outcome.posterBytes }
+					: null),
+			bytes: { ...state.bytes, [part]: outcome.bytes },
 		};
 	}
 	if (outcome.type === "unavailable") {
@@ -202,8 +211,8 @@ export function resolveDeveloperVideoStatus(
 export function developerVideoStoredBytes(
 	state: DeveloperVideoProcessingState,
 ): number {
-	const { source, hls, mp4, poster } = state.bytes;
-	return source + hls + mp4 + poster;
+	const { source, hls, mp4 } = state.bytes;
+	return source + hls + mp4 + (state.poster?.bytes ?? 0);
 }
 
 export function developerVideoRedrive(

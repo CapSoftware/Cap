@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	beginPart,
 	createDeveloperVideoProcessingState,
+	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
@@ -61,14 +62,30 @@ describe("developer video processing state", () => {
 
 		expect(dispatched?.hls).toMatchObject({ state: "running", jobId: "job-1" });
 		expect(
-			dispatched && beginPart(dispatched, "hls", { token: "t2", now: 3_000 }),
+			dispatched &&
+				beginPart(dispatched, "hls", { token: "t2", now: 9_000_000 }),
 		).toBeNull();
+		expect(
+			dispatched && developerVideoPartAction(dispatched.hls, 9_000_000),
+		).toBe("wait");
 	});
 
-	it("restarts a part whose job was never accepted without a second attempt", () => {
-		const restarted = beginPart(running("hls", "t1"), "hls", {
+	it("waits two minutes for a start that was never confirmed, then restarts it without a second attempt", () => {
+		const unconfirmed = running("hls", "t1");
+
+		expect(developerVideoPartAction(unconfirmed.hls, 2_000 + 119_000)).toBe(
+			"wait",
+		);
+		expect(
+			beginPart(unconfirmed, "hls", { token: "t2", now: 2_000 + 119_000 }),
+		).toBeNull();
+		expect(developerVideoPartAction(unconfirmed.hls, 2_000 + 120_000)).toBe(
+			"dispatch",
+		);
+
+		const restarted = beginPart(unconfirmed, "hls", {
 			token: "t2",
-			now: 3_000,
+			now: 2_000 + 120_000,
 		});
 
 		expect(restarted?.hls).toMatchObject({ state: "running", token: "t2" });
@@ -86,6 +103,23 @@ describe("developer video processing state", () => {
 		).toBeNull();
 	});
 
+	it("keeps the poster from the first part that stored one", () => {
+		const withPoster = (part: "hls" | "mp4", token: string, from = fresh()) => {
+			const next = settlePart(running(part, token, from), part, token, {
+				type: "complete",
+				bytes: 10,
+				posterBytes: 5,
+			});
+			if (!next) throw new Error("part did not settle");
+			return next;
+		};
+		const first = withPoster("mp4", "mp4-attempt");
+		const second = withPoster("hls", "hls-attempt", first);
+
+		expect(second.poster).toEqual({ output: "mp4-attempt", bytes: 5 });
+		expect(developerVideoStoredBytes(second)).toBe(25);
+	});
+
 	it("is ready only once both parts have finished", () => {
 		const hlsDone = complete("hls", 500);
 
@@ -99,6 +133,7 @@ describe("developer video processing state", () => {
 			status: "ready",
 			errorReason: null,
 		});
+		expect(bothDone.hls).toEqual({ state: "complete", output: "t" });
 		expect(developerVideoStoredBytes(bothDone)).toBe(800);
 	});
 
@@ -166,7 +201,7 @@ describe("developer video processing state", () => {
 		const retried = retryUnavailableHls(
 			processingState({
 				hls: { state: "unavailable", reason: "not deployed", retryAt: 0 },
-				mp4: { state: "complete" },
+				mp4: { state: "complete", output: "mp4-out" },
 			}),
 		);
 
@@ -229,7 +264,7 @@ describe("developer video redrive", () => {
 				status: "ready",
 				processing: processingState({
 					hls: { state: "unavailable", reason: "not deployed", retryAt },
-					mp4: { state: "complete" },
+					mp4: { state: "complete", output: "mp4-out" },
 				}),
 			});
 
@@ -239,8 +274,8 @@ describe("developer video redrive", () => {
 
 	it("leaves finished, errored and deleted videos alone", () => {
 		const done = processingState({
-			hls: { state: "complete" },
-			mp4: { state: "complete" },
+			hls: { state: "complete", output: "hls-out" },
+			mp4: { state: "complete", output: "mp4-out" },
 		});
 
 		expect(

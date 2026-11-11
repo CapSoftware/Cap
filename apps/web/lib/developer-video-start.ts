@@ -25,7 +25,9 @@ async function claimAndStart(
 		const claimed = await claimDeveloperVideoProcessing(videoId, options);
 		if (!claimed) return false;
 		try {
-			await start(processDeveloperVideoWorkflow, [{ videoId }]);
+			await start(processDeveloperVideoWorkflow, [
+				{ videoId, encodeId: claimed.encodeId },
+			]);
 			return true;
 		} catch (error) {
 			await releaseDeveloperVideoClaim(videoId, claimed);

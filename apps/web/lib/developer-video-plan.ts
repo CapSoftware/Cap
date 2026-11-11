@@ -131,8 +131,9 @@ export interface DeveloperVideoKeys {
 export function developerVideoKeys(
 	video: { appId: string; id: string },
 	encodeId: string,
+	output: string,
 ): DeveloperVideoKeys {
-	const base = `developer/${video.appId}/${video.id}/${encodeId}`;
+	const base = `developer/${video.appId}/${video.id}/${encodeId}/${output}`;
 	return {
 		hlsPrefix: `${base}/hls/`,
 		mp4: `${base}/${DEVELOPER_VIDEO_MP4_FILE}`,

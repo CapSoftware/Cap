@@ -32,7 +32,7 @@ const { GET, HEAD, OPTIONS } = await import(
 );
 
 const PLAYBACK_ID = "playback-id-0123456789ab";
-const HLS_PREFIX = "developer/app-1/video-1/encode-1/hls/";
+const HLS_PREFIX = "developer/app-1/video-1/encode-1/hls-out/hls/";
 const master = [
 	"#EXTM3U",
 	'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="audio",URI="audio.m3u8"',
@@ -55,9 +55,10 @@ const ready = (overrides = {}) =>
 	developerVideo({
 		status: "ready",
 		processing: processingState({
-			hls: { state: "complete" },
-			mp4: { state: "complete" },
-			bytes: { source: 1_000, hls: 5_000, mp4: 2_000, poster: 50 },
+			hls: { state: "complete", output: "hls-out" },
+			mp4: { state: "complete", output: "mp4-out" },
+			poster: { output: "mp4-out", bytes: 50 },
+			bytes: { source: 1_000, hls: 5_000, mp4: 2_000 },
 		}),
 		...overrides,
 	});
@@ -122,8 +123,14 @@ describe("developer video playback route", () => {
 
 	it.each([
 		{ file: "1080p.m4s", key: `${HLS_PREFIX}1080p.m4s` },
-		{ file: "video.mp4", key: "developer/app-1/video-1/encode-1/video.mp4" },
-		{ file: "poster.jpg", key: "developer/app-1/video-1/encode-1/poster.jpg" },
+		{
+			file: "video.mp4",
+			key: "developer/app-1/video-1/encode-1/mp4-out/video.mp4",
+		},
+		{
+			file: "poster.jpg",
+			key: "developer/app-1/video-1/encode-1/mp4-out/poster.jpg",
+		},
 	])("redirects $file to a signed storage URL", async ({ file, key }) => {
 		const response = await play(file);
 
@@ -197,8 +204,9 @@ describe("developer video playback route", () => {
 		mocks.store.video = ready({
 			processing: processingState({
 				hls: { state: "unavailable", reason: "not deployed", retryAt: 0 },
-				mp4: { state: "complete" },
-				bytes: { source: 1_000, hls: 0, mp4: 2_000, poster: 50 },
+				mp4: { state: "complete", output: "mp4-out" },
+				poster: { output: "mp4-out", bytes: 50 },
+				bytes: { source: 1_000, hls: 0, mp4: 2_000 },
 			}),
 		});
 

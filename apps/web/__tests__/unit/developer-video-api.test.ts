@@ -58,9 +58,10 @@ const ready = () =>
 			},
 		],
 		processing: processingState({
-			hls: { state: "complete" },
-			mp4: { state: "complete" },
-			bytes: { source: 1_000, hls: 5_000, mp4: 2_950, poster: 50 },
+			hls: { state: "complete", output: "hls-out" },
+			mp4: { state: "complete", output: "mp4-out" },
+			poster: { output: "mp4-out", bytes: 50 },
+			bytes: { source: 1_000, hls: 5_000, mp4: 2_950 },
 		}),
 	});
 
@@ -152,7 +153,9 @@ describe("developer video API", () => {
 	it("offers no URLs until the video is ready", async () => {
 		mocks.store.video = developerVideo({
 			status: "processing",
-			processing: processingState({ hls: { state: "complete" } }),
+			processing: processingState({
+				hls: { state: "complete", output: "hls-out" },
+			}),
 		});
 
 		const { body } = await get("/video-1/status");
@@ -172,8 +175,9 @@ describe("developer video API", () => {
 			status: "ready",
 			processing: processingState({
 				hls: { state: "unavailable", reason: "not deployed", retryAt: 0 },
-				mp4: { state: "complete" },
-				bytes: { source: 1_000, hls: 0, mp4: 2_000, poster: 50 },
+				mp4: { state: "complete", output: "mp4-out" },
+				poster: { output: "mp4-out", bytes: 50 },
+				bytes: { source: 1_000, hls: 0, mp4: 2_000 },
 			}),
 		});
 

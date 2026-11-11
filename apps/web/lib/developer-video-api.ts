@@ -24,7 +24,7 @@ export function developerVideoOutputs(
 	return {
 		hls: processing.hls.state === "complete",
 		mp4: processing.mp4.state === "complete",
-		poster: processing.bytes.poster > 0,
+		poster: processing.poster !== null,
 	};
 }
 

@@ -13,7 +13,8 @@ export function processingState(
 		hls: { state: "pending" },
 		mp4: { state: "pending" },
 		attempts: { hls: 0, mp4: 0 },
-		bytes: { source: 1_000, hls: 0, mp4: 0, poster: 0 },
+		poster: null,
+		bytes: { source: 1_000, hls: 0, mp4: 0 },
 		...overrides,
 	};
 }

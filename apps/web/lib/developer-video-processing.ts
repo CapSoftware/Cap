@@ -21,9 +21,10 @@ import {
 import {
 	beginPart,
 	createDeveloperVideoProcessingState,
+	type DeveloperVideoPartAction,
 	type DeveloperVideoPartOutcome,
 	type DeveloperVideoRedrive,
-	developerVideoFailureReason,
+	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
@@ -40,9 +41,8 @@ import {
 	readDeveloperVideoText,
 } from "./developer-video-storage";
 import {
-	type MediaServerJobStart,
-	probeVideoViaMediaServer,
 	startMediaServerVideoJob,
+	tryProbeVideoViaMediaServer,
 } from "./media-client";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
@@ -52,16 +52,24 @@ const MEDIA_SERVER_URL_EXPIRES_SECONDS = 3 * 60 * 60;
 const LADDER_UNAVAILABLE_REASON =
 	"Adaptive streaming is not available on the media server yet";
 
+export interface DeveloperVideoClaim {
+	action: DeveloperVideoRedrive;
+	encodeId: string;
+}
+
+export type DeveloperVideoPreparation = "ready" | "retry" | "stale";
+
 export type DeveloperVideoDispatch =
 	| "dispatched"
 	| "busy"
+	| "unconfirmed"
 	| "unavailable"
 	| "failed"
 	| "skipped";
 
 export type DeveloperVideoPartSnapshot = Record<
 	DeveloperVideoPart,
-	DeveloperVideoProcessingState[DeveloperVideoPart]["state"]
+	DeveloperVideoPartAction
 >;
 
 async function mutateDeveloperVideo(
@@ -83,6 +91,21 @@ async function mutateDeveloperVideo(
 			.where(eq(developerVideos.id, videoId));
 		return { ...video, ...updates } as DeveloperVideoRow;
 	});
+}
+
+async function mutateEncode(
+	videoId: string,
+	encodeId: string,
+	mutate: (
+		processing: DeveloperVideoProcessingState,
+		video: DeveloperVideoRow,
+	) => DeveloperVideoUpdate | null,
+): Promise<DeveloperVideoRow | null> {
+	return mutateDeveloperVideo(videoId, (video) =>
+		video.deletedAt || video.processing?.encodeId !== encodeId
+			? null
+			: mutate(video.processing, video),
+	);
 }
 
 function probedColumns(
@@ -120,31 +143,40 @@ async function findDeveloperVideo(
 	return video ?? null;
 }
 
+async function findEncode(videoId: string, encodeId: string) {
+	const video = await findDeveloperVideo(videoId);
+	return video && !video.deletedAt && video.processing?.encodeId === encodeId
+		? { video, processing: video.processing }
+		: null;
+}
+
+function newAttemptToken(): string {
+	return randomBytes(12).toString("base64url");
+}
+
 export async function claimDeveloperVideoProcessing(
 	videoId: string,
 	options: { uploadCompleted?: boolean } = {},
-): Promise<DeveloperVideoRedrive | null> {
-	let claimed: DeveloperVideoRedrive | null = null;
+): Promise<DeveloperVideoClaim | null> {
+	let claimed: DeveloperVideoClaim | null = null;
 	await mutateDeveloperVideo(videoId, (video) => {
 		const now = Date.now();
 		const action = developerVideoRedrive(video, now, options);
 		if (action === "start") {
-			claimed = action;
+			const encodeId = createDeveloperEncodeId();
+			claimed = { action, encodeId };
 			return {
 				status: "processing",
 				errorReason: null,
 				renditions: null,
 				playbackId: video.playbackId ?? createDeveloperPlaybackId(),
-				processing: createDeveloperVideoProcessingState({
-					encodeId: createDeveloperEncodeId(),
-					now,
-				}),
+				processing: createDeveloperVideoProcessingState({ encodeId, now }),
 			};
 		}
 		if (action === "retry-hls" && video.processing) {
 			const processing = retryUnavailableHls(video.processing);
 			if (!processing) return null;
-			claimed = action;
+			claimed = { action, encodeId: processing.encodeId };
 			return { processing };
 		}
 		return null;
@@ -154,56 +186,57 @@ export async function claimDeveloperVideoProcessing(
 
 export async function releaseDeveloperVideoClaim(
 	videoId: string,
-	action: DeveloperVideoRedrive,
+	claim: DeveloperVideoClaim,
 ): Promise<void> {
-	await mutateDeveloperVideo(videoId, (video) => {
-		if (action === "start") {
+	await mutateEncode(videoId, claim.encodeId, (processing, video) => {
+		if (claim.action === "start") {
 			return video.status === "processing"
 				? { status: "uploading", processing: null }
 				: null;
 		}
-		if (!video.processing || video.processing.hls.state !== "pending") {
-			return null;
-		}
-		const token = randomBytes(12).toString("base64url");
+		if (processing.hls.state !== "pending") return null;
+		const token = newAttemptToken();
 		const now = Date.now();
-		const running = beginPart(video.processing, "hls", { token, now });
-		const processing =
+		const running = beginPart(processing, "hls", { token, now });
+		const parked =
 			running &&
 			settlePart(running, "hls", token, {
 				type: "unavailable",
 				reason: LADDER_UNAVAILABLE_REASON,
 				now,
 			});
-		return processing ? { processing } : null;
+		return parked ? { processing: parked } : null;
 	});
 }
 
 export async function prepareDeveloperVideoProcessing(
 	videoId: string,
-): Promise<boolean> {
-	const video = await findDeveloperVideo(videoId);
-	if (!video || video.deletedAt || !video.processing) return false;
-	if (video.processing.probe) return true;
+	encodeId: string,
+): Promise<DeveloperVideoPreparation> {
+	const encode = await findEncode(videoId, encodeId);
+	if (!encode) return "stale";
+	if (encode.processing.probe) return "ready";
+	const { video } = encode;
 	if (!video.s3Key) throw new Error("Video has no uploaded file");
 
 	const source = await headDeveloperVideoObject(video.s3Key);
 	if (!source) throw new Error("Uploaded video was not found in storage");
-	const metadata = await probeVideoViaMediaServer(
+	const probed = await tryProbeVideoViaMediaServer(
 		await internalDeveloperVideoUrl(
 			video.s3Key,
 			MEDIA_SERVER_URL_EXPIRES_SECONDS,
 		),
 	);
+	if (probed.status === "unreachable") return "retry";
+	if (probed.status === "rejected") throw new Error(probed.message);
+	const { metadata } = probed;
 	if (!(metadata.width > 0) || !(metadata.height > 0)) {
 		throw new Error("Uploaded file has no video track");
 	}
 
-	const encodeId = video.processing.encodeId;
-	await mutateDeveloperVideo(videoId, (current) => {
-		if (current.processing?.encodeId !== encodeId) return null;
-		return processingUpdate(current, {
-			...current.processing,
+	const updated = await mutateEncode(videoId, encodeId, (processing, current) =>
+		processingUpdate(current, {
+			...processing,
 			probe: {
 				duration:
 					Number.isFinite(metadata.duration) && metadata.duration > 0
@@ -216,20 +249,22 @@ export async function prepareDeveloperVideoProcessing(
 						? Math.round(metadata.fps)
 						: null,
 			},
-			bytes: { ...current.processing.bytes, source: source.bytes },
-		});
-	});
-	return true;
+			bytes: { ...processing.bytes, source: source.bytes },
+		}),
+	);
+	return updated ? "ready" : "stale";
 }
 
 export async function readDeveloperVideoParts(
 	videoId: string,
+	encodeId: string,
 ): Promise<DeveloperVideoPartSnapshot | null> {
-	const video = await findDeveloperVideo(videoId);
-	if (!video || video.deletedAt || !video.processing) return null;
+	const encode = await findEncode(videoId, encodeId);
+	if (!encode) return null;
+	const now = Date.now();
 	return {
-		hls: video.processing.hls.state,
-		mp4: video.processing.mp4.state,
+		hls: developerVideoPartAction(encode.processing.hls, now),
+		mp4: developerVideoPartAction(encode.processing.mp4, now),
 	};
 }
 
@@ -251,7 +286,7 @@ async function buildJobRequest(
 	if (!video.s3Key || !processing.probe) {
 		throw new Error("Video is missing its source or dimensions");
 	}
-	const keys = developerVideoKeys(video, processing.encodeId);
+	const keys = developerVideoKeys(video, processing.encodeId, token);
 	const plan = planDeveloperVideoEncode(
 		{ width: processing.probe.width, height: processing.probe.height },
 		video.maxResolutionTier,
@@ -316,17 +351,17 @@ async function buildJobRequest(
 
 async function settleDeveloperVideoPart(
 	videoId: string,
+	encodeId: string,
 	part: DeveloperVideoPart,
 	token: string,
 	outcome: DeveloperVideoPartOutcome,
 	renditions?: DeveloperVideoRendition[],
 ): Promise<boolean> {
-	const updated = await mutateDeveloperVideo(videoId, (video) => {
-		if (!video.processing) return null;
-		const processing = settlePart(video.processing, part, token, outcome);
-		if (!processing) return null;
+	const updated = await mutateEncode(videoId, encodeId, (processing, video) => {
+		const settled = settlePart(processing, part, token, outcome);
+		if (!settled) return null;
 		return {
-			...processingUpdate(video, processing),
+			...processingUpdate(video, settled),
 			...(renditions ? { renditions } : {}),
 		};
 	});
@@ -335,61 +370,46 @@ async function settleDeveloperVideoPart(
 
 export async function dispatchDeveloperVideoPart(
 	videoId: string,
+	encodeId: string,
 	part: DeveloperVideoPart,
 ): Promise<DeveloperVideoDispatch> {
-	const token = randomBytes(12).toString("base64url");
-	const video = await mutateDeveloperVideo(videoId, (current) => {
-		if (current.deletedAt || !current.processing) return null;
-		const processing = beginPart(current.processing, part, {
-			token,
-			now: Date.now(),
-		});
-		return processing ? { processing } : null;
+	const token = newAttemptToken();
+	const video = await mutateEncode(videoId, encodeId, (processing) => {
+		const started = beginPart(processing, part, { token, now: Date.now() });
+		return started ? { processing: started } : null;
 	});
 	if (!video?.processing) return "skipped";
 
 	const request = await buildJobRequest(video, video.processing, part, token);
-	const started = await startMediaServerVideoJob(
-		request.path,
-		request.body,
-	).catch((error): MediaServerJobStart => {
-		console.error("[developer-video] Media server did not answer", {
-			videoId,
-			part,
-			error,
-		});
-		return { status: "busy" };
-	});
+	const started = await startMediaServerVideoJob(request.path, request.body);
 
 	if (started.status === "started") {
-		await mutateDeveloperVideo(videoId, (current) => {
-			const processing =
-				current.processing &&
-				markPartDispatched(current.processing, part, {
-					token,
-					jobId: started.jobId,
-				});
-			return processing ? { processing } : null;
+		await mutateEncode(videoId, encodeId, (processing) => {
+			const dispatched = markPartDispatched(processing, part, {
+				token,
+				jobId: started.jobId,
+			});
+			return dispatched ? { processing: dispatched } : null;
 		});
 		return "dispatched";
 	}
-	if (started.status === "busy") {
-		await mutateDeveloperVideo(videoId, (current) => {
-			const processing =
-				current.processing && releasePart(current.processing, part, token);
-			return processing ? { processing } : null;
+	if (started.status === "unconfirmed") return "unconfirmed";
+	if (started.status === "busy" || started.status === "unreachable") {
+		await mutateEncode(videoId, encodeId, (processing) => {
+			const released = releasePart(processing, part, token);
+			return released ? { processing: released } : null;
 		});
 		return "busy";
 	}
 	if (started.status === "unavailable" && part === "hls") {
-		await settleDeveloperVideoPart(videoId, part, token, {
+		await settleDeveloperVideoPart(videoId, encodeId, part, token, {
 			type: "unavailable",
 			reason: LADDER_UNAVAILABLE_REASON,
 			now: Date.now(),
 		});
 		return "unavailable";
 	}
-	await settleDeveloperVideoPart(videoId, part, token, {
+	await settleDeveloperVideoPart(videoId, encodeId, part, token, {
 		type: "failed",
 		reason:
 			started.status === "rejected"
@@ -401,26 +421,17 @@ export async function dispatchDeveloperVideoPart(
 
 export async function failDeveloperVideoProcessing(
 	videoId: string,
+	encodeId: string,
 	reason: string,
 ): Promise<void> {
-	await mutateDeveloperVideo(videoId, (video) => {
-		if (!video.processing) {
-			return video.status === "processing"
-				? {
-						status: "errored",
-						errorReason: developerVideoFailureReason(reason),
-					}
-				: null;
-		}
-		return processingUpdate(
-			video,
-			failUnfinishedParts(video.processing, reason),
-		);
-	});
+	await mutateEncode(videoId, encodeId, (processing, video) =>
+		processingUpdate(video, failUnfinishedParts(processing, reason)),
+	);
 }
 
 interface DeveloperVideoProgressPayload {
 	videoId?: unknown;
+	jobId?: unknown;
 	phase?: unknown;
 	error?: unknown;
 	message?: unknown;
@@ -431,12 +442,13 @@ async function completedOutcome(
 	video: DeveloperVideoRow,
 	processing: DeveloperVideoProcessingState,
 	part: DeveloperVideoPart,
+	token: string,
 	payload: DeveloperVideoProgressPayload,
 ): Promise<{
 	outcome: DeveloperVideoPartOutcome;
 	renditions?: DeveloperVideoRendition[];
 }> {
-	const keys = developerVideoKeys(video, processing.encodeId);
+	const keys = developerVideoKeys(video, processing.encodeId, token);
 	const poster = await headDeveloperVideoObject(keys.poster);
 	const posterBytes = poster?.bytes ?? 0;
 
@@ -489,21 +501,32 @@ export async function applyDeveloperVideoProgress(
 		return ignored;
 	}
 	const part: DeveloperVideoPart = partParam;
+
+	const video = await findDeveloperVideo(payload.videoId);
+	const processing = video?.processing;
+	const current = processing?.[part];
+	if (
+		!video ||
+		!processing ||
+		current?.state !== "running" ||
+		current.token !== token
+	) {
+		return ignored;
+	}
+	const { encodeId } = processing;
+
 	if (
 		payload.phase !== "complete" &&
 		payload.phase !== "error" &&
 		payload.phase !== "cancelled"
 	) {
-		return ignored;
-	}
-
-	const video = await findDeveloperVideo(payload.videoId);
-	const current = video?.processing?.[part];
-	if (
-		!video?.processing ||
-		current?.state !== "running" ||
-		current.token !== token
-	) {
+		const jobId = payload.jobId;
+		if (current.jobId === null && typeof jobId === "string" && jobId) {
+			await mutateEncode(video.id, encodeId, (latest) => {
+				const confirmed = markPartDispatched(latest, part, { token, jobId });
+				return confirmed ? { processing: confirmed } : null;
+			});
+		}
 		return ignored;
 	}
 
@@ -512,21 +535,26 @@ export async function applyDeveloperVideoProgress(
 			(typeof payload.error === "string" && payload.error) ||
 			(typeof payload.message === "string" && payload.message) ||
 			"Video processing failed";
-		const applied = await settleDeveloperVideoPart(video.id, part, token, {
-			type: "failed",
-			reason,
-		});
+		const applied = await settleDeveloperVideoPart(
+			video.id,
+			encodeId,
+			part,
+			token,
+			{ type: "failed", reason },
+		);
 		return { success: true, applied };
 	}
 
 	const { outcome, renditions } = await completedOutcome(
 		video,
-		video.processing,
+		processing,
 		part,
+		token,
 		payload,
 	);
 	const applied = await settleDeveloperVideoPart(
 		video.id,
+		encodeId,
 		part,
 		token,
 		outcome,

@@ -114,16 +114,29 @@ export async function developerPlaybackResponse(
 	const video = await findPlayableVideo(playbackId);
 	if (!video?.processing) return notFound();
 
+	const { processing } = video;
 	const outputs = developerVideoOutputs(video);
-	const keys = developerVideoKeys(video, video.processing.encodeId);
+	const keysFor = (output: string) =>
+		developerVideoKeys(video, processing.encodeId, output);
 
 	if (file === DEVELOPER_VIDEO_MP4_FILE) {
-		return outputs.mp4 ? redirectTo(keys.mp4) : notFound();
+		return outputs.mp4 && processing.mp4.state === "complete"
+			? redirectTo(keysFor(processing.mp4.output).mp4)
+			: notFound();
 	}
 	if (file === DEVELOPER_VIDEO_POSTER_FILE) {
-		return outputs.poster ? redirectTo(keys.poster) : notFound();
+		return outputs.poster && processing.poster
+			? redirectTo(keysFor(processing.poster.output).poster)
+			: notFound();
 	}
-	if (!outputs.hls || !HLS_FILE_PATTERN.test(file)) return notFound();
+	if (
+		!outputs.hls ||
+		processing.hls.state !== "complete" ||
+		!HLS_FILE_PATTERN.test(file)
+	) {
+		return notFound();
+	}
+	const keys = keysFor(processing.hls.output);
 	if (MEDIA_FILE_PATTERN.test(file)) {
 		return redirectTo(`${keys.hlsPrefix}${file}`);
 	}
