@@ -700,7 +700,7 @@ impl EditorWindow {
         normalize_export_options(ui, has_transparent_background(&self.project));
     }
 
-    fn normalize_loaded_export_options(&mut self) {
+    pub(crate) fn normalize_loaded_export_options(&mut self) {
         let transparent = has_transparent_background(&self.project);
         if let Some(ui) = self.export.as_mut() {
             normalize_export_options(ui, transparent);
@@ -1963,6 +1963,9 @@ impl EditorWindow {
                     if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
                         ui.format = ExportFormatKind::Mp4;
                     }
+                }
+                this.normalize_loaded_export_options();
+                if let Some(ui) = this.export.as_mut() {
                     ui.persist();
                 }
                 this.refresh_export_preview(window, cx);
