@@ -84,7 +84,7 @@ export const Performance = () => (
 								lead="in"
 								value={SPEED_MINUTES_TO_FULLY_PROCESSED}
 								unit="minutes"
-								label="fully downloadable"
+								label="every resolution ready"
 							/>
 						</>
 					}

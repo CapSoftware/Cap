@@ -31,7 +31,7 @@ const PROOFS = [
 	{
 		href: `#${ANCHORS.speed}`,
 		figure: `${SPEED_MINUTES_TO_FULLY_PROCESSED} minutes`,
-		label: "until it is fully downloadable",
+		label: "until every resolution is ready",
 	},
 ] as const;
 
