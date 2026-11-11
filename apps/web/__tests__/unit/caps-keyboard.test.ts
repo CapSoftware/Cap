@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Caps, type VideoData } from "@/app/(org)/dashboard/caps/Caps";
 
-const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ mutate: vi.fn(), pending: false }));
 
 vi.mock("@cap/ui", () => ({ Button: () => null }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
@@ -22,7 +22,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("sonner", () => ({ toast: {} }));
 vi.mock("@/lib/EffectRuntime", () => ({
 	useRpcClient: () => ({}),
-	useEffectMutation: () => ({ mutate: mocks.mutate, isPending: false }),
+	useEffectMutation: () => ({ mutate: mocks.mutate, isPending: mocks.pending }),
 }));
 vi.mock("@/lib/Queries/Analytics", () => ({
 	useVideosAnalyticsQuery: () => ({ data: {}, isLoading: false }),
@@ -88,25 +88,26 @@ const data: VideoData = [
 ];
 
 let root: Root;
+const render = () =>
+	root.render(
+		createElement(Caps, {
+			data,
+			count: 1,
+			folders: [],
+			analyticsEnabled: false,
+		}),
+	);
 let container: HTMLDivElement;
 let selection: HTMLButtonElement;
 
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	mocks.mutate.mockClear();
+	mocks.pending = false;
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
-	await act(async () => {
-		root.render(
-			createElement(Caps, {
-				data,
-				count: 1,
-				folders: [],
-				analyticsEnabled: false,
-			}),
-		);
-	});
+	await act(async () => render());
 	const button = container.querySelector<HTMLButtonElement>("button");
 	if (!button) throw new Error("Selection button missing");
 	selection = button;
@@ -189,6 +190,27 @@ describe("Cap selection keyboard shortcuts", () => {
 				}),
 			);
 		}
+		expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith([data[0]?.id]);
+	});
+
+	it("waits for a running delete before deleting again", async () => {
+		const press = () =>
+			selection.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "Delete",
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		mocks.pending = true;
+		await act(async () => render());
+		selection.focus();
+		press();
+		expect(mocks.mutate).not.toHaveBeenCalled();
+
+		mocks.pending = false;
+		await act(async () => render());
+		press();
 		expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith([data[0]?.id]);
 	});
 
