@@ -1,6 +1,6 @@
-import { Logo } from "@cap/ui/logo";
 import Link from "next/link";
 import { LINKS, NAV_LINKS } from "./content";
+import { Lockup } from "./Lockup";
 
 const NAV_ITEM =
 	"rounded-[6px] px-2.5 py-1.5 text-[13.5px] text-[rgba(232,236,244,0.58)] transition-colors duration-200 hover:text-[#E8ECF4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]";
@@ -12,20 +12,9 @@ export const Header = () => (
 				<Link
 					href="/infra"
 					aria-label="Cap Infra"
-					className="flex shrink-0 items-center gap-2 rounded-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]"
+					className="flex shrink-0 items-center rounded-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]"
 				>
-					<Logo
-						white
-						viewBoxDimensions="0 0 120 40"
-						style={{ width: 64, height: 28 }}
-					/>
-					<span
-						aria-hidden="true"
-						className="h-4 w-px bg-[rgba(222,230,246,0.2)]"
-					/>
-					<span className="text-[15px] font-medium tracking-[-0.02em] text-[#E8ECF4]">
-						Infra
-					</span>
+					<Lockup height={22} />
 				</Link>
 				<nav aria-label="Cap Infra" className="hidden items-center md:flex">
 					{NAV_LINKS.map((link) => (
