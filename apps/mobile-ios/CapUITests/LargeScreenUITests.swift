@@ -55,6 +55,25 @@ final class LargeScreenUITests: XCTestCase {
         XCTAssertTrue(moved, "The detail column moved to the second Cap")
     }
 
+    func testDeletingOpenCapClosesIt() throws {
+        let app = try launch()
+        let row = rows(app).matching(NSPredicate(format: "label CONTAINS %@", Self.walkthrough)).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.tap()
+        XCTAssertTrue(app.segmentedControls.firstMatch.waitForExistence(timeout: 15))
+
+        app.buttons["More"].firstMatch.tap()
+        let delete = app.buttons["Delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        let confirm = app.buttons["Delete Cap"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts["Pick a Cap"].waitForExistence(timeout: 10), "The deleted Cap leaves the detail column")
+        XCTAssertFalse(app.segmentedControls.firstMatch.exists)
+    }
+
     func testLinkOpensInDetailColumn() throws {
         let app = try launch(route: "cap:cap_stress?t=12")
         XCTAssertTrue(app.segmentedControls.firstMatch.waitForExistence(timeout: 15))
