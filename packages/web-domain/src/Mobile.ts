@@ -266,6 +266,8 @@ export const MobileUploadProgress = Schema.Struct({
 	processingError: Schema.NullOr(Schema.String),
 });
 
+export const MobileLinkAccess = Schema.Literal("anyone", "restricted");
+
 export const MobileCapSummary = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
@@ -285,6 +287,8 @@ export const MobileCapSummary = Schema.Struct({
 	reactionCount: Schema.Number,
 	upload: Schema.NullOr(MobileUploadProgress),
 	ownedByCurrentUser: Schema.optional(Schema.Boolean),
+	linkAccess: Schema.optional(MobileLinkAccess),
+	linkRestricted: Schema.optional(Schema.Boolean),
 });
 
 export const MobileComment = Schema.Struct({
@@ -411,6 +415,7 @@ export const MobileProfileImageInput = Schema.Struct({
 
 export const MobileCapSharingInput = Schema.Struct({
 	public: Schema.Boolean,
+	linkAccess: Schema.optional(MobileLinkAccess),
 });
 
 export const MobileCapTitleInput = Schema.Struct({
@@ -857,6 +862,7 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 			.setPayload(MobileCapSharingInput)
 			.addSuccess(MobileCapSummary)
 			.middleware(HttpAuthMiddleware)
+			.addError(HttpApiError.Conflict)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	)

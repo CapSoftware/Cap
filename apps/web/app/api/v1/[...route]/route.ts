@@ -134,6 +134,7 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
@@ -148,6 +149,7 @@ import {
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
 import { transcribeVideo } from "@/lib/transcribe";
+import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -2706,10 +2708,30 @@ const AgentHandlersLive = HttpApiBuilder.group(
 						if (!cap.capabilities.download.allowed) {
 							return yield* forbidden(requestId);
 						}
-						const videos = yield* Videos;
 						const principal = yield* Agent.AgentPrincipal;
+						// Viewing a cap is not enough to download it: the same check as
+						// the share page and the dashboard decides, so the cap and
+						// organization download switches apply and non-members only
+						// ever get the published MP4.
+						const access = yield* Effect.tryPromise(() =>
+							currentVideoDownloadAccess(
+								path.id,
+								Option.some(toCurrentUser(principal)),
+							),
+						).pipe(
+							Effect.catchAll((error) =>
+								Effect.logError(
+									"Video download access check failed",
+									error,
+								).pipe(Effect.as("denied" as const)),
+							),
+						);
+						if (access === "denied") {
+							return yield* forbidden(requestId);
+						}
+						const videos = yield* Videos;
 						const result = yield* videos
-							.getDownloadInfo(path.id)
+							.getDownloadInfo(path.id, { publishedOnly: access === "viewer" })
 							.pipe(
 								Effect.provideService(CurrentUser, toCurrentUser(principal)),
 							);
@@ -4849,7 +4871,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								const now = new Date();
 								await tx
 									.update(Db.organizations)
-									.set({ settings: next, updatedAt: now })
+									.set({
+										settings: organizationSettingsKeepingLinkOverride(next),
+										updatedAt: now,
+									})
 									.where(eq(Db.organizations.id, path.organizationId));
 								return {
 									state: "success",

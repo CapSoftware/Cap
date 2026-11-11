@@ -244,6 +244,61 @@ final class CapUITests: XCTestCase {
         }
     }
 
+    func testCaptureModes() {
+        let app = launch()
+        let tab = app.tabBars.buttons["Record"]
+        waitFor(tab, 20)
+        let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
+        wait(for: [hittable], timeout: 10)
+        tab.tap()
+        waitFor(app.buttons["Close"], 10)
+        waitFor(app.staticTexts["Instant Mode"], 10)
+        shot("75-record-modes")
+        for mode in ["Studio Mode", "Screenshot Mode"] {
+            let button = app.buttons[mode]
+            waitFor(button, 10)
+            XCTAssertEqual(button.value as? String, "Coming soon")
+            button.tap()
+            waitFor(app.staticTexts["\(mode) is coming soon"], 5)
+            shot("75-record-\(mode.split(separator: " ")[0].lowercased())-soon")
+            waitFor(app.staticTexts["Instant Mode"], 10)
+        }
+    }
+
+    func testLinkAccessSwitch() {
+        let app = launch(route: "cap:cap_link")
+        let more = app.buttons["More"].firstMatch
+        let open = app.buttons["Open to anyone with the link"].firstMatch
+        let limit = app.buttons["Limit to your organization"].firstMatch
+        waitFor(more, 15)
+        more.tap()
+        waitFor(open)
+        XCTAssertFalse(limit.exists)
+        shot("90-link-restricted-menu")
+        open.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(limit)
+        XCTAssertFalse(open.exists)
+        shot("91-link-open-menu")
+        limit.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(open)
+        app.buttons["Make private"].firstMatch.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(app.buttons["Make public"].firstMatch)
+        XCTAssertFalse(open.exists)
+        XCTAssertFalse(limit.exists)
+        shot("92-link-private-menu")
+        app.buttons["Make public"].firstMatch.tap()
+        waitFor(more)
+        more.tap()
+        waitFor(open)
+        XCTAssertFalse(limit.exists)
+    }
+
     func testScopeBar() {
         let app = launch()
         let myCaps = app.buttons["My Caps"]

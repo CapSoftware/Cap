@@ -237,10 +237,12 @@ export const organizations = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			disableDownloads?: boolean;
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
+			allowPublicLinkOverride?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -488,8 +490,10 @@ export const videos = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			disableDownloads?: boolean;
 			defaultPlaybackSpeed?: number;
 			callToAction?: VideoCallToAction;
+			linkAccess?: "anyone";
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
