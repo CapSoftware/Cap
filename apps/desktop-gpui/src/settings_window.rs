@@ -1333,7 +1333,8 @@ impl SettingsWindow {
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = crate::app_windows::screenshot_editor_key(&path);
+        cx.spawn_in(window, async move |_this, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -1356,8 +1357,10 @@ impl SettingsWindow {
                 tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| this.refresh_screenshots(window, cx))
-                .ok();
+            cx.update(|_, cx| {
+                cx.defer(move |cx| crate::app_windows::screenshot_deleted_from_library(key, cx))
+            })
+            .ok();
         })
         .detach();
     }

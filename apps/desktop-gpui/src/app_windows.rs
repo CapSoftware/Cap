@@ -7647,6 +7647,30 @@ pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
     refresh_screenshot_surfaces(cx);
 }
 
+/// The key a screenshot editor opened from `path` (a `.cap` bundle or the
+/// image inside it) is registered under. Taken before the bundle is deleted:
+/// a deleted path no longer canonicalizes to that key.
+pub(crate) fn screenshot_editor_key(path: &Path) -> Option<PathBuf> {
+    screenshot_editor::resolve_bundle(path).map(|bundle| editor_key(&bundle))
+}
+
+/// A library list (Settings or the main window) deleted a screenshot. An
+/// editor still open on it closes the way the editor's own Delete closes it,
+/// so it stops saving into a folder that is gone, and every list of
+/// screenshots refreshes, not only the one the Delete came from.
+pub(crate) fn screenshot_deleted_from_library(key: Option<PathBuf>, cx: &mut App) {
+    let open = key.filter(|key| {
+        cx.global::<AppWindows>()
+            .screenshot_editors
+            .iter()
+            .any(|(path, _)| path == key)
+    });
+    match open {
+        Some(key) => close_screenshot_editor_after_delete(&key, cx),
+        None => refresh_screenshot_surfaces(cx),
+    }
+}
+
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -8067,6 +8091,48 @@ mod tests {
             camera_park: CameraPark::default(),
             clean_capture: None,
             clean_capture_generation: 0,
+        }
+    }
+
+    /// A screenshot deleted from a library list (Settings passes the image,
+    /// the main window the bundle) closes an editor still open on it, which
+    /// would otherwise keep saving edits into a folder that no longer exists.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_library_screenshot_delete_closes_the_editor_open_on_it(cx: &mut gpui::TestAppContext) {
+        let library = tempfile::tempdir().unwrap();
+        let bundle = library.path().join("Screenshot.cap");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let image = bundle.join("Screenshot.png");
+        std::fs::write(&image, b"png").unwrap();
+        let key = editor_key(&bundle);
+        assert_eq!(screenshot_editor_key(&image).as_ref(), Some(&key));
+        assert_eq!(screenshot_editor_key(&bundle).as_ref(), Some(&key));
+
+        for listed in [image.clone(), bundle.clone()] {
+            std::fs::create_dir_all(&bundle).unwrap();
+            let deleted = screenshot_editor_key(&listed);
+            let handle = cx.add_window({
+                let key = key.clone();
+                move |window, cx| ScreenshotEditorWindow::new(key, window, cx)
+            });
+            cx.update(|cx| {
+                crate::session::RecordingSession::init(cx);
+                let mut windows = test_app_windows(Vec::new());
+                windows.main_closed_by_user = true;
+                windows.screenshot_editors.push((key.clone(), handle));
+                cx.set_global(windows);
+            });
+            std::fs::remove_dir_all(&bundle).unwrap();
+
+            cx.update(|cx| screenshot_deleted_from_library(deleted, cx));
+
+            assert!(
+                handle.update(cx, |_, _, _| ()).is_err(),
+                "the editor on {} closed",
+                listed.display()
+            );
+            cx.update(|cx| assert!(cx.global::<AppWindows>().screenshot_editors.is_empty()));
         }
     }
 
