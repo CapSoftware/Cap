@@ -406,6 +406,7 @@ final class EditorModel {
     /// learned from seeks made while dragging.
     private var exactSeekCost: Double = 0
     private var seekSerial = 0
+    private var exactInFlight: (serial: Int, issued: CFTimeInterval, watched: Bool)?
 
     private func settle(source: Bool, to time: Double, after delay: Double) {
         settleTask?.cancel()
@@ -421,9 +422,21 @@ final class EditorModel {
         guard !seekInFlight else {
             // The newest target wins; the settle seek always comes last, so an exact landing is never lost.
             pendingSeek = seek
+            watchForOvertake(by: seek)
             return
         }
         issue(seek)
+    }
+
+    /// Whatever exact seek is running, a settle seek included, gets its budget counted from when it was issued.
+    private func watchForOvertake(by seek: Seek) {
+        guard let budget = seek.budget, let running = exactInFlight, !running.watched else { return }
+        exactInFlight?.watched = true
+        let remaining = max(0, running.issued + budget - CACurrentMediaTime())
+        Task { [weak self] in
+            if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+            self?.overtake(running.serial, budget: budget)
+        }
     }
 
     private func issue(_ seek: Seek) {
@@ -433,6 +446,7 @@ final class EditorModel {
         let issued = CACurrentMediaTime()
         let before: CMTime = seek.exact ? .zero : .positiveInfinity
         let player = seek.source ? sourcePlayer : self.player
+        exactInFlight = seek.exact ? (serial, issued, false) : nil
         player.seek(to: CMTime(seconds: seek.time, preferredTimescale: 600), toleranceBefore: before, toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in
                 guard let self, serial == self.seekSerial else { return }
@@ -441,16 +455,12 @@ final class EditorModel {
                 if seek.exact { self.exactSeekCost = (self.exactSeekCost + took) / 2 }
                 if seek.source, self.isTrimming { self.showsSource = true }
                 self.seekInFlight = false
+                self.exactInFlight = nil
                 if let next = self.pendingSeek {
                     self.pendingSeek = nil
                     self.chaseSeek(next)
                 }
             }
-        }
-        guard seek.exact, let budget = seek.budget else { return }
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(budget))
-            self?.overtake(serial, budget: budget)
         }
     }
 
@@ -458,7 +468,11 @@ final class EditorModel {
     /// at the newer position, so the picture never freezes for longer than the budget. One slow seek among fast ones
     /// keeps exact frames; a second in a row switches to keyframes until exact seeks are quick again.
     private func overtake(_ serial: Int, budget: Double) {
-        guard serial == seekSerial, seekInFlight, let next = pendingSeek, next.budget != nil else { return }
+        guard serial == seekSerial, seekInFlight else { return }
+        guard let next = pendingSeek, next.budget != nil else {
+            exactInFlight?.watched = false
+            return
+        }
         exactSeekCost = (exactSeekCost + budget * 1.5) / 2
         pendingSeek = nil
         metrics.record("overtakenSeeks", 1)
