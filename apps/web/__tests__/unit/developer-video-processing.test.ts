@@ -169,7 +169,7 @@ describe("developer video webhook", () => {
 			state: "complete",
 			output: "t-mp4",
 		});
-		expect(video().processing?.poster).toEqual({ output: "t-mp4", bytes: 50 });
+		expect(video().processing?.poster).toEqual({ output: "t-mp4" });
 		expect(mocks.head).toHaveBeenCalledWith(`${ENCODE}/t-mp4/video.mp4`);
 		expect(video().storedBytes).toBe(1_000 + 2_000 + 50);
 	});
@@ -183,8 +183,8 @@ describe("developer video webhook", () => {
 			processing: processingState({
 				hls: runningPart("t-hls"),
 				mp4: { state: "complete", output: "mp4-out" },
-				poster: { output: "mp4-out", bytes: 50 },
-				bytes: { source: 1_000, hls: 0, mp4: 2_000 },
+				poster: { output: "mp4-out" },
+				bytes: { source: 1_000, hls: 0, mp4: 2_000, poster: 50 },
 			}),
 		});
 
@@ -204,7 +204,7 @@ describe("developer video webhook", () => {
 		expect(video()).toMatchObject({
 			status: "ready",
 			errorReason: null,
-			storedBytes: 1_000 + 6_000 + 2_000 + 50,
+			storedBytes: 1_000 + 6_000 + 2_000 + 50 + 50,
 			duration: 12,
 			width: 1920,
 			height: 1080,
@@ -353,7 +353,7 @@ describe("developer video dispatch", () => {
 			processing: processingState({
 				probe: null,
 				poster: null,
-				bytes: { source: 0, hls: 0, mp4: 0 },
+				bytes: { source: 0, hls: 0, mp4: 0, poster: 0 },
 			}),
 		});
 

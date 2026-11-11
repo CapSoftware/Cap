@@ -38,7 +38,7 @@ export function createDeveloperVideoProcessingState(input: {
 		mp4: { state: "pending" },
 		attempts: { hls: 0, mp4: 0 },
 		poster: null,
-		bytes: { source: 0, hls: 0, mp4: 0 },
+		bytes: { source: 0, hls: 0, mp4: 0, poster: 0 },
 	};
 }
 
@@ -128,12 +128,12 @@ export function settlePart(
 		return {
 			...state,
 			[part]: { state: "complete", output: token },
-			poster:
-				state.poster ??
-				(outcome.posterBytes
-					? { output: token, bytes: outcome.posterBytes }
-					: null),
-			bytes: { ...state.bytes, [part]: outcome.bytes },
+			poster: state.poster ?? (outcome.posterBytes ? { output: token } : null),
+			bytes: {
+				...state.bytes,
+				[part]: outcome.bytes,
+				poster: state.bytes.poster + (outcome.posterBytes ?? 0),
+			},
 		};
 	}
 	if (outcome.type === "unavailable") {
@@ -211,8 +211,8 @@ export function resolveDeveloperVideoStatus(
 export function developerVideoStoredBytes(
 	state: DeveloperVideoProcessingState,
 ): number {
-	const { source, hls, mp4 } = state.bytes;
-	return source + hls + mp4 + (state.poster?.bytes ?? 0);
+	const { source, hls, mp4, poster } = state.bytes;
+	return source + hls + mp4 + poster;
 }
 
 export function developerVideoRedrive(

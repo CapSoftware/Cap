@@ -103,7 +103,7 @@ describe("developer video processing state", () => {
 		).toBeNull();
 	});
 
-	it("keeps the poster from the first part that stored one", () => {
+	it("plays the first stored poster and counts every stored poster", () => {
 		const withPoster = (part: "hls" | "mp4", token: string, from = fresh()) => {
 			const next = settlePart(running(part, token, from), part, token, {
 				type: "complete",
@@ -116,8 +116,9 @@ describe("developer video processing state", () => {
 		const first = withPoster("mp4", "mp4-attempt");
 		const second = withPoster("hls", "hls-attempt", first);
 
-		expect(second.poster).toEqual({ output: "mp4-attempt", bytes: 5 });
-		expect(developerVideoStoredBytes(second)).toBe(25);
+		expect(second.poster).toEqual({ output: "mp4-attempt" });
+		expect(second.bytes.poster).toBe(10);
+		expect(developerVideoStoredBytes(second)).toBe(30);
 	});
 
 	it("is ready only once both parts have finished", () => {

@@ -57,8 +57,8 @@ const ready = (overrides = {}) =>
 		processing: processingState({
 			hls: { state: "complete", output: "hls-out" },
 			mp4: { state: "complete", output: "mp4-out" },
-			poster: { output: "mp4-out", bytes: 50 },
-			bytes: { source: 1_000, hls: 5_000, mp4: 2_000 },
+			poster: { output: "mp4-out" },
+			bytes: { source: 1_000, hls: 5_000, mp4: 2_000, poster: 50 },
 		}),
 		...overrides,
 	});
@@ -205,8 +205,8 @@ describe("developer video playback route", () => {
 			processing: processingState({
 				hls: { state: "unavailable", reason: "not deployed", retryAt: 0 },
 				mp4: { state: "complete", output: "mp4-out" },
-				poster: { output: "mp4-out", bytes: 50 },
-				bytes: { source: 1_000, hls: 0, mp4: 2_000 },
+				poster: { output: "mp4-out" },
+				bytes: { source: 1_000, hls: 0, mp4: 2_000, poster: 50 },
 			}),
 		});
 
