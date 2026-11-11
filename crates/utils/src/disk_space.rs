@@ -198,7 +198,7 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
 
-    let probe_path = extended_length_path(existing_directory(path));
+    let probe_path = extended_length_path(resolve_existing_ancestor(path));
     let mut wide: Vec<u16> = probe_path.as_os_str().encode_wide().collect();
     if wide.last().copied() != Some(0) {
         wide.push(0);
