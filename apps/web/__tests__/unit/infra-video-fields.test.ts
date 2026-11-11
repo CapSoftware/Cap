@@ -8,27 +8,31 @@ const source = readFileSync(
 );
 const start = source.indexOf("export async function getDeveloperAppVideos");
 const body = source.slice(start, source.indexOf("\n}\n", start));
+const selectStart = body.indexOf(".select(");
+const selection = body.slice(selectStart, body.indexOf(".from(", selectStart));
+const selected = [...selection.matchAll(/(\w+):\s*developerVideos\.(\w+)/g)];
+
+const SHOWN = [
+	"createdAt",
+	"duration",
+	"externalUserId",
+	"height",
+	"id",
+	"name",
+	"width",
+];
 
 describe("console video query", () => {
 	it("names the columns it sends to the browser", () => {
 		expect(start).toBeGreaterThan(-1);
-		expect(body).not.toMatch(/\.select\(\s*\)/);
-		for (const column of [
-			"id",
-			"name",
-			"externalUserId",
-			"duration",
-			"width",
-			"height",
-			"createdAt",
-		]) {
-			expect(body).toContain(`${column}: developerVideos.${column}`);
-		}
+		expect(selectStart).toBeGreaterThan(-1);
+		expect(selection).not.toMatch(/\.select\(\s*\)/);
 	});
 
-	it("leaves storage keys and internal state on the server", () => {
-		for (const column of ["s3Key", "metadata", "processing", "renditions"]) {
-			expect(body).not.toContain(`developerVideos.${column}`);
-		}
+	it("sends exactly the fields the pages show and nothing else", () => {
+		expect(selected.map((match) => match[1]).sort()).toEqual(SHOWN);
+		expect(selected.map((match) => match[2]).sort()).toEqual(SHOWN);
+		expect(selection.match(/developerVideos\./g)).toHaveLength(SHOWN.length);
+		expect(selection).not.toContain("...");
 	});
 });
