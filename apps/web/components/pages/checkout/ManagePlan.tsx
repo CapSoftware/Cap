@@ -147,7 +147,8 @@ export function ManagePlan({
 	}
 
 	return (
-		<AddSeats
+		<ManagedPlan
+			key={requestedYearly ? "yearly" : "seats"}
 			details={plan.details}
 			requestedSeats={requestedSeats}
 			requestedYearly={requestedYearly}
@@ -157,7 +158,12 @@ export function ManagePlan({
 
 type ManagedDetails = Extract<CurrentPlan, { type: "managed" }>["details"];
 
-function AddSeats({
+const canSwitchToYearly = (details: ManagedDetails) =>
+	details.billingInterval === "month" &&
+	details.status === "active" &&
+	!details.cancelAtPeriodEnd;
+
+function ManagedPlan({
 	details,
 	requestedSeats,
 	requestedYearly,
@@ -166,6 +172,76 @@ function AddSeats({
 	requestedSeats: number;
 	requestedYearly: boolean;
 }) {
+	// Decided once per visit: after a successful switch router.refresh()
+	// brings back a yearly plan, and re-deciding would unmount the
+	// confirmation the customer just paid for.
+	const [showYearlySwitch] = useState(
+		() => requestedYearly && canSwitchToYearly(details),
+	);
+
+	if (showYearlySwitch) {
+		return (
+			<SwitchToYearly
+				details={details}
+				summary={<PlanSummary details={details} />}
+			/>
+		);
+	}
+	return <AddSeats details={details} requestedSeats={requestedSeats} />;
+}
+
+function PlanSummary({ details }: { details: ManagedDetails }) {
+	const current = details.currentQuantity;
+	const yearly = details.billingInterval === "year";
+	const perSeatPerPeriod = yearly
+		? details.pricePerSeat * 12
+		: details.pricePerSeat;
+	const pastDue = details.status === "past_due";
+
+	return (
+		<>
+			<PlanHeading tag={pastDue ? "Payment due" : "Your plan"} />
+			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
+				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
+					{formatAmount(perSeatPerPeriod, details.currency)}
+				</span>
+				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
+					per user, per {yearly ? "year" : "month"}
+				</span>
+			</div>
+			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
+				<SummaryRow
+					label="Seats"
+					value={`${current} ${current === 1 ? "seat" : "seats"}`}
+				/>
+				<SummaryRow label="Billing" value={yearly ? "Yearly" : "Monthly"} />
+				<SummaryRow
+					label={details.cancelAtPeriodEnd ? "Ends on" : "Renews on"}
+					value={formatDate(details.currentPeriodEnd)}
+				/>
+				<SummaryRow
+					label={`Every ${yearly ? "year" : "month"}`}
+					value={formatAmount(perSeatPerPeriod * current, details.currency)}
+				/>
+			</dl>
+			<Link
+				href="/dashboard/settings/organization"
+				className="mt-5 inline-flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
+			>
+				Manage billing and invoices
+			</Link>
+			<PlanFeatures />
+		</>
+	);
+}
+
+function AddSeats({
+	details,
+	requestedSeats,
+}: {
+	details: ManagedDetails;
+	requestedSeats: number;
+}) {
 	const router = useRouter();
 	const current = details.currentQuantity;
 	const yearly = details.billingInterval === "year";
@@ -173,8 +249,6 @@ function AddSeats({
 		? details.pricePerSeat * 12
 		: details.pricePerSeat;
 	const pastDue = details.status === "past_due";
-	const canSwitchToYearly =
-		!yearly && details.status === "active" && !details.cancelAtPeriodEnd;
 
 	const [seats, setSeats] = useState(() =>
 		Math.min(MAX_SEATS, Math.max(current + 1, requestedSeats)),
@@ -232,45 +306,7 @@ function AddSeats({
 		if (next.ok) router.refresh();
 	};
 
-	const summary = (
-		<>
-			<PlanHeading tag={pastDue ? "Payment due" : "Your plan"} />
-			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
-				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
-					{formatAmount(perSeatPerPeriod, details.currency)}
-				</span>
-				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
-					per user, per {yearly ? "year" : "month"}
-				</span>
-			</div>
-			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
-				<SummaryRow
-					label="Seats"
-					value={`${current} ${current === 1 ? "seat" : "seats"}`}
-				/>
-				<SummaryRow label="Billing" value={yearly ? "Yearly" : "Monthly"} />
-				<SummaryRow
-					label={details.cancelAtPeriodEnd ? "Ends on" : "Renews on"}
-					value={formatDate(details.currentPeriodEnd)}
-				/>
-				<SummaryRow
-					label={`Every ${yearly ? "year" : "month"}`}
-					value={formatAmount(perSeatPerPeriod * current, details.currency)}
-				/>
-			</dl>
-			<Link
-				href="/dashboard/settings/organization"
-				className="mt-5 inline-flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
-			>
-				Manage billing and invoices
-			</Link>
-			<PlanFeatures />
-		</>
-	);
-
-	if (requestedYearly && canSwitchToYearly) {
-		return <SwitchToYearly details={details} summary={summary} />;
-	}
+	const summary = <PlanSummary details={details} />;
 
 	if (result?.ok) {
 		return (
@@ -442,7 +478,7 @@ function AddSeats({
 					</Link>
 					.
 				</p>
-				{canSwitchToYearly ? (
+				{canSwitchToYearly(details) ? (
 					<Link
 						href="/checkout?plan=yearly"
 						className="mt-5 self-start text-[14px] font-medium text-[#3D77C2] underline decoration-[rgba(61,119,194,0.3)] underline-offset-[4px] transition-colors duration-200 hover:decoration-[#3D77C2]"
@@ -497,8 +533,7 @@ function SwitchToYearly({
 	const submit = async () => {
 		if (submitting || !preview?.ok) return;
 		setSubmitting(true);
-		trackEvent("checkout_switched_to_yearly", { seats });
-		const next = await switchToYearly().catch(
+		const next = await switchToYearly(preview.quantity).catch(
 			(): YearlySwitchResult => ({
 				ok: false,
 				message: "Couldn't switch your plan to yearly.",
@@ -506,7 +541,10 @@ function SwitchToYearly({
 		);
 		setResult(next);
 		setSubmitting(false);
-		if (next.ok) router.refresh();
+		if (next.ok) {
+			trackEvent("checkout_switched_to_yearly", { seats: preview.quantity });
+			router.refresh();
+		}
 	};
 
 	if (result?.ok && preview?.ok) {
