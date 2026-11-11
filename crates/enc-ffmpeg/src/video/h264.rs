@@ -2221,6 +2221,23 @@ mod self_test_tests {
         .find(|(candidate, _)| candidate.name() == "h264_nvenc")
         .expect("available NVENC encoder is configured")
         .1;
+        // Some NVIDIA GPUs (e.g. GeForce MX230) have the driver but no NVENC,
+        // and the encoder cannot open at all.
+        if open_video_encoder_inner(
+            codec,
+            clone_options(&options),
+            &config,
+            160,
+            120,
+            0.3,
+            true,
+            None,
+            false,
+        )
+        .is_err()
+        {
+            return;
+        }
 
         cached_hardware_self_test(codec, &options, &config, 160, 120, 0.3, None)
             .expect("real NVIDIA hardware preserves neutral gray through encode and decode");
