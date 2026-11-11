@@ -117,6 +117,7 @@ import {
 	updateAgentCap,
 } from "@/lib/agent-write";
 import { withJsonNotFound } from "@/lib/api-errors";
+import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { getClientIp } from "@/lib/client-ip";
 import {
 	type CustomStorageAttemptAction,
@@ -133,6 +134,7 @@ import { startAiGeneration } from "@/lib/generate-ai";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
+import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
@@ -147,6 +149,7 @@ import {
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
 import { transcribeVideo } from "@/lib/transcribe";
+import { currentVideoDownloadAccess } from "@/lib/video-download-access";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { isVideoStorageKey } from "@/lib/video-storage-key";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -2705,10 +2708,30 @@ const AgentHandlersLive = HttpApiBuilder.group(
 						if (!cap.capabilities.download.allowed) {
 							return yield* forbidden(requestId);
 						}
-						const videos = yield* Videos;
 						const principal = yield* Agent.AgentPrincipal;
+						// Viewing a cap is not enough to download it: the same check as
+						// the share page and the dashboard decides, so the cap and
+						// organization download switches apply and non-members only
+						// ever get the published MP4.
+						const access = yield* Effect.tryPromise(() =>
+							currentVideoDownloadAccess(
+								path.id,
+								Option.some(toCurrentUser(principal)),
+							),
+						).pipe(
+							Effect.catchAll((error) =>
+								Effect.logError(
+									"Video download access check failed",
+									error,
+								).pipe(Effect.as("denied" as const)),
+							),
+						);
+						if (access === "denied") {
+							return yield* forbidden(requestId);
+						}
+						const videos = yield* Videos;
 						const result = yield* videos
-							.getDownloadInfo(path.id)
+							.getDownloadInfo(path.id, { publishedOnly: access === "viewer" })
 							.pipe(
 								Effect.provideService(CurrentUser, toCurrentUser(principal)),
 							);
@@ -4491,6 +4514,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										providerIdempotencyKey,
 										requestId,
 									);
+									if (
+										yield* Effect.tryPromise(() =>
+											hasLiveProSubscription(customerId),
+										)
+									) {
+										return yield* badRequest(
+											requestId,
+											"The organization owner already has Cap Pro",
+										);
+									}
 									const environment =
 										serverEnv().VERCEL_ENV === "production"
 											? "production"
@@ -4838,7 +4871,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								const now = new Date();
 								await tx
 									.update(Db.organizations)
-									.set({ settings: next, updatedAt: now })
+									.set({
+										settings: organizationSettingsKeepingLinkOverride(next),
+										updatedAt: now,
+									})
 									.where(eq(Db.organizations.id, path.organizationId));
 								return {
 									state: "success",
@@ -4998,37 +5034,54 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								Agent.AgentOrganizationInviteResponse,
 							),
 							execute: (providerIdempotencyKey) =>
-								Effect.tryPromise({
-									try: async () => {
-										const delivery = await sendEmail({
-											email,
-											subject: `Invitation to join ${organization.name} on Cap`,
-											react: OrganizationInvite({
-												email,
-												url: invitation.inviteUrl,
-												organizationName: organization.name,
-											}),
-											idempotencyKey: providerIdempotencyKey,
-										});
-										if (delivery?.error) {
-											if (delivery.error.name === "email_not_configured") {
-												return {
-													...invitation,
-													emailDelivery: "not_configured" as const,
-												};
-											}
-											throw new Error(delivery.error.message);
-										}
-										return {
-											...invitation,
-											emailDelivery: "accepted" as const,
-										};
-									},
-									catch: () =>
-										temporarilyUnavailable(
-											requestId,
-											"The organization invite email could not be delivered",
+								Effect.gen(function* () {
+									const inviteLimits = yield* Effect.promise(() =>
+										Promise.all(
+											[
+												`organization-invite:organization:${path.organizationId}`,
+												`organization-invite:user:${principal.id}`,
+											].map((key) =>
+												isRateLimited(RATE_LIMIT_IDS.ORGANIZATION_INVITE, {
+													key,
+												}),
+											),
 										),
+									);
+									if (inviteLimits.some(Boolean)) {
+										return yield* rateLimited(requestId);
+									}
+									return yield* Effect.tryPromise({
+										try: async () => {
+											const delivery = await sendEmail({
+												email,
+												subject: `Invitation to join ${organization.name} on Cap`,
+												react: OrganizationInvite({
+													email,
+													url: invitation.inviteUrl,
+													organizationName: organization.name,
+												}),
+												idempotencyKey: providerIdempotencyKey,
+											});
+											if (delivery?.error) {
+												if (delivery.error.name === "email_not_configured") {
+													return {
+														...invitation,
+														emailDelivery: "not_configured" as const,
+													};
+												}
+												throw new Error(delivery.error.message);
+											}
+											return {
+												...invitation,
+												emailDelivery: "accepted" as const,
+											};
+										},
+										catch: () =>
+											temporarilyUnavailable(
+												requestId,
+												"The organization invite email could not be delivered",
+											),
+									});
 								}),
 						});
 					}),

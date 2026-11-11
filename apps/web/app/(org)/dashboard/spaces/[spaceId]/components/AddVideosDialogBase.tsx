@@ -10,8 +10,7 @@ import {
 	LoadingSpinner,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { faVideo } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
@@ -20,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
 
 export interface VideoData {

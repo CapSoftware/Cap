@@ -458,11 +458,14 @@ impl PendingConfigSave {
     }
 
     pub fn flush(&mut self) {
-        let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
+        let (Some(path), Some(config)) = (self.path.as_ref(), self.config.as_ref()) else {
             return;
         };
-        match config.write(&path) {
-            Ok(()) => tracing::debug!(path = %path.display(), "screenshot config written"),
+        match config.write(path) {
+            Ok(()) => {
+                self.config = None;
+                tracing::debug!(path = %path.display(), "screenshot config written");
+            }
             Err(error) => {
                 tracing::error!(path = %path.display(), "failed to persist screenshot config: {error}")
             }
@@ -877,6 +880,7 @@ struct Toast {
 struct PanDrag {
     start: Point<Pixels>,
     origin: (f32, f32),
+    button: MouseButton,
 }
 
 /// The measured geometry `Preview.tsx` derives from the container's bounds.
@@ -1082,6 +1086,15 @@ impl ScreenshotEditorWindow {
             this.hex_inputs.insert(target, input);
         }
         this.init_annotation_inputs(window, cx);
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active()
+                && let Some(dialog) = this.crop.as_mut()
+                && dialog.state.keys.release()
+            {
+                cx.notify();
+            }
+        })
+        .detach();
 
         this
     }
@@ -1902,6 +1915,7 @@ impl ScreenshotEditorWindow {
         self.panning = Some(PanDrag {
             start: event.position,
             origin: self.pan,
+            button: event.button,
         });
         cx.notify();
     }
@@ -4568,9 +4582,10 @@ impl Render for ScreenshotEditorWindow {
                     }),
                 ))
             })
-            .when(self.panning.is_some(), |root| {
-                root.child(ui::Slider::drag_layer(
+            .when_some(self.panning.map(|drag| drag.button), |root, button| {
+                root.child(ui::Slider::drag_layer_for(
                     "screenshot-pan-drag",
+                    button,
                     cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                         this.preview_mouse_move(event, window, cx);
                     }),
@@ -5233,6 +5248,43 @@ mod tests {
         assert_eq!(ctrl_wheel_zoom_step(-1.), -8. * 0.005);
     }
 
+    #[test]
+    fn failed_screenshot_save_keeps_edits_for_the_close_time_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let config_path = root.path().join("project-config.json");
+        let original = ProjectConfiguration::default();
+        original.write(root.path()).unwrap();
+        let mut edited = original.clone();
+        edited.background.padding = 42.;
+        let mut pending = PendingConfigSave {
+            path: Some(root.path().to_path_buf()),
+            config: Some(edited.clone()),
+        };
+        let backup = root.path().join("saved-config.json");
+        std::fs::rename(&config_path, &backup).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+
+        pending.flush();
+        assert!(pending.config.is_some(), "failed saves must stay pending");
+        assert_eq!(
+            serde_json::to_value(pending.config.as_ref().unwrap()).unwrap(),
+            serde_json::to_value(&edited).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            serde_json::to_vec_pretty(&original).unwrap()
+        );
+
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::rename(&backup, &config_path).unwrap();
+        pending.flush();
+        assert!(pending.config.is_none());
+        assert_eq!(
+            std::fs::read(&config_path).unwrap(),
+            serde_json::to_vec_pretty(&edited).unwrap()
+        );
+    }
+
     fn new_screenshot_config() -> ProjectConfiguration {
         let mut config = ProjectConfiguration::default();
         config.background.source = BackgroundSource::Color {
@@ -5712,6 +5764,113 @@ mod tests {
                 assert!(editor.history.can_redo());
                 assert_synchronized(editor, &updates);
             });
+        }
+    }
+
+    /// The screenshot crop dialog's held-arrow nudge stops when the window
+    /// loses focus, which is the only place its key-up would have come from.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn deactivating_the_window_releases_a_held_crop_dialog_nudge(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let bundle = project.path().to_path_buf();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            ScreenshotEditorWindow::new(bundle.clone(), window, cx)
+        });
+        let raw_x = |editor: &ScreenshotEditorWindow| editor.crop.as_ref().unwrap().state.raw.x;
+        editor.update_in(cx, |editor, window, cx| {
+            window.activate_window();
+            editor.image_size = Some((1920, 1080));
+            editor.open_crop_dialog(window, cx);
+            let dialog = editor.crop.as_mut().unwrap();
+            dialog.state.raw.width /= 2.;
+            dialog.state.raw.height /= 2.;
+            let event = gpui::KeyDownEvent {
+                keystroke: gpui::Keystroke::parse("right").unwrap(),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            assert!(editor.crop_dialog_key_down(&event, window, cx));
+        });
+        let start = editor.read_with(cx, |editor, _| raw_x(editor));
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.run_until_parked();
+        let held = editor.read_with(cx, |editor, _| raw_x(editor));
+        assert!(held > start, "the held arrow nudges while focused");
+
+        cx.deactivate_window();
+        let released = editor.read_with(cx, |editor, _| raw_x(editor));
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert!(editor.crop.as_ref().unwrap().state.keys.keys.is_empty());
+            assert_eq!(
+                raw_x(editor),
+                released,
+                "no nudges after the window lost focus"
+            );
+        });
+        drop(project);
+    }
+
+    /// A pan follows and ends with the button that started it. The pan's
+    /// drag layer only tracked left-button drags, so a middle-button pan never
+    /// moved the image and stayed live until the next left release.
+    #[cfg(target_os = "linux")]
+    mod preview_pan {
+        use super::*;
+        use gpui::{Modifiers, VisualTestContext, point};
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+        }
+
+        #[gpui::test]
+        fn a_pan_follows_and_ends_with_the_button_that_started_it(cx: &mut gpui::TestAppContext) {
+            for button in [MouseButton::Left, MouseButton::Middle] {
+                let project = tempfile::tempdir().unwrap();
+                let bundle = project.path().to_path_buf();
+                let (editor, cx) = cx.add_window_view(move |window, cx| {
+                    ScreenshotEditorWindow::new(bundle.clone(), window, cx)
+                });
+                editor.update_in(cx, |editor, window, cx| {
+                    // Past the loading skeleton, which has no drag layer.
+                    editor.ready = true;
+                    editor.preview_mouse_down(
+                        &MouseDownEvent {
+                            button,
+                            position: point(px(100.), px(100.)),
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        },
+                        window,
+                        cx,
+                    );
+                });
+                draw(cx);
+                let origin = editor.read_with(cx, |editor, _| editor.pan);
+                let moved = (origin.0 + 30., origin.1 - 10.);
+
+                cx.simulate_mouse_move(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?}");
+                });
+
+                cx.simulate_mouse_up(point(px(130.), px(90.)), button, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert!(editor.panning.is_none(), "{button:?} release");
+                });
+                draw(cx);
+                cx.simulate_mouse_move(point(px(160.), px(120.)), None, Modifiers::default());
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.pan, moved, "{button:?} after release");
+                });
+                drop(project);
+            }
         }
     }
 }

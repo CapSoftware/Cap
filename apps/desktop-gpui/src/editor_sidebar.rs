@@ -719,6 +719,7 @@ pub enum SliderKey {
     Caption(CaptionSlider),
     Keyboard(KeyboardSlider),
     Panel(PanelSlider, usize),
+    VoiceEq(crate::editor_voice_eq::VoiceEqSlider),
 }
 
 /// Which colour the open `NSColorPanel` is editing.
@@ -820,6 +821,7 @@ pub struct SidebarState {
     pads: std::cell::RefCell<HashMap<PadKey, SliderTrack>>,
     /// The live pad drag, and whether it is holding a `history.pause()`.
     pub pad_drag: Option<PadKey>,
+    pub voice_eq: crate::editor_voice_eq::VoiceEqView,
 
     /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
     /// the Background tab's and the Camera tab's open independently.
@@ -926,6 +928,7 @@ impl SidebarState {
             tracks: std::cell::RefCell::new(HashMap::new()),
             pads: std::cell::RefCell::new(HashMap::new()),
             pad_drag: None,
+            voice_eq: crate::editor_voice_eq::VoiceEqView::default(),
             grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
@@ -1049,7 +1052,12 @@ impl EditorWindow {
 
     /// The tab rail's click: clear any selection, then switch tab and put the
     /// scroll body back to the top (`:632-650`).
-    fn select_sidebar_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_sidebar_tab(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab) = SidebarTab::ALL.get(index).copied() else {
             return;
         };
@@ -1287,6 +1295,7 @@ impl EditorWindow {
             SliderKey::Caption(slider) => slider.limits(),
             SliderKey::Keyboard(slider) => slider.limits(),
             SliderKey::Panel(slider, index) => self.panel_slider_limits(slider, index),
+            SliderKey::VoiceEq(slider) => slider.limits(),
         }
     }
 
@@ -1304,6 +1313,9 @@ impl EditorWindow {
             // Every grade slider is `Math.round(value * 100)` in the UI and
             // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
             SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
+            SliderKey::Camera(CameraSlider::SilenceDelay) => self
+                .pending_silence_delay()
+                .unwrap_or_else(|| CameraSlider::SilenceDelay.read(&project)),
             SliderKey::Camera(slider) => slider.read(&project),
             SliderKey::Audio(slider) => slider.read(&project),
             SliderKey::ClipVolume(index) => self
@@ -1316,6 +1328,7 @@ impl EditorWindow {
             SliderKey::Caption(slider) => slider.read(&project),
             SliderKey::Keyboard(slider) => slider.read(&project),
             SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
+            SliderKey::VoiceEq(slider) => self.voice_eq_slider_value(slider),
         }
     }
 
@@ -1349,6 +1362,7 @@ impl EditorWindow {
             SliderKey::Panel(slider, index) => {
                 self.apply_panel_slider(slider, index, value, window, cx)
             }
+            SliderKey::VoiceEq(slider) => self.apply_voice_eq_slider(slider, value, window, cx),
         }
     }
 
@@ -2650,50 +2664,40 @@ impl EditorWindow {
                 this.select_sidebar_tab(*index, window, cx);
             }));
 
-        div()
-            .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .h_full()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(self.card_line())
-                    .shadow(theme.editor.card_shadow())
-                    .child(rail)
-                    .children(self.sidebar.image_import_error.as_ref().map(|error| {
-                        div()
-                            .p(px(12.))
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child(error.clone())
-                    }))
-                    .children(self.sidebar.picking_image.then(|| {
-                        div()
-                            .p(px(12.))
-                            .child(tr::editor::sidebar::importing_image())
-                    }))
-                    .child(if let Some((index, group)) = self.sidebar.style_target {
-                        self.render_style_group(index, group, cx)
-                    } else if self.audio_picker.is_some() {
-                        self.render_audio_library(cx)
-                    } else {
-                        match selection {
-                            Some(selection) => self.render_selection_panel(&selection, cx),
-                            None => self.render_tab_body(cx),
-                        }
-                    }),
-            )
+        // The panel card around it, and the switcher above the rail, are the
+        // root's (`crate::editor_side_panel`).
+        div().size_full().flex().flex_col().min_h_0().child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .overflow_hidden()
+                .child(rail)
+                .children(self.sidebar.image_import_error.as_ref().map(|error| {
+                    div()
+                        .p(px(12.))
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(error.clone())
+                }))
+                .children(self.sidebar.picking_image.then(|| {
+                    div()
+                        .p(px(12.))
+                        .child(tr::editor::sidebar::importing_image())
+                }))
+                .child(if let Some((index, group)) = self.sidebar.style_target {
+                    self.render_style_group(index, group, cx)
+                } else if self.audio_picker.is_some() {
+                    self.render_audio_library(cx)
+                } else {
+                    match selection {
+                        Some(selection) => self.render_selection_panel(&selection, cx),
+                        None => self.render_tab_body(cx),
+                    }
+                }),
+        )
     }
 
     /// The scroll region (`:679-692`): `custom-scroll overflow-x-hidden
@@ -3973,6 +3977,9 @@ pub(crate) fn format_slider_value(value: f32, unit: &str) -> String {
         "pct" => format!("{:.1}%", value * 100.),
         // The ripple duration's `${v.toFixed(2)}s`.
         "secs" => format!("{value:.2}s"),
+        "log2hz" => crate::editor_voice_eq::format_hz(value.exp2()),
+        "sdb" => crate::editor_voice_eq::format_gain(value),
+        "q" => crate::i18n::decimal(format!("{value:.2}")),
         unit => format!("{value:.1}{unit}"),
     }
 }

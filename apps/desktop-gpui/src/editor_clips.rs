@@ -585,39 +585,9 @@ impl EditorWindow {
             .unwrap_or_default()
     }
 
-    // -- The header pill and the mode toggle ---------------------------------
+    // -- Leaving the tab ---------------------------------------------------------
 
-    /// The Clips toggle (`Header.tsx:173-187`): `Button variant={open ?
-    /// "white" : "gray"}` at `flex gap-1.5 justify-center h-[40px]`, clearing
-    /// the timeline selection on every press.
-    pub(crate) fn render_clips_pill(
-        &self,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        ui::EditorButton::plain(&self.theme, "clips-pill")
-            .left_icon("icons/clapperboard.svg")
-            .when(!compact, |button| button.label(tr::editor::clips::title()))
-            .tooltip(&self.theme, tr::editor::clips::title())
-            .pressed(self.clips.open)
-            .disabled(!self.project_ready())
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
-    }
-
-    pub(crate) fn toggle_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.project_ready() {
-            return;
-        }
-        self.set_selection(None, cx);
-        if self.clips.open {
-            self.close_clips(window, cx);
-        } else {
-            self.clips.open = true;
-            self.transcript.open = false;
-        }
-        cx.notify();
-    }
-
+    /// Leaving the Clips tab. Only [`EditorWindow::set_panel_tab`] calls this.
     pub(crate) fn close_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.editing.is_some() {
             self.commit_clip_rename(window, cx);
@@ -765,6 +735,9 @@ impl EditorWindow {
         if self.clip_segments().len() < 2 {
             return;
         }
+        // The trash button stops the press that would blur the rename input,
+        // and deleting shifts every later index under the draft.
+        self.commit_clip_rename(window, cx);
         self.edit_project("clip-delete", window, cx, move |project| {
             project
                 .timeline
@@ -823,7 +796,11 @@ impl EditorWindow {
         let insertion = self.clips.drop_index.take();
         cx.notify();
         let Some(drag) = drag else { return };
-        let (Some(insertion), true) = (insertion, drag.active) else {
+        if !drag.active {
+            self.select_clip_from_panel(drag.index, cx);
+            return;
+        }
+        let Some(insertion) = insertion else {
             return;
         };
 
@@ -885,237 +862,97 @@ impl EditorWindow {
 
     // -- The sidebar ------------------------------------------------------------
 
-    /// The whole clips column, drawn in the config sidebar's slot while the
-    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
-    /// the same card.
-    pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The Clips tab's body, under the panel's switcher: the header row with
+    /// the clip count and the Record and Import actions, then the cards.
+    pub(crate) fn render_clips_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
-            .flex_none()
             .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(self.card_line())
-                    .bg(self.panel_bg())
-                    .shadow(self.theme.editor.card_shadow())
-                    .child(self.render_clips_back_header(cx))
-                    .child(self.render_clips_body(cx)),
-            )
+            .overflow_hidden()
+            .child(self.render_clips_header(cx))
+            .child(self.render_clips_body(cx))
     }
 
-    /// The back header (`:798-805`): `h-16 px-4 gap-2 border-b border-gray-3
-    /// text-sm font-medium text-gray-12 hover:bg-gray-3`.
-    fn render_clips_back_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_clips_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        div()
-            .id("clips-back")
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
-            .px(px(12.))
-            .w_full()
-            .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
-            .rounded_t(px(11.))
-            .border_b_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .text_size(px(13.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.editor.text_1))
-            .cursor_pointer()
-            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
-            .child(
-                svg()
-                    .path("icons/move-left.svg")
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.editor.text_2)),
-            )
-            .child(tr::editor::clips::back())
-            .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
-    }
-
-    /// `flex flex-col flex-1 gap-3 p-3 min-h-0` (`:807`).
-    fn render_clips_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let recorded_clip_count = self
-            .summary()
-            .map(|summary| summary.recording_clips)
-            .unwrap_or_default();
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .gap(px(12.))
-            .p(px(12.))
-            .min_h_0()
-            // The action row (`:808-826`).
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .gap(px(8.))
-                    .child(
-                        div().flex_1().child(
-                            ui::Button::plain(
-                                &theme,
-                                "clips-record",
-                                ui::ButtonVariant::Blue,
-                                ui::ButtonSize::Md,
-                            )
-                            .icon("icons/video.svg")
-                            .label(tr::editor::clips::record_new())
-                            .height(px(40.))
-                            .gap(px(8.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .full_width()
-                            .disabled(self.clips.importing)
-                            .on_click(cx.listener(
-                                |this, _, _window, cx| {
-                                    if !this.begin_editor_recording(cx) {
-                                        return;
-                                    }
-                                    let project_path = this.project_path.clone();
-                                    cx.defer(move |cx| {
-                                        app_windows::open_editor_recording_main(project_path, cx);
-                                    });
-                                },
-                            )),
-                        ),
-                    )
-                    .child(
-                        ui::Button::plain(
-                            &theme,
-                            "clips-import",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Md,
-                        )
-                        .icon("icons/circle-plus.svg")
-                        .label(if self.clips.importing {
+        let count = self.clip_segments().len();
+        let importing = self.clips.importing;
+        crate::editor_side_panel::panel_header(
+            &theme,
+            tr::editor::clips::title(),
+            (count > 0).then(|| SharedString::from(tr::editor::clips::count(count))),
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .child(
+                    ui::EditorButton::plain(&theme, "clips-record")
+                        .left_icon("icons/video.svg")
+                        .label(tr::editor::clips::record())
+                        .tooltip(&theme, tr::editor::clips::record_new())
+                        .disabled(importing)
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            if !this.begin_editor_recording(cx) {
+                                return;
+                            }
+                            let project_path = this.project_path.clone();
+                            cx.defer(move |cx| {
+                                app_windows::open_editor_recording_main(project_path, cx);
+                            });
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "clips-import")
+                        .left_icon("icons/circle-plus.svg")
+                        .label(if importing {
                             tr::editor::clips::importing()
                         } else {
                             tr::editor::clips::import()
                         })
-                        .height(px(40.))
-                        .gap(px(8.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .disabled(self.clips.importing)
-                        .on_open(cx.listener(
-                            |this, bounds: &Bounds<Pixels>, _window, cx| {
-                                if this.clips.importing {
-                                    return;
-                                }
-                                this.clips.import_menu =
-                                    Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
-                                cx.notify();
-                            },
-                        )),
-                    ),
-            )
-            // The section label and the recording-clip count (`:828-835`).
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child(tr::editor::clips::title()),
-                    )
-                    .children((recorded_clip_count > 0).then(|| {
-                        div()
-                            .rounded(px(6.))
-                            .bg(Hsla::from(theme.gray_3))
-                            .px(px(6.))
-                            .py(px(2.))
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(recorded_clip_count.to_string())
-                    })),
-            )
-            // The scroll region (`:837`): `overflow-y-auto flex-1 -mx-1 px-1`.
-            .child(
-                div()
-                    .id("clips-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .mx(px(-4.))
-                    .px(px(4.))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .when(self.clip_segments().is_empty(), |this| {
-                        this.overflow_y_scroll()
-                    })
-                    .child(if self.clip_segments().is_empty() {
-                        self.render_clips_empty().into_any_element()
-                    } else {
-                        self.render_clip_list(cx)
-                    }),
-            )
+                        .disabled(importing)
+                        .pressed(self.clips.import_menu.is_some())
+                        .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, _window, cx| {
+                            if this.clips.importing {
+                                return;
+                            }
+                            this.clips.import_menu =
+                                Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
+                            cx.notify();
+                        })),
+                ),
+        )
     }
 
-    /// The empty state (`:841-849`).
-    fn render_clips_empty(&self) -> impl IntoElement {
-        let theme = self.theme;
+    fn render_clips_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.clip_segments().is_empty() {
+            return self.render_clips_empty().into_any_element();
+        }
         div()
+            .id("clips-scroll")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .justify_center()
-            .items_center()
-            .px(px(16.))
-            .py(px(48.))
-            .text_center()
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .items_center()
-                    .size(px(40.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.gray_3))
-                    .child(
-                        svg()
-                            .path("icons/clapperboard.svg")
-                            .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_9)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
-                    .child(tr::editor::clips::empty_title()),
-            )
-            .child(
-                div()
-                    .max_w(px(200.))
-                    .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
-                    .child(tr::editor::clips::empty_description()),
-            )
+            .px(px(12.))
+            .pt(px(12.))
+            .pb(px(12.))
+            .overflow_hidden()
+            .child(self.render_clip_list(cx))
+            .into_any_element()
+    }
+
+    /// The empty state, the panel's shared one. Record and Import sit in the
+    /// header row above it.
+    fn render_clips_empty(&self) -> impl IntoElement {
+        crate::editor_side_panel::panel_empty_state(
+            &self.theme,
+            "icons/clapperboard.svg",
+            tr::editor::clips::empty_title(),
+            tr::editor::clips::empty_description(),
+        )
     }
 
     /// The card list (`:852-964`).
@@ -1179,6 +1016,11 @@ impl EditorWindow {
                 .drag
                 .as_ref()
                 .is_some_and(|drag| drag.index == index);
+        let selected = self.selection.as_ref().is_some_and(|selection| {
+            selection.track == crate::editor_timeline::TrackKind::Clip
+                && selection.indices.contains(&index)
+        });
+        let accent = Hsla::from(theme.editor.accent);
         let show_top_bar = dragging && self.clips.drop_index == Some(index);
         let show_bottom_bar =
             dragging && index == count - 1 && self.clips.drop_index == Some(count);
@@ -1250,15 +1092,26 @@ impl EditorWindow {
                     .gap(px(12.))
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_4))
                     .p(px(8.))
-                    .bg(card_bg(&theme))
+                    .map(|card| {
+                        if selected {
+                            card.border_color(accent.opacity(0.7))
+                                .bg(accent.opacity(0.08))
+                        } else {
+                            card.border_color(Hsla::from(theme.editor.line))
+                                .bg(card_bg(&theme))
+                                .hover(move |style| {
+                                    style
+                                        .border_color(Hsla::from(theme.editor.line_strong))
+                                        .bg(Hsla::from(theme.editor.ctl))
+                                })
+                        }
+                    })
                     .cursor(if dragging {
                         CursorStyle::ClosedHand
                     } else {
-                        CursorStyle::OpenHand
+                        CursorStyle::PointingHand
                     })
-                    .hover(move |style| style.border_color(Hsla::from(theme.gray_7)))
                     .when(is_dragged, |this| this.opacity(0.4))
                     .child(probe)
                     .on_mouse_down(
@@ -2157,6 +2010,7 @@ impl PreparedMp4Import {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
@@ -2211,39 +2065,68 @@ impl PreparedMp4Import {
     }
 }
 
+/// What the "Existing recording" dialog asks the OS for. A `.cap` recording
+/// is a package only on macOS, where the open panel returns it like a file.
+/// On Windows and Linux it is a plain folder: a file dialog filtered to
+/// `*.cap` opens the folder instead of returning it, and nothing inside
+/// matches the filter, so the recording can never be chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingRecordingPicker {
+    Package,
+    Folder,
+}
+
+const fn existing_recording_picker(macos: bool) -> ExistingRecordingPicker {
+    if macos {
+        ExistingRecordingPicker::Package
+    } else {
+        ExistingRecordingPicker::Folder
+    }
+}
+
 /// `getExistingRecordingPickerOptions` (`ED/existing-recording-picker.ts`):
-/// a `.cap` filter on macOS (bundles are packages there), a directory picker
-/// on Windows, both rooted at the recordings directory where the dialog
-/// supports one.
+/// a `.cap` filter on macOS, a directory picker elsewhere, rooted at the
+/// recordings directory where the dialog supports one.
 async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        crate::platform::open_image_panel(&["cap"])
-    }
-    #[cfg(target_os = "linux")]
-    {
-        crate::platform::open_file_panel_async(
-            &[(tr::editor::clips::cap_filter(), &["cap"])],
-            Some(crate::recording::recordings_dir()),
-            _cx,
-        )
-        .await
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        rfd::FileDialog::new()
-            .set_directory(crate::recording::recordings_dir())
-            .add_filter(tr::editor::clips::cap_filter(), &["cap"])
-            .pick_file()
+    match existing_recording_picker(cfg!(target_os = "macos")) {
+        ExistingRecordingPicker::Package => crate::platform::open_image_panel(&["cap"]),
+        ExistingRecordingPicker::Folder => {
+            let root = crate::recording::recordings_dir();
+            #[cfg(target_os = "linux")]
+            {
+                crate::platform::open_folder_panel_async(Some(root), _cx).await
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                rfd::FileDialog::new().set_directory(root).pick_folder()
+            }
+        }
     }
 }
 
 /// `toast.error(\`Failed to import clip: ...\`)` (`:520`), as the blocking
 /// dialog this app uses where the webview has toasts.
 fn show_import_error(message: &str) {
+    let title = tr::editor::clips::import_error_title();
+    let description = tr::editor::clips::import_error(message);
+    // rfd shows Linux message dialogs through zenity and shows nothing
+    // without it, so a folder that is not a recording would import nothing
+    // and say nothing.
+    #[cfg(target_os = "linux")]
+    if !crate::linux_dialog::zenity_available()
+        && crate::linux_dialog::show(&crate::linux_dialog::Request {
+            title: title.to_string(),
+            message: description.to_string(),
+            accept: tr::common::ok().to_string(),
+            cancel: None,
+        })
+        .is_some()
+    {
+        return;
+    }
     let _ = rfd::MessageDialog::new()
-        .set_title(tr::editor::clips::import_error_title())
-        .set_description(tr::editor::clips::import_error(message))
+        .set_title(title)
+        .set_description(description)
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -2641,6 +2524,7 @@ fn full_timeline_for_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -3240,6 +3124,7 @@ fn full_timeline_for_source_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             })
         })
@@ -3350,6 +3235,7 @@ fn source_timeline_segments_for_import(
             name: None,
             speed_audio_mode: segment.speed_audio_mode,
             hide_cursor: segment.hide_cursor,
+            voice_eq: segment.voice_eq,
             volume: segment.volume,
         });
     }
@@ -3582,6 +3468,7 @@ pub(crate) fn append_cap_project_to_editor(
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
                 hide_cursor: source_segment.hide_cursor,
+                voice_eq: source_segment.voice_eq,
                 volume: source_segment.volume,
             });
         }
@@ -3609,6 +3496,77 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[cfg(target_os = "linux")]
+    mod rename_and_delete {
+        use super::*;
+        use gpui::Render;
+
+        struct ClipsView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for ClipsView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full()
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                ClipsView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn three_clips(editor: &mut EditorWindow) {
+            editor.project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 4.0},
+                        {"recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 6.0}
+                    ],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            editor.history.record(&editor.project);
+        }
+
+        /// Deleting shifts every later clip down one index, so a rename still
+        /// bound to an index when the delete lands would commit its draft
+        /// onto a different clip. Without a loaded recording `edit_project`
+        /// applies neither edit here; what this checks is that the delete
+        /// closes the rename before it runs, through the same commit a press
+        /// on another card uses.
+        #[gpui::test]
+        fn deleting_a_clip_ends_a_live_rename_first(cx: &mut gpui::TestAppContext) {
+            for (renamed, deleted) in [(1, 0), (2, 1), (2, 2), (0, 2)] {
+                let (editor, cx) = fixture(cx);
+                editor.update_in(cx, |editor, window, cx| {
+                    three_clips(editor);
+                    editor.start_clip_rename(renamed, window, cx);
+                    assert_eq!(editor.clips.editing, Some(renamed));
+                    let input = editor.clips.rename_input.clone().unwrap();
+                    input.update(cx, |input, cx| input.set_text("Intro".to_string(), cx));
+                    editor.delete_clip(deleted, window, cx);
+                    assert_eq!(
+                        editor.clips.editing, None,
+                        "rename of clip {renamed} still live after deleting clip {deleted}"
+                    );
+                });
+            }
+        }
+    }
 
     #[test]
     fn appended_recordings_bring_their_markers_onto_the_copied_segments() {
@@ -4046,6 +4004,7 @@ mod tests {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         }
     }
@@ -4284,6 +4243,7 @@ mod tests {
             split_layout: None,
             transition_in: 0.3,
             transition_out: 0.3,
+            from_silence: false,
         }];
         let kind = cap_project::ClipTransitionType::Zoom;
         let mut live = base.clone();
@@ -4600,6 +4560,76 @@ mod tests {
         assert_eq!(compute_drop_index(px(97.), &cards), 48);
         assert_eq!(compute_drop_index(px(300.), &cards), 49);
         assert_eq!(compute_drop_index(px(0.), &[]), 0);
+    }
+
+    #[test]
+    fn existing_recording_is_picked_as_a_folder_except_on_macos() {
+        assert_eq!(
+            existing_recording_picker(true),
+            ExistingRecordingPicker::Package
+        );
+        assert_eq!(
+            existing_recording_picker(false),
+            ExistingRecordingPicker::Folder
+        );
+    }
+
+    #[test]
+    fn picked_folder_imports_only_when_it_is_a_cap_recording() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("source.cap");
+        let source_segment = source.join("content/segments/segment-0");
+        std::fs::create_dir_all(&source_segment).unwrap();
+        std::fs::write(source_segment.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+        std::fs::copy(
+            target.project.join("recording-meta.json"),
+            source.join("recording-meta.json"),
+        )
+        .unwrap();
+
+        let plain_folder = target.root.join("Holiday photos");
+        std::fs::create_dir(&plain_folder).unwrap();
+        let before = target.project_bytes();
+        for (picked, expected) in [
+            (
+                plain_folder.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                source_segment.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                target.root.as_path(),
+                tr::editor::clips::error::not_a_project(),
+            ),
+            (
+                target.project.as_path(),
+                tr::editor::clips::error::into_itself(),
+            ),
+        ] {
+            assert_eq!(
+                append_cap_project_to_editor(&target.project, picked).unwrap_err(),
+                expected,
+                "picked {}",
+                picked.display()
+            );
+        }
+        assert_eq!(target.project_bytes(), before);
+
+        assert_eq!(
+            append_cap_project_to_editor(&target.project, &source).unwrap(),
+            1
+        );
+        let meta = RecordingMeta::load_for_project(&target.project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            panic!("target stopped being a studio recording");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+            panic!("target is not multi-segment");
+        };
+        assert_eq!(inner.segments.len(), 2);
+        assert!(meta.path(&inner.segments[1].display.path).is_file());
     }
 
     #[test]

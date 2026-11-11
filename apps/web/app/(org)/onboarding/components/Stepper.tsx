@@ -1,10 +1,10 @@
 "use client";
 
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import clsx from "clsx";
 import { usePathname } from "next/navigation";
 import { Fragment, useMemo } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 export default function Stepper({
 	completedSteps,

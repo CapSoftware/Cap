@@ -187,8 +187,8 @@ pub static CAPTION_MODELS: &[CaptionModel] = &[
     CaptionModel {
         name: "best",
         label: tr::editor::tabs::captions::model::recommended,
-        model_name: "parakeet-tdt-0.6b-v3 int8",
-        size: "~640MB",
+        model_name: "parakeet-tdt-0.6b-v3 8-bit",
+        size: "~870MB",
         description: tr::editor::tabs::captions::model::recommended_description,
     },
     CaptionModel {
@@ -393,6 +393,7 @@ pub enum CameraSlider {
     ShadowSize,
     ShadowOpacity,
     ShadowBlur,
+    SilenceDelay,
 }
 
 impl CameraSlider {
@@ -409,6 +410,7 @@ impl CameraSlider {
             | Self::ShadowSize
             | Self::ShadowOpacity
             | Self::ShadowBlur => false,
+            Self::SilenceDelay => true,
         }
     }
 
@@ -417,6 +419,10 @@ impl CameraSlider {
             // `minValue={20} maxValue={80} step={0.1}` (`:3204-3206`).
             Self::Size => (20., 80., 0.1),
             Self::ZoomSize => (10., 100., 0.1),
+            Self::SilenceDelay => {
+                let (min, max) = ProjectConfiguration::CAMERA_SILENCE_DELAY_RANGE;
+                (min, max, 0.1)
+            }
             _ => (0., 100., 0.1),
         }
     }
@@ -432,6 +438,9 @@ impl CameraSlider {
             Self::ShadowSize => shadow.map_or(UI_SHADOW_FALLBACK.size, |s| s.size),
             Self::ShadowOpacity => shadow.map_or(UI_SHADOW_FALLBACK.opacity, |s| s.opacity),
             Self::ShadowBlur => shadow.map_or(UI_SHADOW_FALLBACK.blur, |s| s.blur),
+            Self::SilenceDelay => project
+                .camera_silence_delay
+                .unwrap_or(ProjectConfiguration::CAMERA_SILENCE_DELAY_DEFAULT),
         }
     }
 }
@@ -1253,6 +1262,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if slider == CameraSlider::SilenceDelay {
+            self.set_camera_silence_delay(value, window, cx);
+            return;
+        }
         self.edit_project_with_rebuild(
             slider.changes_timeline_model(),
             "camera-slider",
@@ -1279,6 +1292,7 @@ impl EditorWindow {
                         }
                         camera.advanced_shadow = Some(shadow);
                     }
+                    CameraSlider::SilenceDelay => {}
                 }
                 true
             },
@@ -1575,6 +1589,11 @@ impl EditorWindow {
                         ),
                 ),
             )
+            .children(
+                self.summary()
+                    .is_some_and(|summary| summary.has_microphone)
+                    .then(|| self.render_camera_silence(cx)),
+            )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.slider_field(
@@ -1691,6 +1710,45 @@ impl EditorWindow {
                     )
                     .into_any_element()
             }))
+            .into_any_element()
+    }
+
+    fn render_camera_silence(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let enabled = self.project.camera_silence_delay.is_some();
+        let enabling = self.enabling_camera_silence();
+        let toggle = ui::Subfield::plain(&theme, tr::editor::tabs::camera::hide_when_silent())
+            .child(
+                ui::Toggle::plain(
+                    &theme,
+                    "camera-hide-when-silent",
+                    enabled || enabling,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_camera_silence(window, cx);
+                })),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(toggle)
+            .when(enabling || self.pending_silence_delay().is_some(), |column| {
+                column.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::camera::finding_silences()),
+                )
+            })
+            .when(enabled, |column| {
+                column.child(self.slider_field(
+                    tr::editor::tabs::camera::silence_delay(),
+                    SliderKey::Camera(CameraSlider::SilenceDelay),
+                    "s",
+                    cx,
+                ))
+            })
             .into_any_element()
     }
 
@@ -1912,6 +1970,7 @@ impl EditorWindow {
                 ),
             )
             .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
+            .children(has_microphone.then(|| self.render_voice_eq_card(cx)))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     tr::editor::tabs::audio::mic_volume(),
@@ -2988,6 +3047,14 @@ impl EditorWindow {
                         .text_color(error_color)
                         .child(error),
                 );
+            } else if snapshot.no_speech {
+                column = column.child(
+                    div()
+                        .id("caption-no-speech")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(tr::editor::transcript::no_speech())),
+                );
             } else if snapshot.refining {
                 column = column.child(
                     div()
@@ -3023,7 +3090,30 @@ impl EditorWindow {
                     .label(tr::editor::tabs::captions::download((model.label)()))
             };
 
-            let mut column = div().flex().flex_col().gap(px(8.)).child(download_button);
+            let mut column = div().flex().flex_col().gap(px(8.));
+            if model.name == "best" && snapshot.recommended_outdated {
+                column = column.child(
+                    div()
+                        .id("caption-model-updated")
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(tr::editor::tabs::captions::model_updated()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(tr::editor::tabs::captions::model_updated_description()),
+                        ),
+                );
+            }
+            column = column.child(download_button);
             if is_downloading {
                 column = column
                     .child(
@@ -3746,6 +3836,11 @@ impl EditorWindow {
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.refine_caption_timings(window, cx);
                     });
+                }
+                Err(error) if error == transcription::NO_SPEECH => {
+                    tracing::info!("caption generation heard no speech");
+                    transcription::finish_generation_without_speech(&project_path);
+                    let _ = this.update(cx, |_, cx| cx.notify());
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");

@@ -2,8 +2,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import type { Metadata } from "next";
 import { redirect, unstable_rethrow } from "next/navigation";
+import { getOrganizationDirectorySync } from "@/actions/organization/directory-sync";
 import { getOrganizationSsoSettings } from "@/actions/organization/sso";
 import { ComplianceCard } from "../components/ComplianceCard";
+import { DirectorySyncCard } from "../components/DirectorySyncCard";
 import { SsoCard } from "../components/SsoCard";
 
 export const metadata: Metadata = {
@@ -67,6 +69,15 @@ export default async function OrganizationSecurityPage({
 		);
 	}
 
+	const directorySync = settings.entitled
+		? await getOrganizationDirectorySync(settings.organizationId).catch(
+				(error) => {
+					unstable_rethrow(error);
+					return null;
+				},
+			)
+		: null;
+
 	return (
 		<div className="flex flex-col gap-6">
 			<SsoCard
@@ -78,6 +89,14 @@ export default async function OrganizationSecurityPage({
 						: undefined
 				}
 			/>
+			{directorySync && (
+				<DirectorySyncCard
+					key={`directory-${settings.organizationId}`}
+					organizationId={settings.organizationId}
+					organizationName={settings.organizationName}
+					initialStatus={directorySync}
+				/>
+			)}
 			<ComplianceCard />
 		</div>
 	);

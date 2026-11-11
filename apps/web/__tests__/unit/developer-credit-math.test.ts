@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+	dailyStorageMicroCredits,
+	MICRO_CREDITS_PER_DOLLAR,
+} from "@/lib/developer-pricing";
 
-const MICRO_CREDITS_PER_DOLLAR = 100_000;
 const MICRO_CREDITS_PER_MINUTE = 5_000;
-const MICRO_CREDITS_PER_MINUTE_PER_DAY = 3.33;
 const MIN_BALANCE_MICRO_CREDITS = 5_000;
 
 function purchaseCreditsFormula(amountCents: number): number {
@@ -11,10 +13,6 @@ function purchaseCreditsFormula(amountCents: number): number {
 
 function videoRecordingCost(durationMinutes: number): number {
 	return Math.floor(durationMinutes * MICRO_CREDITS_PER_MINUTE);
-}
-
-function dailyStorageCost(totalMinutes: number): number {
-	return Math.floor(totalMinutes * MICRO_CREDITS_PER_MINUTE_PER_DAY);
 }
 
 function balanceDollars(balanceMicroCredits: number): string {
@@ -97,28 +95,24 @@ describe("Video Recording Cost", () => {
 });
 
 describe("Daily Storage Cost", () => {
-	it("charges 3 micro-credits for 1 minute stored", () => {
-		expect(dailyStorageCost(1)).toBe(Math.floor(1 * 3.33));
-		expect(dailyStorageCost(1)).toBe(3);
+	it("charges 2 micro-credits for 1 minute stored", () => {
+		expect(dailyStorageMicroCredits(1)).toBe(2);
 	});
 
-	it("charges 33 micro-credits for 10 minutes stored", () => {
-		expect(dailyStorageCost(10)).toBe(Math.floor(10 * 3.33));
-		expect(dailyStorageCost(10)).toBe(33);
+	it("charges 26 micro-credits for 10 minutes stored", () => {
+		expect(dailyStorageMicroCredits(10)).toBe(26);
 	});
 
-	it("charges 333 micro-credits for 100 minutes stored", () => {
-		expect(dailyStorageCost(100)).toBe(Math.floor(100 * 3.33));
-		expect(dailyStorageCost(100)).toBe(333);
+	it("charges 266 micro-credits for 100 minutes stored", () => {
+		expect(dailyStorageMicroCredits(100)).toBe(266);
 	});
 
-	it("charges 3330 micro-credits for 1000 minutes stored", () => {
-		expect(dailyStorageCost(1000)).toBe(Math.floor(1000 * 3.33));
-		expect(dailyStorageCost(1000)).toBe(3330);
+	it("charges 2666 micro-credits for 1000 minutes stored", () => {
+		expect(dailyStorageMicroCredits(1000)).toBe(2666);
 	});
 
 	it("charges 0 micro-credits for 0 minutes stored", () => {
-		expect(dailyStorageCost(0)).toBe(0);
+		expect(dailyStorageMicroCredits(0)).toBe(0);
 	});
 });
 

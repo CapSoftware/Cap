@@ -12,7 +12,7 @@ vi.mock("@fortawesome/free-solid-svg-icons", () => ({
 	faFolderPlus: {},
 	faInfoCircle: {},
 }));
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("next/navigation", () => ({

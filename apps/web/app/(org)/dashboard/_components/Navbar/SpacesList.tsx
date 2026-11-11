@@ -2,13 +2,10 @@
 
 import { Button } from "@cap/ui";
 import type { Space } from "@cap/web-domain";
-import {
-	faLayerGroup,
-	faLock,
-	faPlus,
-	faXmark,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faXmark } from "@fortawesome/free-solid-svg-icons/faXmark";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -18,6 +15,7 @@ import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { useDashboardContext } from "../../Contexts";

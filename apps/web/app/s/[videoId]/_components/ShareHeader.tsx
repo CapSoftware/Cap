@@ -11,17 +11,14 @@ import {
 	Logo,
 } from "@cap/ui";
 import type { ViewerSettingKey } from "@cap/web-backend";
-import {
-	faChartSimple,
-	faChevronDown,
-	faEllipsis,
-	faGear,
-	faLock,
-	faShare,
-	faTrash,
-	faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
@@ -52,6 +49,7 @@ import type { VideoStatusResult } from "@/actions/videos/get-status";
 import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { ShareDashboardDestination } from "@/lib/share-dashboard-destination";
@@ -156,6 +154,8 @@ export const ShareHeader = ({
 	customDomain,
 	domainVerified,
 	allowedEmailDomain,
+	allowLinkOverride = false,
+	linkOpenToAnyone = false,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	viewerCount = 0,
@@ -172,6 +172,8 @@ export const ShareHeader = ({
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	allowedEmailDomain?: string | null;
+	allowLinkOverride?: boolean;
+	linkOpenToAnyone?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
 	viewerCount?: number;
 	userOrganizations?: { id: string; name: string }[];
@@ -523,7 +525,8 @@ export const ShareHeader = ({
 	 */
 	const audience = describeShareAudience({
 		isPublic: Boolean(data.public),
-		allowedEmailDomain,
+		allowedEmailDomain:
+			allowLinkOverride && linkOpenToAnyone ? null : allowedEmailDomain,
 		passwordProtected: effectivePasswordProtected,
 		audienceNames: [
 			...(sharedOrganizations ?? []).map((org) => org.name),
@@ -854,12 +857,15 @@ export const ShareHeader = ({
 					onSharingUpdated={handleSharingUpdated}
 					isPublic={data.public}
 					allowedEmailDomain={allowedEmailDomain}
+					allowLinkOverride={allowLinkOverride}
+					linkOpenToAnyone={linkOpenToAnyone}
 					spacesData={spacesData}
 					hasPassword={passwordProtected}
 					inheritedPasswordSources={data.inheritedPasswordSources}
 					onPasswordUpdated={handlePasswordUpdated}
 					user={user}
 					onUpgradeRequest={setUpgradeModalOpen}
+					shareUrl={getVideoLink()}
 				/>
 			)}
 			{shareLinkDialogMounted && (
@@ -1094,6 +1100,20 @@ export const ShareHeader = ({
 							{user !== null ? (
 								<div className="flex min-w-0 max-w-[60%] justify-end lg:max-w-xs">
 									{renderSharedStatus()}
+								</div>
+							) : canDownload ? (
+								<div className="flex shrink-0 items-center gap-2">
+									<Button
+										variant="gray"
+										size="xs"
+										className="gap-1.5 px-3"
+										disabled={isDownloading}
+										onClick={() => download("current")}
+									>
+										<Download className="size-3.5 text-gray-12" />
+										Download
+									</Button>
+									{data.public && renderShareButton()}
 								</div>
 							) : (
 								data.public && renderShareButton("shrink-0")

@@ -2,7 +2,6 @@
 
 import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV } from "@cap/env";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -12,24 +11,20 @@ import {
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { HttpClient } from "@effect/platform";
-import {
-	faChartSimple,
-	faCheck,
-	faCopy,
-	faDownload,
-	faEllipsis,
-	faGear,
-	faImage,
-	faLink,
-	faLock,
-	faScissors,
-	faShare,
-	faTrash,
-	faUnlock,
-	faVideo,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
+import { faEllipsis } from "@fortawesome/free-solid-svg-icons/faEllipsis";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faLink } from "@fortawesome/free-solid-svg-icons/faLink";
+import { faLock } from "@fortawesome/free-solid-svg-icons/faLock";
+import { faScissors } from "@fortawesome/free-solid-svg-icons/faScissors";
+import { faShare } from "@fortawesome/free-solid-svg-icons/faShare";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
+import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
+import { faVideo } from "@fortawesome/free-solid-svg-icons/faVideo";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
@@ -41,6 +36,7 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
@@ -49,10 +45,12 @@ import {
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { startBrowserDownload } from "@/lib/start-browser-download";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
 } from "@/lib/video-share-clipboard";
+import { videoShareUrl } from "@/lib/video-share-url";
 import { usePublicEnv } from "@/utils/public-env";
 import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
@@ -119,6 +117,7 @@ export interface CapCardProps extends PropsWithChildren {
 			disableChapters?: boolean;
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
+			linkAccess?: "anyone";
 		} | null;
 	};
 	analytics: number;
@@ -158,8 +157,6 @@ export const CapCard = ({
 	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
-	const customDomain = activeOrganization?.organization.customDomain;
-	const domainVerified = activeOrganization?.organization.domainVerified;
 
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -187,21 +184,8 @@ export const CapCard = ({
 		mutationFn: () =>
 			Effect.gen(function* () {
 				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
-				const httpClient = yield* HttpClient.HttpClient;
 				if (Option.isSome(result)) {
-					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
-					const blob = yield* fetchResponse.arrayBuffer;
-
-					const blobUrl = window.URL.createObjectURL(new Blob([blob]));
-					const link = document.createElement("a");
-					link.href = blobUrl;
-					link.download = result.value.fileName;
-					link.style.display = "none";
-					document.body.appendChild(link);
-					link.click();
-					document.body.removeChild(link);
-
-					window.URL.revokeObjectURL(blobUrl);
+					startBrowserDownload(result.value.downloadUrl);
 				} else {
 					throw new Error("Failed to get download URL");
 				}
@@ -365,13 +349,7 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(
-			NODE_ENV === "development"
-				? `${webUrl}/s/${cap.id}`
-				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
-					? `https://${customDomain}/s/${cap.id}`
-					: `${webUrl}/s/${cap.id}`,
-		);
+		handleCopy(videoShareUrl(webUrl, cap.id, activeOrganization?.organization));
 	};
 	const canEditVideo =
 		isOwner &&
@@ -403,6 +381,7 @@ export const CapCard = ({
 				sharedSpaces={cap.sharedSpaces || []}
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
+				linkOpenToAnyone={cap.settings?.linkAccess === "anyone"}
 				hasPassword={passwordProtected}
 				inheritedPasswordSources={cap.inheritedPasswordSources}
 				onPasswordUpdated={handlePasswordUpdated}
@@ -413,6 +392,7 @@ export const CapCard = ({
 				inheritedSpaceSettings={cap.inheritedSpaceSettings}
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
+				onSaved={() => router.refresh()}
 			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}
@@ -634,16 +614,18 @@ export const CapCard = ({
 											{passwordProtected ? "Edit password" : "Add password"}
 										</p>
 									</DropdownMenuItem>
-									<DropdownMenuItem
-										onClick={(e) => {
-											e.stopPropagation();
-											setConfirmOpen(true);
-										}}
-										className="flex gap-2 items-center rounded-lg"
-									>
-										<FontAwesomeIcon className="size-3" icon={faTrash} />
-										<p className="text-sm text-gray-12">Delete Cap</p>
-									</DropdownMenuItem>
+									{onDelete && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												setConfirmOpen(true);
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faTrash} />
+											<p className="text-sm text-gray-12">Delete Cap</p>
+										</DropdownMenuItem>
+									)}
 								</>
 							)}
 						</DropdownMenuContent>
