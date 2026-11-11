@@ -101,6 +101,7 @@ final class CapDetailModel {
     @ObservationIgnored private var lastBurstTime: Double = 0
     @ObservationIgnored private var trackedView = false
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var cues: [TranscriptCue] = []
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var hideTask: Task<Void, Never>?
@@ -164,7 +165,19 @@ final class CapDetailModel {
 
     // MARK: Loading
 
+    /// Runs in the model's own task: folding or unfolding the phone cancels the screen's task partway through,
+    /// and the screen that replaces it skips a model that already shows as loaded.
     func load(session: SessionModel) async {
+        if loading == nil {
+            loading = Task { [weak self] in
+                await self?.performLoad(session: session)
+                self?.loading = nil
+            }
+        }
+        await loading?.value
+    }
+
+    private func performLoad(session: SessionModel) async {
         self.session = session
         switch content {
         case .loaded: return
@@ -436,6 +449,13 @@ final class CapDetailModel {
 
     func pause() {
         player?.pause()
+    }
+
+    /// The Cap's route left every tab, so nothing will show this model again.
+    func discard() {
+        loading?.cancel()
+        loading = nil
+        pauseForDisappear()
     }
 
     func pauseForDisappear() {

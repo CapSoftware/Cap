@@ -88,7 +88,7 @@ final class CapDetailModels {
     func keep(_ path: [Route]) {
         let open = Set(path)
         for (route, model) in models where !open.contains(route) {
-            model.pauseForDisappear()
+            model.discard()
             models[route] = nil
         }
     }
