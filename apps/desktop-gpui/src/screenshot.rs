@@ -8,8 +8,7 @@
 //! {name}.cap/` holding `original.png`, a Studio `SingleSegment` meta whose
 //! display track is the PNG at `fps: 0`, and a project config whose
 //! background is transparent white with no shadow (`recording.rs:2963-2985`).
-//! Known deviations from that command: no native notification and no `ScreenshotTaken`
-//! automations (no automation runner here).
+//! Known deviation from that command: no native notification.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -89,6 +88,7 @@ fn capture(target: ScreenCaptureTarget, cx: &mut App) {
 
 fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
     let settle = app_windows::prepare_for_screenshot_capture(cx);
+    let automation_target = crate::automation::screenshot_target(&target);
 
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
         if settle {
@@ -111,7 +111,15 @@ fn capture_without_overlays(target: ScreenCaptureTarget, cx: &mut App) {
                 None
             }
         };
-        cx.update(|cx| app_windows::screenshot_finished(captured, cx));
+        let skip_editor = match (&captured, automation_target) {
+            (Some(png), Some(target)) => {
+                let skip = crate::automation::screenshot_skips_editor(Some(&target), png);
+                crate::automation::screenshot_taken(png.clone(), target);
+                skip
+            }
+            _ => false,
+        };
+        cx.update(|cx| app_windows::screenshot_finished(captured, skip_editor, cx));
     })
     .detach();
 }

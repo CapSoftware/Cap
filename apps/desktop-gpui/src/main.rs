@@ -7,6 +7,7 @@ mod app_sounds;
 mod app_windows;
 mod assets;
 mod auth;
+mod automation;
 mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
@@ -511,6 +512,7 @@ fn main() {
         app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
         upload::instant_cleanup::init(cx);
+        automation::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu

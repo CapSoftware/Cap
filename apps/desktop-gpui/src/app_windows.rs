@@ -634,10 +634,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let (finished_studio, preparing_editor, finished_instant, deleted) =
+            let (finished_studio, studio_behaviour, preparing_editor, finished_instant, deleted) =
                 session.update(cx, |session, _| {
                     (
                         session.finished_studio.take(),
+                        session.studio_behaviour.take(),
                         session.take_preparing_studio_editor(),
                         std::mem::take(&mut session.finished_instant),
                         std::mem::take(&mut session.deleted_recording),
@@ -687,7 +688,8 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 // deleted from the bar reshows it only for "Reopen recording
                 // window", as the Tauri `delete_recording` did.
                 let settings = crate::store::GeneralSettings::load();
-                let behaviour = settings.post_studio_recording_behaviour;
+                let behaviour =
+                    studio_behaviour.unwrap_or(settings.post_studio_recording_behaviour);
                 // Linux restores the main window through the clean-capture
                 // lease before this runs, so it keeps reshowing as before. A
                 // main window reopened mid-recording (even if minimized since)
@@ -767,8 +769,7 @@ fn open_preparing_studio_editor(session: &Entity<RecordingSession>, cx: &mut App
     if !pending.capture_stopped
         || pending.presentation != StudioEditorPresentation::Pending
         || !pending.finalization.is_finalizing()
-        || crate::store::GeneralSettings::load().post_studio_recording_behaviour
-            != crate::store::PostStudioBehaviour::OpenEditor
+        || session.read(cx).studio_behaviour != Some(crate::store::PostStudioBehaviour::OpenEditor)
     {
         return;
     }
@@ -7489,7 +7490,7 @@ pub fn empty_overlays_for_screenshot(cx: &mut App) -> Option<impl Future<Output 
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
 /// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
+pub fn screenshot_finished(captured: Option<PathBuf>, skip_editor: bool, cx: &mut App) {
     let Some(png) = captured else {
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
@@ -7519,7 +7520,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         .detach();
     }
 
-    if behaviour.opens_editor() {
+    if behaviour.opens_editor() && !skip_editor {
         // The editor owns the foreground now, the way a stopped studio
         // recording hands off to the video editor; `screenshot_editor_closed`
         // brings the main window back.
@@ -7537,6 +7538,29 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     if hidden && was_visible && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
     }
+}
+
+/// An automation's Delete local files on a screenshot: refused while a
+/// screenshot editor has the bundle open, and run here on the main thread so
+/// no editor can open it between that check and the delete.
+pub fn delete_screenshot_for_automation(bundle: &Path, cx: &mut App) -> Result<(), String> {
+    let key = editor_key(bundle);
+    if cx
+        .global::<AppWindows>()
+        .screenshot_editors
+        .iter()
+        .any(|(path, _)| editor_key(path) == key)
+    {
+        return Err(tr::dialog::delete_recording::open_in_editor().to_string());
+    }
+    crate::library::delete_screenshot(bundle)?;
+    if let Some(settings) = cx.global::<AppWindows>().settings {
+        settings
+            .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
+            .ok();
+    }
+    refresh_library_after_delete(cx);
+    Ok(())
 }
 
 /// Open (or focus) the screenshot editor for a bundle -- the

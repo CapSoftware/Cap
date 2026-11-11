@@ -57,6 +57,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+cap-automation = { path = "../../crates/automation" }
 # The cursor style picker draws the same SVG assets the renderer composites.
 # gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
 # be rasterised instead: `resvg` at the pin cap-rendering already builds, into

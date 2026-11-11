@@ -2118,6 +2118,10 @@ pub fn automations() -> AutomationsStore {
     }
 }
 
+pub fn automations_value() -> Option<Value> {
+    cached_store(&tauri_store_path()).and_then(|store| store.get(AUTOMATIONS).cloned())
+}
+
 /// `set_automations` (`automation.rs:834-837`): `store.set("automations",
 /// json!(store))` -- the key replaced wholesale, unlike the per-key
 /// [`set_store_setting`] writes.

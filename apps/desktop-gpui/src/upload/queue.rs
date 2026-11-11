@@ -855,6 +855,7 @@ impl<B: UploadBackend> Manager<B> {
             Some(&upload.cancel),
         )
         .map_err(|error| error.to_string())?;
+        crate::automation::upload_completed(project, &state.video_id);
         let cleanup_cleared = self.backend.forget_start_cleanup(&state.video_id);
         if !state.preserve_local && self.backend.delete_after_upload() {
             check_segment_cancelled(&upload.cancel)?;
@@ -1220,6 +1221,17 @@ pub(crate) async fn retry(project: PathBuf) -> Result<(), String> {
 }
 
 pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
+    if !project.exists() {
+        return Ok(());
+    }
+    delete_recording_without_automations(project.clone()).await?;
+    crate::automation::recording_deleted(project);
+    Ok(())
+}
+
+/// The delete an automation's own Delete local files action runs: the same
+/// guards, without firing the recording-deleted rules (0.6.0 did not either).
+pub(crate) async fn delete_recording_without_automations(project: PathBuf) -> Result<(), String> {
     if !project.exists() {
         return Ok(());
     }
