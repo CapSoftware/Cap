@@ -147,10 +147,12 @@ export const Caps = ({
 				);
 			}
 		}),
-		onMutate: (ids: Video.VideoId[]) => {
+		onMutate: (ids: Video.VideoId[]) =>
 			toast.loading(
 				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-			);
+			),
+		onSettled: (_data, _error, _ids, toastId) => {
+			if (toastId !== undefined) toast.dismiss(toastId);
 		},
 		onSuccess: (data: { success: number; error?: number }) => {
 			setSelectedCaps([]);
