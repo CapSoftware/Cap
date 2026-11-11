@@ -1,0 +1,159 @@
+name: scratch-win-export-4016
+on:
+  push:
+    branches:
+      - scratch/win-export-4016
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  export:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Keep crash dumps
+        run: |
+          New-Item -ItemType Directory -Force C:\dumps | Out-Null
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+          New-Item -Path $key -Force | Out-Null
+          Set-ItemProperty $key -Name DumpFolder -Value C:\dumps -Type ExpandString
+          Set-ItemProperty $key -Name DumpType -Value 1 -Type DWord
+          Set-ItemProperty $key -Name DumpCount -Value 20 -Type DWord
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting" -Name DontShowUI -Value 1 -Type DWord
+
+      - name: Machine
+        run: |
+          Get-CimInstance Win32_VideoController | Format-List Name, DriverVersion, AdapterCompatibility
+          Get-CimInstance Win32_OperatingSystem | Format-List Caption, Version, BuildNumber
+          query user 2>&1 | Out-String | Write-Host
+          [System.Environment]::UserInteractive
+
+      - name: Fetch builds
+        run: |
+          New-Item -ItemType Directory -Force C:\dl | Out-Null
+          gh api repos/${{ github.repository }}/actions/artifacts/12847797411/zip > C:\dl\i062.zip
+          gh api repos/${{ github.repository }}/actions/artifacts/13826263160/zip > C:\dl\inightly.zip
+          Expand-Archive C:\dl\i062.zip C:\dl\i062
+          Expand-Archive C:\dl\inightly.zip C:\dl\inightly
+          Get-ChildItem C:\dl\i062, C:\dl\inightly
+          $setup062 = (Get-ChildItem C:\dl\i062 -Filter *.exe)[0].FullName
+          $setupN = (Get-ChildItem C:\dl\inightly -Filter *.exe)[0].FullName
+          7z x $setup062 -oC:\cap062 -y | Out-Null
+          7z x $setupN -oC:\capnightly -y | Out-Null
+          Get-ChildItem C:\cap062 | Select-Object Name, Length | Format-Table
+          Get-ChildItem C:\capnightly | Select-Object Name, Length | Format-Table
+
+      - name: Record studio projects
+        run: |
+          New-Item -ItemType Directory -Force C:\work | Out-Null
+          foreach ($v in @("062", "nightly")) {
+            $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap-cli.exe")[0].FullName
+            if (-not $cli) { $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap.exe")[0].FullName }
+            Write-Host "== $v CLI $cli"
+            & $cli --version
+            & $cli targets screens 2>&1 | Out-String | Write-Host
+            $p = Start-Process -FilePath $cli -ArgumentList @("record", "--duration", "8", "--path", "C:\work\rec$v.cap") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "C:\work\rec$v.out" -RedirectStandardError "C:\work\rec$v.err"
+            Write-Host ("record $v exit=0x{0:X8}" -f $p.ExitCode)
+            Get-Content "C:\work\rec$v.out" -Tail 15
+            Get-Content "C:\work\rec$v.err" -Tail 25
+            if (Test-Path "C:\work\rec$v.cap") { Get-ChildItem "C:\work\rec$v.cap" -Recurse | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Write-Host }
+          }
+
+      - name: CLI exports
+        run: |
+          New-Item -ItemType Directory -Force C:\out | Out-Null
+          $cases = @(
+            @{ n = "default"; a = @() },
+            @{ n = "1080p60max"; a = @("--resolution", "1920x1080", "--fps", "60", "--quality", "maximum") },
+            @{ n = "720p30web"; a = @("--resolution", "1280x720", "--fps", "30", "--quality", "web") },
+            @{ n = "gif"; a = @("--format", "gif") }
+          )
+          foreach ($v in @("062", "nightly")) {
+            $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap-cli.exe")[0].FullName
+            foreach ($src in @("062", "nightly")) {
+              $proj = "C:\work\rec$src.cap"
+              if (-not (Test-Path "$proj\recording-meta.json")) { Write-Host "skip $src project, not recorded"; continue }
+              foreach ($c in $cases) {
+                $ext = if ($c.n -eq "gif") { "gif" } else { "mp4" }
+                $out = "C:\out\cli-$v-from$src-$($c.n).$ext"
+                $cliArgs = @("export", $proj, "--output", $out) + $c.a
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $p = Start-Process -FilePath $cli -ArgumentList $cliArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$out.out" -RedirectStandardError "$out.err"
+                $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
+                Write-Host ("RESULT cli app={0} project={1} case={2} exit=0x{3:X8} size={4} secs={5:N1}" -f $v, $src, $c.n, $p.ExitCode, $size, $sw.Elapsed.TotalSeconds)
+                if ($p.ExitCode -ne 0) { Get-Content "$out.err" -Tail 20; Get-Content "$out.out" -Tail 5 }
+              }
+            }
+          }
+
+      - name: GUI editor exports
+        run: |
+          foreach ($v in @("062", "nightly")) {
+            foreach ($kind in @("mp4", "gif")) {
+              Get-Process Cap -ErrorAction SilentlyContinue | Stop-Process -Force
+              Start-Sleep 2
+              $exe = (Get-ChildItem "C:\cap$v" -Recurse -Filter "Cap.exe")[0].FullName
+              if ($v -eq "062" -and $kind -eq "mp4") {
+                $logs = "$env:LOCALAPPDATA\so.cap.desktop\logs"
+                Remove-Item Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
+              } else {
+                $logs = "C:\guilogs\$v-$kind"
+                New-Item -ItemType Directory -Force $logs | Out-Null
+                $env:CAP_GPUI_LOG_DIR = $logs
+              }
+              $out = "C:\out\gui-$v.$kind"
+              $env:CAP_GPUI_AUTO_EDITOR = "C:\work\rec062.cap"
+              $env:CAP_GPUI_AUTO_EXPORT = $out
+              $p = Start-Process -FilePath $exe -PassThru
+              $deadline = (Get-Date).AddSeconds(240)
+              $state = "timeout"
+              while ((Get-Date) -lt $deadline) {
+                if ($p.HasExited) { $state = "exited"; break }
+                if (Get-ChildItem $logs -Filter "cap-gpui.log*" -ErrorAction SilentlyContinue | Select-String -Pattern "editor export completed|editor export failed" -Quiet) { $state = "logged"; Start-Sleep 2; break }
+                Start-Sleep 2
+              }
+              $code = if ($p.HasExited) { "0x{0:X8}" -f $p.ExitCode } else { "running" }
+              $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
+              Write-Host "RESULT gui app=$v kind=$kind state=$state process=$code size=$size"
+              Get-ChildItem $logs | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+              Get-ChildItem $logs -Filter "cap-gpui.log*" | Select-String -Pattern "auto editor|editor export|export|encoder|native crash|panick|ERROR|adapter|DXC|FXC" | Select-Object -Last 40 | ForEach-Object { $_.Line }
+              Get-Process Cap -ErrorAction SilentlyContinue | Stop-Process -Force
+            }
+          }
+          Remove-Item Env:CAP_GPUI_AUTO_EXPORT, Env:CAP_GPUI_AUTO_EDITOR, Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
+
+      - name: Default log directory and dumps
+        if: always()
+        run: |
+          Write-Host "LOCALAPPDATA=$env:LOCALAPPDATA APPDATA=$env:APPDATA"
+          foreach ($d in @("$env:LOCALAPPDATA\so.cap.desktop", "$env:APPDATA\so.cap.desktop")) {
+            Write-Host "== $d exists=$(Test-Path $d)"
+            if (Test-Path $d) { Get-ChildItem $d -Recurse -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Write-Host }
+          }
+          Get-ChildItem C:\dumps -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table
+          Get-ChildItem "$env:LOCALAPPDATA\CrashDumps" -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ matrix.runner }}
+          path: |
+            C:\out\*.err
+            C:\out\*.out
+            C:\work\*.out
+            C:\work\*.err
+            C:\guilogs
+            C:\dumps
+          if-no-files-found: ignore
