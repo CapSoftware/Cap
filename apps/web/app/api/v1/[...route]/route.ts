@@ -126,6 +126,23 @@ import {
 } from "@/lib/custom-storage-policy";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
+import {
+	createTranscriptFromUrl,
+	createTranscriptUpload,
+	deleteTranscriptObjects,
+	getTranscript,
+	getTranscriptResult,
+	listTranscripts,
+	startTranscriptUpload,
+} from "@/lib/developer-transcript-store";
+import {
+	isTranscriptStatus,
+	type TranscriptSummaryRow,
+} from "@/lib/developer-transcripts";
+import {
+	completeDeveloperVideoUpload,
+	createDeveloperVideoUpload,
+} from "@/lib/developer-video-upload";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
@@ -400,6 +417,58 @@ const approvalRequired = (requestId: string, message: string) =>
 		code: "APPROVAL_REQUIRED",
 		approvalUrl: null,
 	});
+
+const developerMediaFailure = (
+	requestId: string,
+	failure: { status: number; code: string; message: string },
+) => {
+	if (failure.status === 402) {
+		return new Agent.AgentPaymentRequiredError({
+			...commonError(
+				requestId,
+				"The app does not have enough credits. Create a checkout link with `cap developers credits purchase`, then retry.",
+			),
+			code: "INSUFFICIENT_CREDITS",
+		});
+	}
+	if (failure.status === 404) {
+		return new Agent.AgentNotFoundError({
+			...commonError(requestId, failure.message),
+			code: "NOT_FOUND",
+		});
+	}
+	if (failure.status === 409) {
+		return failure.code === "upload_not_found"
+			? notReady(requestId, failure.message)
+			: new Agent.AgentConflictError({
+					...commonError(requestId, failure.message),
+					code: "CONFLICT",
+				});
+	}
+	if (failure.status === 503) {
+		return temporarilyUnavailable(requestId, failure.message, 5_000);
+	}
+	return badRequest(requestId, failure.message);
+};
+
+const toAgentDeveloperTranscript = (row: TranscriptSummaryRow) => ({
+	id: row.id,
+	appId: row.appId,
+	status: row.status,
+	name: row.name,
+	sourceType: row.sourceType,
+	sourceUrl: row.sourceUrl,
+	durationSeconds: row.durationSeconds,
+	language: row.language,
+	wordCount: row.wordCount,
+	costMicroCredits: row.billedMicroCredits,
+	errorCode: row.status === "error" ? row.errorCode : null,
+	errorMessage: row.status === "error" ? row.errorMessage : null,
+	externalUserId: row.externalUserId,
+	createdAt: row.createdAt.toISOString(),
+	updatedAt: row.updatedAt.toISOString(),
+	completedAt: row.completedAt?.toISOString() ?? null,
+});
 
 const withMappedErrors = <A, E, R>(
 	effect: Effect.Effect<A, E, R>,
@@ -1631,6 +1700,43 @@ const getAgentOperation = Effect.fn("Agent.getOperation")(function* (
 	);
 	if (!operation) return yield* notFound(requestId);
 	return toAgentOperationResponse(operation, requestId);
+});
+
+const requireDeveloperAppOwner = Effect.fn("Agent.requireDeveloperAppOwner")(
+	function* (
+		principal: Agent.AgentPrincipal["Type"],
+		appId: string,
+		requestId: string,
+	) {
+		const database = yield* Database;
+		const [app] = yield* database.use((db) =>
+			db
+				.select({ id: Db.developerApps.id })
+				.from(Db.developerApps)
+				.where(
+					and(
+						eq(Db.developerApps.id, appId),
+						eq(Db.developerApps.ownerId, principal.id),
+						isNull(Db.developerApps.deletedAt),
+					),
+				)
+				.limit(1),
+		);
+		if (!app) return yield* notFound(requestId);
+	},
+);
+
+const requireMutationIdempotencyKey = Effect.fn(
+	"Agent.requireMutationIdempotencyKey",
+)(function* (requestId: string) {
+	const idempotencyKey = yield* requestIdempotencyKey;
+	if (!isAgentIdempotencyKey(idempotencyKey)) {
+		return yield* badRequest(
+			requestId,
+			"A valid Idempotency-Key header is required",
+		);
+	}
+	return idempotencyKey;
 });
 
 const requireUserConfirmedRequest = Effect.fn(
@@ -4431,6 +4537,291 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+					}),
+					requestId,
+				);
+			})
+			.handle("createDeveloperVideo", ({ path, payload }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						yield* requireAgentWrites(requestId);
+						yield* requireUserConfirmedRequest(requestId);
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:write", requestId);
+						const idempotencyKey =
+							yield* requireMutationIdempotencyKey(requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const result = yield* Effect.tryPromise(() =>
+							createDeveloperVideoUpload(path.appId, {
+								...payload,
+								idempotencyKey,
+							}),
+						);
+						if (!result.ok) {
+							return yield* Effect.fail(
+								developerMediaFailure(requestId, result),
+							);
+						}
+						return { video: result.video, upload: result.upload, requestId };
+					}),
+					requestId,
+				);
+			})
+			.handle("completeDeveloperVideo", ({ path, payload }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						yield* requireAgentWrites(requestId);
+						yield* requireUserConfirmedRequest(requestId);
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:write", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const result = yield* Effect.tryPromise(() =>
+							completeDeveloperVideoUpload(path.appId, path.videoId, payload),
+						);
+						if (!result.ok) {
+							return yield* Effect.fail(
+								developerMediaFailure(requestId, result),
+							);
+						}
+						return {
+							video: {
+								id: result.video.id,
+								appId: result.video.appId,
+								name: result.video.name,
+								durationSeconds: result.video.duration ?? 0,
+								width: result.video.width,
+								height: result.video.height,
+								fps: result.video.fps,
+							},
+							chargedMicroCredits: result.chargedMicroCredits,
+							requestId,
+						};
+					}),
+					requestId,
+				);
+			})
+			.handle("listDeveloperTranscripts", ({ path, urlParams }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:read", requestId);
+						const limit = parseAgentLimit(urlParams.limit);
+						const decodedCursor = decodeAgentCursor(urlParams.cursor);
+						if (limit === null || decodedCursor === undefined) {
+							return yield* badRequest(requestId, "Pagination is invalid");
+						}
+						const status = urlParams.status?.trim() || null;
+						if (status !== null && !isTranscriptStatus(status)) {
+							return yield* badRequest(requestId, "Status filter is invalid");
+						}
+						const externalUserId = urlParams.userId?.trim() || null;
+						if ((externalUserId?.length ?? 0) > 255) {
+							return yield* badRequest(requestId, "User ID is too long");
+						}
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const { transcripts, hasMore } = yield* Effect.tryPromise(() =>
+							listTranscripts(path.appId, {
+								limit,
+								cursor: decodedCursor
+									? {
+											createdAt: new Date(decodedCursor.updatedAt),
+											id: decodedCursor.id,
+										}
+									: null,
+								userId: externalUserId,
+								status,
+							}),
+						);
+						const next = hasMore ? transcripts.at(-1) : undefined;
+						return {
+							transcripts: transcripts.map(toAgentDeveloperTranscript),
+							nextCursor: next
+								? encodeAgentCursor({
+										updatedAt: next.createdAt.toISOString(),
+										id: next.id,
+									})
+								: null,
+							requestId,
+						};
+					}),
+					requestId,
+				);
+			})
+			.handle("getDeveloperTranscript", ({ path, urlParams }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:read", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const transcript = yield* Effect.tryPromise(() =>
+							getTranscript(path.appId, path.transcriptId),
+						);
+						if (!transcript) return yield* notFound(requestId);
+						const includeSegments = (urlParams.include ?? "")
+							.split(",")
+							.some((part) => part.trim() === "segments");
+						const result = includeSegments
+							? yield* Effect.tryPromise(() => getTranscriptResult(transcript))
+							: null;
+						return {
+							transcript: toAgentDeveloperTranscript(transcript),
+							text:
+								transcript.status === "complete"
+									? (transcript.text ?? "")
+									: null,
+							segments: result ? result.segments : null,
+							requestId,
+						};
+					}),
+					requestId,
+				);
+			})
+			.handle("createDeveloperTranscript", ({ path, payload }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						yield* requireAgentWrites(requestId);
+						yield* requireUserConfirmedRequest(requestId);
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:write", requestId);
+						const idempotencyKey =
+							yield* requireMutationIdempotencyKey(requestId);
+						const url = payload.url?.trim() || null;
+						const contentLength = payload.contentLength;
+						if ((url === null) === (contentLength === undefined)) {
+							return yield* badRequest(
+								requestId,
+								"Send either url, or fileName with contentLength",
+							);
+						}
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const options = {
+							name: payload.name,
+							language: payload.language,
+							userId: payload.userId,
+							idempotencyKey,
+						};
+						if (url !== null) {
+							const result = yield* Effect.tryPromise(() =>
+								createTranscriptFromUrl(path.appId, { ...options, url }),
+							);
+							if (!result.ok) {
+								return yield* Effect.fail(
+									developerMediaFailure(requestId, result),
+								);
+							}
+							return {
+								transcript: toAgentDeveloperTranscript(result.transcript),
+								upload: null,
+								requestId,
+							};
+						}
+						const result = yield* Effect.tryPromise(() =>
+							createTranscriptUpload(path.appId, {
+								...options,
+								fileName: payload.fileName,
+								contentLength: contentLength ?? 0,
+							}),
+						);
+						if (!result.ok) {
+							return yield* Effect.fail(
+								developerMediaFailure(requestId, result),
+							);
+						}
+						return {
+							transcript: toAgentDeveloperTranscript(result.transcript),
+							upload: result.upload,
+							requestId,
+						};
+					}),
+					requestId,
+				);
+			})
+			.handle("startDeveloperTranscript", ({ path }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						yield* requireAgentWrites(requestId);
+						yield* requireUserConfirmedRequest(requestId);
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:write", requestId);
+						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
+						const result = yield* Effect.tryPromise(() =>
+							startTranscriptUpload(path.appId, path.transcriptId),
+						);
+						if (!result.ok) {
+							return yield* Effect.fail(
+								developerMediaFailure(requestId, result),
+							);
+						}
+						return {
+							transcript: toAgentDeveloperTranscript(result.transcript),
+							requestId,
+						};
+					}),
+					requestId,
+				);
+			})
+			.handle("deleteDeveloperTranscript", ({ path }) => {
+				const requestId = makeRequestId();
+				return withMappedErrors(
+					Effect.gen(function* () {
+						yield* requireAgentWrites(requestId);
+						yield* requireUserConfirmedRequest(requestId);
+						const principal = yield* Agent.AgentPrincipal;
+						yield* requireScope(principal, "developer:write", requestId);
+						const response = yield* runAgentMutation({
+							principal,
+							operation: "delete_developer_transcript",
+							idempotencyKey: yield* requestIdempotencyKey,
+							request: path,
+							requestId,
+							decodeReplay: decodeMutationResponse,
+							execute: async (tx) => {
+								const [transcript] = await tx
+									.select({ id: Db.developerTranscripts.id })
+									.from(Db.developerTranscripts)
+									.innerJoin(
+										Db.developerApps,
+										eq(Db.developerTranscripts.appId, Db.developerApps.id),
+									)
+									.where(
+										and(
+											eq(Db.developerTranscripts.id, path.transcriptId),
+											eq(Db.developerTranscripts.appId, path.appId),
+											eq(Db.developerApps.ownerId, principal.id),
+											isNull(Db.developerApps.deletedAt),
+											isNull(Db.developerTranscripts.deletedAt),
+										),
+									)
+									.limit(1)
+									.for("update");
+								if (!transcript) return { state: "not_found" };
+								const now = new Date();
+								await tx
+									.update(Db.developerTranscripts)
+									.set({ deletedAt: now, text: null })
+									.where(eq(Db.developerTranscripts.id, path.transcriptId));
+								return {
+									state: "success",
+									response: mutationResponse(
+										"developer_transcript",
+										path.transcriptId,
+										"deleted",
+										requestId,
+										now,
+									),
+								};
+							},
+						});
+						yield* Effect.promise(() =>
+							deleteTranscriptObjects(path.appId, path.transcriptId),
+						);
+						return response;
 					}),
 					requestId,
 				);
