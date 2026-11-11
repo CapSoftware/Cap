@@ -22,12 +22,34 @@ const colleagueVideo = Video.VideoId.make("video-colleague");
 
 let memberRole: string | null;
 let sharedRows: { videoId: Video.VideoId; ownerId: string }[];
-let folderSql = "";
+const folderRows = [
+	{ id: "personal-folder", organizationId, spaceId: null },
+	{ id: "org-folder", organizationId, spaceId: organizationId },
+	{ id: "space-folder", organizationId, spaceId: "space-1" },
+	{ id: "other-org-folder", organizationId: "org-2", spaceId: "org-2" },
+];
 const writes: { table: string; params: unknown[] }[] = [];
+
+// Applies a compiled `and` of `column = ?` / `column is null` comparisons on
+// `folders` to a row, so the test checks the filter the action really builds.
+function matchesFolderFilter(
+	row: Record<string, unknown>,
+	sql: string,
+	params: unknown[],
+) {
+	if (/ or |not /i.test(sql)) throw new Error(`unsupported filter: ${sql}`);
+	const comparisons = [
+		...sql.matchAll(/`folders`\.`(\w+)` (= \?|is null)/g),
+	];
+	if (comparisons.length === 0) throw new Error(`unsupported filter: ${sql}`);
+	let next = 0;
+	return comparisons.every(([, column, op]) =>
+		op === "is null" ? row[column] == null : row[column] === params[next++],
+	);
+}
 
 beforeEach(() => {
 	writes.length = 0;
-	folderSql = "";
 	memberRole = "member";
 	sharedRows = [
 		{ videoId: ownVideo, ownerId: "member-user" },
@@ -37,6 +59,7 @@ beforeEach(() => {
 	mocks.select.mockImplementation(() => {
 		let table = "";
 		let params: unknown[] = [];
+		let sql = "";
 		const rows = () => {
 			if (table === "organizations")
 				return [{ id: organizationId, ownerId: "org-owner" }];
@@ -45,9 +68,9 @@ beforeEach(() => {
 			if (table === "shared_videos")
 				return sharedRows.filter((row) => params.includes(row.videoId));
 			if (table === "folders")
-				return folderSql.includes("spaceId")
-					? [{ id: "org-folder" }]
-					: [{ id: "personal-folder" }, { id: "org-folder" }];
+				return folderRows
+					.filter((row) => matchesFolderFilter(row, sql, params))
+					.map(({ id }) => ({ id }));
 			return [];
 		};
 		const query = Object.assign(
@@ -61,7 +84,7 @@ beforeEach(() => {
 				where(filter: SQL) {
 					const compiled = dialect.sqlToQuery(filter);
 					params = compiled.params;
-					if (table === "folders") folderSql = compiled.sql;
+					sql = compiled.sql;
 					return query;
 				},
 				limit: () => query,
@@ -105,7 +128,6 @@ describe("removing videos from an organization", () => {
 	it("only unfiles videos from the organization's folders, not personal ones", async () => {
 		await removeVideosFromOrganization(organizationId, [ownVideo]);
 
-		expect(folderSql).toContain("spaceId");
 		expect(writes).toContainEqual({
 			table: "videos",
 			params: [ownVideo, "org-folder"],
