@@ -3,6 +3,7 @@
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -98,6 +99,10 @@ export function BillingSummaryCard() {
 			: subscription.status === "trialing"
 				? "Trialing"
 				: "Active";
+	const canSwitchToYearly =
+		subscription.billingInterval === "month" &&
+		subscription.status === "active" &&
+		!subscription.cancelAtPeriodEnd;
 	const intervalLabel =
 		subscription.billingInterval === "year" ? "annually" : "monthly";
 	const totalAmount = subscription.pricePerSeat * subscription.currentQuantity;
@@ -150,6 +155,14 @@ export function BillingSummaryCard() {
 						) : (
 							<p>Next billing date: {nextBillingDate}</p>
 						)}
+						{canSwitchToYearly ? (
+							<Link
+								href="/checkout?plan=yearly"
+								className="self-start font-medium text-blue-11 underline underline-offset-2"
+							>
+								Switch to yearly billing and save
+							</Link>
+						) : null}
 					</div>
 				</div>
 				<Button
