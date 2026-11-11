@@ -2075,12 +2075,8 @@ async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Opt
     }
     #[cfg(target_os = "linux")]
     {
-        crate::platform::open_file_panel_async(
-            &[(tr::editor::clips::cap_filter(), &["cap"])],
-            Some(crate::recording::recordings_dir()),
-            _cx,
-        )
-        .await
+        crate::platform::open_folder_panel_async(Some(crate::recording::recordings_dir()), _cx)
+            .await
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {

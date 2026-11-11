@@ -282,18 +282,29 @@ fn portal_filters(filters: &[(&str, &[&str])]) -> Vec<ashpd::desktop::file_choos
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum LinuxOpenSelection<'a> {
+    File(&'a [(&'a str, &'a [&'a str])]),
+    Folder,
+}
+
+#[cfg(target_os = "linux")]
 async fn linux_open_file_panel(
-    filters: &[(&str, &[&str])],
+    selection: LinuxOpenSelection<'_>,
     directory: Option<std::path::PathBuf>,
     owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
     parent: Option<LinuxFileDialogParent>,
     cx: &mut gpui::AsyncApp,
 ) -> LinuxFileDialogResult {
-    let filters = portal_filters(filters);
+    let (filters, folder) = match selection {
+        LinuxOpenSelection::File(filters) => (portal_filters(filters), false),
+        LinuxOpenSelection::Folder => (Vec::new(), true),
+    };
     run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
         let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
             .identifier(identifier)
             .multiple(false)
+            .directory(folder.then_some(true))
             .filters(filters)
             .current_folder::<&std::path::PathBuf>(directory.as_ref())
             .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
@@ -382,6 +393,25 @@ pub(crate) async fn open_file_panel_async(
     directory: Option<std::path::PathBuf>,
     cx: &mut gpui::AsyncWindowContext,
 ) -> Option<std::path::PathBuf> {
+    open_panel_in_window(LinuxOpenSelection::File(filters), directory, cx).await
+}
+
+/// A `.cap` recording is a folder, so it needs the portal's folder mode: in
+/// file mode the chooser opens the folder instead of returning it.
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_folder_panel_async(
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    open_panel_in_window(LinuxOpenSelection::Folder, directory, cx).await
+}
+
+#[cfg(target_os = "linux")]
+async fn open_panel_in_window(
+    selection: LinuxOpenSelection<'_>,
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
     let (owner, parent) = cx
         .update_root(|root, window, _| {
             (
@@ -390,7 +420,7 @@ pub(crate) async fn open_file_panel_async(
             )
         })
         .ok()?;
-    let result = linux_open_file_panel(filters, directory, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(selection, directory, Some(owner), parent, cx).await;
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
@@ -428,7 +458,14 @@ pub(crate) async fn open_file_panel_from_app_async(
             .ok()
     });
     let (owner, parent) = captured?;
-    let result = linux_open_file_panel(filters, None, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(
+        LinuxOpenSelection::File(filters),
+        None,
+        Some(owner),
+        parent,
+        cx,
+    )
+    .await;
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
