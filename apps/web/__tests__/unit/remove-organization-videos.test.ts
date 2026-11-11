@@ -41,7 +41,7 @@ function matchesFolderFilter(
 	const comparisons = [...sql.matchAll(/`folders`\.`(\w+)` (= \?|is null)/g)];
 	if (comparisons.length === 0) throw new Error(`unsupported filter: ${sql}`);
 	let next = 0;
-	return comparisons.every(([, column, op]) =>
+	return comparisons.every(([, column = "", op]) =>
 		op === "is null" ? row[column] == null : row[column] === params[next++],
 	);
 }
