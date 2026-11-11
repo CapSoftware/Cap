@@ -8,6 +8,7 @@ struct CapDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.capsLayout) private var layout
     @Environment(\.capSelection) private var selection
+    @Environment(CapDetailModels.self) private var capModels: CapDetailModels?
     @State private var model: CapDetailModel
     @State private var showingRename = false
     @State private var renameText = ""
@@ -54,6 +55,9 @@ struct CapDetailView: View {
             }
             .onChange(of: showingFullscreen) { _, value in
                 if model.isFullscreen != value { model.isFullscreen = value }
+            }
+            .onChange(of: isCovered) { _, covered in
+                capModels?.setCovered(covered, by: model)
             }
             .fullScreenCover(isPresented: $showingFullscreen) {
                 if let player = model.player {
@@ -133,6 +137,10 @@ struct CapDetailView: View {
                 Text("You won't see their Caps or comments in Cap for iPhone.")
             }
             .capDeleteConfirmation(pendingDelete: $pendingDelete) { _ in close() }
+    }
+
+    private var isCovered: Bool {
+        editor != nil || showingFullscreen
     }
 
     /// Beside the library the Cap is the detail column's root, which dismiss can't pop.

@@ -76,8 +76,18 @@ extension EnvironmentValues {
 /// Keeps each open Cap's model, and so its player, alive while the layout around it is rebuilt.
 /// Keyed by route, so a link that opens the same Cap at another moment still starts fresh, as it did before.
 @MainActor
+@Observable
 final class CapDetailModels {
-    private var models: [Route: CapDetailModel] = [:]
+    @ObservationIgnored private var models: [Route: CapDetailModel] = [:]
+    private var covering: Set<ObjectIdentifier> = []
+
+    var isCovered: Bool { !covering.isEmpty }
+
+    func setCovered(_ covered: Bool, by model: CapDetailModel) {
+        let id = ObjectIdentifier(model)
+        guard covering.contains(id) != covered else { return }
+        if covered { covering.insert(id) } else { covering.remove(id) }
+    }
 
     func model(for route: Route, target: ShareTarget) -> CapDetailModel {
         if let model = models[route] { return model }
@@ -91,6 +101,7 @@ final class CapDetailModels {
         for (route, model) in models where !open.contains(route) {
             model.discard()
             models[route] = nil
+            setCovered(false, by: model)
         }
     }
 }

@@ -156,9 +156,12 @@ struct MainTabView: View {
     @State private var settingsPath: [Route] = []
     @State private var recorder: RecorderRequest?
     @State private var capModels = CapDetailModels()
+    @State private var heldLayout: CapsLayout?
 
+    /// Held while a Cap's editor or fullscreen player is up: swapping layouts under it would rebuild the screen that
+    /// presents it and close it, losing unsaved edits. It changes once the cover closes.
     private var capsLayout: CapsLayout {
-        CapsLayout(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
+        heldLayout ?? CapsLayout(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
     }
 
     private var openRoutes: [Route] {
@@ -283,8 +286,10 @@ struct MainTabView: View {
                 }
             }
         }
+        .environment(capModels)
         .environment(\.capsLayout, capsLayout)
         .onChange(of: openRoutes) { _, routes in capModels.keep(routes) }
+        .onChange(of: capModels.isCovered) { _, covered in heldLayout = covered ? capsLayout : nil }
     }
 
     @ViewBuilder
