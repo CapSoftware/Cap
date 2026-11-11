@@ -12,13 +12,8 @@ import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { buildEnv, serverEnv } from "@cap/env";
-import {
-	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID,
-	STRIPE_PLAN_IDS,
-	stripe,
-	userIsPro,
-} from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import {
 	AgentManagement,
 	collectPasswordHashes,
@@ -129,6 +124,7 @@ import {
 	logCustomStorageAttempt,
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
+import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
@@ -4337,12 +4333,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													{
 														price_data: {
 															currency: "usd",
-															product:
-																STRIPE_DEVELOPER_CREDITS_PRODUCT_ID[
-																	buildEnv.NEXT_PUBLIC_IS_CAP
-																		? "production"
-																		: "development"
-																],
+															product: developerCreditsProductId(),
 															unit_amount: payload.amountCents,
 														},
 														quantity: 1,
