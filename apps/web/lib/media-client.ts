@@ -280,3 +280,48 @@ export async function fetchConvertedVideoViaMediaServer(
 		{ maxRetries: 0 },
 	);
 }
+
+export type MediaServerJobStart =
+	| { status: "started"; jobId: string }
+	| { status: "busy" }
+	| { status: "unavailable" }
+	| { status: "rejected"; message: string };
+
+const JOB_START_TIMEOUT_MS = 30_000;
+
+export async function startMediaServerVideoJob(
+	path: "/video/ladder" | "/video/process",
+	body: Record<string, unknown>,
+): Promise<MediaServerJobStart> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	const response = await fetch(`${mediaServerUrl}${path}`, {
+		method: "POST",
+		headers: getMediaServerHeaders(mediaServerSecret),
+		body: JSON.stringify({ ...body, webhookSecret: mediaServerSecret }),
+		signal: AbortSignal.timeout(JOB_START_TIMEOUT_MS),
+	});
+
+	if (response.ok) {
+		const data = (await response.json()) as { jobId?: unknown };
+		if (typeof data.jobId !== "string" || data.jobId.length === 0) {
+			return { status: "rejected", message: "Media server returned no job" };
+		}
+		return { status: "started", jobId: data.jobId };
+	}
+
+	const errorData = (await response
+		.json()
+		.catch(() => ({}))) as Partial<MediaServerError>;
+	if (response.status === 404 || response.status === 405) {
+		return { status: "unavailable" };
+	}
+	if (response.status === 503) return { status: "busy" };
+	return {
+		status: "rejected",
+		message:
+			errorData.details ||
+			errorData.error ||
+			`Media server answered ${response.status}`,
+	};
+}
