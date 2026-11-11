@@ -41,21 +41,21 @@ jobs:
           exit 0
 
       - name: Fetch builds
+        timeout-minutes: 8
         run: |
           New-Item -ItemType Directory -Force C:\dl | Out-Null
-          gh api repos/${{ github.repository }}/actions/artifacts/12847797411/zip > C:\dl\i062.zip
-          gh api repos/${{ github.repository }}/actions/artifacts/13826263160/zip > C:\dl\inightly.zip
-          Expand-Archive C:\dl\i062.zip C:\dl\i062
-          Expand-Archive C:\dl\inightly.zip C:\dl\inightly
+          gh run download 40753381400 -R ${{ github.repository }} -n unsigned-windows-installer -D C:\dl\i062
+          gh run download 42950558054 -R ${{ github.repository }} -n unsigned-windows-installer -D C:\dl\inightly
           Get-ChildItem C:\dl\i062, C:\dl\inightly
           $setup062 = (Get-ChildItem C:\dl\i062 -Filter *.exe)[0].FullName
           $setupN = (Get-ChildItem C:\dl\inightly -Filter *.exe)[0].FullName
-          7z x $setup062 -oC:\cap062 -y | Out-Null
-          7z x $setupN -oC:\capnightly -y | Out-Null
+          7z x $setup062 -oC:\cap062 -aoa -bd | Select-Object -Last 3
+          7z x $setupN -oC:\capnightly -aoa -bd | Select-Object -Last 3
           Get-ChildItem C:\cap062 | Select-Object Name, Length | Format-Table
           Get-ChildItem C:\capnightly | Select-Object Name, Length | Format-Table
 
       - name: Record studio projects
+        timeout-minutes: 6
         run: |
           New-Item -ItemType Directory -Force C:\work | Out-Null
           foreach ($v in @("062", "nightly")) {
@@ -73,6 +73,7 @@ jobs:
           exit 0
 
       - name: CLI exports
+        timeout-minutes: 20
         run: |
           New-Item -ItemType Directory -Force C:\out | Out-Null
           $cases = @(
@@ -101,6 +102,7 @@ jobs:
           exit 0
 
       - name: GUI editor exports
+        timeout-minutes: 25
         run: |
           foreach ($v in @("062", "nightly")) {
             foreach ($kind in @("mp4", "gif")) {
