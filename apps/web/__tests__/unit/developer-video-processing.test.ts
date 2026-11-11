@@ -433,6 +433,25 @@ describe("developer video dispatch", () => {
 		expect(video().processing?.attempts.mp4).toBe(0);
 	});
 
+	it("keeps the part for a later try when the media server cannot be reached", async () => {
+		mocks.startJob.mockRejectedValue(new Error("fetch failed"));
+
+		expect(await dispatchDeveloperVideoPart("video-1", "hls")).toBe("busy");
+		expect(video().processing?.hls).toEqual({ state: "pending" });
+		expect(video().status).toBe("processing");
+	});
+
+	it("fails preparation for a video that has no uploaded file", async () => {
+		mocks.store.video = developerVideo({
+			s3Key: null,
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(prepareDeveloperVideoProcessing("video-1")).rejects.toThrow(
+			"no uploaded file",
+		);
+	});
+
 	it("does not dispatch a part twice", async () => {
 		mocks.store.video = developerVideo({
 			processing: processingState({ mp4: runningPart("t-mp4") }),

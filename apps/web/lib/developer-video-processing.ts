@@ -40,6 +40,7 @@ import {
 	readDeveloperVideoText,
 } from "./developer-video-storage";
 import {
+	type MediaServerJobStart,
 	probeVideoViaMediaServer,
 	startMediaServerVideoJob,
 } from "./media-client";
@@ -182,10 +183,9 @@ export async function prepareDeveloperVideoProcessing(
 	videoId: string,
 ): Promise<boolean> {
 	const video = await findDeveloperVideo(videoId);
-	if (!video || video.deletedAt || !video.processing || !video.s3Key) {
-		return false;
-	}
+	if (!video || video.deletedAt || !video.processing) return false;
 	if (video.processing.probe) return true;
+	if (!video.s3Key) throw new Error("Video has no uploaded file");
 
 	const source = await headDeveloperVideoObject(video.s3Key);
 	if (!source) throw new Error("Uploaded video was not found in storage");
@@ -349,7 +349,17 @@ export async function dispatchDeveloperVideoPart(
 	if (!video?.processing) return "skipped";
 
 	const request = await buildJobRequest(video, video.processing, part, token);
-	const started = await startMediaServerVideoJob(request.path, request.body);
+	const started = await startMediaServerVideoJob(
+		request.path,
+		request.body,
+	).catch((error): MediaServerJobStart => {
+		console.error("[developer-video] Media server did not answer", {
+			videoId,
+			part,
+			error,
+		});
+		return { status: "busy" };
+	});
 
 	if (started.status === "started") {
 		await mutateDeveloperVideo(videoId, (current) => {
