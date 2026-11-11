@@ -1,4 +1,6 @@
+import type { CSSProperties } from "react";
 import { COMPLIANCE_SEALS, ComplianceSeal } from "@/components/ComplianceSeals";
+import { PLAIN } from "./art";
 import {
 	ANCHORS,
 	BAA,
@@ -12,6 +14,8 @@ import {
 	SPEED_VIDEO_MINUTES,
 	usd,
 } from "./content";
+import { FilmButton } from "./Film";
+import { FILM } from "./film-source";
 import { HeroArt } from "./Plain";
 import styles from "./scene.module.css";
 import { Actions } from "./shared";
@@ -40,6 +44,18 @@ const RULE = "border-[rgba(222,230,246,0.1)]";
 export const Hero = () => (
 	<section className={styles.hero}>
 		<HeroArt />
+		{FILM.files ? (
+			<div
+				className={styles.stage}
+				style={
+					{
+						"--slab-base": PLAIN.slabBase,
+					} as CSSProperties
+				}
+			>
+				<FilmButton files={FILM.files} />
+			</div>
+		) : null}
 		<div className="mx-auto flex h-full max-w-[1184px] flex-col px-5 sm:px-8 lg:justify-center lg:pb-[7vh]">
 			<div className="max-w-[520px]">
 				<h1
