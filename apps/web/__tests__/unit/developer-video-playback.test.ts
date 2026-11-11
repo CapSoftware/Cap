@@ -63,8 +63,12 @@ const ready = (overrides = {}) =>
 		...overrides,
 	});
 
+const request = new Request(
+	`https://web.example/api/developer/playback/${PLAYBACK_ID}/master.m3u8`,
+) as NextRequest;
+
 function play(file: string, playbackId = PLAYBACK_ID) {
-	return GET({} as NextRequest, {
+	return GET(request, {
 		params: Promise.resolve({ playbackId, file }),
 	});
 }
@@ -119,6 +123,11 @@ describe("developer video playback route", () => {
 			"#EXT-X-ENDLIST",
 		]);
 		expect(mocks.sign).toHaveBeenCalledTimes(1);
+		expect(mocks.sign).toHaveBeenCalledWith(
+			`${HLS_PREFIX}1080p.m4s`,
+			43200,
+			request,
+		);
 	});
 
 	it.each([

@@ -1,4 +1,5 @@
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets/index";
+import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import { Effect, ManagedRuntime, Option } from "effect";
 
 const StorageRuntime = ManagedRuntime.make(S3Buckets.Default);
@@ -28,13 +29,36 @@ function isMissingObject(error: unknown): boolean {
 	return false;
 }
 
+export function requestAsSeenByViewer(request: Request): Request {
+	const host = (
+		request.headers.get("x-forwarded-host") ?? request.headers.get("host")
+	)
+		?.split(",")[0]
+		?.trim();
+	if (!host) return request;
+	try {
+		const url = new URL(request.url);
+		const viewer = new URL(`${url.protocol}//${host}`);
+		url.hostname = viewer.hostname;
+		url.port = viewer.port;
+		return new Request(url, { headers: request.headers });
+	} catch {
+		return request;
+	}
+}
+
 export function signedDeveloperVideoUrl(
 	key: string,
 	expiresIn: number,
+	request: Request,
 ): Promise<string> {
 	return StorageRuntime.runPromise(
 		bucket.pipe(
 			Effect.flatMap((access) => access.getSignedObjectUrl(key, { expiresIn })),
+			Effect.provideService(
+				HttpServerRequest.HttpServerRequest,
+				HttpServerRequest.fromWeb(requestAsSeenByViewer(request)),
+			),
 		),
 	);
 }

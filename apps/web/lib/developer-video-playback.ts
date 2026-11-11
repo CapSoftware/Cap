@@ -40,13 +40,13 @@ function notFound(): Response {
 	});
 }
 
-async function redirectTo(key: string): Promise<Response> {
+async function redirectTo(key: string, request: Request): Promise<Response> {
 	return new Response(null, {
 		status: 302,
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
 			...CACHEABLE,
-			Location: await signedDeveloperVideoUrl(key, SIGNED_URL_SECONDS),
+			Location: await signedDeveloperVideoUrl(key, SIGNED_URL_SECONDS, request),
 		},
 	});
 }
@@ -108,6 +108,7 @@ async function findPlayableVideo(playbackId: string) {
 export async function developerPlaybackResponse(
 	playbackId: string,
 	file: string,
+	request: Request,
 ): Promise<Response> {
 	if (!PLAYBACK_ID_PATTERN.test(playbackId)) return notFound();
 
@@ -121,12 +122,12 @@ export async function developerPlaybackResponse(
 
 	if (file === DEVELOPER_VIDEO_MP4_FILE) {
 		return outputs.mp4 && processing.mp4.state === "complete"
-			? redirectTo(keysFor(processing.mp4.output).mp4)
+			? redirectTo(keysFor(processing.mp4.output).mp4, request)
 			: notFound();
 	}
 	if (file === DEVELOPER_VIDEO_POSTER_FILE) {
 		return outputs.poster && processing.poster
-			? redirectTo(keysFor(processing.poster.output).poster)
+			? redirectTo(keysFor(processing.poster.output).poster, request)
 			: notFound();
 	}
 	if (
@@ -138,7 +139,7 @@ export async function developerPlaybackResponse(
 	}
 	const keys = keysFor(processing.hls.output);
 	if (MEDIA_FILE_PATTERN.test(file)) {
-		return redirectTo(`${keys.hlsPrefix}${file}`);
+		return redirectTo(`${keys.hlsPrefix}${file}`, request);
 	}
 
 	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
@@ -150,6 +151,7 @@ export async function developerPlaybackResponse(
 					signedDeveloperVideoUrl(
 						`${keys.hlsPrefix}${name}`,
 						SIGNED_URL_SECONDS,
+						request,
 					),
 				);
 	return new Response(body, {

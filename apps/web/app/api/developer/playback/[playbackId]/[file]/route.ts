@@ -5,12 +5,12 @@ import {
 } from "@/lib/developer-video-playback";
 
 export async function GET(
-	_request: NextRequest,
+	request: NextRequest,
 	{ params }: { params: Promise<{ playbackId: string; file: string }> },
 ) {
 	const { playbackId, file } = await params;
 	try {
-		return await developerPlaybackResponse(playbackId, file);
+		return await developerPlaybackResponse(playbackId, file, request);
 	} catch (error) {
 		console.error("[developer-playback] Failed to serve playback file", error);
 		return new Response("Playback is unavailable", {
