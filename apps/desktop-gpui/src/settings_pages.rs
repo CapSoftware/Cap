@@ -1066,6 +1066,25 @@ const CANCEL_OUTCOMES: [(bool, OutcomeOption); 2] = [
     ),
 ];
 
+const EDITOR_CLOSE_OUTCOMES: [(bool, OutcomeOption); 2] = [
+    (
+        false,
+        OutcomeOption {
+            icon: "icons/app-window.svg",
+            label: tr::settings::shortcuts::outcome::editor_close_show_cap,
+            hint: tr::settings::shortcuts::outcome::editor_close_show_cap_hint,
+        },
+    ),
+    (
+        true,
+        OutcomeOption {
+            icon: "icons/eye-off.svg",
+            label: tr::settings::shortcuts::outcome::editor_close_stay_hidden,
+            hint: tr::settings::shortcuts::outcome::editor_close_stay_hidden_hint,
+        },
+    ),
+];
+
 fn shortcut_label(action: &str) -> &'static str {
     match action {
         "screenshotArea" => tr::settings::shortcuts::label::screenshot_area(),
@@ -1731,6 +1750,30 @@ impl SettingsWindow {
             ),
         ];
 
+        let editor_close = vec![
+            self.render_outcome_panel(
+                "outcome-editor-close",
+                tr::settings::shortcuts::on_editor_close::title(),
+                tr::settings::shortcuts::on_editor_close::hint(),
+                &EDITOR_CLOSE_OUTCOMES
+                    .iter()
+                    .map(|(keep_hidden, option)| {
+                        (
+                            *option,
+                            *keep_hidden == self.settings.keep_main_hidden_after_editor,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                |this, index, cx| {
+                    if let Some((keep_hidden, _)) = EDITOR_CLOSE_OUTCOMES.get(index) {
+                        this.settings.keep_main_hidden_after_editor = *keep_hidden;
+                        this.write_bool("keepMainHiddenAfterEditor", *keep_hidden, cx);
+                    }
+                },
+                cx,
+            ),
+        ];
+
         let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
@@ -1775,6 +1818,15 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
+        sections.push(
+            self.section(
+                tr::settings::shortcuts::closing_editor_title(),
+                Some(tr::settings::shortcuts::closing_editor_description()),
+                None,
+                vec![card("shortcuts-editor-close", editor_close, cx)],
+            )
+            .into_any_element(),
+        );
         sections.push(
             self.section(
                 tr::settings::shortcuts::while_recording_title(),
