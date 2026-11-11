@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [windows-2025, windows-2022]
+        runner: [windows-2022]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
@@ -74,60 +74,21 @@ jobs:
           }
           exit 0
 
-      - name: GUI editor exports
-        timeout-minutes: 40
-        run: |
-          foreach ($v in @("062", "nightly")) {
-            foreach ($kind in @("mp4", "gif")) {
-              Get-Process Cap -ErrorAction SilentlyContinue | Stop-Process -Force
-              Start-Sleep 2
-              $exe = (Get-ChildItem "C:\cap$v" -Recurse -Filter "Cap.exe")[0].FullName
-              if ($v -eq "062" -and $kind -eq "mp4") {
-                $logs = "$env:LOCALAPPDATA\so.cap.desktop\logs"
-                Remove-Item Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
-              } else {
-                $logs = "C:\guilogs\$v-$kind"
-                New-Item -ItemType Directory -Force $logs | Out-Null
-                $env:CAP_GPUI_LOG_DIR = $logs
-              }
-              $out = "C:\out\gui-$v.$kind"
-              $env:CAP_GPUI_AUTO_EDITOR = "C:\work\rec062.cap"
-              $env:CAP_GPUI_AUTO_EXPORT = $out
-              $p = Start-Process -FilePath $exe -PassThru
-              $deadline = (Get-Date).AddSeconds(480)
-              $state = "timeout"
-              while ((Get-Date) -lt $deadline) {
-                if ($p.HasExited) { $state = "exited"; break }
-                if (Get-ChildItem $logs -Filter "cap-gpui.log*" -ErrorAction SilentlyContinue | Select-String -Pattern "editor export completed|editor export failed|no studio .cap" | Select-Object -First 1) { $state = "logged"; Start-Sleep 2; break }
-                Start-Sleep 2
-              }
-              $code = if ($p.HasExited) { "0x{0:X8}" -f $p.ExitCode } else { "running" }
-              $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
-              Write-Host "RESULT gui app=$v kind=$kind state=$state process=$code size=$size"
-              Get-ChildItem $logs | Select-Object Name, Length | Format-Table | Out-String | Write-Host
-              Get-ChildItem $logs -Filter "cap-gpui.log*" | Select-String -Pattern "auto editor|editor export|export|encoder|native crash|panick|ERROR|adapter|DXC|FXC" | Select-Object -Last 40 | ForEach-Object { $_.Line }
-              Get-Process Cap -ErrorAction SilentlyContinue | Stop-Process -Force
-            }
-          }
-          Remove-Item Env:CAP_GPUI_AUTO_EXPORT, Env:CAP_GPUI_AUTO_EDITOR, Env:CAP_GPUI_LOG_DIR -ErrorAction SilentlyContinue
-          exit 0
-
       - name: CLI exit crash under cdb
         timeout-minutes: 20
         run: |
           New-Item -ItemType Directory -Force C:\out | Out-Null
           $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
           Write-Host "cdb exists=$(Test-Path $cdb)"
-          foreach ($v in @("nightly", "062")) {
+          Set-Content -Path C:\out\cmds.txt -Value @('sxe -c2 ".echo SECOND_CHANCE_AV; r; .ecxr; kn 40; ~*kn 8; lmo; q" av', 'sxd ld', 'sxd ud', 'g', 'q')
+          foreach ($run in @(@("nightly",1),@("nightly",2),@("nightly",3),@("062",1))) {
+            $v = $run[0]; $i = $run[1]
             $cli = "C:\cap$v\cap-cli.exe"
-            foreach ($i in 1..2) {
-              $out = "C:\out\cdb-$v-$i.mp4"
-              $cmd = 'sxe -c2 "r; kn 40; lm; q" av; sxd -c "" ld; g'
-              $p = Start-Process -FilePath $cdb -ArgumentList @("-G", "-lines", "-c", "`"$cmd`"", $cli, "export", "C:\work\rec062.cap", "--output", $out) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$out.cdb" -RedirectStandardError "$out.err"
-              $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
-              Write-Host ("RESULT cdb app={0} run={1} exit=0x{2:X8} size={3}" -f $v, $i, $p.ExitCode, $size)
-              Select-String -Path "$out.cdb" -Pattern "Access violation|second chance|^[0-9a-f]{2} [0-9a-f`]+ [0-9a-f`]+ |Exported video|ExitProcess|exit code" | Select-Object -First 50 | ForEach-Object { $_.Line }
-            }
+            $out = "C:\out\cdb-$v-$i.mp4"
+            $p = Start-Process -FilePath $cdb -ArgumentList @("-G", "-cf", "C:\out\cmds.txt", $cli, "export", "C:\work\rec062.cap", "--output", $out) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$out.cdb" -RedirectStandardError "$out.err"
+            $size = if (Test-Path $out) { (Get-Item $out).Length } else { -1 }
+            Write-Host ("RESULT cdb app={0} run={1} exit=0x{2:X8} size={3}" -f $v, $i, $p.ExitCode, $size)
+            Select-String -Path "$out.cdb" -Pattern "SECOND_CHANCE_AV|Access violation|exited with|Exported video|^\s*[0-9a-f]{2} [0-9a-f``]+ [0-9a-f``]+ " | Select-Object -First 60 | ForEach-Object { $_.Line }
           }
           exit 0
 
