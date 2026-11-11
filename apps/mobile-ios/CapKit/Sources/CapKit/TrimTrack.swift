@@ -20,12 +20,9 @@ public struct TrimTrack: Sendable, Hashable {
     public static let fingerInset: Double = 3.6
     public static let playheadWidth: Double = 4
     public static let zoomFactor: Double = 5
-    /// A touch has to travel this far before it trims or scrubs.
     public static let dragThreshold: Double = 10
-    /// Holding a handle still for this long expands the strip.
     public static let holdDelay: Double = 0.53
 
-    /// The strip expands around a held handle, which stays where it is.
     public struct Zoom: Sendable, Hashable {
         public let time: Double
         public let position: Double
@@ -63,7 +60,6 @@ public struct TrimTrack: Sendable, Hashable {
         return zoom.time + (position - zoom.position) / scale
     }
 
-    /// Where a held handle's inner edge goes for a finger at `position`.
     public func edge(_ edge: TrimEdge, forFingerAt position: Double) -> Double {
         edge == .start ? position + Self.fingerInset : position - Self.fingerInset
     }
@@ -105,7 +101,6 @@ public struct TrimTrack: Sendable, Hashable {
         return .handle(best.edge)
     }
 
-    /// The playhead never overlaps the handles of the clip it is in.
     public func playheadPosition(for time: Double, in clip: EditRange) -> Double {
         let half = Self.playheadWidth / 2
         let low = position(for: clip.start) + half
