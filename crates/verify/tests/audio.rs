@@ -60,8 +60,6 @@ fn speeds_match(config: &mut ProjectConfiguration) {
     speeds(config, Some(ClipSpeedAudioMode::MatchSpeed));
 }
 
-/// A typed (non-preset) speed applied to every clip: the whole export runs
-/// at 1.2x with the audio resampled.
 fn custom_speed_all(config: &mut ProjectConfiguration) {
     common::set_cuts(config, &[(0.3, 3.4, 1.2), (3.4, 5.0, 1.2), (5.5, 7.8, 1.2)]);
     for segment in &mut config.timeline.as_mut().expect("timeline").segments {
