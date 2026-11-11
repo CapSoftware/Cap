@@ -351,8 +351,6 @@ app.post(
 				});
 			}).pipe(provideOptionalAuth, runPromise);
 
-			await startDeveloperVideoProcessing(videoId);
-
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
 				duration: billingDuration,
 			};
@@ -364,6 +362,8 @@ app.post(
 				.update(developerVideos)
 				.set(updates)
 				.where(eq(developerVideos.id, videoId));
+
+			await startDeveloperVideoProcessing(videoId);
 
 			return c.json({ success: true });
 		} catch (error) {

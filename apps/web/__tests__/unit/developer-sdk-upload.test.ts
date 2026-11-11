@@ -180,6 +180,14 @@ describe("developer SDK multipart upload", () => {
 		).toBe(true);
 		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
 		expect(mocks.startProcessing).toHaveBeenCalledWith("video-1");
+		const savedAt = mocks.query.mock.invocationCallOrder.at(
+			mocks.query.mock.calls.findLastIndex(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			),
+		);
+		expect(savedAt).toBeLessThan(
+			mocks.startProcessing.mock.invocationCallOrder[0] ?? 0,
+		);
 	});
 
 	it("answers a repeated complete without charging or touching storage again", async () => {
