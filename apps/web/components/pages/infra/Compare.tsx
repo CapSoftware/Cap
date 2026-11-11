@@ -71,7 +71,7 @@ const SourceLink = ({ href, label }: { href: string; label: string }) => (
 );
 
 export const Compare = () => (
-	<Section id={ANCHORS.compare} className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.compare} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="The lowest price at every resolution.">
 				<p>
@@ -122,7 +122,7 @@ export const Compare = () => (
 			</figure>
 		</div>
 
-		<div className="mt-16 flex flex-col gap-x-10 gap-y-5 sm:flex-row sm:items-center sm:justify-between lg:mt-24">
+		<div className="mt-14 flex flex-col gap-x-10 gap-y-5 sm:flex-row sm:items-center sm:justify-between lg:mt-20">
 			<p className="m-0 max-w-[440px] text-pretty text-[13.5px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
 				Every rate, drawn to scale. Prices from each provider's public pricing
 				page on {AS_OF}.

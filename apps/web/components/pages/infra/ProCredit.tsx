@@ -16,7 +16,7 @@ const grouped = new Intl.NumberFormat("en-US");
 const CREDIT = usdWhole(PRICES.proMonthlyCredit);
 
 export const ProCredit = () => (
-	<Section id={ANCHORS.pro} className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.pro} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-8">
 			<SectionHeading title={`${CREDIT} free every month with Cap Pro.`}>
 				<p>

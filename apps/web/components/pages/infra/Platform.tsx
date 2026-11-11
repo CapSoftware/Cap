@@ -40,7 +40,7 @@ const Row = ({
 );
 
 export const Platform = () => (
-	<Section className="pt-28 lg:pt-40">
+	<Section className="pt-16 lg:pt-20">
 		<Row
 			id={ANCHORS.speech}
 			title="Transcribe any file."

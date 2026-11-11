@@ -62,7 +62,7 @@ const SCALE = `${MONO} relative h-4 text-[11.5px] leading-4 text-[rgba(232,236,2
 const LIT = "text-[rgba(232,236,244,0.8)]";
 
 export const Performance = () => (
-	<Section id={ANCHORS.speed} className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.speed} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-8">
 			<SectionHeading title="Ready in seconds.">
 				<p>

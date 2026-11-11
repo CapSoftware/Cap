@@ -4,7 +4,7 @@ import { Section, SectionHeading } from "./shared";
 import { TEXT_LINK } from "./theme";
 
 export const Faq = () => (
-	<Section id={ANCHORS.faq} className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.faq} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-8 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Questions">
 				<p>

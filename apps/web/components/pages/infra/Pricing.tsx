@@ -8,7 +8,7 @@ const ROW = "border-b border-[rgba(222,230,246,0.08)]";
 const FIGURE = `${MONO} text-[13.5px] tabular-nums text-[#E8ECF4]`;
 
 export const Pricing = () => (
-	<Section id={ANCHORS.pricing} className="pt-28 lg:pt-40">
+	<Section id={ANCHORS.pricing} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p>
@@ -88,7 +88,7 @@ export const Pricing = () => (
 				</p>
 			</div>
 		</div>
-		<div className="mt-12 lg:mt-16">
+		<div className="mt-14 lg:mt-20">
 			<Calculator />
 		</div>
 	</Section>

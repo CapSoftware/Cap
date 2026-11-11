@@ -7,7 +7,7 @@ import { type CSSProperties, useId, useState } from "react";
 import type { InfraResolutionTier } from "@/lib/infra-pricing";
 import { LINKS, PRICES, usd, usdWhole } from "./content";
 import { TierSwitch, useTier } from "./TierSwitch";
-import { BTN_PRIMARY } from "./theme";
+import { BTN_PRIMARY, H_SECTION, MONO } from "./theme";
 
 const STEPS = 1000;
 
@@ -117,6 +117,11 @@ const CURRENCY = {
 	minimumFractionDigits: 2,
 	maximumFractionDigits: 2,
 } as const;
+
+const BREAKDOWN_ROW =
+	"flex items-baseline justify-between gap-4 border-b border-[rgba(222,230,246,0.07)] py-2.5 first:border-t";
+
+const BREAKDOWN_FIGURE = `${MONO} m-0 text-[13px] tabular-nums text-[rgba(232,236,244,0.9)]`;
 
 const SLIDER = [
 	"relative block h-5 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none",
@@ -248,8 +253,9 @@ export const Calculator = () => {
 	const total = Math.max(0, subtotal - credit);
 
 	return (
-		<div className="grid rounded-[12px] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.08)] lg:grid-cols-[minmax(0,1fr)_minmax(0,340px)]">
-			<div className="divide-y divide-[rgba(222,230,246,0.07)] p-5 sm:p-7">
+		<div className="grid gap-x-16 gap-y-8 border-t border-[rgba(222,230,246,0.08)] pt-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-7 lg:pt-12">
+			<h3 className={`${H_SECTION} m-0 text-[22px]`}>Estimate your bill.</h3>
+			<div className="min-w-0 divide-y divide-[rgba(222,230,246,0.07)] lg:col-start-2 lg:row-span-2 lg:row-start-1">
 				<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pb-5">
 					<div className="min-w-0">
 						<p className="m-0 text-[14.5px] text-[#E8ECF4]">Resolution</p>
@@ -271,44 +277,42 @@ export const Calculator = () => {
 					/>
 				))}
 			</div>
-			<div className="flex flex-col border-t border-[rgba(222,230,246,0.08)] p-5 text-[#E8ECF4] sm:p-7 lg:border-l lg:border-t-0">
+			<div className="flex min-w-0 flex-col text-[#E8ECF4] lg:col-start-1 lg:row-start-2">
 				<p className="m-0 text-[13.5px] text-[rgba(232,236,244,0.5)]">
 					Estimated month
 				</p>
-				<p className="m-0 mt-2 text-[40px] font-medium leading-none tracking-[-0.035em] tabular-nums">
+				<p
+					className={`${MONO} m-0 mt-2.5 text-[38px] leading-none tracking-[-0.045em] tabular-nums text-white`}
+				>
 					<NumberFlow value={total} format={CURRENCY} locales="en-US" />
 				</p>
-				<dl className="m-0 mt-6 space-y-2 text-[13.5px]">
+				<dl className="m-0 mt-7 text-[13.5px]">
 					{lines.map((line) => (
-						<div key={line.key} className="flex justify-between gap-4">
+						<div key={line.key} className={BREAKDOWN_ROW}>
 							<dt className="text-[rgba(232,236,244,0.5)]">{line.label}</dt>
-							<dd className="m-0 tabular-nums text-[rgba(232,236,244,0.9)]">
-								{usd(line.cost)}
-							</dd>
+							<dd className={BREAKDOWN_FIGURE}>{usd(line.cost)}</dd>
 						</div>
 					))}
-					<div className="flex justify-between gap-4">
+					<div className={BREAKDOWN_ROW}>
 						<dt className="text-[rgba(232,236,244,0.5)]">Encoding</dt>
-						<dd className="m-0 text-[rgba(232,236,244,0.9)]">Free</dd>
+						<dd className={BREAKDOWN_FIGURE}>Free</dd>
 					</div>
 					{pro ? (
-						<div className="flex justify-between gap-4">
+						<div className={BREAKDOWN_ROW}>
 							<dt className="text-[rgba(232,236,244,0.5)]">Cap Pro credit</dt>
-							<dd className="m-0 tabular-nums text-[rgba(232,236,244,0.9)]">
-								−{usd(credit)}
-							</dd>
+							<dd className={BREAKDOWN_FIGURE}>−{usd(credit)}</dd>
 						</div>
 					) : null}
 				</dl>
 				<label
 					htmlFor={proId}
-					className="mt-auto flex cursor-pointer items-center justify-between gap-4 border-t border-[rgba(222,230,246,0.07)] pt-4 text-[13.5px] text-[rgba(232,236,244,0.7)] transition-colors duration-200 hover:text-[#E8ECF4]"
+					className="flex cursor-pointer items-center justify-between gap-4 py-3.5 text-[13.5px] text-[rgba(232,236,244,0.7)] transition-colors duration-200 hover:text-[#E8ECF4]"
 				>
-					<span className="mt-6 lg:mt-0">
+					<span>
 						I have Cap Pro, with {usdWhole(PRICES.proMonthlyCredit)} of usage
 						included
 					</span>
-					<span className="relative mt-6 inline-flex shrink-0 lg:mt-0">
+					<span className="relative inline-flex shrink-0">
 						<input
 							id={proId}
 							type="checkbox"
@@ -336,7 +340,7 @@ export const Calculator = () => {
 						</span>
 					</span>
 				</label>
-				<Link href={LINKS.start} className={`${BTN_PRIMARY} mt-5 w-full`}>
+				<Link href={LINKS.start} className={`${BTN_PRIMARY} mt-4 self-start`}>
 					Start building
 				</Link>
 			</div>

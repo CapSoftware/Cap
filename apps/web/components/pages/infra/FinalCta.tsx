@@ -5,7 +5,7 @@ import { Actions } from "./shared";
 import { H_DISPLAY } from "./theme";
 
 export const FinalCta = () => (
-	<section className={`${styles.night} mt-28 lg:mt-40`}>
+	<section className={`${styles.night} mt-24 lg:mt-32`}>
 		<NightArt />
 		<div className="mx-auto flex max-w-[720px] flex-col items-center px-5 pb-[300px] text-center sm:pb-[340px] lg:pb-[400px]">
 			<h2 className={`${H_DISPLAY} m-0 text-[clamp(32px,4vw,48px)]`}>
