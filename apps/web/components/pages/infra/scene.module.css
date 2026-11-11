@@ -1,0 +1,228 @@
+.scene {
+	position: relative;
+	isolation: isolate;
+	overflow: hidden;
+}
+
+.sky {
+	--sun-x: calc(50% + var(--slab-w) / 2);
+	--sun-y: calc(var(--horizon) - var(--slab-h));
+	position: absolute;
+	inset: 0;
+	z-index: -3;
+	background:
+		radial-gradient(
+			circle 54px at var(--sun-x) var(--sun-y),
+			rgba(255, 255, 255, 0.95) 0%,
+			rgba(255, 255, 255, 0.55) 40%,
+			rgba(255, 255, 255, 0) 100%
+		),
+		radial-gradient(
+			ellipse 620px 360px at var(--sun-x) var(--sun-y),
+			rgba(236, 232, 225, 0.3) 0%,
+			rgba(236, 232, 225, 0.09) 45%,
+			rgba(236, 232, 225, 0) 80%
+		),
+		linear-gradient(
+			180deg,
+			#0e0f10 0%,
+			#111213 calc(var(--horizon) - 34%),
+			#26272a calc(var(--horizon) - 4%),
+			#3b3c3d var(--horizon),
+			#141516 calc(var(--horizon) + 0.5%),
+			#0e0f10 100%
+		);
+}
+
+.night .sky {
+	background:
+		radial-gradient(
+			60% 18% at 50% var(--horizon),
+			rgba(236, 232, 225, 0.16) 0%,
+			rgba(236, 232, 225, 0) 70%
+		),
+		linear-gradient(
+			180deg,
+			#0e0f10 0%,
+			#0f1011 calc(var(--horizon) - 20%),
+			#1b1c1e var(--horizon),
+			#0e0f10 calc(var(--horizon) + 0.5%),
+			#0e0f10 100%
+		);
+}
+
+.glare {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: var(--horizon);
+	bottom: 0;
+	z-index: -2;
+	background:
+		radial-gradient(
+			30% 55% at calc(50% + var(--slab-w) / 2) 0%,
+			rgba(236, 232, 225, 0.2) 0%,
+			rgba(236, 232, 225, 0.05) 50%,
+			rgba(236, 232, 225, 0) 80%
+		),
+		radial-gradient(
+			80% 60% at 30% 10%,
+			rgba(236, 232, 225, 0.035) 0%,
+			rgba(236, 232, 225, 0) 70%
+		);
+}
+
+.floor {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: var(--horizon);
+	bottom: 0;
+	z-index: -2;
+	width: 100%;
+	height: calc(100% - var(--horizon));
+	-webkit-mask-image: linear-gradient(
+		180deg,
+		transparent 0%,
+		#000 12%,
+		#000 62%,
+		transparent 100%
+	);
+	mask-image: linear-gradient(
+		180deg,
+		transparent 0%,
+		#000 12%,
+		#000 62%,
+		transparent 100%
+	);
+}
+
+.fade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 18%;
+	z-index: -1;
+	background: linear-gradient(180deg, rgba(14, 15, 16, 0) 0%, #0e0f10 100%);
+}
+
+.monolith {
+	position: absolute;
+	left: 50%;
+	bottom: calc(100% - var(--horizon));
+	z-index: -1;
+	width: var(--slab-w);
+	height: var(--slab-h);
+	transform: translateX(-50%);
+	background:
+		linear-gradient(
+			180deg,
+			transparent calc(33.3% - 0.5px),
+			rgba(236, 232, 225, 0.13) calc(33.3% - 0.5px),
+			rgba(236, 232, 225, 0.13) calc(33.3% + 0.5px),
+			transparent calc(33.3% + 0.5px),
+			transparent calc(66.6% - 0.5px),
+			rgba(236, 232, 225, 0.13) calc(66.6% - 0.5px),
+			rgba(236, 232, 225, 0.13) calc(66.6% + 0.5px),
+			transparent calc(66.6% + 0.5px)
+		), linear-gradient(90deg, #121315 0%, #1a1b1d 55%, #202123 100%);
+	box-shadow:
+		inset -1px 0 0 rgba(236, 232, 225, 0.42),
+		inset 0 1px 0 rgba(236, 232, 225, 0.06),
+		0 30px 60px -20px rgba(0, 0, 0, 0.6);
+}
+
+.monolith::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 1px;
+	background: rgba(236, 232, 225, 0.75);
+	box-shadow: 0 0 10px rgba(236, 232, 225, 0.45);
+}
+
+.slit {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 50%;
+	width: 3px;
+	margin-left: -1.5px;
+	background: linear-gradient(180deg, #ffffff 0%, #ece8e1 100%);
+	box-shadow:
+		0 0 10px 1px rgba(236, 232, 225, 0.65),
+		0 0 44px 6px rgba(236, 232, 225, 0.16);
+	transform-origin: 50% 100%;
+	animation: slit-open 1.8s cubic-bezier(0.2, 0.7, 0.1, 1) 0.25s both;
+}
+
+.spill {
+	position: absolute;
+	left: 50%;
+	top: var(--horizon);
+	z-index: -1;
+	width: min(320px, 40vw);
+	height: 34%;
+	transform: translateX(-50%);
+	background: radial-gradient(
+		50% 100% at 50% 0%,
+		rgba(236, 232, 225, 0.32) 0%,
+		rgba(236, 232, 225, 0.08) 40%,
+		rgba(236, 232, 225, 0) 75%
+	);
+	animation: fade-in 1.4s ease-out 1.2s both;
+}
+
+.grain {
+	pointer-events: none;
+	position: absolute;
+	inset: 0;
+	z-index: 60;
+	opacity: 0.12;
+	background-size: 180px 180px;
+	mix-blend-mode: screen;
+}
+
+.plate {
+	transform: perspective(520px) rotateX(58deg);
+	transform-origin: 50% 50%;
+	background: linear-gradient(
+		180deg,
+		rgba(236, 232, 225, 0.16) 0%,
+		rgba(236, 232, 225, 0.05) 100%
+	);
+	box-shadow:
+		inset 0 0 0 1.5px rgba(236, 232, 225, 0.7),
+		0 0 24px rgba(236, 232, 225, 0.12);
+	border-radius: 4px;
+}
+
+@keyframes slit-open {
+	from {
+		transform: scaleY(0);
+		opacity: 0;
+	}
+	to {
+		transform: scaleY(1);
+		opacity: 1;
+	}
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.slit,
+	.spill {
+		animation: none;
+	}
+}
