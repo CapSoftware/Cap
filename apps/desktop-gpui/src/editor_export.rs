@@ -437,6 +437,15 @@ impl ExportUi {
         }
     }
 
+    fn gif_preview_quality(&self) -> Option<GifQuality> {
+        (self.format == ExportFormatKind::Gif && !self.cursor_only).then(|| {
+            self.gif_quality.settings().unwrap_or(GifQuality {
+                quality: None,
+                fast: None,
+            })
+        })
+    }
+
     fn is_custom_bpp(&self) -> bool {
         self.custom_bpp
             .is_some_and(|bpp| (bpp - self.compression.bits_per_pixel()).abs() > 0.001)
@@ -744,6 +753,7 @@ impl EditorWindow {
             resolution_base: XY::new(width, height),
             compression_bpp: ui.bpp(),
             cursor_only: ui.cursor_only,
+            gif_quality: ui.gif_preview_quality(),
         };
         // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
         let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
@@ -3469,6 +3479,21 @@ mod tests {
         ui.fps = 60;
         normalize_export_options(&mut ui, false);
         assert_eq!((ui.resolution, ui.fps), (ExportResolution::P1080, 15));
+    }
+
+    #[test]
+    fn only_gif_exports_preview_with_a_gif_palette() {
+        let mut ui = clipboard_export();
+        assert!(ui.gif_preview_quality().is_none());
+        ui.format = ExportFormatKind::Gif;
+        assert!(
+            ui.gif_preview_quality()
+                .is_some_and(|q| q.quality.is_none())
+        );
+        ui.gif_quality = GifQualityPreset::Low;
+        assert_eq!(ui.gif_preview_quality().and_then(|q| q.quality), Some(50));
+        ui.cursor_only = true;
+        assert!(ui.gif_preview_quality().is_none());
     }
 
     #[test]
