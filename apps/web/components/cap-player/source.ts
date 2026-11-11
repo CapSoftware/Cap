@@ -24,10 +24,10 @@ export const pickPlaybackMode = (
 	return source.mp4 ? "file" : "none";
 };
 
-let hlsModule: Promise<typeof import("hls.js/light")> | undefined;
+let hlsModule: Promise<typeof import("hls.js")> | undefined;
 
 const loadHls = () => {
-	hlsModule ??= import("hls.js/light");
+	hlsModule ??= import("hls.js");
 	return hlsModule;
 };
 
