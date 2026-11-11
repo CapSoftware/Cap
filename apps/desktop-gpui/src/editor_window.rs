@@ -1501,6 +1501,10 @@ pub struct EditorWindow {
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
+    clip_speed_input: Option<Entity<ui::TextInputState>>,
+    /// The custom speed field holds typing that has not been committed yet, so
+    /// render must not re-derive its text from the clip.
+    clip_speed_draft: bool,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
     /// The timeline as it was when a transition drag began; every step of the
@@ -1787,7 +1791,7 @@ fn transition_clip_keys(
 const TEXT_MENU_WIDTH: f32 = 250.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
-const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 440.;
+const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 470.;
 
 /// The clip settings menu (`ClipSettingsControl`, `TL/ClipTrack.tsx`), opened
 /// from the clip's cog or by right-clicking the clip.
@@ -1846,6 +1850,14 @@ fn format_clip_speed(speed: f64) -> String {
         format!("{}x", speed.round() as i32)
     } else {
         format!("{speed}x")
+    }
+}
+
+fn custom_clip_speed_text(speed: f64) -> String {
+    if edits::is_clip_speed_preset(speed) {
+        String::new()
+    } else {
+        speed.to_string()
     }
 }
 
@@ -2240,6 +2252,8 @@ impl EditorWindow {
             generating_keyboard: false,
             keyboard_generation_message: None,
             clip_speed: None,
+            clip_speed_input: None,
+            clip_speed_draft: false,
             markers: markers_state,
             transition_popover: None,
             transition_drag_base: None,
@@ -8717,6 +8731,14 @@ impl EditorWindow {
             "clip menu opened"
         );
         self.clip_speed = Some(menu);
+        self.ensure_clip_speed_input(window, cx);
+        self.clip_speed_draft = false;
+        if let Some(input) = &self.clip_speed_input {
+            input.update(cx, |input, _| {
+                input.set_placeholder(tr::editor::window::clip_menu::custom_speed());
+            });
+        }
+        self.sync_clip_speed_input(cx);
         cx.notify();
     }
 
@@ -9097,6 +9119,93 @@ impl EditorWindow {
         self.note_edit("clip-speed", Some(TrackKind::Clip));
     }
 
+    fn apply_clip_speed_to_all(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_clip_speed_input(window, cx);
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::apply_clip_speed_to_all(timeline, index) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-speed-all", Some(TrackKind::Clip));
+    }
+
+    fn ensure_clip_speed_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.clip_speed_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        self.push_text_subscription(cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
+                this.on_clip_speed_input_event(event, window, cx);
+            },
+        ));
+        self.clip_speed_input = Some(input);
+    }
+
+    fn sync_clip_speed_input(&mut self, cx: &mut Context<Self>) {
+        if self.clip_speed_draft {
+            return;
+        }
+        let (Some(menu), Some(input)) = (self.clip_speed, self.clip_speed_input.clone()) else {
+            return;
+        };
+        let text = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.segments.get(menu.index))
+            .map(|segment| custom_clip_speed_text(segment.timescale))
+            .unwrap_or_default();
+        if input.read(cx).text() != text {
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    fn commit_clip_speed_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.clip_speed_draft) {
+            return;
+        }
+        let (Some(menu), Some(input)) = (self.clip_speed, self.clip_speed_input.clone()) else {
+            return;
+        };
+        if let Some(speed) = edits::parse_clip_speed(input.read(cx).text()) {
+            self.set_clip_timescale(menu.index, speed, window, cx);
+        }
+        self.sync_clip_speed_input(cx);
+        cx.notify();
+    }
+
+    fn on_clip_speed_input_event(
+        &mut self,
+        event: &ui::TextInputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ui::TextInputEvent::Changed => self.clip_speed_draft = true,
+            ui::TextInputEvent::Confirmed => {
+                self.commit_clip_speed_input(window, cx);
+                self.focus_root(window, cx);
+            }
+            ui::TextInputEvent::Cancelled => {
+                self.clip_speed_draft = false;
+                self.sync_clip_speed_input(cx);
+                self.focus_root(window, cx);
+                cx.notify();
+            }
+            ui::TextInputEvent::Blurred => self.commit_clip_speed_input(window, cx),
+        }
+    }
+
     pub(crate) fn set_clip_volume(
         &mut self,
         index: usize,
@@ -9376,7 +9485,13 @@ impl EditorWindow {
             .rename_in_progress()
             .filter(|(editing, _)| *editing == index)
             .map(|(_, input)| input);
-        let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
+        let custom_speed = !edits::is_clip_speed_preset(timescale);
+        let speed_input = self.clip_speed_input.clone();
+        let speed_input_empty = speed_input
+            .as_ref()
+            .is_none_or(|input| input.read(cx).is_empty());
+        let can_apply_all = timeline.segments.len() > 1;
+        let applies_to_all = edits::clip_speed_applies_to_all(timeline, index);
         let audio_modes = [
             (
                 ClipSpeedAudioMode::Mute,
@@ -9488,19 +9603,103 @@ impl EditorWindow {
                         &theme,
                         tr::editor::window::clip_menu::speed(),
                     ))
-                    .child(chip_row().children(speeds.into_iter().map(|speed| {
-                        let selected = (timescale - speed).abs() < 1e-6;
-                        chip(
-                            SharedString::from(format!("clip-speed-{speed}")),
-                            selected,
-                            format_clip_speed(speed),
-                        )
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.set_clip_timescale(index, speed, window, cx);
-                            },
-                        ))
-                    }))),
+                    .child(
+                        chip_row().children(edits::CLIP_SPEED_PRESETS.into_iter().map(|speed| {
+                            let selected = (timescale - speed).abs() < 1e-6;
+                            chip(
+                                SharedString::from(format!("clip-speed-{speed}")),
+                                selected,
+                                format_clip_speed(speed),
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.clip_speed_draft = false;
+                                    this.set_clip_timescale(index, speed, window, cx);
+                                },
+                            ))
+                        })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.))
+                            .when_some(speed_input, |row, input| {
+                                row.child(
+                                    div()
+                                        .id("clip-speed-custom")
+                                        .w(px(96.))
+                                        .h(px(26.))
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .px(px(8.))
+                                        .rounded(px(8.))
+                                        .cursor_text()
+                                        .bg(Hsla::from(if custom_speed {
+                                            theme.editor.ctl_active
+                                        } else {
+                                            theme.editor.ctl
+                                        }))
+                                        .child(
+                                            div().flex_1().min_w_0().child(
+                                                ui::TextInput::bare(
+                                                    &theme,
+                                                    "clip-speed-custom-input",
+                                                    &input,
+                                                )
+                                                .text_size(px(11.5))
+                                                .text_color(Hsla::from(theme.editor.text_1))
+                                                .placeholder_color(Hsla::from(theme.editor.text_3)),
+                                            ),
+                                        )
+                                        .when(!speed_input_empty, |field| {
+                                            field.child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_size(px(11.5))
+                                                    .text_color(Hsla::from(theme.editor.text_3))
+                                                    .child("x"),
+                                            )
+                                        }),
+                                )
+                            })
+                            .when(can_apply_all, |row| {
+                                row.child(div().flex_1()).child(
+                                    div()
+                                        .id("clip-speed-apply-all")
+                                        .flex_none()
+                                        .rounded(px(6.))
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .text_size(px(11.5))
+                                        .whitespace_nowrap()
+                                        .text_color(Hsla::from(if applies_to_all {
+                                            theme.editor.text_2
+                                        } else {
+                                            theme.editor.text_3
+                                        }))
+                                        .when(applies_to_all, |button| {
+                                            button
+                                                .cursor_pointer()
+                                                .hover(|this| {
+                                                    this.bg(Hsla::from(theme.editor.ctl_hover))
+                                                        .text_color(Hsla::from(theme.editor.text_1))
+                                                })
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.apply_clip_speed_to_all(
+                                                            index, window, cx,
+                                                        );
+                                                    },
+                                                ))
+                                        })
+                                        .child(tr::editor::window::clip_menu::apply_speed_to_all()),
+                                )
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -9793,7 +9992,8 @@ impl EditorWindow {
                         .top_0()
                         .left_0()
                         .size_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.commit_clip_speed_input(window, cx);
                             this.clip_speed = None;
                             cx.notify();
                         })),
@@ -12721,6 +12921,7 @@ impl Render for EditorWindow {
             this.sync_picker_hex(window, cx);
         });
         self.prepare_frame_fields(window, cx);
+        self.sync_clip_speed_input(cx);
         self.sync_crop_container(window);
         self.sidebar.release_retired_images(window);
         let theme = self.theme;
@@ -15414,17 +15615,23 @@ mod tests {
             editor: Entity<EditorWindow>,
             _driver: TransportDriver,
             _project: tempfile::TempDir,
+            clip_menu: bool,
         }
 
         impl Render for ClipRowView {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let viewport_width = f32::from(window.viewport_size().width);
+                let clip_menu = self.clip_menu;
                 self.editor.update(cx, |editor, cx| {
+                    editor.sync_clip_speed_input(cx);
                     div()
                         .size_full()
                         .flex()
                         .flex_col()
                         .child(editor.render_timeline_body(viewport_width, cx))
+                        .when(clip_menu, |this| {
+                            this.children(editor.render_clip_speed_popover(cx))
+                        })
                 })
             }
         }
@@ -15433,6 +15640,13 @@ mod tests {
         /// about.
         fn split_clip(
             cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            split_clip_view(cx, false)
+        }
+
+        fn split_clip_view(
+            cx: &mut gpui::TestAppContext,
+            clip_menu: bool,
         ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
             let project = tempfile::tempdir().unwrap();
             let (handle, driver, _) = transport();
@@ -15478,6 +15692,7 @@ mod tests {
                     editor,
                     _driver: driver,
                     _project: project,
+                    clip_menu,
                 }
             });
             (view.read_with(cx, |view, _| view.editor.clone()), cx)
@@ -15525,6 +15740,98 @@ mod tests {
                     .as_ref()
                     .and_then(|timeline| timeline.effective_transition(1))
             })
+        }
+
+        fn clip_speeds(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> Vec<f64> {
+            editor.read_with(cx, |editor, _| {
+                editor
+                    .project
+                    .timeline
+                    .as_ref()
+                    .map(|timeline| timeline.segments.iter().map(|s| s.timescale).collect())
+                    .unwrap_or_default()
+            })
+        }
+
+        fn speed_field_text(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> String {
+            editor.read_with(cx, |editor, cx| {
+                editor
+                    .clip_speed_input
+                    .as_ref()
+                    .map(|input| input.read(cx).text().to_string())
+                    .unwrap_or_default()
+            })
+        }
+
+        fn type_speed(editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext, keys: &str) {
+            editor.update_in(cx, |editor, window, cx| {
+                let input = editor
+                    .clip_speed_input
+                    .clone()
+                    .expect("the menu made the field");
+                input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
+            });
+            cx.run_until_parked();
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+        }
+
+        #[gpui::test]
+        fn a_typed_clip_speed_lands_and_applies_to_every_clip_in_one_undo(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip_view(cx, true);
+            editor.update_in(cx, |editor, window, cx| {
+                editor.open_clip_menu_at(0, point(px(200.), px(500.)), window, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(speed_field_text(&editor, cx), "");
+
+            type_speed(&editor, cx, "1 , 2 x enter");
+            assert_eq!(clip_speeds(&editor, cx), [1.2, 1.0]);
+            assert_eq!(speed_field_text(&editor, cx), "1.2");
+            editor.read_with(cx, |editor, _| {
+                assert!((editor.timeline.total_duration - (4. / 1.2 + 6.)).abs() < 1e-9);
+            });
+
+            type_speed(&editor, cx, "f a s t enter");
+            assert_eq!(clip_speeds(&editor, cx), [1.2, 1.0]);
+            assert_eq!(speed_field_text(&editor, cx), "1.2");
+
+            editor.update_in(cx, |editor, window, cx| {
+                editor.apply_clip_speed_to_all(0, window, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(clip_speeds(&editor, cx), [1.2, 1.2]);
+            editor.read_with(cx, |editor, _| {
+                assert!((editor.timeline.total_duration - 10. / 1.2).abs() < 1e-9);
+            });
+
+            editor.update_in(cx, |editor, window, cx| editor.undo(window, cx));
+            assert_eq!(clip_speeds(&editor, cx), [1.2, 1.0], "one undo step");
+            editor.update_in(cx, |editor, window, cx| editor.undo(window, cx));
+            assert_eq!(clip_speeds(&editor, cx), [1.0, 1.0]);
+
+            editor.update_in(cx, |editor, window, cx| {
+                editor.clip_speed = None;
+                editor.set_clip_timescale(1, 2.0, window, cx);
+                editor.open_clip_menu_at(1, point(px(200.), px(500.)), window, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                speed_field_text(&editor, cx),
+                "",
+                "a preset leaves the field empty"
+            );
+            type_speed(&editor, cx, "4 enter");
+            assert_eq!(clip_speeds(&editor, cx), [1.0, 4.0]);
+            assert_eq!(speed_field_text(&editor, cx), "");
         }
 
         #[gpui::test]

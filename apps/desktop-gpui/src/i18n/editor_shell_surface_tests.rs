@@ -978,7 +978,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::camera3d_lane::prompt(),
             "Add cinematic 3D shots to your recording",
         ),
+        (
+            tr::editor::window::clip_menu::apply_speed_to_all(),
+            "Apply to all clips",
+        ),
         (tr::editor::window::clip_menu::audio(), "AUDIO"),
+        (tr::editor::window::clip_menu::custom_speed(), "Custom"),
         (tr::editor::window::clip_menu::cursor(), "CURSOR"),
         (tr::editor::window::clip_menu::delete(), "Delete clip"),
         (

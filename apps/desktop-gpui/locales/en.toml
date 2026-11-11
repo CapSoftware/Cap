@@ -3012,6 +3012,8 @@ how_many = "How many shots?"
 prompt = "Add cinematic 3D shots to your recording"
 
 [editor.window.clip_menu]
+apply_speed_to_all = { text = "Apply to all clips", context = "Button under the clip speed chips: gives every clip on the timeline this clip's speed." }
+custom_speed = { text = "Custom", context = "Placeholder in the clip menu's speed field, where any speed such as 1.2 can be typed. Keep it short." }
 audio = { text = "AUDIO", context = "Section heading in the clip menu, written in capitals." }
 cursor = { text = "CURSOR", context = "Section heading in the clip menu, written in capitals." }
 delete = "Delete clip"

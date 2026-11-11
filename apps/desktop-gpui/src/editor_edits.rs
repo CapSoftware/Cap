@@ -2772,12 +2772,84 @@ fn lerp_vector_keyframe(
     }
 }
 
+pub const CLIP_SPEED_MIN: f64 = 0.25;
+pub const CLIP_SPEED_MAX: f64 = 8.0;
+pub const CLIP_SPEED_PRESETS: [f64; 7] = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
+
+pub fn is_clip_speed_preset(timescale: f64) -> bool {
+    CLIP_SPEED_PRESETS
+        .iter()
+        .any(|preset| (timescale - preset).abs() < 1e-6)
+}
+
+/// A typed speed (`1.2`, `1.2x`, `1,2`), clamped to the range the audio and
+/// video paths play. Rounding to hundredths keeps two clips given the same
+/// typed value bit-identical, which merge and the preset chips compare on.
+pub fn parse_clip_speed(text: &str) -> Option<f64> {
+    let number = text
+        .trim()
+        .trim_end_matches(['x', 'X', '×'])
+        .trim_end()
+        .replace(',', ".");
+    let value = number.parse::<f64>().ok()?;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    Some((value.clamp(CLIP_SPEED_MIN, CLIP_SPEED_MAX) * 100.0).round() / 100.0)
+}
+
+/// The audio mode "Apply to all clips" gives `target`: the source's Keep pitch
+/// or Match speed choice, unless the target was muted on purpose. A muted or
+/// default source leaves every target's audio as it was.
+fn speed_audio_mode_for_all(
+    source: Option<ClipSpeedAudioMode>,
+    target: Option<ClipSpeedAudioMode>,
+) -> Option<ClipSpeedAudioMode> {
+    match source {
+        Some(mode @ (ClipSpeedAudioMode::MaintainPitch | ClipSpeedAudioMode::MatchSpeed))
+            if target != Some(ClipSpeedAudioMode::Mute) =>
+        {
+            Some(mode)
+        }
+        _ => target,
+    }
+}
+
+pub fn clip_speed_applies_to_all(timeline: &TimelineConfiguration, source: usize) -> bool {
+    let Some(source) = timeline.segments.get(source) else {
+        return false;
+    };
+    timeline.segments.iter().any(|segment| {
+        segment.timescale.to_bits() != source.timescale.to_bits()
+            || speed_audio_mode_for_all(source.speed_audio_mode, segment.speed_audio_mode)
+                != segment.speed_audio_mode
+    })
+}
+
+pub fn apply_clip_speed_to_all(timeline: &mut TimelineConfiguration, source: usize) -> bool {
+    let Some(segment) = timeline.segments.get(source) else {
+        return false;
+    };
+    let (timescale, audio_mode) = (segment.timescale, segment.speed_audio_mode);
+    let mut changed = false;
+    for index in 0..timeline.segments.len() {
+        changed |= set_clip_segment_timescale(timeline, index, timescale);
+        let segment = &mut timeline.segments[index];
+        let next = speed_audio_mode_for_all(audio_mode, segment.speed_audio_mode);
+        if segment.speed_audio_mode != next {
+            segment.speed_audio_mode = next;
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn set_clip_segment_timescale(
     timeline: &mut TimelineConfiguration,
     index: usize,
     timescale: f64,
 ) -> bool {
-    if !(0.25..=8.0).contains(&timescale) || !timescale.is_finite() {
+    if !(CLIP_SPEED_MIN..=CLIP_SPEED_MAX).contains(&timescale) || !timescale.is_finite() {
         return false;
     }
     let Some(segment) = timeline.segments.get(index) else {
@@ -4995,6 +5067,158 @@ mod tests {
         assert_eq!(keyboard.keys[0].time_offset, 500.0);
         assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    fn typed_clip_speeds_clamp_and_round_to_hundredths() {
+        for (text, expected) in [
+            ("1.2", Some(1.2)),
+            (" 1.2x ", Some(1.2)),
+            ("1,25", Some(1.25)),
+            ("1.234", Some(1.23)),
+            ("0.333X", Some(0.33)),
+            ("1.5×", Some(1.5)),
+            ("0.1", Some(0.25)),
+            ("20", Some(8.0)),
+            ("2", Some(2.0)),
+            ("0", None),
+            ("-1", None),
+            ("", None),
+            ("x", None),
+            ("fast", None),
+            ("inf", None),
+            ("NaN", None),
+        ] {
+            assert_eq!(parse_clip_speed(text), expected, "{text:?}");
+        }
+        assert_eq!(
+            parse_clip_speed("1.20").unwrap().to_bits(),
+            1.2f64.to_bits()
+        );
+        assert!(is_clip_speed_preset(parse_clip_speed("1.5").unwrap()));
+        assert!(!is_clip_speed_preset(parse_clip_speed("1.2").unwrap()));
+    }
+
+    #[test]
+    fn a_custom_clip_speed_retimes_like_a_preset() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        let before = clip_timeline_duration(timeline);
+        let clip = timeline.segments[0].end - timeline.segments[0].start;
+        assert!(set_clip_segment_timescale(timeline, 0, 1.2));
+        assert_eq!(timeline.segments[0].timescale, 1.2);
+        let after = clip_timeline_duration(timeline);
+        assert!((before - after - (clip - clip / 1.2)).abs() < 1e-9);
+        assert!((timeline.zoom_segments[0].start - 2.0 / 1.2).abs() < 1e-9);
+        assert!((timeline.zoom_segments[0].end - 5.0 / 1.2).abs() < 1e-9);
+        assert!(!set_clip_segment_timescale(timeline, 0, 8.01));
+        assert!(!set_clip_segment_timescale(timeline, 0, 0.24));
+    }
+
+    #[test]
+    fn a_custom_clip_speed_survives_save_and_reopen() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(set_clip_segment_timescale(timeline, 0, 1.23));
+        let saved = serde_json::to_string(&project).unwrap();
+        let reopened: cap_project::ProjectConfiguration = serde_json::from_str(&saved).unwrap();
+        let timescale = reopened.timeline.unwrap().segments[0].timescale;
+        assert_eq!(timescale.to_bits(), 1.23f64.to_bits());
+        assert!(!is_clip_speed_preset(timescale));
+    }
+
+    #[test]
+    fn applying_a_clip_speed_to_all_clips_retimes_every_clip_and_track() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 6.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 6.0, "end": 12.0, "speedAudioMode": "maintainPitch" },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 6.0, "speedAudioMode": "mute" }
+                ],
+                "zoomSegments": [
+                    { "start": 3.0, "end": 4.0, "amount": 1.5, "mode": "auto" },
+                    { "start": 10.0, "end": 11.0, "amount": 1.5, "mode": "auto" }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[0].timescale = 1.2;
+        timeline.segments[0].speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
+        let mut expected = timeline.clone();
+        for index in 1..expected.segments.len() {
+            assert!(set_clip_segment_timescale(&mut expected, index, 1.2));
+        }
+
+        assert!(clip_speed_applies_to_all(timeline, 0));
+        assert!(apply_clip_speed_to_all(timeline, 0));
+
+        assert!(
+            timeline
+                .segments
+                .iter()
+                .all(|segment| segment.timescale == 1.2)
+        );
+        let modes: Vec<_> = timeline
+            .segments
+            .iter()
+            .map(|segment| segment.speed_audio_mode)
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                Some(ClipSpeedAudioMode::MaintainPitch),
+                Some(ClipSpeedAudioMode::MaintainPitch),
+                Some(ClipSpeedAudioMode::Mute),
+            ]
+        );
+        assert!((clip_timeline_duration(timeline) - 18.0 / 1.2).abs() < 1e-9);
+        let zooms: Vec<_> = timeline
+            .zoom_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect();
+        let expected_zooms: Vec<_> = expected
+            .zoom_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect();
+        assert_eq!(zooms, expected_zooms);
+        assert!((zooms[0].0 - 3.0 / 1.2).abs() < 1e-9);
+        assert!((zooms[1].0 - 10.0 / 1.2).abs() < 1e-9);
+
+        assert!(!clip_speed_applies_to_all(timeline, 0));
+        assert!(!apply_clip_speed_to_all(timeline, 0));
+        assert!(!apply_clip_speed_to_all(timeline, 9));
+    }
+
+    #[test]
+    fn applying_a_muted_clip_speed_to_all_leaves_other_clips_audio_alone() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0, "speedAudioMode": "mute" },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 4.0, "end": 8.0, "speedAudioMode": "matchSpeed" },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 8.0, "end": 12.0 }
+                ]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(apply_clip_speed_to_all(timeline, 0));
+        let segments: Vec<_> = timeline
+            .segments
+            .iter()
+            .map(|segment| (segment.timescale, segment.speed_audio_mode))
+            .collect();
+        assert_eq!(
+            segments,
+            [
+                (1.0, Some(ClipSpeedAudioMode::Mute)),
+                (1.0, Some(ClipSpeedAudioMode::MatchSpeed)),
+                (1.0, None),
+            ]
+        );
+        assert!(!clip_is_muted(&timeline.segments[2]));
     }
 
     #[test]
