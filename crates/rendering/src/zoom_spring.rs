@@ -3745,6 +3745,7 @@ mod tests {
             split_layout: None,
             transition_in: 0.3,
             transition_out: 1.0,
+            from_silence: false,
         }];
         let spans = camera_zone_spans(&project, camera_layout());
         assert!(camera_zone_at(&spans, 4.0).is_none());
@@ -3784,6 +3785,7 @@ mod tests {
                     split_layout: None,
                     transition_in: 0.0,
                     transition_out: 0.0,
+                    from_silence: false,
                 });
             variants.push(scene);
         }
@@ -3808,6 +3810,7 @@ mod tests {
             split_layout: None,
             transition_in: 0.0,
             transition_out: 0.0,
+            from_silence: false,
         });
         timeline.style_segments.push(StyleSegment {
             start: 6.0,
