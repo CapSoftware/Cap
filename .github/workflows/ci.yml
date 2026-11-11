@@ -343,6 +343,7 @@ jobs:
       - name: Test desktop regressions
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
+          cargo test --locked -p cap-automation
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap --bin cap recordings::tests
           cargo test --locked -p cap --bin cap automation::tests::cli_save_to_location
