@@ -64,6 +64,7 @@ async function call<T>(
 	publicKey: string,
 	body: unknown,
 	signal?: AbortSignal,
+	cancellable = true,
 ) {
 	for (let attempt = 1; ; attempt++) {
 		const res = await fetch(`${SDK}${path}`, {
@@ -73,7 +74,7 @@ async function call<T>(
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(body),
-			signal,
+			signal: cancellable ? signal : undefined,
 		});
 		if (res.status === 429 && signal && attempt < RATE_LIMIT_ATTEMPTS) {
 			await pause(retryAfterMs(res.headers.get("Retry-After")), signal);
@@ -211,15 +212,19 @@ export function UploadDrop({
 				publicKey,
 				{ name: name.slice(0, 255) },
 				signal,
+				false,
 			);
 			videoId = created.videoId;
+			stopIfCancelled();
 			const initiated = await call<{ uploadId: string }>(
 				"/upload/multipart/initiate",
 				publicKey,
 				{ videoId, contentType: file.type || "video/mp4" },
 				signal,
+				false,
 			);
 			uploadId = initiated.uploadId;
+			stopIfCancelled();
 
 			const partBytes = partBytesFor(file.size);
 			const parts: { partNumber: number; etag: string; size: number }[] = [];
