@@ -4,12 +4,12 @@ const TOKEN =
 	/("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|<\/?[a-z]+|\/?>|\b[a-z]+(?==")|(?<=^|\s)-{1,2}[A-Za-z][\w-]*|\b(?:const|await|curl)\b|\b\d+(?:\.\d+)?\b)/g;
 
 const COLORS = {
-	key: "#C9B8F8",
-	string: "#9EE0C2",
-	number: "#F7C995",
-	keyword: "#9CC9F5",
-	plain: "#E8EDF3",
-	muted: "rgba(232,237,243,0.5)",
+	key: "#9C9890",
+	string: "#F4F1EB",
+	number: "#D8C7A8",
+	keyword: "#FFFFFF",
+	plain: "#B9B5AD",
+	muted: "rgba(236,232,225,0.45)",
 } as const;
 
 const colorOf = (token: string, rest: string) => {

@@ -3,8 +3,8 @@
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { type CSSProperties, useId, useState } from "react";
-import { GRAIN } from "@/components/pages/HomeTwo/theme";
 import { PRICES, usd, usdWhole } from "./content";
+import { GLASS_PANEL } from "./theme";
 
 const STEPS = 1000;
 
@@ -114,11 +114,11 @@ const CURRENCY = {
 const SLIDER = [
 	"relative block h-6 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none",
 	"[&::-webkit-slider-runnable-track]:h-[6px] [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:[background:var(--track)]",
-	"[&::-webkit-slider-thumb]:-mt-[8px] [&::-webkit-slider-thumb]:size-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(17,17,17,0.14),0_2px_6px_rgba(17,17,17,0.18)] [&::-webkit-slider-thumb]:transition-[box-shadow,transform] [&::-webkit-slider-thumb]:duration-150",
-	"active:[&::-webkit-slider-thumb]:scale-110 focus-visible:[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(17,17,17,0.14),0_0_0_5px_rgba(61,119,194,0.28)]",
+	"[&::-webkit-slider-thumb]:-mt-[8px] [&::-webkit-slider-thumb]:size-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F4F1EB] [&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_0_16px_rgba(236,232,225,0.45)] [&::-webkit-slider-thumb]:transition-[box-shadow,transform] [&::-webkit-slider-thumb]:duration-150",
+	"active:[&::-webkit-slider-thumb]:scale-110 focus-visible:[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_0_0_6px_rgba(236,232,225,0.22)]",
 	"[&::-moz-range-track]:h-[6px] [&::-moz-range-track]:rounded-full [&::-moz-range-track]:[background:var(--track)]",
-	"[&::-moz-range-thumb]:size-[22px] [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(17,17,17,0.14),0_2px_6px_rgba(17,17,17,0.18)]",
-	"focus-visible:[&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(17,17,17,0.14),0_0_0_5px_rgba(61,119,194,0.28)]",
+	"[&::-moz-range-thumb]:size-[22px] [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-[#F4F1EB] [&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_0_16px_rgba(236,232,225,0.45)]",
+	"focus-visible:[&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_0_0_6px_rgba(236,232,225,0.22)]",
 ].join(" ");
 
 const MeterInput = ({
@@ -135,7 +135,7 @@ const MeterInput = ({
 	const position = toPosition(meter, value);
 	const fill = (position / STEPS) * 100;
 	const trackStyle = {
-		"--track": `linear-gradient(to right, #3D77C2 0%, #6FA8E8 ${fill}%, #DCE4EC ${fill}%, #DCE4EC 100%)`,
+		"--track": `linear-gradient(to right, rgba(236,232,225,0.35) 0%, #ECE8E1 ${fill}%, rgba(236,232,225,0.1) ${fill}%, rgba(236,232,225,0.1) 100%)`,
 	} as CSSProperties;
 
 	return (
@@ -144,15 +144,15 @@ const MeterInput = ({
 				<div className="min-w-0">
 					<label
 						htmlFor={`${id}-number`}
-						className="block text-[16px] font-medium tracking-[-0.01em] text-[#111111]"
+						className="block text-[16px] font-medium tracking-[-0.01em] text-[#ECE8E1]"
 					>
 						{meter.label}
 					</label>
-					<p className="m-0 mt-1 text-[13.5px] text-[rgba(17,17,17,0.55)]">
+					<p className="m-0 mt-1 text-[13.5px] text-[rgba(236,232,225,0.48)]">
 						{meter.rate}
 					</p>
 				</div>
-				<div className="flex h-11 w-[168px] items-center rounded-[11px] bg-white pl-3.5 pr-3 shadow-[inset_0_0_0_1px_#D3DCE6] transition-shadow duration-200 focus-within:shadow-[inset_0_0_0_1.5px_#3D77C2,0_0_0_4px_rgba(61,119,194,0.14)]">
+				<div className="flex h-11 w-[168px] items-center rounded-[10px] bg-black/30 pl-3.5 pr-3 shadow-[inset_0_0_0_1px_rgba(236,232,225,0.12)] transition-shadow duration-200 focus-within:shadow-[inset_0_0_0_1px_rgba(236,232,225,0.55),0_0_0_4px_rgba(236,232,225,0.08)]">
 					<input
 						id={`${id}-number`}
 						type="text"
@@ -170,9 +170,9 @@ const MeterInput = ({
 							const next = digits === "" ? 0 : Number(digits);
 							onChange(Math.min(meter.max, next));
 						}}
-						className="w-full min-w-0 bg-transparent text-right text-[16px] tabular-nums text-[#111111] outline-none"
+						className="w-full min-w-0 bg-transparent text-right text-[16px] tabular-nums text-[#ECE8E1] outline-none"
 					/>
-					<span className="ml-2 shrink-0 text-[14px] text-[rgba(17,17,17,0.5)]">
+					<span className="ml-2 shrink-0 text-[14px] text-[rgba(236,232,225,0.42)]">
 						{meter.unit}
 					</span>
 				</div>
@@ -194,7 +194,7 @@ const MeterInput = ({
 				/>
 				<div
 					aria-hidden="true"
-					className="relative mt-1.5 h-4 text-[12px] tabular-nums text-[rgba(17,17,17,0.42)]"
+					className="relative mt-1.5 h-4 text-[12px] tabular-nums text-[rgba(236,232,225,0.34)]"
 				>
 					<span className="absolute left-0">0</span>
 					{ticksFor(meter).map((tick, i, all) => {
@@ -238,8 +238,10 @@ export const Calculator = () => {
 	const total = Math.max(0, subtotal - credit);
 
 	return (
-		<div className="grid overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgba(17,17,17,0.07),0_30px_60px_-36px_rgba(17,17,17,0.3)] lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-			<div className="divide-y divide-[#E1E7EE] p-6 sm:p-9">
+		<div
+			className={`grid overflow-hidden rounded-[20px] ${GLASS_PANEL} lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]`}
+		>
+			<div className="divide-y divide-[rgba(236,232,225,0.08)] p-6 sm:p-9">
 				{METERS.map((meter) => (
 					<MeterInput
 						key={meter.key}
@@ -251,14 +253,7 @@ export const Calculator = () => {
 					/>
 				))}
 			</div>
-			<div
-				className="flex flex-col p-6 text-white sm:p-9"
-				style={{
-					backgroundColor: "#141517",
-					backgroundImage: GRAIN,
-					backgroundSize: "200px 200px",
-				}}
-			>
+			<div className="flex flex-col border-t border-[rgba(236,232,225,0.08)] bg-black/35 p-6 text-[#ECE8E1] sm:p-9 lg:border-l lg:border-t-0">
 				<p className="m-0 text-[14px] text-white/60">Your monthly estimate</p>
 				<p className="m-0 mt-3 text-[clamp(44px,5.4vw,64px)] font-normal leading-none tracking-[-0.04em] tabular-nums">
 					<NumberFlow value={total} format={CURRENCY} locales="en-US" />
@@ -280,8 +275,8 @@ export const Calculator = () => {
 					</div>
 					{pro ? (
 						<div className="flex justify-between gap-4">
-							<dt className="text-[#9EE0C2]">Cap Pro credit</dt>
-							<dd className="m-0 tabular-nums text-[#9EE0C2]">
+							<dt className="text-[#D8C7A8]">Cap Pro credit</dt>
+							<dd className="m-0 tabular-nums text-[#D8C7A8]">
 								−{usd(credit)}
 							</dd>
 						</div>
@@ -313,13 +308,15 @@ export const Calculator = () => {
 								aria-hidden="true"
 								className={classNames(
 									"block h-6 w-10 rounded-full transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-white/70",
-									pro ? "bg-[#3D77C2]" : "bg-white/20",
+									pro ? "bg-[#ECE8E1]" : "bg-white/20",
 								)}
 							>
 								<span
 									className={classNames(
-										"mt-[3px] block size-[18px] rounded-full bg-white shadow-sm transition-transform duration-200",
-										pro ? "translate-x-[19px]" : "translate-x-[3px]",
+										"mt-[3px] block size-[18px] rounded-full shadow-sm transition-[transform,background-color] duration-200",
+										pro
+											? "translate-x-[19px] bg-[#0E0F10]"
+											: "translate-x-[3px] bg-[#ECE8E1]",
 									)}
 								/>
 							</span>

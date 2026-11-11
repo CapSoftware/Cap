@@ -2,7 +2,7 @@ import { ANCHORS, CREATE_TRANSCRIPT, PRICES, usd } from "./content";
 import { Code, Section, SectionHeading } from "./shared";
 
 export const Speech = () => (
-	<Section id={ANCHORS.speech} className="bg-[#EDF1F6]/60">
+	<Section id={ANCHORS.speech}>
 		<div className="grid items-center gap-12 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-16">
 			<div className="order-2 min-w-0 lg:order-1">
 				<Code samples={CREATE_TRANSCRIPT} label="Create a transcript" />
@@ -18,8 +18,8 @@ export const Speech = () => (
 						code.
 					</p>
 				</SectionHeading>
-				<p className="mt-8 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.62)]">
-					<span className="text-[#111111]">
+				<p className="mt-8 text-[15px] leading-[1.5] text-[rgba(236,232,225,0.5)]">
+					<span className="text-[#ECE8E1]">
 						{usd(PRICES.speechPerHour)} per hour of audio.
 					</span>{" "}
 					Free for videos hosted on Cap Infra.

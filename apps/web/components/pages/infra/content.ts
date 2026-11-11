@@ -260,6 +260,12 @@ export const VIDEO_OUTPUTS = [
 	},
 ] as const;
 
+export const LADDER = [
+	{ label: "4K", scale: 1 },
+	{ label: "1080p", scale: 0.74 },
+	{ label: "360p", scale: 0.46 },
+] as const;
+
 export const UPLOAD_SOURCES = [
 	"the dashboard",
 	"the REST API",
@@ -300,7 +306,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "Is Cap Infra compliant for sensitive video?",
 		answer:
-			"Cap is SOC 2 Type II and HIPAA compliant, and a BAA is available. Cap Infra runs on Cap's own GPUs, the same pipeline that processes every Cap recording.",
+			"Cap is SOC 2 Type II, ISO 27001 and HIPAA compliant, and a BAA is available. Cap Infra runs on Cap's own GPUs, the same pipeline that processes every Cap recording.",
 	},
 ];
 

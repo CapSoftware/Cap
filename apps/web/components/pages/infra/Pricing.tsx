@@ -3,7 +3,7 @@ import { ANCHORS, PRICE_ROWS, PRICES, usdWhole } from "./content";
 import { Section, SectionHeading } from "./shared";
 
 export const Pricing = () => (
-	<Section id={ANCHORS.pricing} className="bg-[#EDF1F6]/60">
+	<Section id={ANCHORS.pricing}>
 		<div className="grid gap-12 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16">
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p className="m-0">
@@ -25,22 +25,25 @@ export const Pricing = () => (
 				</thead>
 				<tbody>
 					{PRICE_ROWS.map((row) => (
-						<tr key={row.meter} className="border-b border-[#D9E1EA]">
+						<tr
+							key={row.meter}
+							className="border-b border-[rgba(236,232,225,0.09)]"
+						>
 							<th
 								scope="row"
-								className="whitespace-nowrap py-5 pr-4 align-top text-[16px] font-normal tracking-[-0.01em] text-[#111111] sm:text-[17px]"
+								className="whitespace-nowrap py-5 pr-4 align-top text-[16px] font-normal tracking-[-0.01em] text-[#ECE8E1] sm:text-[17px]"
 							>
 								{row.meter}
 							</th>
 							<td className="py-5 text-right align-top">
-								<span className="block text-[22px] leading-none tracking-[-0.03em] text-[#111111] tabular-nums sm:text-[26px]">
+								<span className="block text-[22px] leading-none tracking-[-0.03em] text-[#ECE8E1] tabular-nums sm:text-[26px]">
 									{row.price}
 								</span>
-								<span className="mt-2 block text-[13.5px] leading-[1.4] text-[rgba(17,17,17,0.58)]">
+								<span className="mt-2 block text-[13.5px] leading-[1.4] text-[rgba(236,232,225,0.48)]">
 									{row.unit}
 								</span>
 								{row.note ? (
-									<span className="mt-0.5 block text-[13.5px] leading-[1.4] text-[#2F6CB5]">
+									<span className="mt-0.5 block text-[13.5px] leading-[1.4] text-[#D8C7A8]">
 										{row.note}
 									</span>
 								) : null}
@@ -51,7 +54,7 @@ export const Pricing = () => (
 			</table>
 		</div>
 		<div className="mt-16 lg:mt-20">
-			<h3 className="text-[22px] font-normal tracking-[-0.02em] text-[#111111] sm:text-[26px]">
+			<h3 className="text-[22px] font-normal tracking-[-0.02em] text-[#ECE8E1] sm:text-[26px]">
 				Estimate your month
 			</h3>
 			<div className="mt-6">

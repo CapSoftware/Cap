@@ -9,7 +9,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { CopyIconButton } from "@/components/pages/agents/copy";
-import { GRAIN, MONO } from "@/components/pages/HomeTwo/theme";
+import { GLASS_PANEL, MONO } from "./theme";
 
 export type PanelTab = {
 	id: string;
@@ -75,16 +75,12 @@ export const CodePanel = ({
 	return (
 		<div
 			className={classNames(
-				"min-w-0 overflow-hidden rounded-[18px] text-[#E8EDF3] shadow-[0_0_0_1px_rgba(17,17,17,0.9),0_24px_48px_-24px_rgba(17,17,17,0.45)]",
+				"min-w-0 overflow-hidden rounded-[16px] text-[#ECE8E1]",
+				GLASS_PANEL,
 				className,
 			)}
-			style={{
-				backgroundColor: "#141517",
-				backgroundImage: GRAIN,
-				backgroundSize: "200px 200px",
-			}}
 		>
-			<div className="flex items-center justify-between gap-3 border-b border-white/[0.07] py-2 pl-2 pr-2">
+			<div className="flex items-center justify-between gap-3 border-b border-[rgba(236,232,225,0.08)] py-2 pl-2 pr-2">
 				{switchable ? (
 					<div role="tablist" aria-label={label} className="flex gap-1">
 						{tabs.map((tab, i) => {
@@ -138,7 +134,7 @@ export const CodePanel = ({
 				</pre>
 			)}
 			{response ? (
-				<div className="border-t border-white/[0.07] bg-black/25">
+				<div className="border-t border-[rgba(236,232,225,0.08)] bg-black/30">
 					<p className="m-0 px-5 pt-3.5 text-[12.5px] text-white/45">
 						Response
 					</p>

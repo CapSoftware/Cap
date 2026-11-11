@@ -1,10 +1,10 @@
 import { classNames } from "@cap/utils/helpers";
 import { DM_Mono } from "next/font/google";
 import type { ReactNode } from "react";
-import { BODY_TEXT, H_SECTION } from "@/components/pages/HomeTwo/theme";
 import { CodePanel } from "./CodePanel";
 import type { CodeSample } from "./content";
 import { highlight } from "./highlight";
+import { BODY, H_SECTION } from "./theme";
 
 export const infraMono = DM_Mono({
 	subsets: ["latin"],
@@ -51,13 +51,13 @@ export const SectionHeading = ({
 	<div className={className}>
 		<h2
 			id={id}
-			className={`${H_SECTION} scroll-mt-24 text-balance text-[clamp(34px,4.2vw,52px)]`}
+			className={`${H_SECTION} scroll-mt-24 text-balance text-[clamp(32px,4vw,50px)]`}
 		>
 			{title}
 		</h2>
 		{children ? (
 			<div
-				className={`${BODY_TEXT} mt-5 max-w-[520px] text-pretty text-[16.5px] leading-[1.55] text-[rgba(17,17,17,0.74)] sm:text-[17.5px]`}
+				className={`${BODY} mt-5 max-w-[500px] text-pretty text-[16px] leading-[1.6] sm:text-[17px] [&_p]:leading-[1.6]`}
 			>
 				{children}
 			</div>
@@ -76,7 +76,10 @@ export const Section = ({
 }) => (
 	<section
 		id={id}
-		className={classNames("scroll-mt-20 px-5 py-20 lg:py-28", className)}
+		className={classNames(
+			"scroll-mt-16 border-t border-[rgba(236,232,225,0.07)] px-5 py-20 lg:py-28",
+			className,
+		)}
 	>
 		<div className="mx-auto max-w-[1160px]">{children}</div>
 	</section>

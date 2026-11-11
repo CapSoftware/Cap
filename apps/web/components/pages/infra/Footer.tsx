@@ -12,21 +12,22 @@ const FOOTER_LINKS = [
 ] as const;
 
 const LINK =
-	"rounded-[6px] text-[14px] text-[rgba(17,17,17,0.6)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111]";
+	"rounded-[6px] text-[14px] text-[rgba(236,232,225,0.5)] transition-colors duration-200 hover:text-[#ECE8E1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ECE8E1]";
 
 export const Footer = () => (
-	<footer className="px-5 pb-10 pt-6">
+	<footer className="border-t border-[rgba(236,232,225,0.07)] px-5 pb-10 pt-10">
 		<div className="mx-auto flex max-w-[1160px] flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
 			<div className="flex items-center gap-2.5">
 				<Logo
+					white
 					viewBoxDimensions="0 0 120 40"
 					style={{ width: 66, height: 28 }}
 				/>
 				<span
 					aria-hidden="true"
-					className="h-4 w-px bg-[rgba(17,17,17,0.16)]"
+					className="h-4 w-px bg-[rgba(236,232,225,0.2)]"
 				/>
-				<span className="text-[15px] font-medium tracking-[-0.02em] text-[#111111]">
+				<span className="text-[15px] font-medium tracking-[-0.02em] text-[#ECE8E1]">
 					Infra
 				</span>
 			</div>
@@ -57,7 +58,7 @@ export const Footer = () => (
 				</ul>
 			</nav>
 		</div>
-		<p className="mx-auto mt-8 max-w-[1160px] text-[13px] text-[rgba(17,17,17,0.45)]">
+		<p className="mx-auto mt-8 max-w-[1160px] text-[13px] text-[rgba(236,232,225,0.36)]">
 			© Cap Software, Inc. {new Date().getFullYear()}. Cap is open source.
 		</p>
 	</footer>
