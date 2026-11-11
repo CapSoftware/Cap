@@ -10,6 +10,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { startDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
@@ -349,6 +350,8 @@ app.post(
 					MultipartUpload: { Parts: formattedParts },
 				});
 			}).pipe(provideOptionalAuth, runPromise);
+
+			await startDeveloperVideoProcessing(videoId);
 
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
 				duration: billingDuration,

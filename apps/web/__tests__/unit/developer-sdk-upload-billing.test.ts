@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
 	videoUpdates: [] as Record<string, unknown>[],
 }));
 
+vi.mock("@/lib/developer-video-start", () => ({
+	startDeveloperVideoProcessing: vi.fn(),
+}));
+
 vi.mock("@cap/database", async () => {
 	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
 	const { developerVideos } = await import("@cap/database/schema");

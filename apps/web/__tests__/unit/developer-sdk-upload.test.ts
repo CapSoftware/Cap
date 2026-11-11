@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	presign: vi.fn(),
 	complete: vi.fn(),
 	abort: vi.fn(),
+	startProcessing: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -44,6 +45,9 @@ vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
 });
+vi.mock("@/lib/developer-video-start", () => ({
+	startDeveloperVideoProcessing: mocks.startProcessing,
+}));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
@@ -174,6 +178,8 @@ describe("developer SDK multipart upload", () => {
 				String(query).startsWith("update `developer_videos`"),
 			),
 		).toBe(true);
+		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
+		expect(mocks.startProcessing).toHaveBeenCalledWith("video-1");
 	});
 
 	it("answers a repeated complete without charging or touching storage again", async () => {
@@ -185,6 +191,7 @@ describe("developer SDK multipart upload", () => {
 		await expect(response.json()).resolves.toEqual({ success: true });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(writes()).toHaveLength(0);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
 	});
 
 	it("charges a completion once even when a retry overlaps it", async () => {
