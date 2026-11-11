@@ -10,11 +10,11 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { UPLOAD_MICRO_CREDITS_PER_MINUTE } from "@/lib/developer-pricing";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
-const MICRO_CREDITS_PER_MINUTE = 5_000;
 const MAX_DURATION_SECS = 4 * 60 * 60;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
 
@@ -238,7 +238,7 @@ app.post(
 			);
 			const durationMinutes = billingDuration / 60;
 			const microCreditsToDebit = Math.floor(
-				durationMinutes * MICRO_CREDITS_PER_MINUTE,
+				durationMinutes * UPLOAD_MICRO_CREDITS_PER_MINUTE,
 			);
 
 			if (microCreditsToDebit > 0) {

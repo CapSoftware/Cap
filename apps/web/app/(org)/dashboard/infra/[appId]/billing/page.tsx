@@ -3,6 +3,7 @@ import {
 	DELIVERY_DOLLARS_PER_1000_MINUTES,
 	SPEECH_DOLLARS_PER_HOUR,
 	STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+	UPLOAD_DOLLARS_PER_MINUTE,
 } from "@/lib/developer-pricing";
 import { formatCredits } from "@/lib/infra-usage";
 import { CreditTransactionTable } from "../../_components/credit-transaction-table";
@@ -17,7 +18,11 @@ export const metadata: Metadata = {
 const dollars = (value: number) => `$${value.toFixed(2)}`;
 
 const rates = [
-	{ name: "Encoding", price: "Free", unit: null },
+	{
+		name: "Upload",
+		price: dollars(UPLOAD_DOLLARS_PER_MINUTE),
+		unit: "per minute uploaded",
+	},
 	{
 		name: "Storage",
 		price: dollars(STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH),
