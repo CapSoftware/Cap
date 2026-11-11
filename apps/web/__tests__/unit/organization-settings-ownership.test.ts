@@ -55,7 +55,7 @@ vi.mock("@cap/ui", () => {
 			createElement("button", { disabled, onClick, type: "button" }, children),
 	};
 });
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 vi.mock("@/components/Tooltip", () => ({

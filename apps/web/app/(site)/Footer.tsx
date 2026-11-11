@@ -5,10 +5,10 @@ import { faDiscord } from "@fortawesome/free-brands-svg-icons/faDiscord";
 import { faLinkedinIn } from "@fortawesome/free-brands-svg-icons/faLinkedinIn";
 import { faXTwitter } from "@fortawesome/free-brands-svg-icons/faXTwitter";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 type FooterLink = {
 	label: string;

@@ -1,19 +1,16 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
-import {
-	faEdit,
-	faLayerGroup,
-	faPlus,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
+import { faLayerGroup } from "@fortawesome/free-solid-svg-icons/faLayerGroup";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { Search } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
 	normalizeOrganizationRole,

@@ -791,6 +791,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
+				options?: { publishedOnly?: boolean },
 			) {
 				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
@@ -805,6 +806,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						.where(Dz.eq(Db.videos.id, videoId)),
 				);
 
+				// Viewers who are not members only ever get the finished MP4: never a
+				// screenshot object, and nothing while an upload or processing is still
+				// running, when result.mp4 can hold the raw recording.
+				if (options?.publishedOnly) {
+					if (videoRow?.isScreenshot) return Option.none();
+					const [activeUpload] = yield* db.use((db) =>
+						db
+							.select({ phase: Db.videoUploads.phase })
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
+					);
+					if (activeUpload && activeUpload.phase !== "complete") {
+						return Option.none();
+					}
+					const published = Video.Video.getSource(video);
+					if (!(published instanceof Video.Mp4Source)) return Option.none();
+					const exists = yield* bucket.headObject(published.getFileKey()).pipe(
+						Effect.map((head) => (head.ContentLength ?? 0) > 0),
+						Effect.catchAll(() => Effect.succeed(false)),
+					);
+					if (!exists) return Option.none();
+					const fileName = `${video.name}.mp4`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						published.getFileKey(),
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
+				}
+
 				if (videoRow?.isScreenshot) {
 					const listResponse = yield* bucket.listObjects({
 						prefix: `${video.ownerId}/${video.id}/`,
@@ -814,11 +844,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 					if (!screenshotKey) return Option.none();
 					const extension = getFileExtensionFromKey(screenshotKey) ?? "jpg";
-					const downloadUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
-					return Option.some({
-						fileName: `${video.name}.${extension}`,
-						downloadUrl,
-					});
+					const fileName = `${video.name}.${extension}`;
+					const downloadUrl = yield* bucket.getSignedDownloadUrl(
+						screenshotKey,
+						fileName,
+					);
+					return Option.some({ fileName, downloadUrl });
 				}
 
 				const src = Video.Video.getSource(video);
@@ -832,14 +863,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Option.isSome(mp4Head) &&
 						(mp4Head.value.ContentLength ?? 0) > 0
 					) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
+						const fileName = `${video.name}.mp4`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
 							src.getFileKey(),
+							fileName,
 						);
 
-						return Option.some({
-							fileName: `${video.name}.mp4`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 
 					const [upload] = yield* db.use((db) =>
@@ -850,24 +880,27 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 
 					if (upload?.rawFileKey) {
-						const downloadUrl = yield* bucket.getSignedObjectUrl(
-							upload.rawFileKey,
-						);
 						const extension =
 							getFileExtensionFromKey(upload.rawFileKey) ?? "mp4";
+						const fileName = `${video.name}.${extension}`;
+						const downloadUrl = yield* bucket.getSignedDownloadUrl(
+							upload.rawFileKey,
+							fileName,
+						);
 
-						return Option.some({
-							fileName: `${video.name}.${extension}`,
-							downloadUrl,
-						});
+						return Option.some({ fileName, downloadUrl });
 					}
 				}
 
 				if (!src) return Option.none();
 				if (!(src instanceof Video.Mp4Source)) return Option.none();
 
-				const downloadUrl = yield* bucket.getSignedObjectUrl(src.getFileKey());
-				return Option.some({ fileName: `${video.name}.mp4`, downloadUrl });
+				const fileName = `${video.name}.mp4`;
+				const downloadUrl = yield* bucket.getSignedDownloadUrl(
+					src.getFileKey(),
+					fileName,
+				);
+				return Option.some({ fileName, downloadUrl });
 			}),
 
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (

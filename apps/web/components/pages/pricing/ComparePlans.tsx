@@ -15,6 +15,7 @@ import {
 	MODE_THEME,
 } from "@/components/pages/HomeTwo/theme";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 
 type PlanKey = "free" | "desktop" | "pro";
 
@@ -268,6 +269,10 @@ export const ComparePlans = () => {
 			body: JSON.stringify(body),
 		});
 		const data = await response.json();
+		if (response.status === 429) {
+			toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+			return;
+		}
 		if (response.ok && data.url) {
 			window.location.href = data.url;
 			return;
@@ -294,6 +299,10 @@ export const ComparePlans = () => {
 		}
 		if (data.subscription === true) {
 			toast.success("You are already on the Cap Pro plan");
+			return;
+		}
+		if (response.status === 429) {
+			toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
 			return;
 		}
 		if (data.url) {

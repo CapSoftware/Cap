@@ -1,8 +1,7 @@
 "use client";
 
 import { Button, LogoBadge } from "@cap/ui";
-import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { useMutation } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -10,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { getSafeNextPath } from "../safe-next";
 
 export function VerifyOTPForm({

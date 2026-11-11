@@ -5,12 +5,10 @@ import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
-
 import {
 	isNonMediaRawUploadKey,
 	nonMediaUploadMessage,
@@ -19,6 +17,7 @@ import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { zValidator } from "@/utils/zod-validator";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
 

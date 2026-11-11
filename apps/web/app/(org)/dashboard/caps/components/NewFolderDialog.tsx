@@ -10,14 +10,15 @@ import {
 	Input,
 } from "@cap/ui";
 import type { Folder, Space } from "@cap/web-domain";
-import { faFolder, faFolderPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
 import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import type React from "react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { PublicCollectionField } from "../../_components/PublicCollectionField";
 import { useDashboardContext } from "../../Contexts";
