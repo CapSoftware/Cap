@@ -353,7 +353,9 @@ final class CapDetailModel {
             if seconds.isFinite, seconds > 0 { duration = seconds }
             if let start = pendingStartTime {
                 pendingStartTime = nil
-                seek(to: start)
+                // Loading outlives the screen, so a link left before its video was ready opens at the moment, paused.
+                let shown = presentations > 0 || isFullscreen || isPictureInPictureActive
+                seek(to: start, play: shown)
             }
             NowPlaying.shared.update(self)
         default:
