@@ -11,14 +11,12 @@ import type {
 	User,
 	Video,
 } from "@cap/web-domain";
-import {
-	faFolderPlus,
-	faGear,
-	faInfoCircle,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
+import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	type SeededThumbnails,
 	SeededThumbnailsProvider,

@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
 	recordedLength: null as string | null,
 	recordedLengthFails: false,
 	audioInitExists: false,
+	manifestModifiedAt: undefined as Date | undefined,
+	manifestListFails: false,
+	listManifest: vi.fn(),
 	storageUnavailable: false,
 	denied: false,
 	defaultBucket: false,
@@ -48,13 +51,30 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 				return `https://media.example.com/${key}`;
 			}),
 		listObjects: ({ prefix }: { prefix: string }) =>
-			mocks.storageUnavailable
-				? Effect.fail(
-						new StorageDomain.StorageError({ cause: "storage unavailable" }),
-					)
-				: Effect.succeed({
-						Contents: mocks.audioInitExists ? [{ Key: prefix, Size: 764 }] : [],
-					}),
+			prefix.endsWith("/segments/manifest.json")
+				? Effect.suspend(() => {
+						mocks.listManifest();
+						return mocks.manifestListFails
+							? Effect.fail(
+									new StorageDomain.StorageError({
+										cause: "storage unavailable",
+									}),
+								)
+							: Effect.succeed({
+									Contents: [
+										{ Key: prefix, LastModified: mocks.manifestModifiedAt },
+									],
+								});
+					})
+				: mocks.storageUnavailable
+					? Effect.fail(
+							new StorageDomain.StorageError({ cause: "storage unavailable" }),
+						)
+					: Effect.succeed({
+							Contents: mocks.audioInitExists
+								? [{ Key: prefix, Size: 764 }]
+								: [],
+						}),
 	};
 	return {
 		...actual,
@@ -141,6 +161,9 @@ describe("Instant playlist readiness API", () => {
 			is_complete: true,
 		};
 		mocks.audioInitExists = false;
+		mocks.manifestModifiedAt = undefined;
+		mocks.manifestListFails = false;
+		mocks.listManifest.mockClear();
 		mocks.recordedLength = null;
 		mocks.recordedLengthFails = false;
 		mocks.storageUnavailable = false;
@@ -188,6 +211,63 @@ describe("Instant playlist readiness API", () => {
 		).text();
 		expect(master).not.toContain("earlyPlayback");
 		expect(master).not.toContain("#EXT-X-START");
+	});
+
+	describe("abandoned uploads", () => {
+		const minutesAgo = (minutes: number) =>
+			new Date(Date.now() - minutes * 60 * 1000);
+		beforeEach(() => {
+			mocks.manifest.is_complete = false;
+		});
+
+		it.each(["segments-video", "segments-audio"])(
+			"ends %s once its manifest has gone quiet",
+			async (type) => {
+				mocks.manifestModifiedAt = minutesAgo(31);
+				const response = await request(type, "");
+				expect(response.status).toBe(200);
+				const playlist = await response.text();
+				expect(playlist).toContain("#EXT-X-ENDLIST");
+				// A live playlist must not change type when it ends.
+				expect(playlist).not.toContain("#EXT-X-PLAYLIST-TYPE");
+				expect(playlist.match(/#EXTINF/g)).toHaveLength(2);
+			},
+		);
+
+		it("keeps following an upload that is paused or still running", async () => {
+			mocks.manifestModifiedAt = minutesAgo(29);
+			expect(await (await request("segments-video", "")).text()).not.toContain(
+				"#EXT-X-ENDLIST",
+			);
+			mocks.manifestModifiedAt = undefined;
+			expect(await (await request("segments-video", "")).text()).not.toContain(
+				"#EXT-X-ENDLIST",
+			);
+		});
+
+		it("ends an early playback playlist that will never grow", async () => {
+			mocks.manifestModifiedAt = minutesAgo(31);
+			const video = await (
+				await request("segments-video", "&earlyPlayback=1")
+			).text();
+			expect(video).toContain("#EXT-X-PLAYLIST-TYPE:EVENT");
+			expect(video).toContain("#EXT-X-ENDLIST");
+		});
+
+		it("stays live when the manifest age cannot be read", async () => {
+			mocks.manifestListFails = true;
+			const response = await request("segments-video", "");
+			expect(response.status).toBe(200);
+			expect(await response.text()).not.toContain("#EXT-X-ENDLIST");
+		});
+
+		it("does not look up the manifest age for a complete recording", async () => {
+			mocks.manifest.is_complete = true;
+			await request("segments-video", "");
+			await request("segments-master", "");
+			await request("segments-status");
+			expect(mocks.listManifest).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("early playback", () => {

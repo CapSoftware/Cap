@@ -223,11 +223,15 @@ final class AppModel {
         try services.vault.replace(with: credentials)
         signedOutNotice = nil
         phase = .signedIn(SessionModel(services: services, credentials: credentials))
+        Task { await PushNotifications.shared.registerIfAllowed() }
     }
 
     func signOut() async {
         let api = services.api
-        let revoke = Task { try? await api.revokeSession() }
+        let revoke = Task {
+            await PushNotifications.shared.unregister()
+            try? await api.revokeSession()
+        }
         let timeout = Task {
             try? await Task.sleep(for: .seconds(4))
             revoke.cancel()

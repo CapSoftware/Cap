@@ -24,6 +24,7 @@ import {
 import {
 	getEarlySegmentTracks,
 	getSegmentPlaybackState,
+	isAbandonedSegmentUpload,
 	readRecordedLength,
 	totalSegmentDuration,
 } from "@/lib/segment-playback";
@@ -425,7 +426,24 @@ const getPlaylistResponse = (
 				playlist += `${segmentUrls[i]}\n`;
 			}
 
-			if (manifest.is_complete) {
+			// An upload that stopped mid-recording never completes its manifest,
+			// and players reload an unended playlist forever, so end it once the
+			// manifest has gone quiet. A resumed upload rewrites the manifest and
+			// the next load is live again.
+			const uploadAbandoned =
+				!manifest.is_complete &&
+				(yield* bucket.listObjects({ prefix: manifestKey, maxKeys: 1 }).pipe(
+					Effect.map((objects) =>
+						isAbandonedSegmentUpload(
+							objects.Contents?.find((object) => object.Key === manifestKey)
+								?.LastModified,
+							Date.now(),
+						),
+					),
+					Effect.orElseSucceed(() => false),
+				));
+
+			if (manifest.is_complete || uploadAbandoned) {
 				playlist += "#EXT-X-ENDLIST\n";
 			}
 

@@ -39,6 +39,28 @@ use tracing::*;
 mod completion;
 pub use completion::CleanInstantRecording;
 
+/// Stop failed because the recording had already failed, after every capture
+/// task exited and its sources stopped. Nothing is capturing any more,
+/// and the files on disk stay as they are.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct CaptureStoppedAfterFailure(#[from] anyhow::Error);
+
+pub fn capture_stopped_after_failure(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<CaptureStoppedAfterFailure>())
+}
+
+/// Keeps the actor's own error, with its causes, rather than a copy of its
+/// message.
+fn handler_error<M>(error: kameo::error::SendError<M, anyhow::Error>) -> anyhow::Error {
+    match error {
+        kameo::error::SendError::HandlerError(error) => error,
+        error => anyhow::anyhow!("{error}"),
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Joined covers this attempt's capture/output work, not shared preview feeds or physical device shutdown.
@@ -312,7 +334,7 @@ impl ActorHandle {
     }
 
     pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
-        Ok(self.actor_ref.ask(Stop).await?)
+        self.actor_ref.ask(Stop).await.map_err(handler_error)
     }
 
     pub fn done_fut(&self) -> output_pipeline::DoneFut {
@@ -332,7 +354,7 @@ impl ActorHandle {
     }
 
     pub async fn cancel(&self) -> anyhow::Result<()> {
-        Ok(self.actor_ref.ask(Cancel).await?)
+        self.actor_ref.ask(Cancel).await.map_err(handler_error)
     }
 
     pub fn is_paused(&self) -> impl Future<Output = anyhow::Result<bool>> + Send + 'static + use<> {
@@ -370,9 +392,18 @@ impl Drop for ActorHandle {
             });
         }
         #[cfg(not(target_os = "linux"))]
-        tokio::spawn(async move {
-            let _ = actor_ref.tell(Stop).await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = actor_ref.tell(Stop).await;
+                });
+            }
+            // The app drops a handle it kept after a failed stop on its UI
+            // thread, which has no Tokio runtime; `tokio::spawn` would panic.
+            Err(_) => {
+                let _ = actor_ref.tell(Stop).try_send();
+            }
+        }
     }
 }
 
@@ -387,6 +418,8 @@ pub struct Actor {
     total_pause_duration: std::time::Duration,
     pause_started_at: Option<f64>,
     terminal_stop_error: Option<String>,
+    #[cfg(not(target_os = "linux"))]
+    terminal_capture_stopped: bool,
     #[cfg(target_os = "linux")]
     lifetime: InstantLifetimeOwner,
 }
@@ -441,7 +474,12 @@ impl Actor {
     #[cfg(not(target_os = "linux"))]
     async fn stop(&mut self) -> anyhow::Result<()> {
         if let Some(error) = &self.terminal_stop_error {
-            return Err(anyhow::anyhow!(error.clone()));
+            let error = anyhow::anyhow!(error.clone());
+            return Err(if self.terminal_capture_stopped {
+                anyhow::Error::new(CaptureStoppedAfterFailure::from(error))
+            } else {
+                error
+            });
         }
         let pipeline = replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
             (
@@ -456,17 +494,25 @@ impl Actor {
 
         let result = async {
             if let Some(pipeline) = pipeline {
-                if let Some(audio) = pipeline.audio {
-                    let (audio_res, video_res) = tokio::join!(audio.stop(), pipeline.video.stop());
-                    video_res?;
-                    audio_res?;
-                } else {
-                    pipeline.video.stop().await?;
+                let (audio, video) = tokio::join!(
+                    futures::future::OptionFuture::from(
+                        pipeline.audio.map(OutputPipeline::stop_with_outcome)
+                    ),
+                    pipeline.video.stop_with_outcome()
+                );
+                let video = video?;
+                let audio = audio.transpose()?;
+                if let Some(error) = video
+                    .media_error
+                    .or_else(|| audio.and_then(|audio| audio.media_error))
+                {
+                    return Err(anyhow::Error::new(CaptureStoppedAfterFailure::from(error)));
                 }
             }
             Ok(())
         }
         .await;
+        self.terminal_capture_stopped = result.as_ref().is_err_and(capture_stopped_after_failure);
         preserve_terminal_stop_error(&mut self.terminal_stop_error, result)
     }
 }
@@ -1458,6 +1504,8 @@ async fn build_instant_recording_actor(
         total_pause_duration: std::time::Duration::ZERO,
         pause_started_at: None,
         terminal_stop_error: None,
+        #[cfg(not(target_os = "linux"))]
+        terminal_capture_stopped: false,
         #[cfg(target_os = "linux")]
         lifetime: InstantLifetimeOwner {
             lifecycle: lifecycle.clone(),
@@ -1655,6 +1703,8 @@ mod tests {
             total_pause_duration: std::time::Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: Some("Required camera disconnected".to_string()),
+            #[cfg(not(target_os = "linux"))]
+            terminal_capture_stopped: false,
             #[cfg(target_os = "linux")]
             lifetime: InstantLifetimeOwner::new(),
         };
@@ -2915,6 +2965,7 @@ mod non_linux_stop_tests {
             total_pause_duration: std::time::Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: error,
+            terminal_capture_stopped: false,
         }
     }
 
@@ -3017,6 +3068,7 @@ mod non_linux_stop_tests {
             total_pause_duration: Duration::ZERO,
             pause_started_at: None,
             terminal_stop_error: None,
+            terminal_capture_stopped: false,
         });
         let stop_actor = actor.clone();
         let stop = tokio::spawn(async move {
@@ -3087,6 +3139,72 @@ mod non_linux_stop_tests {
     #[tokio::test]
     async fn cancel_waits_for_video_after_audio_finalization_fails() {
         audio_failure_waits_for_video_and_remains_visible(true).await;
+    }
+
+    /// The encoder fails to finish while Stop runs (AVFoundation's
+    /// `NotWriting`, a failed muxer). Every capture task had exited, so Stop
+    /// and every retry say capture stopped, and the failure stays visible.
+    #[tokio::test]
+    async fn stop_after_the_encoder_fails_confirms_capture_stopped() {
+        let directory = tempfile::tempdir().unwrap();
+        let timestamps = Timestamps::now();
+        let video_info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 4, 4, 30);
+        let (video_sender, video_receiver) = flume::bounded(4);
+        let video = OutputPipeline::builder(directory.path().join("display"))
+            .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(
+                video_info,
+                video_receiver,
+            ))
+            .with_timestamps(timestamps)
+            .build::<TestMuxer>(Finalizer {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                finished: Arc::new(AtomicBool::new(false)),
+                release: None,
+                error: Some("encoder failed to finish"),
+            })
+            .await
+            .unwrap();
+        video_sender
+            .send(Frame(Timestamp::Instant(timestamps.instant())))
+            .unwrap();
+        let actor = Actor::spawn(Actor {
+            diagnostic: None,
+            recording_dir: directory.path().to_path_buf(),
+            output_dir: directory.path().join("display"),
+            capture_target: ScreenCaptureTarget::CameraOnly,
+            video_info,
+            state: ActorState::Recording {
+                pipeline: Pipeline {
+                    video,
+                    audio: None,
+                    video_info,
+                    segments_dir: directory.path().join("display"),
+                    segment_rx: None,
+                },
+                segment_start_time: current_time_f64(),
+            },
+            total_pause_duration: Duration::ZERO,
+            pause_started_at: None,
+            terminal_stop_error: None,
+            terminal_capture_stopped: false,
+        });
+
+        let error = tokio::time::timeout(Duration::from_secs(5), actor.ask(Stop))
+            .await
+            .unwrap()
+            .map_err(handler_error)
+            .unwrap_err();
+        assert!(
+            capture_stopped_after_failure(&error),
+            "every capture task had exited, but Stop stayed unconfirmed: {error:#}"
+        );
+        assert!(format!("{error:#}").contains("encoder failed to finish"));
+        let retry = actor.ask(Cancel).await.map_err(handler_error).unwrap_err();
+        assert!(capture_stopped_after_failure(&retry));
+        assert!(retry.to_string().contains("encoder failed to finish"));
+        drop(video_sender);
+        actor.kill();
+        actor.wait_for_stop().await;
     }
 
     #[tokio::test]

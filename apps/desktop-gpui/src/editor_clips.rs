@@ -585,39 +585,9 @@ impl EditorWindow {
             .unwrap_or_default()
     }
 
-    // -- The header pill and the mode toggle ---------------------------------
+    // -- Leaving the tab ---------------------------------------------------------
 
-    /// The Clips toggle (`Header.tsx:173-187`): `Button variant={open ?
-    /// "white" : "gray"}` at `flex gap-1.5 justify-center h-[40px]`, clearing
-    /// the timeline selection on every press.
-    pub(crate) fn render_clips_pill(
-        &self,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        ui::EditorButton::plain(&self.theme, "clips-pill")
-            .left_icon("icons/clapperboard.svg")
-            .when(!compact, |button| button.label(tr::editor::clips::title()))
-            .tooltip(&self.theme, tr::editor::clips::title())
-            .pressed(self.clips.open)
-            .disabled(!self.project_ready())
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
-    }
-
-    pub(crate) fn toggle_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.project_ready() {
-            return;
-        }
-        self.set_selection(None, cx);
-        if self.clips.open {
-            self.close_clips(window, cx);
-        } else {
-            self.clips.open = true;
-            self.transcript.open = false;
-        }
-        cx.notify();
-    }
-
+    /// Leaving the Clips tab. Only [`EditorWindow::set_panel_tab`] calls this.
     pub(crate) fn close_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.editing.is_some() {
             self.commit_clip_rename(window, cx);
@@ -826,7 +796,11 @@ impl EditorWindow {
         let insertion = self.clips.drop_index.take();
         cx.notify();
         let Some(drag) = drag else { return };
-        let (Some(insertion), true) = (insertion, drag.active) else {
+        if !drag.active {
+            self.select_clip_from_panel(drag.index, cx);
+            return;
+        }
+        let Some(insertion) = insertion else {
             return;
         };
 
@@ -888,237 +862,97 @@ impl EditorWindow {
 
     // -- The sidebar ------------------------------------------------------------
 
-    /// The whole clips column, drawn in the config sidebar's slot while the
-    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
-    /// the same card.
-    pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The Clips tab's body, under the panel's switcher: the header row with
+    /// the clip count and the Record and Import actions, then the cards.
+    pub(crate) fn render_clips_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
-            .flex_none()
             .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(self.card_line())
-                    .bg(self.panel_bg())
-                    .shadow(self.theme.editor.card_shadow())
-                    .child(self.render_clips_back_header(cx))
-                    .child(self.render_clips_body(cx)),
-            )
+            .overflow_hidden()
+            .child(self.render_clips_header(cx))
+            .child(self.render_clips_body(cx))
     }
 
-    /// The back header (`:798-805`): `h-16 px-4 gap-2 border-b border-gray-3
-    /// text-sm font-medium text-gray-12 hover:bg-gray-3`.
-    fn render_clips_back_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_clips_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        div()
-            .id("clips-back")
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
-            .px(px(12.))
-            .w_full()
-            .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
-            .rounded_t(px(11.))
-            .border_b_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .text_size(px(13.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.editor.text_1))
-            .cursor_pointer()
-            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
-            .child(
-                svg()
-                    .path("icons/move-left.svg")
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.editor.text_2)),
-            )
-            .child(tr::editor::clips::back())
-            .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
-    }
-
-    /// `flex flex-col flex-1 gap-3 p-3 min-h-0` (`:807`).
-    fn render_clips_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let recorded_clip_count = self
-            .summary()
-            .map(|summary| summary.recording_clips)
-            .unwrap_or_default();
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .gap(px(12.))
-            .p(px(12.))
-            .min_h_0()
-            // The action row (`:808-826`).
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .gap(px(8.))
-                    .child(
-                        div().flex_1().child(
-                            ui::Button::plain(
-                                &theme,
-                                "clips-record",
-                                ui::ButtonVariant::Blue,
-                                ui::ButtonSize::Md,
-                            )
-                            .icon("icons/video.svg")
-                            .label(tr::editor::clips::record_new())
-                            .height(px(40.))
-                            .gap(px(8.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .full_width()
-                            .disabled(self.clips.importing)
-                            .on_click(cx.listener(
-                                |this, _, _window, cx| {
-                                    if !this.begin_editor_recording(cx) {
-                                        return;
-                                    }
-                                    let project_path = this.project_path.clone();
-                                    cx.defer(move |cx| {
-                                        app_windows::open_editor_recording_main(project_path, cx);
-                                    });
-                                },
-                            )),
-                        ),
-                    )
-                    .child(
-                        ui::Button::plain(
-                            &theme,
-                            "clips-import",
-                            ui::ButtonVariant::Gray,
-                            ui::ButtonSize::Md,
-                        )
-                        .icon("icons/circle-plus.svg")
-                        .label(if self.clips.importing {
+        let count = self.clip_segments().len();
+        let importing = self.clips.importing;
+        crate::editor_side_panel::panel_header(
+            &theme,
+            tr::editor::clips::title(),
+            (count > 0).then(|| SharedString::from(tr::editor::clips::count(count))),
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .child(
+                    ui::EditorButton::plain(&theme, "clips-record")
+                        .left_icon("icons/video.svg")
+                        .label(tr::editor::clips::record())
+                        .tooltip(&theme, tr::editor::clips::record_new())
+                        .disabled(importing)
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            if !this.begin_editor_recording(cx) {
+                                return;
+                            }
+                            let project_path = this.project_path.clone();
+                            cx.defer(move |cx| {
+                                app_windows::open_editor_recording_main(project_path, cx);
+                            });
+                        })),
+                )
+                .child(
+                    ui::EditorButton::plain(&theme, "clips-import")
+                        .left_icon("icons/circle-plus.svg")
+                        .label(if importing {
                             tr::editor::clips::importing()
                         } else {
                             tr::editor::clips::import()
                         })
-                        .height(px(40.))
-                        .gap(px(8.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .disabled(self.clips.importing)
-                        .on_open(cx.listener(
-                            |this, bounds: &Bounds<Pixels>, _window, cx| {
-                                if this.clips.importing {
-                                    return;
-                                }
-                                this.clips.import_menu =
-                                    Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
-                                cx.notify();
-                            },
-                        )),
-                    ),
-            )
-            // The section label and the recording-clip count (`:828-835`).
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child(tr::editor::clips::title()),
-                    )
-                    .children((recorded_clip_count > 0).then(|| {
-                        div()
-                            .rounded(px(6.))
-                            .bg(Hsla::from(theme.gray_3))
-                            .px(px(6.))
-                            .py(px(2.))
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(recorded_clip_count.to_string())
-                    })),
-            )
-            // The scroll region (`:837`): `overflow-y-auto flex-1 -mx-1 px-1`.
-            .child(
-                div()
-                    .id("clips-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .mx(px(-4.))
-                    .px(px(4.))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .when(self.clip_segments().is_empty(), |this| {
-                        this.overflow_y_scroll()
-                    })
-                    .child(if self.clip_segments().is_empty() {
-                        self.render_clips_empty().into_any_element()
-                    } else {
-                        self.render_clip_list(cx)
-                    }),
-            )
+                        .disabled(importing)
+                        .pressed(self.clips.import_menu.is_some())
+                        .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, _window, cx| {
+                            if this.clips.importing {
+                                return;
+                            }
+                            this.clips.import_menu =
+                                Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
+                            cx.notify();
+                        })),
+                ),
+        )
     }
 
-    /// The empty state (`:841-849`).
-    fn render_clips_empty(&self) -> impl IntoElement {
-        let theme = self.theme;
+    fn render_clips_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.clip_segments().is_empty() {
+            return self.render_clips_empty().into_any_element();
+        }
         div()
+            .id("clips-scroll")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .justify_center()
-            .items_center()
-            .px(px(16.))
-            .py(px(48.))
-            .text_center()
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .items_center()
-                    .size(px(40.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.gray_3))
-                    .child(
-                        svg()
-                            .path("icons/clapperboard.svg")
-                            .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_9)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
-                    .child(tr::editor::clips::empty_title()),
-            )
-            .child(
-                div()
-                    .max_w(px(200.))
-                    .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
-                    .child(tr::editor::clips::empty_description()),
-            )
+            .px(px(12.))
+            .pt(px(12.))
+            .pb(px(12.))
+            .overflow_hidden()
+            .child(self.render_clip_list(cx))
+            .into_any_element()
+    }
+
+    /// The empty state, the panel's shared one. Record and Import sit in the
+    /// header row above it.
+    fn render_clips_empty(&self) -> impl IntoElement {
+        crate::editor_side_panel::panel_empty_state(
+            &self.theme,
+            "icons/clapperboard.svg",
+            tr::editor::clips::empty_title(),
+            tr::editor::clips::empty_description(),
+        )
     }
 
     /// The card list (`:852-964`).
@@ -1182,6 +1016,11 @@ impl EditorWindow {
                 .drag
                 .as_ref()
                 .is_some_and(|drag| drag.index == index);
+        let selected = self.selection.as_ref().is_some_and(|selection| {
+            selection.track == crate::editor_timeline::TrackKind::Clip
+                && selection.indices.contains(&index)
+        });
+        let accent = Hsla::from(theme.editor.accent);
         let show_top_bar = dragging && self.clips.drop_index == Some(index);
         let show_bottom_bar =
             dragging && index == count - 1 && self.clips.drop_index == Some(count);
@@ -1253,15 +1092,26 @@ impl EditorWindow {
                     .gap(px(12.))
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_4))
                     .p(px(8.))
-                    .bg(card_bg(&theme))
+                    .map(|card| {
+                        if selected {
+                            card.border_color(accent.opacity(0.7))
+                                .bg(accent.opacity(0.08))
+                        } else {
+                            card.border_color(Hsla::from(theme.editor.line))
+                                .bg(card_bg(&theme))
+                                .hover(move |style| {
+                                    style
+                                        .border_color(Hsla::from(theme.editor.line_strong))
+                                        .bg(Hsla::from(theme.editor.ctl))
+                                })
+                        }
+                    })
                     .cursor(if dragging {
                         CursorStyle::ClosedHand
                     } else {
-                        CursorStyle::OpenHand
+                        CursorStyle::PointingHand
                     })
-                    .hover(move |style| style.border_color(Hsla::from(theme.gray_7)))
                     .when(is_dragged, |this| this.opacity(0.4))
                     .child(probe)
                     .on_mouse_down(

@@ -17,8 +17,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@cap/ui";
-import { faUser } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { format } from "date-fns";
@@ -33,6 +32,7 @@ import { updateOrganizationMemberRole } from "@/actions/organization/update-memb
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Organization } from "@/app/(org)/dashboard/dashboard-data";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	filterAndSortMembersTableRows,
 	type MembersTableRow,
