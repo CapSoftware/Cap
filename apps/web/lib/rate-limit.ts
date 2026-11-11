@@ -187,6 +187,8 @@ export const RATE_LIMIT_IDS = {
 	COMMENT_CREATE: "rl_comment_create",
 	/** Video edit saves and restores per user: each one re-encodes the video and regenerates AI output. Suggested: 30 / 1h per key (user). */
 	VIDEO_EDIT: "rl_video_edit",
+	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
+	VIEWER_DOWNLOAD: "rl_viewer_download",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -234,6 +236,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		windowMs: 60 * MINUTE_MS,
 	},
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

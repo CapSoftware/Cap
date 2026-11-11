@@ -392,6 +392,7 @@ export const CapCard = ({
 				inheritedSpaceSettings={cap.inheritedSpaceSettings}
 				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
+				onSaved={() => router.refresh()}
 			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}
