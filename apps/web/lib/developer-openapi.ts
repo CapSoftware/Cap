@@ -128,7 +128,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"Use the SDK operations (public `cpk_` key, safe in browsers) to create a video and upload it with S3 multipart upload: createSdkVideo, initiateSdkUpload, presignSdkUploadPart for each part, then completeSdkUpload.",
 			"Use the REST operations (secret `csk_` key, server-side only) to list, inspect and delete videos and read credit usage.",
 			"",
-			"Create a developer app and its keys at https://cap.so/dashboard/developers. Development apps accept any origin, so use one to test before switching to a production app with allowed domains.",
+			"Create a developer app and its keys at https://cap.so/dashboard/infra. Development apps accept any origin, so use one to test before switching to a production app with allowed domains.",
 			"",
 			"Authentication, origin, rate-limit, unknown-route and unexpected errors include `error`, `code`, `message`, `hint` and `docs` fields. Other handler errors may include only `error`; request-body validation errors return `success: false` with the failing fields. Each key is limited to 60 requests per minute; a 429 response carries Retry-After.",
 		].join("\n"),
@@ -343,14 +343,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				scheme: "bearer",
 				bearerFormat: "csk_...",
 				description:
-					"Secret key from https://cap.so/dashboard/developers. Server-side only.",
+					"Secret key from https://cap.so/dashboard/infra. Server-side only.",
 			},
 			publicKey: {
 				type: "http",
 				scheme: "bearer",
 				bearerFormat: "cpk_...",
 				description:
-					"Public key from https://cap.so/dashboard/developers. Production apps also require an Origin header from an allowed domain.",
+					"Public key from https://cap.so/dashboard/infra. Production apps also require an Origin header from an allowed domain.",
 			},
 		},
 		schemas: {

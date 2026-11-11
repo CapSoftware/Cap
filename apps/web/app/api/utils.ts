@@ -179,7 +179,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 			apiErrorBody(
 				"invalid_public_key",
 				"Invalid public key",
-				"Send Authorization: Bearer cpk_... with a public key from https://cap.so/dashboard/developers.",
+				"Send Authorization: Bearer cpk_... with a public key from https://cap.so/dashboard/infra.",
 			),
 			401,
 		);
@@ -213,7 +213,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 			apiErrorBody(
 				"invalid_public_key",
 				"Invalid or revoked public key",
-				"Copy the current public key for your app from https://cap.so/dashboard/developers. Regenerating keys revokes the previous pair.",
+				"Copy the current public key for your app from https://cap.so/dashboard/infra. Regenerating keys revokes the previous pair.",
 			),
 			401,
 		);
@@ -247,7 +247,7 @@ export const withDeveloperPublicAuth = createMiddleware<{
 				apiErrorBody(
 					"origin_not_allowed",
 					"Origin not allowed",
-					"Add this origin to the app's allowed domains at https://cap.so/dashboard/developers.",
+					"Add this origin to the app's allowed domains at https://cap.so/dashboard/infra.",
 				),
 				403,
 			);
@@ -273,7 +273,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 			apiErrorBody(
 				"invalid_secret_key",
 				"Invalid secret key",
-				"Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/developers.",
+				"Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
 			),
 			401,
 		);
@@ -304,7 +304,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 			apiErrorBody(
 				"invalid_secret_key",
 				"Invalid or revoked secret key",
-				"Copy the current secret key for your app from https://cap.so/dashboard/developers. Regenerating keys revokes the previous pair.",
+				"Copy the current secret key for your app from https://cap.so/dashboard/infra. Regenerating keys revokes the previous pair.",
 			),
 			401,
 		);

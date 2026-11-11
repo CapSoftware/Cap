@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { infraAppPath } from "@/lib/infra-routes";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
 
@@ -114,8 +115,8 @@ app.post(
 					},
 				],
 				mode: "payment",
-				success_url: `${serverEnv().WEB_URL}/dashboard/developers/credits?purchase=success`,
-				cancel_url: `${serverEnv().WEB_URL}/dashboard/developers/credits`,
+				success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?purchase=success`,
+				cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
 				metadata: {
 					type: "developer_credits",
 					appId,

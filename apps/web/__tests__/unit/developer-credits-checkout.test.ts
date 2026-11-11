@@ -290,6 +290,31 @@ describe("POST /api/developer/credits/checkout", () => {
 		);
 	});
 
+	it("returns the buyer to the app's Cap Infra billing page", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			...mockUser,
+			stripeCustomerId: "cus_exist",
+		});
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_exist" },
+			]);
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+
+		await POST(makeRequest({ appId: "app-456", amountCents: 2500 }));
+
+		const [params] = mockStripe.checkout.sessions.create.mock.calls[0] ?? [];
+		const successUrl = new URL(params.success_url);
+		const cancelUrl = new URL(params.cancel_url);
+		expect(successUrl.pathname).toBe("/dashboard/infra/app-456/billing");
+		expect(successUrl.searchParams.get("purchase")).toBe("success");
+		expect(cancelUrl.pathname).toBe("/dashboard/infra/app-456/billing");
+		expect(cancelUrl.search).toBe("");
+	});
+
 	it("returns checkout URL on success", async () => {
 		mockGetCurrentUser.mockResolvedValue({
 			...mockUser,
