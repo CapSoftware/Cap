@@ -63,8 +63,10 @@ jobs:
             if (-not $cli) { $cli = (Get-ChildItem "C:\cap$v" -Recurse -Filter "cap.exe")[0].FullName }
             Write-Host "== $v CLI $cli"
             & $cli --version
-            & $cli targets screens 2>&1 | Out-String | Write-Host
-            $p = Start-Process -FilePath $cli -ArgumentList @("record", "--duration", "8", "--path", "C:\work\rec$v.cap") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "C:\work\rec$v.out" -RedirectStandardError "C:\work\rec$v.err"
+            $targets = & $cli targets screens 2>&1 | Out-String
+            $screen = [regex]::Match($targets, "id:\s*(\d+)").Groups[1].Value
+            Write-Host "screen=$screen"
+            $p = Start-Process -FilePath $cli -ArgumentList @("record", "--screen", $screen, "--duration", "8", "--path", "C:\work\rec$v.cap") -NoNewWindow -Wait -PassThru -RedirectStandardOutput "C:\work\rec$v.out" -RedirectStandardError "C:\work\rec$v.err"
             Write-Host ("record $v exit=0x{0:X8}" -f $p.ExitCode)
             Get-Content "C:\work\rec$v.out" -Tail 15
             Get-Content "C:\work\rec$v.err" -Tail 25
@@ -125,7 +127,7 @@ jobs:
               $state = "timeout"
               while ((Get-Date) -lt $deadline) {
                 if ($p.HasExited) { $state = "exited"; break }
-                if (Get-ChildItem $logs -Filter "cap-gpui.log*" -ErrorAction SilentlyContinue | Select-String -Pattern "editor export completed|editor export failed" -Quiet) { $state = "logged"; Start-Sleep 2; break }
+                if (Get-ChildItem $logs -Filter "cap-gpui.log*" -ErrorAction SilentlyContinue | Select-String -Pattern "editor export completed|editor export failed|no studio .cap" | Select-Object -First 1) { $state = "logged"; Start-Sleep 2; break }
                 Start-Sleep 2
               }
               $code = if ($p.HasExited) { "0x{0:X8}" -f $p.ExitCode } else { "running" }
