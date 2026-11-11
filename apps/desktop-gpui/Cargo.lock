@@ -1729,6 +1729,7 @@ dependencies = [
  "gifski",
  "image 0.25.10",
  "imgref",
+ "libc",
  "mp4",
  "rgb",
  "serde",
