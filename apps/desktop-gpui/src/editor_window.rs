@@ -9125,14 +9125,20 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.commit_clip_speed_input(window, cx);
+        let typed = self.take_clip_speed_draft(cx);
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
-        if !edits::apply_clip_speed_to_all(timeline, index) {
+        let retyped =
+            typed.is_some_and(|speed| edits::set_clip_segment_timescale(timeline, index, speed));
+        let applied = edits::apply_clip_speed_to_all(timeline, index);
+        if !retyped && !applied {
+            self.sync_clip_speed_input(cx);
+            cx.notify();
             return;
         }
         self.project_changed(window, cx);
+        self.sync_clip_speed_input(cx);
         self.note_edit("clip-speed-all", Some(TrackKind::Clip));
     }
 
@@ -9170,14 +9176,22 @@ impl EditorWindow {
         }
     }
 
-    fn commit_clip_speed_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.clip_speed_draft) {
-            return;
+    fn draft_clip_speed(&self, cx: &gpui::App) -> Option<f64> {
+        if !self.clip_speed_draft {
+            return None;
         }
-        let (Some(menu), Some(input)) = (self.clip_speed, self.clip_speed_input.clone()) else {
-            return;
-        };
-        if let Some(speed) = edits::parse_clip_speed(input.read(cx).text()) {
+        edits::parse_clip_speed(self.clip_speed_input.as_ref()?.read(cx).text())
+    }
+
+    fn take_clip_speed_draft(&mut self, cx: &gpui::App) -> Option<f64> {
+        let speed = self.draft_clip_speed(cx);
+        self.clip_speed_draft = false;
+        speed
+    }
+
+    fn commit_clip_speed_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.take_clip_speed_draft(cx);
+        if let (Some(menu), Some(speed)) = (self.clip_speed, typed) {
             self.set_clip_timescale(menu.index, speed, window, cx);
         }
         self.sync_clip_speed_input(cx);
@@ -9191,7 +9205,10 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ui::TextInputEvent::Changed => self.clip_speed_draft = true,
+            ui::TextInputEvent::Changed => {
+                self.clip_speed_draft = true;
+                cx.notify();
+            }
             ui::TextInputEvent::Confirmed => {
                 self.commit_clip_speed_input(window, cx);
                 self.focus_root(window, cx);
@@ -9491,7 +9508,10 @@ impl EditorWindow {
             .as_ref()
             .is_none_or(|input| input.read(cx).is_empty());
         let can_apply_all = timeline.segments.len() > 1;
-        let applies_to_all = edits::clip_speed_applies_to_all(timeline, index);
+        let applies_to_all = self
+            .draft_clip_speed(cx)
+            .is_some_and(|speed| speed.to_bits() != timescale.to_bits())
+            || edits::clip_speed_applies_to_all(timeline, index);
         let audio_modes = [
             (
                 ClipSpeedAudioMode::Mute,
@@ -15805,6 +15825,18 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(clip_speeds(&editor, cx), [1.2, 1.2]);
 
+            type_speed(&editor, cx, "1 . 7 5");
+            editor.update_in(cx, |editor, window, cx| {
+                editor.apply_clip_speed_to_all(0, window, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                clip_speeds(&editor, cx),
+                [1.75, 1.75],
+                "a typed speed applies without Enter"
+            );
+            assert_eq!(speed_field_text(&editor, cx), "1.75");
+
             editor.update_in(cx, |editor, window, cx| {
                 editor.clip_speed = None;
                 editor.set_clip_timescale(1, 2.0, window, cx);
@@ -15817,7 +15849,7 @@ mod tests {
                 "a preset leaves the field empty"
             );
             type_speed(&editor, cx, "4 enter");
-            assert_eq!(clip_speeds(&editor, cx), [1.2, 4.0]);
+            assert_eq!(clip_speeds(&editor, cx), [1.75, 4.0]);
             assert_eq!(speed_field_text(&editor, cx), "");
         }
 
