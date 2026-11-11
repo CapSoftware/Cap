@@ -17,6 +17,7 @@ import { withDeveloperPublicAuth } from "../../../../utils";
 
 const MAX_DURATION_SECS = 4 * 60 * 60;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
+const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
 type StoredPart = { PartNumber?: number; ETag?: string; Size?: number };
 
@@ -29,8 +30,11 @@ function storedBytesForParts(
 	const storedByNumber = new Map(
 		storedParts.map((part) => [part.PartNumber, part]),
 	);
+	const seen = new Set<number>();
 	let totalBytes = 0;
 	for (const requested of requestedParts) {
+		if (seen.has(requested.partNumber)) return null;
+		seen.add(requested.partNumber);
 		const stored = storedByNumber.get(requested.partNumber);
 		if (
 			stored?.Size === undefined ||
@@ -228,6 +232,12 @@ app.post(
 			if (totalBytes === null) {
 				return c.json(
 					{ error: "Uploaded parts do not match the request" },
+					400,
+				);
+			}
+			if (clampedDuration > totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND) {
+				return c.json(
+					{ error: "Duration is longer than the uploaded file can hold" },
 					400,
 				);
 			}
