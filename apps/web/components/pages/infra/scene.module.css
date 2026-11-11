@@ -512,9 +512,50 @@
 	display: none;
 }
 
+.caret {
+	display: inline-block;
+	width: 2px;
+	height: 1.15em;
+	margin-left: 0.45em;
+	vertical-align: -0.2em;
+	background: #fff;
+	box-shadow:
+		0 0 8px 1px rgba(214, 228, 255, 0.7),
+		0 0 28px 4px rgba(190, 210, 255, 0.28);
+	animation: caret-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes caret-breathe {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.3;
+	}
+}
+
+.promptFade {
+	max-height: 128px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		rgba(0, 0, 0, 0.55) 45%,
+		transparent 100%
+	);
+	mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		rgba(0, 0, 0, 0.55) 45%,
+		transparent 100%
+	);
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.art,
-	.pulse {
+	.pulse,
+	.caret {
 		animation: none;
 	}
 

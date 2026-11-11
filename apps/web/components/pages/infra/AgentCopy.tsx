@@ -22,7 +22,7 @@ export const CopyPromptButton = ({ className }: { className?: string }) => (
 	<CopyLabelButton
 		text={CAP_INFRA_AGENT_PROMPT}
 		onCopy={() => track("full")}
-		className={`${BTN_PRIMARY} !h-11 !rounded-[9px] !px-5 !text-[15px] ${className ?? ""}`}
+		className={`${BTN_PRIMARY} ${className ?? ""}`}
 	>
 		Copy prompt
 	</CopyLabelButton>

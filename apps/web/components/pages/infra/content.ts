@@ -91,6 +91,7 @@ export const ANCHORS = {
 	speech: "speech",
 	player: "player",
 	pricing: "pricing",
+	pro: "pro",
 	faq: "faq",
 } as const;
 
@@ -112,6 +113,7 @@ export const LINKS = {
 	start: "/dashboard/infra",
 	docs: "/docs",
 	agentDocs: "/docs/agents",
+	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
 	home: "/",
@@ -335,10 +337,30 @@ export const PLAYER: readonly CodeSample[] = [
 	},
 ];
 
-export const AGENT_STEPS = [
-	"Copy the prompt.",
-	"Paste it into your agent.",
-	"Ask for what you want.",
+const roundedDown = (value: number, step: number) =>
+	Math.floor(value / step) * step;
+
+export const PRO_CREDIT_COVERS = [
+	{
+		amount: roundedDown(
+			(PRICES.proMonthlyCredit / PRICES.deliveryPer1000Minutes[DEFAULT_TIER]) *
+				1000,
+			1000,
+		),
+		unit: "minutes watched",
+	},
+	{
+		amount: roundedDown(
+			(PRICES.proMonthlyCredit / PRICES.storagePer1000Minutes[DEFAULT_TIER]) *
+				1000,
+			100,
+		),
+		unit: "minutes stored",
+	},
+	{
+		amount: roundedDown(PRICES.proMonthlyCredit / PRICES.speechPerHour, 1),
+		unit: "hours transcribed",
+	},
 ] as const;
 
 export const AGENT_TOOLS =

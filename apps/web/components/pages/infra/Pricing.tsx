@@ -1,13 +1,5 @@
 import { Calculator } from "./Calculator";
-import {
-	ANCHORS,
-	PRICE_ROWS,
-	PRICES,
-	TIER_LABEL,
-	TIERS,
-	usd,
-	usdWhole,
-} from "./content";
+import { ANCHORS, PRICE_ROWS, TIER_LABEL, TIERS, usd } from "./content";
 import { Section, SectionHeading } from "./shared";
 import { MONO } from "./theme";
 
@@ -21,8 +13,7 @@ export const Pricing = () => (
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p>
 					Encoding is free at every resolution. No minimums, seats or plans.
-					Credits are prepaid, and Cap Pro subscribers get{" "}
-					{usdWhole(PRICES.proMonthlyCredit)} of usage every month.
+					Credits are prepaid.
 				</p>
 			</SectionHeading>
 			<div className="min-w-0">

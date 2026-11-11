@@ -6,6 +6,7 @@ import { Hero } from "./Hero";
 import { Performance } from "./Performance";
 import { Platform } from "./Platform";
 import { Pricing } from "./Pricing";
+import { ProCredit } from "./ProCredit";
 import { Video } from "./Video";
 
 export const InfraPage = () => (
@@ -17,6 +18,7 @@ export const InfraPage = () => (
 		<Video />
 		<Platform />
 		<Pricing />
+		<ProCredit />
 		<Faq />
 		<FinalCta />
 	</main>
