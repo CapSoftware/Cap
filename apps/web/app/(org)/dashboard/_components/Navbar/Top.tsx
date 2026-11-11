@@ -35,7 +35,6 @@ import { resetUser } from "@/app/utils/analytics";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { LazyUpgradeModal } from "@/components/LazyUpgradeModal";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { getInfraPageTitle } from "@/lib/infra-routes";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
@@ -78,9 +77,7 @@ const Top = () => {
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
 	};
 
-	const title = activeSpace
-		? activeSpace.name
-		: titles[pathname] || getInfraPageTitle(pathname) || "";
+	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
 
 	const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
 		(e) => {

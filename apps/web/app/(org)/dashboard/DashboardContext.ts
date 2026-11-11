@@ -8,7 +8,6 @@ import type {
 	Spaces,
 	UserPreferences,
 } from "./dashboard-data";
-import type { InfraAppSummary } from "./infra/infra-data";
 
 /**
  * The context objects and hooks, split from `Contexts.tsx` so consumers
@@ -37,9 +36,6 @@ export type SharedContext = {
 	setInviteDialogOpen: (open: boolean) => void;
 	referClickedState: boolean;
 	setReferClickedStateHandler: (referClicked: boolean) => void;
-	isInfraSection: boolean;
-	infraApps: InfraAppSummary[] | null;
-	setInfraApps: (apps: InfraAppSummary[] | null) => void;
 	shareableLinkUsage: { used: number; limit: number } | null;
 };
 

@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
 	redirect: (url: string) => redirectMock(url),
 }));
 
-vi.mock("@/app/(org)/dashboard/infra/infra-data", () => ({
+vi.mock("@/app/(infra)/dashboard/infra/infra-data", () => ({
 	getSelectedInfraApp: () => getSelectedInfraAppMock(),
 }));
 

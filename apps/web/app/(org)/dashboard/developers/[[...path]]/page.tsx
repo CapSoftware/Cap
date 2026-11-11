@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSelectedInfraApp } from "@/app/(org)/dashboard/infra/infra-data";
+import { getSelectedInfraApp } from "@/app/(infra)/dashboard/infra/infra-data";
 import {
 	INFRA_BASE_PATH,
 	infraAppPath,
