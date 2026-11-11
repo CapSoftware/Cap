@@ -2477,6 +2477,9 @@ upload_complete = "अपलोड पूरा हुआ"
 uploading = "शेयर करने लायक लिंक बन रहा है"
 
 [editor.export.quality]
+gif_high = "उच्च"
+gif_low = "निम्न"
+gif_medium = "मध्यम"
 larger = "बड़ी फ़ाइल"
 maximum = "अधिकतम"
 potato = "न्यूनतम"

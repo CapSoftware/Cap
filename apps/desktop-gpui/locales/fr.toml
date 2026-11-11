@@ -2477,6 +2477,9 @@ upload_complete = "Mise en ligne terminée"
 uploading = "Création du lien de partage"
 
 [editor.export.quality]
+gif_high = "Élevée"
+gif_low = "Faible"
+gif_medium = "Moyenne"
 larger = "Fichier plus lourd"
 maximum = "Maximale"
 potato = "Patate"

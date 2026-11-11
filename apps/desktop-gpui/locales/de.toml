@@ -2477,6 +2477,9 @@ upload_complete = "Hochladen abgeschlossen"
 uploading = "Link zum Teilen wird erstellt"
 
 [editor.export.quality]
+gif_high = "Hoch"
+gif_low = "Niedrig"
+gif_medium = "Mittel"
 larger = "Größere Datei"
 maximum = "Maximal"
 potato = "Kartoffel"

@@ -2477,6 +2477,9 @@ upload_complete = "アップロードが完了しました"
 uploading = "共有リンクを作成中"
 
 [editor.export.quality]
+gif_high = "高"
+gif_low = "低"
+gif_medium = "中"
 larger = "大きいファイル"
 maximum = "最高"
 potato = "最低"

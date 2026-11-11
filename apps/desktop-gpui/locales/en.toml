@@ -2479,6 +2479,9 @@ upload_complete = "Upload complete"
 uploading = "Creating shareable link"
 
 [editor.export.quality]
+gif_high = { text = "High", context = "GIF export quality preset." }
+gif_low = { text = "Low", context = "GIF export quality preset." }
+gif_medium = { text = "Medium", context = "GIF export quality preset." }
 larger = "Larger file"
 maximum = { text = "Maximum", context = "Export quality preset." }
 potato = { text = "Potato", context = "Export quality preset: the lowest quality, said playfully." }

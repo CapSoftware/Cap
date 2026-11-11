@@ -152,6 +152,8 @@ pub struct ExportPrefs {
     pub organization_id: Option<String>,
     #[serde(default)]
     pub turbo: bool,
+    #[serde(default)]
+    pub gif_quality: Option<String>,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.

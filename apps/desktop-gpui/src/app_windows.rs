@@ -6104,6 +6104,7 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 }
             }
         }
+        view.normalize_loaded_export_options();
         tracing::info!(path = %path.display(), "auto editor export requested");
         view.start_export(window, cx);
     });
