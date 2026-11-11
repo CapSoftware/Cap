@@ -1502,16 +1502,23 @@ async function encodeLadderAsync(
 		if (uploadingJob) void sendWebhook(uploadingJob);
 
 		await withJobHeartbeat(jobId, async () => {
-			await Promise.all(
-				ladder.files.map((file) =>
-					uploadFileToS3(
-						file.path,
-						options.uploads[file.name] as string,
-						file.contentType,
-						signal,
-					),
-				),
+			const uploadsStopped = new AbortController();
+			const uploadSignal = AbortSignal.any([signal, uploadsStopped.signal]);
+			const uploads = ladder.files.map((file) =>
+				uploadFileToS3(
+					file.path,
+					options.uploads[file.name] as string,
+					file.contentType,
+					uploadSignal,
+				).catch((error) => {
+					uploadsStopped.abort();
+					throw error;
+				}),
 			);
+			const failed = (await Promise.allSettled(uploads)).find(
+				(upload) => upload.status === "rejected",
+			);
+			if (failed?.status === "rejected") throw failed.reason;
 			if (options.thumbnailPresignedUrl) {
 				const thumbnailData = await generateThumbnail(
 					input.path,
@@ -1537,8 +1544,6 @@ async function encodeLadderAsync(
 		});
 		const completedJob = getJob(jobId);
 		if (completedJob) await sendWebhook(completedJob);
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		if (!signal.aborted) {
 			console.error(`[video/ladder] Error encoding job ${jobId}:`, err);
@@ -1548,11 +1553,7 @@ async function encodeLadderAsync(
 			error: err instanceof Error ? err.message : String(err),
 			message: "Encoding failed",
 		});
-		try {
-			if (updatedJob) await sendWebhook(updatedJob);
-		} finally {
-			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
-		}
+		if (updatedJob) await sendWebhook(updatedJob);
 	} finally {
 		await cleanupLadder?.();
 		await cleanupTempFiles([inputTempFile]);

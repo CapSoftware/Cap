@@ -83,7 +83,7 @@ export async function encodeHlsLadder(
 	const rotation = await probeVideoRotation(inputPath, abortSignal);
 	abortSignal?.throwIfAborted();
 	const rungs = planHlsLadder(
-		{ width: metadata.width, height: metadata.height, rotation },
+		{ width: metadata.width, height: metadata.height },
 		{ maxTier: options.maxTier },
 	);
 	const sourceHasAudio = Boolean(metadata.audioCodec);
@@ -100,6 +100,10 @@ export async function encodeHlsLadder(
 		release();
 	};
 
+	const work = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, work.signal])
+		: work.signal;
 	const masterPath = join(dir, HLS_LADDER_MASTER_PLAYLIST);
 	const sliceSeconds = range
 		? (range.durationSeconds ??
@@ -139,15 +143,12 @@ export async function encodeHlsLadder(
 					totalDurationUs,
 					timeoutMs,
 					onProgress,
-					abortSignal,
+					signal,
 				);
 				recordNvencAttempt("process");
 				return "nvenc";
 			} catch (error) {
-				const reason = nvencFallbackReason(
-					error,
-					abortSignal?.aborted ?? false,
-				);
+				const reason = nvencFallbackReason(error, signal.aborted);
 				if (reason === null) throw error;
 				recordNvencAttempt("process", reason);
 				logNvencFallback({
@@ -170,7 +171,7 @@ export async function encodeHlsLadder(
 			totalDurationUs,
 			timeoutMs,
 			onProgress,
-			abortSignal,
+			signal,
 		);
 		return "libx264";
 	};
@@ -185,12 +186,17 @@ export async function encodeHlsLadder(
 						metadata.duration * 1_000_000,
 						getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
 						undefined,
-						abortSignal,
+						signal,
 					)
-				: null;
-		separateAudio?.catch(() => {});
-		const encoder = await encodeVideo();
-		await separateAudio;
+				: Promise.resolve();
+		const video = encodeVideo();
+		const [encoder] = await Promise.all([video, separateAudio]).catch(
+			async (error) => {
+				work.abort();
+				await Promise.allSettled([video, separateAudio]);
+				throw error;
+			},
+		);
 		abortSignal?.throwIfAborted();
 
 		const master = parseHlsLadderMaster(await readFile(masterPath, "utf8"));

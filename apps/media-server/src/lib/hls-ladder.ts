@@ -36,21 +36,10 @@ export interface HlsLadderRung {
 export interface HlsLadderSource {
 	width: number;
 	height: number;
-	rotation?: number | null;
 }
 
 function even(value: number): number {
 	return Math.max(2, Math.round(value / 2) * 2);
-}
-
-function displaySize(source: HlsLadderSource): {
-	width: number;
-	height: number;
-} {
-	const quarterTurns = Math.round(Math.abs(source.rotation ?? 0) / 90) % 2;
-	return quarterTurns === 1
-		? { width: source.height, height: source.width }
-		: { width: source.width, height: source.height };
 }
 
 function fitShortSide(
@@ -89,7 +78,7 @@ export function planHlsLadder(
 	source: HlsLadderSource,
 	options: { maxTier?: HlsLadderTierName } = {},
 ): HlsLadderRung[] {
-	const size = displaySize(source);
+	const size = { width: source.width, height: source.height };
 	if (!(size.width > 0) || !(size.height > 0)) {
 		throw new Error("Source video has no usable dimensions");
 	}
@@ -163,6 +152,10 @@ export interface HlsLadderRange {
 // the offset lands in an edit list that players ignore, and every slice would
 // start again at zero.
 const SLICE_OUTPUT_ARGS = ["-hls_segment_options", "movflags=+frag_discont"];
+// -ss counts from the start of the file while -copyts keeps the file's own
+// first timestamp, which is not always zero. -start_at_zero moves that first
+// timestamp to zero so seeking, trimming and the audio all share one origin.
+const SOURCE_CLOCK_ARGS = ["-copyts", "-start_at_zero"];
 const SLICE_SEEK_MARGIN_SECONDS = 2;
 
 function sliceSeekSeconds(range: HlsLadderRange): number {
@@ -186,7 +179,7 @@ function sliceInputArgs(range: HlsLadderRange | null | undefined): string[] {
 							SLICE_SEEK_MARGIN_SECONDS,
 					),
 				]),
-		"-copyts",
+		...SOURCE_CLOCK_ARGS,
 	];
 }
 
@@ -460,7 +453,7 @@ export function buildHlsAudioArgs(input: {
 	return [
 		"ffmpeg",
 		...(input.extraInputArgs ?? []),
-		"-copyts",
+		...SOURCE_CLOCK_ARGS,
 		"-i",
 		input.inputPath,
 		"-vn",

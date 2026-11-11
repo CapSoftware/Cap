@@ -50,6 +50,35 @@ function videoFrameTimes(playlist: string): number[] {
 		.sort((a, b) => a - b);
 }
 
+function streamSeconds(playlist: string, stream: string): number {
+	const output = execFileSync(
+		"ffprobe",
+		[
+			"-v",
+			"error",
+			"-allowed_extensions",
+			"ALL",
+			"-select_streams",
+			stream,
+			"-show_entries",
+			"packet=pts_time,duration_time",
+			"-of",
+			"csv=p=0",
+			playlist,
+		],
+		{ encoding: "utf8" },
+	);
+	const packets = output
+		.split("\n")
+		.map((line) => line.split(",").map(Number.parseFloat))
+		.filter(([pts]) => Number.isFinite(pts));
+	const first = Math.min(...packets.map(([pts]) => pts ?? 0));
+	const last = Math.max(
+		...packets.map(([pts, duration]) => (pts ?? 0) + (duration || 0)),
+	);
+	return last - first;
+}
+
 function fileNamed(ladder: EncodedHlsLadder, name: string) {
 	const file = ladder.files.find((candidate) => candidate.name === name);
 	if (!file) throw new Error(`missing ${name}`);
@@ -61,7 +90,7 @@ describe("HLS ladder encode", () => {
 	const source = join(directory, "source.mp4");
 	const ladders: EncodedHlsLadder[] = [];
 
-	beforeAll(() => {
+	function writeSource(path: string, extraOutputArgs: string[] = []) {
 		execFileSync("ffmpeg", [
 			"-v",
 			"error",
@@ -81,9 +110,14 @@ describe("HLS ladder encode", () => {
 			"yuv420p",
 			"-c:a",
 			"aac",
+			...extraOutputArgs,
 			"-y",
-			source,
+			path,
 		]);
+	}
+
+	beforeAll(() => {
+		writeSource(source);
 	});
 
 	afterAll(async () => {
@@ -91,14 +125,69 @@ describe("HLS ladder encode", () => {
 		rmSync(directory, { recursive: true, force: true });
 	});
 
-	async function encode(range?: HlsLadderRange, includeAudio = true) {
-		const metadata = await probeVideoFile(source);
-		const ladder = await encodeHlsLadder(source, metadata, {
+	async function encode(
+		range?: HlsLadderRange,
+		includeAudio = true,
+		path = source,
+	) {
+		const metadata = await probeVideoFile(path);
+		const ladder = await encodeHlsLadder(path, metadata, {
 			range,
 			includeAudio,
 		});
 		ladders.push(ladder);
 		return ladder;
+	}
+
+	function stitch(slices: EncodedHlsLadder[], name: string) {
+		const stitched = stitchHlsLadderSlices(
+			slices.map((slice) => ({
+				master: readFileSync(fileNamed(slice, "master.m3u8").path, "utf8"),
+				playlists: Object.fromEntries(
+					slice.result.renditions.map((rendition) => [
+						rendition.name,
+						readFileSync(fileNamed(slice, rendition.playlist).path, "utf8"),
+					]),
+				),
+			})),
+			{ hasAudio: true },
+		);
+		const output = join(directory, name);
+		mkdirSync(output);
+		writeFileSync(join(output, "master.m3u8"), stitched.master);
+		for (const [playlist, text] of Object.entries(stitched.playlists)) {
+			writeFileSync(join(output, playlist), text);
+		}
+		for (const media of stitched.media) {
+			const slice = slices[media.slice];
+			if (!slice) throw new Error("missing slice");
+			copyFileSync(
+				fileNamed(slice, media.source).path,
+				join(output, media.name),
+			);
+		}
+		const [first] = slices;
+		if (!first) throw new Error("missing slice");
+		for (const audio of ["audio.m3u8", "audio.m4s"]) {
+			copyFileSync(fileNamed(first, audio).path, join(output, audio));
+		}
+		return output;
+	}
+
+	function expectSameFrames(stitched: number[], whole: number[]) {
+		expect(stitched.length).toBe(whole.length);
+		expect(new Set(stitched).size).toBe(stitched.length);
+		const stitchedStart = stitched[0] ?? Number.NaN;
+		const wholeStart = whole[0] ?? Number.NaN;
+		const frame = 1001 / 30000;
+		for (const [index, time] of stitched.entries()) {
+			const expected = (whole[index] ?? Number.NaN) - wholeStart;
+			expect(Math.abs(time - stitchedStart - expected)).toBeLessThan(0.001);
+			if (index > 0) {
+				const gap = time - (stitched[index - 1] ?? 0);
+				expect(Math.abs(gap - frame)).toBeLessThan(0.001);
+			}
+		}
 	}
 
 	test("encodes every rendition with shared audio and aligned segments", async () => {
@@ -151,51 +240,53 @@ describe("HLS ladder encode", () => {
 		expect(slices[0]?.result.audio).not.toBeNull();
 		expect(slices[1]?.result.audio).toBeNull();
 
-		const stitched = stitchHlsLadderSlices(
-			slices.map((slice) => ({
-				master: readFileSync(fileNamed(slice, "master.m3u8").path, "utf8"),
-				playlists: Object.fromEntries(
-					slice.result.renditions.map((rendition) => [
-						rendition.name,
-						readFileSync(fileNamed(slice, rendition.playlist).path, "utf8"),
-					]),
-				),
-			})),
-			{ hasAudio: true },
-		);
-
-		const output = join(directory, "stitched");
-		mkdirSync(output);
-		writeFileSync(join(output, "master.m3u8"), stitched.master);
-		for (const [name, text] of Object.entries(stitched.playlists)) {
-			writeFileSync(join(output, name), text);
-		}
-		for (const media of stitched.media) {
-			const slice = slices[media.slice];
-			if (!slice) throw new Error("missing slice");
-			copyFileSync(
-				fileNamed(slice, media.source).path,
-				join(output, media.name),
-			);
-		}
-
-		const stitchedFrames = videoFrameTimes(join(output, "720p.m3u8"));
-		expect(stitchedFrames.length).toBe(wholeFrames.length);
-		expect(new Set(stitchedFrames).size).toBe(stitchedFrames.length);
-		const stitchedStart = stitchedFrames[0] ?? Number.NaN;
-		const wholeStart = wholeFrames[0] ?? Number.NaN;
-		for (const [index, time] of stitchedFrames.entries()) {
-			const expected = (wholeFrames[index] ?? Number.NaN) - wholeStart;
-			expect(Math.abs(time - stitchedStart - expected)).toBeLessThan(0.001);
-		}
-		const frame = 1001 / 30000;
-		for (let index = 1; index < stitchedFrames.length; index++) {
-			const gap =
-				(stitchedFrames[index] ?? 0) - (stitchedFrames[index - 1] ?? 0);
-			expect(Math.abs(gap - frame)).toBeLessThan(0.001);
-		}
+		const output = stitch(slices, "stitched");
+		expectSameFrames(videoFrameTimes(join(output, "720p.m3u8")), wholeFrames);
 		expect(videoFrameTimes(join(output, "360p.m3u8")).length).toBe(
 			wholeFrames.length,
 		);
+
+		const audioSeconds = streamSeconds(join(output, "master.m3u8"), "a:0");
+		const videoSeconds = streamSeconds(join(output, "master.m3u8"), "v:0");
+		expect(audioSeconds).toBeGreaterThan(SOURCE_SECONDS - 1);
+		expect(Math.abs(audioSeconds - videoSeconds)).toBeLessThan(0.5);
 	}, 180_000);
+
+	test("slices line up when the source does not start at zero", async () => {
+		const offset = join(directory, "offset.mp4");
+		writeSource(offset, ["-output_ts_offset", "10"]);
+		const whole = await encode(undefined, true, offset);
+		const wholeFrames = videoFrameTimes(fileNamed(whole, "720p.m3u8").path);
+		const slices = await Promise.all(
+			planHlsLadderSlices(SOURCE_SECONDS, 2, 8).map((range, index) =>
+				encode(range, index === 0, offset),
+			),
+		);
+		const output = stitch(slices, "stitched-offset");
+		expectSameFrames(videoFrameTimes(join(output, "720p.m3u8")), wholeFrames);
+	}, 180_000);
+
+	test("keeps a rotated source in the orientation it plays in", async () => {
+		const rotated = join(directory, "rotated.mp4");
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-display_rotation",
+			"90",
+			"-i",
+			source,
+			"-c",
+			"copy",
+			"-t",
+			"6",
+			"-y",
+			rotated,
+		]);
+		const ladder = await encode(undefined, true, rotated);
+		expect(ladder.result.renditions[0]).toMatchObject({
+			name: "720p",
+			width: 720,
+			height: 1280,
+		});
+	}, 120_000);
 });

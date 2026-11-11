@@ -62,12 +62,6 @@ describe("planHlsLadder", () => {
 		]);
 	});
 
-	test("uses the displayed size of a rotated source", () => {
-		expect(
-			summary(planHlsLadder({ width: 1920, height: 1080, rotation: -90 })),
-		).toEqual(["1080p=1080x1920", "720p=720x1280", "360p=360x640"]);
-	});
-
 	test("skips a tier that is nearly the same size as the source", () => {
 		expect(summary(planHlsLadder({ width: 1582, height: 890 }))).toEqual([
 			"1080p=1582x890",
@@ -243,6 +237,61 @@ describe("buildHlsLadderArgs", () => {
 		expect(valueAfter(args, "-fps_mode:v")).toBe("passthrough");
 	});
 
+	test("cuts a middle slice on the shared frame grid at both ends", () => {
+		const args = buildHlsLadderArgs(
+			argsInput({
+				hasAudio: false,
+				range: { startSeconds: 112, durationSeconds: 112 },
+			}),
+		);
+		const input = args.indexOf("-i");
+		expect(args.slice(input - 6, input)).toEqual([
+			"-ss",
+			"110",
+			"-t",
+			"116",
+			"-copyts",
+			"-start_at_zero",
+		]);
+		expect(valueAfter(args, "-filter_complex")).toStartWith(
+			"[0:v]fps=30,trim=start=112:end=224,split=3",
+		);
+		expect(valueAfter(args, "-hls_segment_options")).toBe(
+			"movflags=+frag_discont",
+		);
+	});
+
+	test("starts the first slice at the beginning of the source", () => {
+		const args = buildHlsLadderArgs(
+			argsInput({
+				hasAudio: false,
+				range: { startSeconds: 0, durationSeconds: 112 },
+			}),
+		);
+		expect(valueAfter(args, "-ss")).toBe("0");
+		expect(valueAfter(args, "-t")).toBe("114");
+		expect(valueAfter(args, "-filter_complex")).toStartWith(
+			"[0:v]fps=30,trim=end=112,split=3",
+		);
+	});
+
+	test("lets the last slice run to the end of the source", () => {
+		const args = buildHlsLadderArgs(
+			argsInput({ hasAudio: false, range: { startSeconds: 224 } }),
+		);
+		expect(args).not.toContain("-t");
+		expect(valueAfter(args, "-filter_complex")).toStartWith(
+			"[0:v]fps=30,trim=start=224,split=3",
+		);
+	});
+
+	test("leaves a whole encode on its own timeline", () => {
+		const args = buildHlsLadderArgs(argsInput());
+		expect(args).not.toContain("-copyts");
+		expect(args).not.toContain("-hls_segment_options");
+		expect(valueAfter(args, "-filter_complex")).not.toContain("trim");
+	});
+
 	test("refuses an empty ladder", () => {
 		expect(() => buildHlsLadderArgs(argsInput({ rungs: [] }))).toThrow();
 	});
@@ -338,6 +387,7 @@ describe("buildHlsAudioArgs", () => {
 		});
 		expect(args).toContain("-vn");
 		expect(args).toContain("-copyts");
+		expect(args).toContain("-start_at_zero");
 		expect(valueAfter(args, "-hls_segment_options")).toBe(
 			"movflags=+frag_discont",
 		);
