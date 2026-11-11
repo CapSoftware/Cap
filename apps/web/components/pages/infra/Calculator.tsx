@@ -2,10 +2,12 @@
 
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
+import Link from "next/link";
 import { type CSSProperties, useId, useState } from "react";
 import type { InfraResolutionTier } from "@/lib/infra-pricing";
-import { PRICES, usd, usdWhole } from "./content";
+import { LINKS, PRICES, usd, usdWhole } from "./content";
 import { TierSwitch, useTier } from "./TierSwitch";
+import { BTN_PRIMARY } from "./theme";
 
 const STEPS = 1000;
 
@@ -334,6 +336,9 @@ export const Calculator = () => {
 						</span>
 					</span>
 				</label>
+				<Link href={LINKS.start} className={`${BTN_PRIMARY} mt-5 w-full`}>
+					Start building
+				</Link>
 			</div>
 		</div>
 	);

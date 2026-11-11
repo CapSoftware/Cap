@@ -15,7 +15,7 @@ import {
 } from "./comparison";
 import { ANCHORS, TIER_LABEL, usd, usdRate, usdWhole } from "./content";
 import { type RateRow, RateTable } from "./RateTable";
-import { Section, SectionHeading } from "./shared";
+import { Actions, Section, SectionHeading } from "./shared";
 import { TierSwitch } from "./TierSwitch";
 import { MONO, TEXT_LINK } from "./theme";
 
@@ -71,7 +71,7 @@ const SourceLink = ({ href, label }: { href: string; label: string }) => (
 );
 
 export const Compare = () => (
-	<Section id={ANCHORS.compare} className="pt-20 lg:pt-28">
+	<Section id={ANCHORS.compare} className="pt-28 lg:pt-40">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="The lowest price at every resolution.">
 				<p>
@@ -152,6 +152,20 @@ export const Compare = () => (
 				unit="per 1,000 minutes"
 				rows={encodingRows}
 				note={`Mux charges ${usdWhole(MUX_PAID_ENCODING_PER_1000_MINUTES.from)} to ${usdWhole(MUX_PAID_ENCODING_PER_1000_MINUTES.to)} per 1,000 minutes on its higher quality levels.`}
+			/>
+		</div>
+
+		<div className="mt-14 flex flex-col gap-x-10 gap-y-5 sm:flex-row sm:items-center sm:justify-between lg:mt-16">
+			<p className="m-0 max-w-[440px] text-pretty text-[15.5px] leading-[1.55] text-[rgba(232,236,244,0.78)]">
+				The lowest list price for storage, delivery and speech to text. Encoding
+				is free.
+			</p>
+			<Actions
+				className="shrink-0"
+				secondary={{
+					label: "Estimate your bill",
+					href: `#${ANCHORS.pricing}`,
+				}}
 			/>
 		</div>
 
