@@ -1,0 +1,61 @@
+[{'recordingSegment': 0, 'start': 0.3, 'end': 2.0, 'timescale': 1.0}, {'recordingSegment': 0, 'start': 2.0, 'end': 4.0, 'timescale': 2.0, 'speedAudioMode': 'maintainPitch'}, {'recordingSegment': 0, 'start': 4.0, 'end': 5.0, 'timescale': 0.5}, {'recordingSegment': 0, 'start': 5.0, 'end': 7.0, 'timescale': 1.5, 'speedAudioMode': 'matchSpeed'}, {'recordingSegment': 0, 'start': 7.0, 'end': 7.8, 'timescale': 4.0, 'speedAudioMode': 'maintainPitch'}]
+== presets main
+stream|codec_type=video|duration=6.233333|nb_frames=187
+stream|codec_type=audio|duration=6.234000|nb_frames=295
+format|duration=6.234000
+video MD5=b59fd53c241ebc282d842bf87408e625
+audio MD5=3294b66b55577601b5ddc89187507c96
+file 3b4a26e50b8cc9daaefb87d28144c12262834a3d753bfbe766bfd9553c583ca6
+== presets branch
+stream|codec_type=video|duration=6.233333|nb_frames=187
+stream|codec_type=audio|duration=6.234000|nb_frames=295
+format|duration=6.234000
+video MD5=b59fd53c241ebc282d842bf87408e625
+audio MD5=3294b66b55577601b5ddc89187507c96
+file 4d106bfa4bb4721d57d4f2fa3099cf5e6c3016b858b6e8cace520ae6659c9855
+== presets main vs branch: bytes differ
+== custom main
+stream|codec_type=video|duration=5.866667|nb_frames=176
+stream|codec_type=audio|duration=5.867000|nb_frames=278
+format|duration=5.867000
+video MD5=eb4ef51c5a8a2d74be1ed3f4cf17799d
+audio MD5=f8760ee54e06db79b9925a1a0ea7248d
+file 681734b0bc7d08e3d985b0b4835d1a71267618903532ac35bff00ebb049a02d9
+== custom branch
+stream|codec_type=video|duration=5.866667|nb_frames=176
+stream|codec_type=audio|duration=5.867000|nb_frames=278
+format|duration=5.867000
+video MD5=eb4ef51c5a8a2d74be1ed3f4cf17799d
+audio MD5=f8760ee54e06db79b9925a1a0ea7248d
+file d18876d754f9a01823cb71d5e732ad46f36e5f4ada83d392cada7d4eab983ce8
+== custom main vs branch: bytes differ
+== custompitch main
+stream|codec_type=video|duration=5.866667|nb_frames=176
+stream|codec_type=audio|duration=5.867000|nb_frames=278
+format|duration=5.867000
+video MD5=eb4ef51c5a8a2d74be1ed3f4cf17799d
+audio MD5=88d25d7a59a4e59d3ac420568afffdaf
+file 4eb7430fea498e7242ebe692617879429869ded623ed2b11b3fc036452c27950
+== custompitch branch
+stream|codec_type=video|duration=5.866667|nb_frames=176
+stream|codec_type=audio|duration=5.867000|nb_frames=278
+format|duration=5.867000
+video MD5=eb4ef51c5a8a2d74be1ed3f4cf17799d
+audio MD5=88d25d7a59a4e59d3ac420568afffdaf
+file d249f8ec7772cc204a651afe3bb03bc8e370ca474eb14ff815fd058a01a45a2e
+== custompitch main vs branch: bytes differ
+== gui-saved main
+stream|codec_type=video|duration=6.600000|nb_frames=198
+stream|codec_type=audio|duration=6.584000|nb_frames=311
+format|duration=6.600000
+video MD5=4910beeb4d619547c9e31181a97f9f5d
+audio MD5=514cb77859ce04c04449908032e0c559
+file 9ec4429b0d4efc15a6be661951e3f9a7f2b7791f71b774fcc202fbf83167b04c
+== gui-saved branch
+stream|codec_type=video|duration=6.600000|nb_frames=198
+stream|codec_type=audio|duration=6.584000|nb_frames=311
+format|duration=6.600000
+video MD5=4910beeb4d619547c9e31181a97f9f5d
+audio MD5=514cb77859ce04c04449908032e0c559
+file 6ec7cddd40c1ce0b33ba97da9da17129bd2b7ee96dad9a673d786b6bc4f38f91
+== gui-saved main vs branch: bytes differ
