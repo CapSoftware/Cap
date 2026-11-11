@@ -5143,7 +5143,7 @@ mod tests {
             }
         }));
         let timeline = project.timeline.as_mut().unwrap();
-        timeline.segments[0].timescale = 1.2;
+        assert!(set_clip_segment_timescale(timeline, 0, 1.2));
         timeline.segments[0].speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
         let mut expected = timeline.clone();
         for index in 1..expected.segments.len() {
@@ -5185,7 +5185,7 @@ mod tests {
             .collect();
         assert_eq!(zooms, expected_zooms);
         assert!((zooms[0].0 - 3.0 / 1.2).abs() < 1e-9);
-        assert!((zooms[1].0 - 10.0 / 1.2).abs() < 1e-9);
+        assert!((zooms[1].0 - (12.0 / 1.2 + 1.0 / 1.2)).abs() < 1e-9);
 
         assert!(!clip_speed_applies_to_all(timeline, 0));
         assert!(!apply_clip_speed_to_all(timeline, 0));
@@ -5200,7 +5200,8 @@ mod tests {
                     { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0, "speedAudioMode": "mute" },
                     { "recordingSegment": 0, "timescale": 2.0, "start": 4.0, "end": 8.0, "speedAudioMode": "matchSpeed" },
                     { "recordingSegment": 0, "timescale": 1.0, "start": 8.0, "end": 12.0 }
-                ]
+                ],
+                "zoomSegments": []
             }
         }));
         let timeline = project.timeline.as_mut().unwrap();
