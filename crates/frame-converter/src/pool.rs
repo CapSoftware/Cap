@@ -342,6 +342,54 @@ struct WorkerContext {
     frame_pool: Option<Arc<VideoFramePool>>,
 }
 
+struct FullOutputOutcome {
+    evicted: Option<ConvertedFrame>,
+    dropped: Option<ConvertedFrame>,
+}
+
+fn try_send_frame(
+    output_tx: &flume::Sender<ConvertedFrame>,
+    frame: ConvertedFrame,
+) -> Option<ConvertedFrame> {
+    match output_tx.try_send(frame) {
+        Ok(()) => None,
+        Err(flume::TrySendError::Full(frame) | flume::TrySendError::Disconnected(frame)) => {
+            Some(frame)
+        }
+    }
+}
+
+fn handle_full_output(
+    output_tx: &flume::Sender<ConvertedFrame>,
+    output_rx: &flume::Receiver<ConvertedFrame>,
+    drop_strategy: DropStrategy,
+    frame: ConvertedFrame,
+) -> FullOutputOutcome {
+    if matches!(drop_strategy, DropStrategy::DropNewest) {
+        return FullOutputOutcome {
+            evicted: None,
+            dropped: Some(frame),
+        };
+    }
+
+    match output_rx.try_recv() {
+        Ok(oldest) => FullOutputOutcome {
+            evicted: Some(oldest),
+            dropped: try_send_frame(output_tx, frame),
+        },
+        // The consumer drained the queue between the failed send and this
+        // receive, so the frame fits after all; retry rather than drop it.
+        Err(flume::TryRecvError::Empty) => FullOutputOutcome {
+            evicted: None,
+            dropped: try_send_frame(output_tx, frame),
+        },
+        Err(flume::TryRecvError::Disconnected) => FullOutputOutcome {
+            evicted: None,
+            dropped: Some(frame),
+        },
+    }
+}
+
 fn worker_loop(ctx: WorkerContext) {
     debug!(
         "Converter worker {} started{}",
@@ -388,40 +436,19 @@ fn worker_loop(ctx: WorkerContext) {
                             conversion_duration,
                         }) {
                             Ok(()) => {}
-                            Err(flume::TrySendError::Full(dropped_frame)) => {
-                                // Dropping the frame just converted would keep the stale
-                                // frames already queued ahead of it, so DropOldest first
-                                // evicts the oldest queued frame to make room; the new
-                                // frame is only dropped when that is not possible (empty
-                                // channel after racing with the consumer, or the retry
-                                // hitting a full channel again).
-                                let to_drop = match ctx.drop_strategy {
-                                    DropStrategy::DropOldest => match ctx.output_rx.try_recv() {
-                                        Ok(oldest) => {
-                                            ctx.stats
-                                                .frames_dropped
-                                                .fetch_add(1, Ordering::Relaxed);
-                                            if let Some(ref pool) = ctx.frame_pool {
-                                                pool.put(oldest.frame);
-                                            }
-                                            match ctx.output_tx.try_send(dropped_frame) {
-                                                Ok(()) => None,
-                                                Err(flume::TrySendError::Full(frame)) => {
-                                                    Some(frame)
-                                                }
-                                                Err(flume::TrySendError::Disconnected(frame)) => {
-                                                    Some(frame)
-                                                }
-                                            }
-                                        }
-                                        Err(_) => Some(dropped_frame),
-                                    },
-                                    DropStrategy::DropNewest => Some(dropped_frame),
-                                };
-                                if let Some(dropped_frame) = to_drop {
+                            Err(flume::TrySendError::Full(rejected_frame)) => {
+                                let outcome = handle_full_output(
+                                    &ctx.output_tx,
+                                    &ctx.output_rx,
+                                    ctx.drop_strategy,
+                                    rejected_frame,
+                                );
+                                for frame in
+                                    [outcome.evicted, outcome.dropped].into_iter().flatten()
+                                {
                                     ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
                                     if let Some(ref pool) = ctx.frame_pool {
-                                        pool.put(dropped_frame.frame);
+                                        pool.put(frame.frame);
                                     }
                                 }
                             }
@@ -548,6 +575,54 @@ mod tests {
         let sequences = Arc::try_unwrap(sequences).unwrap().into_inner().unwrap();
         assert_eq!(drained, sequences.len());
         (sequences, pool.stats().frames_dropped)
+    }
+
+    fn converted_frame(sequence: u64) -> ConvertedFrame {
+        ConvertedFrame {
+            frame: test_frame(),
+            sequence,
+            submit_time: Instant::now(),
+            conversion_duration: Duration::ZERO,
+        }
+    }
+
+    fn rejected_by_full_queue(
+        output_tx: &flume::Sender<ConvertedFrame>,
+        frame: ConvertedFrame,
+    ) -> ConvertedFrame {
+        match output_tx.try_send(frame) {
+            Err(flume::TrySendError::Full(frame)) => frame,
+            _ => panic!("expected the output queue to be full"),
+        }
+    }
+
+    #[test]
+    fn drop_oldest_evicts_the_queued_head_before_retrying() {
+        let (output_tx, output_rx) = flume::bounded(1);
+        output_tx.send(converted_frame(1)).unwrap();
+        let rejected = rejected_by_full_queue(&output_tx, converted_frame(2));
+
+        let outcome =
+            handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
+
+        assert_eq!(outcome.evicted.unwrap().sequence, 1);
+        assert!(outcome.dropped.is_none());
+        assert_eq!(output_rx.recv().unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn drop_oldest_retries_the_send_when_the_consumer_drained_the_queue() {
+        let (output_tx, output_rx) = flume::bounded(1);
+        output_tx.send(converted_frame(1)).unwrap();
+        let rejected = rejected_by_full_queue(&output_tx, converted_frame(2));
+        assert_eq!(output_rx.recv().unwrap().sequence, 1);
+
+        let outcome =
+            handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
+
+        assert!(outcome.evicted.is_none());
+        assert!(outcome.dropped.is_none());
+        assert_eq!(output_rx.recv().unwrap().sequence, 2);
     }
 
     #[test]
