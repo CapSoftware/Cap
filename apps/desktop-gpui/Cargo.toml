@@ -203,6 +203,7 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
