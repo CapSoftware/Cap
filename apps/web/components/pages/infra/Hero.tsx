@@ -1,3 +1,4 @@
+import { buildEnv } from "@cap/env";
 import type { CSSProperties } from "react";
 import { COMPLIANCE_SEALS, ComplianceSeal } from "@/components/ComplianceSeals";
 import { PLAIN } from "./art";
@@ -15,7 +16,7 @@ import {
 	usd,
 } from "./content";
 import { FilmButton } from "./Film";
-import { FILM } from "./film-source";
+import { filmFiles } from "./film-source";
 import { HeroArt } from "./Plain";
 import styles from "./scene.module.css";
 import { Actions } from "./shared";
@@ -41,10 +42,12 @@ const PROOFS = [
 
 const RULE = "border-[rgba(222,230,246,0.1)]";
 
+const FILM_FILES = filmFiles(buildEnv.NEXT_PUBLIC_INFRA_FILM_URL);
+
 export const Hero = () => (
 	<section className={styles.hero}>
 		<HeroArt />
-		{FILM.files ? (
+		{FILM_FILES ? (
 			<div
 				className={styles.stage}
 				style={
@@ -53,7 +56,7 @@ export const Hero = () => (
 					} as CSSProperties
 				}
 			>
-				<FilmButton files={FILM.files} />
+				<FilmButton files={FILM_FILES} />
 			</div>
 		) : null}
 		<div className="mx-auto flex h-full max-w-[1184px] flex-col px-5 sm:px-8 lg:justify-center lg:pb-[7vh]">

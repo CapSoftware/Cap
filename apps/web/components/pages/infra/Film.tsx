@@ -6,7 +6,7 @@ import { trackEvent } from "@/app/utils/analytics";
 import { CapPlayer } from "@/components/cap-player/CapPlayer";
 import { warmSource } from "@/components/cap-player/source";
 import styles from "./film.module.css";
-import { FILM, FILM_EVENT } from "./film-source";
+import { FILM, FILM_EVENT, type FilmFiles } from "./film-source";
 
 const announce = (open: boolean) =>
 	window.dispatchEvent(new CustomEvent(FILM_EVENT, { detail: open }));
@@ -14,11 +14,7 @@ const announce = (open: boolean) =>
 const track = (event: "infra_film_opened" | "infra_film_completed") =>
 	trackEvent(event, { source_page: "infra", cta_location: "hero" });
 
-export const FilmButton = ({
-	files,
-}: {
-	files: NonNullable<typeof FILM.files>;
-}) => {
+export const FilmButton = ({ files }: { files: FilmFiles }) => {
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const warmed = useRef(false);
 	const scroll = useRef("");
