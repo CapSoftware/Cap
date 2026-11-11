@@ -1,14 +1,14 @@
 import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
-import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-
+import { faReply } from "@fortawesome/free-solid-svg-icons/faReply";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import { memo } from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { LinkifiedText } from "@/components/LinkifiedText";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";

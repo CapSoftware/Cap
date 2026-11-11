@@ -32,6 +32,7 @@ vi.mock("@/lib/Notification", () => ({}));
 vi.mock("@/lib/organization-provisioning", () => ({}));
 vi.mock("@/lib/sync-video-storage-names", () => ({}));
 vi.mock("@/lib/transcribe", () => ({}));
+vi.mock("@/lib/video-download-access", () => ({}));
 vi.mock("@/lib/video-processing", () => ({}));
 vi.mock("@/workflows/agent-cap-operation", () => ({}));
 vi.mock("@/workflows/import-loom-video", () => ({}));

@@ -132,7 +132,7 @@ export const ToolsPageTemplate = ({
 				</div>
 
 				<div className="relative z-10 px-4 pt-6 pb-4 w-full sm:px-5 md:pt-12 md:pb-8">
-					<div className="mx-auto max-w-3xl text-center wrapper wrapper-sm">
+					<div className="mx-auto w-[92%] max-w-3xl text-center">
 						<h1 className="fade-in-down text-[1.75rem] leading-[2.25rem] sm:text-[2rem] sm:leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] relative z-10 text-black mb-3 md:mb-4">
 							{content.title}
 						</h1>

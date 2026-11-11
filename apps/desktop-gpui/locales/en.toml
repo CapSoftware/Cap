@@ -390,6 +390,8 @@ quarter = "Quarter"
 blocked_while_recording = "Shortcuts can't be changed while this recording holds its stop key. Stop recording first."
 cancelling_description = "For screenshots and recordings started from a shortcut or the tray."
 cancelling_title = "Cancelling"
+closing_editor_description = "For the screenshot editor and the video editor."
+closing_editor_title = "Closing the editor"
 needs_modifier_macos = "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
 needs_modifier_other = "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
 record_shortcut = "Record shortcut"
@@ -421,11 +423,19 @@ title = "After an Instant recording"
 hint = "Esc or closing the picker"
 title = "When you cancel"
 
+[settings.shortcuts.on_editor_close]
+hint = "After the last one closes"
+title = "When you close the editor"
+
 [settings.shortcuts.outcome]
 cancel_show_cap = "Show Cap"
 cancel_show_cap_hint = "Back to the recorder"
 cancel_stay_hidden = "Stay hidden"
 cancel_stay_hidden_hint = "Unless Cap was open"
+editor_close_show_cap = "Show Cap"
+editor_close_show_cap_hint = "Back to the recorder"
+editor_close_stay_hidden = "Stay hidden"
+editor_close_stay_hidden_hint = "Until you open Cap"
 instant_copy_link = "Copy link only"
 instant_copy_link_hint = "Nothing opens"
 instant_open_link = "Open link"
@@ -1419,6 +1429,7 @@ failed_title = "Could not delete recording"
 finishing_body = "Cap is waiting for recording cleanup to finish before completing this deletion."
 finishing_title = "Deletion is still finishing"
 in_use = { text = "This recording is still in use. Finish or cancel its upload and try again: {error}", context = "{error} is a technical error message, usually in English." }
+open_in_editor = "This recording is open in the editor. Close the editor and try again."
 outside_library = "This recording is outside the recordings library. Its files were not changed."
 recording_active = "Finish or cancel the recording before deleting this project."
 retained_title = "Recording retained"
@@ -2468,6 +2479,9 @@ upload_complete = "Upload complete"
 uploading = "Creating shareable link"
 
 [editor.export.quality]
+gif_high = { text = "High", context = "GIF export quality preset." }
+gif_low = { text = "Low", context = "GIF export quality preset." }
+gif_medium = { text = "Medium", context = "GIF export quality preset." }
 larger = "Larger file"
 maximum = { text = "Maximum", context = "Export quality preset." }
 potato = { text = "Potato", context = "Export quality preset: the lowest quality, said playfully." }

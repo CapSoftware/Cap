@@ -2,14 +2,12 @@
 
 import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import {
-	faRectangleList,
-	faRotateRight,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faRectangleList } from "@fortawesome/free-solid-svg-icons/faRectangleList";
+import { faRotateRight } from "@fortawesome/free-solid-svg-icons/faRotateRight";
 import { Edit3 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { formatPlayerTime } from "@/lib/player-time";
 import { type SummaryEditingState, SummaryEditor } from "./SummaryEditor";
 

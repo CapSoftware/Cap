@@ -109,6 +109,9 @@ pub struct ActiveRecording {
     // The mic error channel must outlive the stream or error sends panic the
     // sender side into logs; we keep it and drain nothing.
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
+    /// Keeps the library from deleting this folder until the recording, and
+    /// any clone a stop future holds, is gone.
+    _in_progress: Arc<crate::library::RecordingInProgress>,
 }
 
 #[cfg(target_os = "linux")]
@@ -804,7 +807,9 @@ async fn finish_failed_capture(
     stop: impl Future<Output = anyhow::Result<()>>,
     persist_stopped: impl FnOnce() -> anyhow::Result<()>,
 ) -> (bool, anyhow::Result<PathBuf>) {
-    if let Err(error) = stop.await {
+    if let Err(error) = stop.await
+        && !cap_recording::instant_recording::capture_stopped_after_failure(&error)
+    {
         return (
             false,
             Err(error.context("Failed capture shutdown is unconfirmed; local files preserved")),
@@ -1468,8 +1473,31 @@ pub fn available_recording_storage() -> std::io::Result<cap_utils::disk_space::R
 }
 
 pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> anyhow::Result<()> {
-    let storage = cap_utils::disk_space::recording_storage(project_path)
-        .context("checking storage before saving the recording")?;
+    finalization_storage_verdict(
+        project_path,
+        cap_utils::disk_space::recording_storage(project_path),
+    )
+}
+
+fn finalization_storage_verdict(
+    project_path: &std::path::Path,
+    storage: std::io::Result<cap_utils::disk_space::RecordingStorage>,
+) -> anyhow::Result<()> {
+    let storage = match storage {
+        Ok(storage) => storage,
+        // A check that could not run says nothing about the drive. Refusing
+        // here left a captured recording unsaved and blocked its recovery the
+        // same way, while the save stages its output beside the capture and
+        // reports a full drive itself, so only a measured shortage refuses.
+        Err(error) => {
+            tracing::warn!(
+                path = %project_path.display(),
+                %error,
+                "Could not check storage before saving the recording; saving without the check"
+            );
+            return Ok(());
+        }
+    };
     if !storage.can_finalize() {
         return Err(anyhow!(
             "Low storage. Your recording files are preserved at {}. Free up space, then recover the recording in Cap.",
@@ -2380,6 +2408,7 @@ async fn start_attempt_with_upload(
     )?;
 
     tracing::info!(dir = %project_dir.display(), "starting recording");
+    let in_progress = Arc::new(crate::library::RecordingInProgress::begin(&project_dir));
 
     if config.camera.is_some()
         && let Some(ready) = &config.input_readiness.camera
@@ -2682,6 +2711,7 @@ async fn start_attempt_with_upload(
         _mic_feed: mic_feed,
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
+        _in_progress: in_progress,
     })
 }
 
@@ -2918,13 +2948,14 @@ fn format_recording_project_name(
     let formatted = template
         .replace("{recording_mode}", recording_mode)
         .replace("{mode}", mode)
-        .replace("{target_kind}", target_kind)
-        .replace("{target_name}", &target_name);
+        .replace("{target_kind}", target_kind);
     let formatted = replace_datetime_template_token(&formatted, "date", "%Y-%m-%d", datetime);
     let formatted = replace_datetime_template_token(&formatted, "time", "%I:%M %p", datetime);
     let formatted =
         replace_datetime_template_token(&formatted, "moment", "%Y-%m-%d %H:%M", datetime);
-    formatted
+    // Last, so a window title keeps any placeholder it contains, as it does
+    // `{random}`.
+    formatted.replace("{target_name}", &target_name)
 }
 
 fn replace_random_template_tokens(input: &str) -> String {
@@ -2980,8 +3011,16 @@ fn replace_datetime_template_token(
         if token == name {
             output.push_str(&datetime.format(default_format).to_string());
         } else if let Some(custom_format) = token.strip_prefix(&format!("{name}:")) {
+            use std::fmt::Write as _;
             let format = cap_utils::moment_format_to_chrono(custom_format);
-            output.push_str(&datetime.format(&format).to_string());
+            // A format chrono cannot render (a stray `%`) stays as typed, like
+            // an unknown placeholder: `to_string` would panic the start.
+            let mut rendered = String::new();
+            if write!(rendered, "{}", datetime.format(&format)).is_ok() {
+                output.push_str(&rendered);
+            } else {
+                output.push_str(&candidate[..=end]);
+            }
         } else {
             output.push_str(&candidate[..=end]);
         }
@@ -3221,6 +3260,44 @@ mod tests {
         );
 
         assert!(name.contains("Implement {random} placeholder"));
+    }
+
+    #[test]
+    fn recording_project_names_keep_a_custom_format_chrono_cannot_render() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{date:YYYY 100%}-{moment:YYYY %Q}-{time:HH.mm}"),
+                "Example Window",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "{date:YYYY 100%}-{moment:YYYY %Q}-09.15"
+        );
+    }
+
+    #[test]
+    fn recording_project_names_keep_date_placeholders_in_window_title() {
+        let timestamp = chrono::Local
+            .with_ymd_and_hms(2026, 8, 25, 9, 15, 0)
+            .single()
+            .unwrap();
+
+        assert_eq!(
+            format_recording_project_name(
+                Some("{target_name} {date}"),
+                "Notes {date} {time:100%}",
+                "Window",
+                RecordingMode::Studio,
+                timestamp,
+            ),
+            "Notes {date} {time:100%} 2026-08-25"
+        );
     }
 
     #[test]
@@ -4635,6 +4712,63 @@ mod studio_finalization_tests {
     }
 }
 
+#[cfg(test)]
+mod finalization_storage_tests {
+    use super::*;
+
+    #[test]
+    fn finalization_storage_check_that_cannot_run_does_not_block_the_save() {
+        let directory = tempfile::tempdir().unwrap();
+        ensure_finalization_storage(&directory.path().join("missing.cap")).unwrap();
+        finalization_storage_verdict(
+            directory.path(),
+            Err(std::io::Error::other(
+                "The system cannot find the path specified. (0x80070003)",
+            )),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn finalization_storage_check_still_refuses_a_measured_shortage() {
+        use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RecordingStorage};
+        let directory = tempfile::tempdir().unwrap();
+        let recording_bytes = 1024 * 1024 * 1024;
+        let needed = recording_bytes * 3 + RECORDING_DISK_RESERVE_BYTES / 2;
+        let error = finalization_storage_verdict(
+            directory.path(),
+            Ok(RecordingStorage {
+                available_bytes: needed,
+                recording_bytes,
+            }),
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with("Low storage."), "{error}");
+        finalization_storage_verdict(
+            directory.path(),
+            Ok(RecordingStorage {
+                available_bytes: needed + 1,
+                recording_bytes,
+            }),
+        )
+        .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finalization_storage_check_accepts_a_project_past_max_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut project = directory.path().to_path_buf();
+        while project.as_os_str().len() < 286 {
+            project.push("p".repeat(40));
+        }
+        project.push("content");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("segment_000.m4s"), [0; 128]).unwrap();
+        ensure_finalization_storage(project.parent().unwrap()).unwrap();
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod instant_lifecycle_tests {
     use super::*;
@@ -4942,6 +5076,28 @@ mod failed_capture_tests {
         assert!(!stopped);
         assert!(!written.load(Ordering::SeqCst));
         assert!(format!("{:#}", result.unwrap_err()).contains("cancel failed"));
+    }
+
+    #[tokio::test]
+    async fn stop_after_a_joined_pipeline_failure_confirms_capture_stopped() {
+        let written = AtomicBool::new(false);
+        let (stopped, result) = finish_failed_capture(
+            async {
+                Err(anyhow::Error::new(
+                    cap_recording::instant_recording::CaptureStoppedAfterFailure::from(anyhow!(
+                        "Task mux-video failed: encoder rejected a frame"
+                    )),
+                ))
+            },
+            || {
+                written.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(stopped);
+        assert!(written.load(Ordering::SeqCst));
+        assert!(format!("{:#}", result.unwrap_err()).contains("local files preserved"));
     }
 
     #[tokio::test]

@@ -20,7 +20,7 @@ use crate::{
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig},
     output_pipeline::{
         AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline,
-        PipelineDoneError,
+        OutputPipelineStopOutcome, PipelineDoneError,
     },
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
@@ -1437,6 +1437,25 @@ fn has_track_failure(failures: &SharedTrackFailures, track: RecordingTrackKind) 
     }
 }
 
+/// An optional track whose own pipeline failed has already stopped capturing.
+/// It is dropped with its failure recorded, like a track that fails to stop,
+/// and the rest of the recording is kept.
+fn optional_track_output(
+    outcome: OutputPipelineStopOutcome,
+) -> anyhow::Result<FinishedOutputPipeline> {
+    match outcome.media_error {
+        Some(error) if outcome.pipeline_failed => Err(error),
+        _ => Ok(outcome.finished),
+    }
+}
+
+fn optional_track_media_error(outcome: &OutputPipelineStopOutcome) -> Option<&anyhow::Error> {
+    outcome
+        .media_error
+        .as_ref()
+        .filter(|_| !outcome.pipeline_failed)
+}
+
 fn finalize_optional_track(
     track: RecordingTrackKind,
     result: Result<Option<FinishedOutputPipeline>, anyhow::Error>,
@@ -1679,21 +1698,21 @@ impl Pipeline {
                 microphone
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
-                    .and_then(|outcome| outcome.media_error.as_ref()),
+                    .and_then(optional_track_media_error),
             ),
             (
                 "camera",
                 camera
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
-                    .and_then(|outcome| outcome.media_error.as_ref()),
+                    .and_then(optional_track_media_error),
             ),
             (
                 "system audio",
                 system_audio
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
-                    .and_then(|outcome| outcome.media_error.as_ref()),
+                    .and_then(optional_track_media_error),
             ),
         ]
         .into_iter()
@@ -1712,13 +1731,13 @@ impl Pipeline {
 
         let microphone = microphone
             .transpose()
-            .map(|outcome| outcome.map(|outcome| outcome.finished));
+            .and_then(|outcome| outcome.map(optional_track_output).transpose());
         let camera = camera
             .transpose()
-            .map(|outcome| outcome.map(|outcome| outcome.finished));
+            .and_then(|outcome| outcome.map(optional_track_output).transpose());
         let system_audio = system_audio
             .transpose()
-            .map(|outcome| outcome.map(|outcome| outcome.finished));
+            .and_then(|outcome| outcome.map(optional_track_output).transpose());
 
         Ok(PipelineStopOutcome {
             pipeline: FinishedPipeline {
@@ -3830,7 +3849,7 @@ fn persist_final_recording_meta(
     };
 
     recording_meta
-        .save_for_project()
+        .save_for_project_with_retry()
         .context("persist final recording metadata")?;
     Ok(recording_meta)
 }
@@ -4361,6 +4380,177 @@ mod tests {
         assert!(replay.accepted_intent);
         assert!(replay.stop_acknowledged);
         assert_eq!(replay.result.err().expect("cached media failure"), error);
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    struct RejectingVideoMuxer;
+
+    #[cfg(any(target_os = "macos", windows))]
+    impl Muxer for RejectingVideoMuxer {
+        type Config = ();
+
+        async fn setup(
+            _: Self::Config,
+            _: PathBuf,
+            _: Option<VideoInfo>,
+            _: Option<cap_media_info::AudioInfo>,
+            _: Arc<std::sync::atomic::AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self)
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    impl AudioMuxer for RejectingVideoMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _: crate::output_pipeline::AudioFrame,
+            _: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    impl VideoMuxer for RejectingVideoMuxer {
+        type VideoFrame = TestVideoFrame;
+
+        fn send_video_frame(&mut self, _: TestVideoFrame, _: Duration) -> anyhow::Result<()> {
+            Err(anyhow!("encoder rejected the frame"))
+        }
+    }
+
+    /// The screen pipeline fails mid-recording (an encoder or capture task
+    /// error) and the app then stops the recording. Every capture task has
+    /// already exited, so Stop must confirm capture stopped, keep the segment
+    /// and mark the project Failed, instead of leaving Stop and Quit waiting.
+    #[cfg(any(target_os = "macos", windows))]
+    #[tokio::test]
+    async fn stop_after_a_screen_pipeline_failure_confirms_capture_stopped() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        std::fs::create_dir(path.join("content")).unwrap();
+        write_in_progress_meta(path, None).unwrap();
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        #[cfg(target_os = "macos")]
+        let scope = crate::output_pipeline::PipelineBuildScope::new_macos_segment();
+        #[cfg(windows)]
+        let scope = crate::output_pipeline::PipelineBuildScope::new();
+        let screen = crate::output_pipeline::finish_pipeline_startup(
+            &scope,
+            OutputPipeline::builder(path.join("content/display.mp4"))
+                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                    test_video_info(),
+                    screen_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<RejectingVideoMuxer>(()),
+        )
+        .await
+        .unwrap();
+        let screen_done = screen.done_fut();
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(timestamps.instant()),
+            })
+            .await
+            .unwrap();
+        let failure = tokio::time::timeout(Duration::from_secs(5), screen_done)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(failure.to_string().contains("Task mux-video failed"));
+
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let target = screen_capture::ScreenCaptureTarget::CameraOnly;
+        let segment_factory = SegmentPipelineFactory::new(
+            path.join("content/segments"),
+            path.join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: target.clone(),
+                window_only: false,
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: None,
+                start_gate: None,
+                #[cfg(target_os = "macos")]
+                shareable_content: None,
+                #[cfg(target_os = "macos")]
+                excluded_windows: Vec::new(),
+            },
+            false,
+            false,
+            false,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            completion_tx.clone(),
+        );
+        let actor_ref = Actor::spawn(Actor {
+            diagnostic: None,
+            recording_dir: path.to_path_buf(),
+            state: Some(ActorState::Recording {
+                pipeline: Pipeline {
+                    start_time: timestamps,
+                    start_gate: None,
+                    screen,
+                    microphone: None,
+                    camera: None,
+                    system_audio: None,
+                    cursor: None,
+                    track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+                    watcher_task: None,
+                    #[cfg(windows)]
+                    stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                },
+                index: 0,
+                segment_start_time: 0.0,
+                segment_start_instant: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
+            }),
+            all_tracks_stopped: true,
+            terminal_stop_failure: None,
+            #[cfg(windows)]
+            cancel_error: None,
+            segment_factory,
+            segments: Vec::new(),
+            completion_tx,
+            display_notch: None,
+            pretty_name: None,
+            markers: crate::markers::RecordingMarkers::new(None),
+        });
+        let handle = ActorHandle {
+            recording_dir: path.to_path_buf(),
+            terminal: Arc::new(WindowsStudioTerminal::default()),
+            actor_ref,
+            capture_target: target,
+            done_fut: completion_rx_to_done_fut(completion_rx),
+            markers: crate::markers::RecordingMarkers::new(None),
+        };
+
+        let outcome = tokio::time::timeout(Duration::from_secs(5), handle.stop_with_outcome())
+            .await
+            .unwrap();
+        let error = outcome.result.err().expect("the failure must stay visible");
+        assert!(
+            outcome.capture_stopped,
+            "every capture task had exited, but Stop stayed unconfirmed: {error}"
+        );
+        assert!(error.contains("encoder rejected the frame"));
+        assert!(matches!(
+            RecordingMeta::load_for_project(path)
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        drop(screen_tx);
     }
 
     #[cfg(target_os = "macos")]
@@ -5553,7 +5743,9 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            assert_eq!(stopped.all_tracks_stopped, !fail_system_audio);
+            // A system audio encoder that fails to finish has still stopped
+            // capturing: the track is dropped, and Stop stays confirmed.
+            assert!(stopped.all_tracks_stopped);
             assert!(stopped.media_error.is_none());
             let finished = stopped.pipeline;
             assert!(finished.microphone.is_some());
@@ -6546,12 +6738,14 @@ mod tests {
                 done_fut,
                 markers: crate::markers::RecordingMarkers::new(None),
             };
+            // The failed microphone's pipeline had already exited, so the
+            // stop is acknowledged and its failure stays the terminal result.
             let report = handle.stop_with_intent(first).await;
             assert!(report.accepted_intent);
-            assert!(!report.stop_acknowledged);
+            assert!(report.stop_acknowledged);
             assert!(report.result.is_err());
             assert!(handle.terminal_started());
-            assert!(!handle.stop_acknowledged());
+            assert!(handle.stop_acknowledged());
             assert!(handle.same_attempt(&handle.clone()));
             let repeated = handle.stop_with_intent(first).await;
             assert_eq!(repeated.result.err(), report.result.err());
@@ -6561,7 +6755,7 @@ mod tests {
             };
             let rejected = handle.stop_with_intent(other).await;
             assert!(!rejected.accepted_intent);
-            assert!(!rejected.stop_acknowledged);
+            assert!(rejected.result.is_err());
             assert!(temp.path().join("content/partial.m4s").exists());
             drop(screen_tx);
             actor_ref.kill();
@@ -6640,51 +6834,44 @@ mod tests {
             "runtime error should retain the mux send-failure context"
         );
 
-        let stopped = pipeline.stop().await;
-        #[cfg(windows)]
-        {
-            assert!(stopped.is_err());
-            assert!(completion_rx.borrow().as_ref().is_some_and(Result::is_err));
-            drop(screen_tx);
-        }
-        #[cfg(not(windows))]
-        let finished = stopped
-            .expect("display success should still allow the recording to stop cleanly")
-            .pipeline;
+        // The failed microphone has stopped capturing, so on Windows too the
+        // stop is confirmed and the track is dropped instead of retaining Stop.
+        let stopped = pipeline
+            .stop()
+            .await
+            .expect("display success should still allow the recording to stop cleanly");
+        assert!(stopped.all_tracks_stopped);
+        let finished = stopped.pipeline;
 
-        #[cfg(not(windows))]
         drop(screen_tx);
-        #[cfg(not(windows))]
-        {
-            assert_eq!(
-                finished.screen.video_frame_count, 1,
-                "display output should be preserved"
-            );
-            assert!(
-                finished.microphone.is_none(),
-                "optional microphone output should be dropped after runtime failure"
-            );
-            assert_eq!(
-                finished.track_failures.len(),
-                1,
-                "runtime failure should be recorded exactly once"
-            );
-            #[cfg(target_os = "linux")]
-            assert!(completion_rx.borrow().as_ref().is_some_and(Result::is_err));
-            #[cfg(not(target_os = "linux"))]
-            assert!(completion_rx.borrow().is_none());
-            assert_eq!(
-                finished.track_failures[0].track,
-                RecordingTrackKind::Microphone
-            );
-            assert_eq!(finished.track_failures[0].stage, TrackFailureStage::Runtime);
-            assert!(
-                finished.track_failures[0]
-                    .error
-                    .contains("Audio muxer stopped accepting frames at frame 1"),
-                "recorded runtime failure should preserve the mux send-failure context"
-            );
-        }
+        assert_eq!(
+            finished.screen.video_frame_count, 1,
+            "display output should be preserved"
+        );
+        assert!(
+            finished.microphone.is_none(),
+            "optional microphone output should be dropped after runtime failure"
+        );
+        assert_eq!(
+            finished.track_failures.len(),
+            1,
+            "runtime failure should be recorded exactly once"
+        );
+        #[cfg(any(target_os = "linux", windows))]
+        assert!(completion_rx.borrow().as_ref().is_some_and(Result::is_err));
+        #[cfg(not(any(target_os = "linux", windows)))]
+        assert!(completion_rx.borrow().is_none());
+        assert_eq!(
+            finished.track_failures[0].track,
+            RecordingTrackKind::Microphone
+        );
+        assert_eq!(finished.track_failures[0].stage, TrackFailureStage::Runtime);
+        assert!(
+            finished.track_failures[0]
+                .error
+                .contains("Audio muxer stopped accepting frames at frame 1"),
+            "recorded runtime failure should preserve the mux send-failure context"
+        );
     }
 
     #[test]

@@ -445,6 +445,15 @@ struct ShapedCaptionText {
     colors: CaptionTextColors,
 }
 
+fn caption_text_left(buffer: &Buffer, content_left: f32, render_scale: f32) -> f32 {
+    let min_x = LayoutRunIter::new(buffer)
+        .flat_map(|run| run.glyphs)
+        .map(|glyph| glyph.x)
+        .reduce(f32::min)
+        .unwrap_or(0.0);
+    content_left - min_x * render_scale
+}
+
 fn shape_caption_text(font_system: &mut FontSystem, shaped: &ShapedCaptionText) -> Buffer {
     let font_size = f32::from_bits(shaped.font_size);
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, font_size * 1.2));
@@ -964,13 +973,14 @@ impl CaptionsLayer {
         let draw_text_width = text_width * anim_scale;
         let draw_text_height = text_height * anim_scale;
 
-        let text_left = draw_box_left + padding * anim_scale;
+        let content_left = draw_box_left + padding * anim_scale;
+        let text_left = caption_text_left(&self.text.buffer, content_left, render_scale);
         let text_top = draw_box_top + padding * anim_scale;
 
         let bounds = TextBounds {
-            left: (text_left - 2.0).floor() as i32,
+            left: (content_left - 2.0).floor() as i32,
             top: (text_top - 2.0).floor() as i32,
-            right: (text_left + draw_text_width + 2.0).ceil() as i32,
+            right: (content_left + draw_text_width + 2.0).ceil() as i32,
             bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
         };
 
@@ -1329,6 +1339,62 @@ mod tests {
         word_byte_range,
     };
     use cap_project::{CaptionTrackSegment, CaptionWord, XY};
+
+    #[test]
+    fn caption_glyphs_fit_the_content_box_in_both_directions() {
+        use super::{CaptionTextColors, ShapedCaptionText, caption_text_left, shape_caption_text};
+        use glyphon::{Color, Family, Weight};
+
+        let mut fonts = super::super::new_font_system();
+        for text in [
+            "سلام دنیا این یک متن آزمایشی است",
+            "مرحبا بالعالم",
+            "سلام Cap 123 دنیا",
+            "Hello world",
+        ] {
+            for wrap_width in [80.0_f32, 1800.0] {
+                for colors in [
+                    CaptionTextColors::Uniform(Color::rgb(255, 255, 255)),
+                    CaptionTextColors::Spans(vec![(0..text.len(), Color::rgb(255, 200, 0))]),
+                ] {
+                    let buffer = shape_caption_text(
+                        &mut fonts,
+                        &ShapedCaptionText {
+                            text: text.to_string(),
+                            font_size: 48.0_f32.to_bits(),
+                            wrap_width: wrap_width.to_bits(),
+                            family: Family::SansSerif,
+                            weight: Weight::BOLD,
+                            colors,
+                        },
+                    );
+                    let runs = buffer.layout_runs().collect::<Vec<_>>();
+                    assert_eq!(runs.len(), 1);
+                    assert!(!runs[0].glyphs.is_empty());
+                    assert!(runs[0].glyphs.iter().all(|glyph| glyph.glyph_id != 0));
+                    let width = runs[0].line_w;
+                    for scale in [0.35, 0.72, 1.0, 1.08] {
+                        let content_left = 200.0;
+                        let left = caption_text_left(&buffer, content_left, scale);
+                        if text == "Hello world" {
+                            assert_eq!(left, content_left);
+                        }
+                        let mut min_x = f32::INFINITY;
+                        for glyph in runs[0].glyphs {
+                            let x = left + glyph.x * scale;
+                            min_x = min_x.min(x);
+                            assert!(x >= content_left - 0.001, "{text}: {x}");
+                            assert!(
+                                x + glyph.w * scale <= content_left + width * scale + 0.001,
+                                "{text}: {x}"
+                            );
+                        }
+                        assert!((min_x - content_left).abs() < 0.001, "{text}: {min_x}");
+                    }
+                }
+            }
+        }
+    }
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
         CaptionTrackSegment {
@@ -2160,6 +2226,47 @@ mod gpu_tests {
         let pixels = readback.slice(..).get_mapped_range().to_vec();
         readback.unmap();
         pixels
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn rtl_caption_ink_stays_inside_its_background() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let decoded = frames(size);
+        for sentence in ["سلام دنیا", "مرحبا بالعالم"] {
+            let segments = spoken_segments(&[sentence]);
+            for highlight_style in ["none", "pill", "color"] {
+                let settings = CaptionSettings {
+                    enabled: true,
+                    size: 60,
+                    active_word_highlight: highlight_style != "none",
+                    highlight_style: highlight_style.to_string(),
+                    background_opacity: 100,
+                    ..Default::default()
+                };
+                let mut uniforms = uniforms(&constants, settings, &segments, size);
+                uniforms.frame_number = 30;
+                let mut layer = CaptionsLayer::new(&constants.device, &constants.queue);
+                layer.prepare(&uniforms, &decoded, size, &constants);
+                assert!(layer.has_caption);
+                let [left, top, right, bottom] = layer.frame_box.unwrap().bounds;
+                let pixels = render_pixels(&constants, &layer, size);
+                let mut ink = 0;
+                for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+                    if pixel[0] > 100 && pixel[1] > 100 && pixel[2] > 100 {
+                        ink += 1;
+                        let x = (index % size.x as usize) as f32;
+                        let y = (index / size.x as usize) as f32;
+                        assert!(x >= left && x < right && y >= top && y < bottom);
+                    }
+                }
+                assert!(
+                    ink > 20,
+                    "{sentence} ({highlight_style}) has no visible glyphs"
+                );
+            }
+        }
     }
 
     #[test]

@@ -105,6 +105,7 @@ jobs:
         run: >-
           bun run --cwd apps/web test
           __tests__/unit/add-videos-dialog-retry.test.ts
+          __tests__/unit/agent-download-access.test.ts
           __tests__/unit/analytics-track-route.test.ts
           __tests__/unit/caps-analytics-round-trips.test.ts
           __tests__/unit/caps-keyboard.test.ts
@@ -116,6 +117,7 @@ jobs:
           __tests__/unit/dashboard-analytics-cap-access.test.ts
           __tests__/unit/dashboard-analytics-membership.test.ts
           __tests__/unit/dashboard-analytics-space-access.test.ts
+          __tests__/unit/dashboard-search-item-values.test.ts
           __tests__/unit/desktop-subscribe-route.test.ts
           __tests__/unit/detect-platform.test.ts
           __tests__/unit/embed-page-round-trips.test.ts
@@ -145,6 +147,7 @@ jobs:
           __tests__/unit/organization-preferences-switch.test.ts
           __tests__/unit/organization-preferences-target.test.ts
           __tests__/unit/organization-settings-ownership.test.ts
+          __tests__/unit/organization-switcher-item-values.test.ts
           __tests__/unit/playback-store.test.ts
           __tests__/unit/pro-checkout-session.test.ts
           __tests__/unit/pro-checkout-webhook.test.ts
@@ -153,9 +156,11 @@ jobs:
           __tests__/unit/reply-notification.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/share-comments-rendering.test.ts
+          __tests__/unit/share-page-loading.test.ts
           __tests__/unit/share-page-round-trips.test.ts
           __tests__/unit/share-transcript-rendering.test.ts
           __tests__/unit/share-video-quota-loading.test.ts
+          __tests__/unit/shared-cap-card-delete.test.ts
           __tests__/unit/sdk-recorder-hook.test.ts
           __tests__/unit/signed-baa-card.test.ts
           __tests__/unit/sonner-theme.test.ts
@@ -180,7 +185,12 @@ jobs:
           __tests__/unit/video-analytics-access.test.ts
           __tests__/unit/video-analytics-bulk.test.ts
           __tests__/unit/video-create-atomicity.test.ts
+          __tests__/unit/video-download-info-published.test.ts
+          __tests__/unit/video-download-key.test.ts
           __tests__/unit/video-download-permissions.test.ts
+          __tests__/unit/video-download-rpc.test.ts
+          __tests__/unit/video-settings-action.test.ts
+          __tests__/unit/viewer-download-action.test.ts
           __tests__/unit/voice-note-playback.test.ts
 
       - name: Typecheck
@@ -492,6 +502,7 @@ jobs:
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             WGPU_BACKEND=vulkan cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             WGPU_BACKEND=gl cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
+            cargo +1.95.0 test -p gpui_linux --lib -- unmapped_frame retained_visibility
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             cargo +1.95.0 test -p gpui_wgpu --lib wgpu_atlas -- --nocapture
             # Run under lldb: a SIGSEGV in these tests (1 run in about 36 so

@@ -26,6 +26,7 @@ const defaultSettings: OrganizationSettings = {
 	disableChapters: false,
 	disableReactions: false,
 	disableTranscript: false,
+	disableDownloads: false,
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
@@ -81,6 +82,11 @@ const options: Array<{
 		value: "hideShareableLinkCapLogo",
 		description: "Show Cap branding at the top of shareable links",
 		pro: true,
+	},
+	{
+		label: "Enable downloads",
+		value: "disableDownloads",
+		description: "Allow viewers to download caps",
 	},
 ];
 

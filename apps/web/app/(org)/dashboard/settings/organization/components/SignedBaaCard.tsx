@@ -12,8 +12,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import { faFileSignature } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faFileSignature } from "@fortawesome/free-solid-svg-icons/faFileSignature";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -35,6 +34,7 @@ import {
 	signPaidBaa,
 } from "@/actions/organization/signed-baa";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignaturePad } from "./SignaturePad";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

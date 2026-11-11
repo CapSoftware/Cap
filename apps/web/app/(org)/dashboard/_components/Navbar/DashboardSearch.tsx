@@ -405,7 +405,7 @@ export function DashboardSearch({
 												icon={video.isScreenshot ? Image : FileVideo}
 												title={video.name}
 												subtitle={formatVideoSubtitle(video)}
-												value={`${video.name} ${video.ownerName ?? ""}`}
+												value={`video-${video.id}`}
 												onSelect={() => navigateTo(`/s/${video.id}`)}
 											/>
 										))
@@ -430,7 +430,7 @@ export function DashboardSearch({
 											icon={item.icon}
 											title={item.title}
 											subtitle={item.subtitle}
-											value={item.value}
+											value={item.id}
 											onSelect={() => navigateTo(item.href)}
 										/>
 									))}
@@ -446,7 +446,7 @@ export function DashboardSearch({
 											title={item.title}
 											subtitle={item.subtitle}
 											badge={item.badge}
-											value={item.value}
+											value={item.id}
 											onSelect={() => navigateTo(item.href)}
 										/>
 									))}
@@ -461,7 +461,7 @@ export function DashboardSearch({
 											icon={item.icon}
 											title={item.title}
 											subtitle={item.subtitle}
-											value={item.value}
+											value={item.id}
 											onSelect={() => navigateTo(item.href)}
 										/>
 									))}

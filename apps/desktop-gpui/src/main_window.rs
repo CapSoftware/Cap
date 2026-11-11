@@ -2302,6 +2302,19 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
+            // Where the start put the main window, and where the end of the
+            // recording leaves it (`mainWindowRecordingStartBehaviour`).
+            let log_main_window = |when: &str, cx: &mut gpui::AsyncWindowContext| {
+                if let Ok((visible, minimized)) = cx.update(|window, _| {
+                    (
+                        crate::platform::window_is_visible(window),
+                        crate::platform::window_is_minimized(window),
+                    )
+                }) {
+                    tracing::info!(visible, minimized, "auto-record main window {when}");
+                }
+            };
+            log_main_window("while recording", cx);
             let app: &gpui::AsyncApp = cx;
             if delete {
                 tracing::info!("auto-record delete requested");
@@ -2310,6 +2323,19 @@ impl MainWindow {
                 tracing::info!("auto-record stop requested");
                 app.update(|cx| session.update(cx, |session, cx| session.stop(cx)));
             }
+            for _ in 0..300 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let app: &gpui::AsyncApp = cx;
+                if app.update(|cx| session.read(cx).phase == Phase::Idle) {
+                    break;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            log_main_window("after the recording", cx);
         })
         .detach();
     }
@@ -5027,6 +5053,11 @@ impl MainWindow {
             tr::settings::screenshots::open_folder(),
             move |_, _, cx| library::open_recording_folder(&folder, mode, cx),
         ));
+        // The recording being captured or finalized owns its folder; the
+        // delete itself refuses it too.
+        if library::is_recording_in_progress(&path) {
+            return row;
+        }
         row.child(self.library_action(
             "lib-rec-delete",
             "icons/trash.svg",
@@ -5215,6 +5246,14 @@ impl MainWindow {
             ) {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
             }) else {
@@ -5223,6 +5262,7 @@ impl MainWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             cx.update(|_, cx| cx.defer(app_windows::refresh_library_after_delete))

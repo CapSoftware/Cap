@@ -398,6 +398,61 @@ async fn real_app_instant_recording_with_camera_uploads_and_verifies() {
     assert!(!log.contains("panicked at"), "the app panicked");
 }
 
+/// Main window when recording starts: Close hides the main window and
+/// Minimise sends it to the Dock, and the reshow at the end of the recording
+/// brings either back on screen. Read from the window state the auto-record
+/// harness logs.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_recording_start_behaviour_minimises_or_hides_main_window() {
+    for (behaviour, minimized) in [("minimise", true), ("close", false)] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        sandbox.set_general("mainWindowRecordingStartBehaviour", json!(behaviour));
+        // Show Cap rather than the editor, so the end of the recording
+        // reshows the main window, and no startup screen to take its place.
+        sandbox.set_general("postStudioRecordingBehaviour", json!("showOverlay"));
+        sandbox.set_general("hasCompletedStartup", json!(true));
+        let app = sandbox.launch(behaviour, &[("CAP_GPUI_AUTO_RECORD", "studio:3")]);
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the main window after the recording",
+            Duration::from_secs(120),
+            || {
+                sandbox
+                    .log(behaviour)
+                    .contains("auto-record main window after the recording")
+            },
+        )
+        .await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(behaviour));
+        let state = |when: &str| {
+            log.lines()
+                .find(|line| line.contains(&format!("auto-record main window {when}")))
+                .map(|line| {
+                    (
+                        line.contains("visible=true"),
+                        line.contains("minimized=true"),
+                    )
+                })
+                .unwrap_or_else(|| panic!("{behaviour}: no state {when}: {log}"))
+        };
+        assert_eq!(
+            state("while recording"),
+            (false, minimized),
+            "{behaviour}: {log}"
+        );
+        assert_eq!(
+            state("after the recording"),
+            (true, false),
+            "{behaviour}: {log}"
+        );
+    }
+}
+
 /// The After an Instant recording outcome decides whether the main window,
 /// hidden at start, comes back once the recording finishes: only Show Cap
 /// takes the reshow, so opening the link never leaves it on screen behind the
@@ -430,6 +485,23 @@ async fn real_app_instant_outcome_decides_whether_main_window_returns() {
                     .first()
                     .and_then(|project| state(project))
                     .is_some_and(|state| state["phase"] == "Verified")
+            },
+        )
+        .await;
+        // Opening the link can hold the main thread while the browser starts,
+        // so wait for the decision itself before the settle time.
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the main window decision",
+            Duration::from_secs(60),
+            || {
+                let log = without_ansi(&sandbox.log(name));
+                log.split_once("recording finished")
+                    .is_some_and(|(_, after)| {
+                        after.contains("main window kept hidden after the Instant recording")
+                            || after.contains("showing the main window")
+                    })
             },
         )
         .await;
@@ -832,6 +904,75 @@ async fn real_app_display_sleep_ends_the_recording_with_its_media() {
                 "studio: no saved segments in {}: {:?}",
                 project.display(),
                 meta(project)
+            );
+        }
+    }
+}
+
+/// A recording whose pipeline fails mid-capture (in the field an encoder or
+/// capture task error; here the debug build's injected task failure) is
+/// stopped by the app. Every capture task has already exited, so Stop must
+/// confirm, keep the media and show the failure, instead of retaining a Stop
+/// control that can never confirm and cancelling Quit.
+#[cfg(target_os = "macos")]
+#[ignore]
+#[tokio::test(flavor = "multi_thread")]
+async fn real_app_pipeline_failure_stops_and_keeps_its_media() {
+    for mode in ["instant", "studio"] {
+        let mock = MockCap::start(Vec::new()).await;
+        let sandbox = Sandbox::new(&mock.url, 0);
+        let name = format!("pipeline-failure-{mode}");
+        let auto = format!("{mode}:90");
+        let app = sandbox.launch(
+            &name,
+            &[
+                ("CAP_GPUI_AUTO_RECORD", auto.as_str()),
+                ("CAP_RECORDING_FAIL_PIPELINE_AFTER_MS", "6000"),
+            ],
+        );
+        let ended = |log: &str| {
+            log.contains("Capture cleanup is unconfirmed")
+                || log.contains("recording failed to stop cleanly")
+                || log.contains("recording finished")
+        };
+        wait_for_app(
+            &sandbox,
+            &app,
+            "the failed recording to stop",
+            Duration::from_secs(150),
+            || ended(&sandbox.log(&name)),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        kill(app);
+        let log = without_ansi(&sandbox.log(&name));
+        assert!(
+            log.contains("Injected pipeline failure") && log.contains("recording pipeline failed"),
+            "{mode}: the injected failure never reached the session:\n{log}"
+        );
+        assert!(
+            !log.contains("Capture cleanup is unconfirmed"),
+            "{mode}: Stop was left waiting on a capture that had already ended:\n{log}"
+        );
+        assert!(
+            log.contains("recording failed to stop cleanly"),
+            "{mode}: the failure was not reported:\n{log}"
+        );
+        let projects = sandbox.projects();
+        assert_eq!(projects.len(), 1, "{mode}: {projects:?}");
+        let project = &projects[0];
+        assert!(
+            media_files(project) > 0,
+            "{mode}: no media kept in {}",
+            project.display()
+        );
+        if mode == "studio" {
+            let status = meta(project).map(|meta| meta["status"].clone());
+            assert!(
+                status
+                    .as_ref()
+                    .is_some_and(|status| status["status"] == "Failed"),
+                "studio: project not marked Failed for the editor's salvage: {status:?}"
             );
         }
     }

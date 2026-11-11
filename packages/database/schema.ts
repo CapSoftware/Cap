@@ -237,10 +237,12 @@ export const organizations = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			disableDownloads?: boolean;
 			hideShareableLinkCapLogo?: boolean;
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
+			allowPublicLinkOverride?: boolean;
 		}>(),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
@@ -488,8 +490,10 @@ export const videos = mysqlTable(
 			disableReactions?: boolean;
 			disableTranscript?: boolean;
 			disableComments?: boolean;
+			disableDownloads?: boolean;
 			defaultPlaybackSpeed?: number;
 			callToAction?: VideoCallToAction;
+			linkAccess?: "anyone";
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
@@ -1012,6 +1016,40 @@ export const authApiKeys = mysqlTable(
 			table.userId,
 			table.createdAt,
 		),
+	}),
+);
+
+export const mobilePushTokens = mysqlTable(
+	"mobile_push_tokens",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		token: varchar("token", { length: 200 }).notNull(),
+		// SHA-256 of the auth_api_keys id that registered it, so the token dies with that session.
+		sessionHash: varchar("sessionHash", { length: 64 }).notNull(),
+		environment: varchar("environment", {
+			length: 10,
+			enum: ["sandbox", "production"],
+		}).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		tokenUnique: uniqueIndex("token_idx").on(table.token),
+		userIdIndex: index("user_id_idx").on(table.userId),
+		sessionHashIndex: index("session_hash_idx").on(table.sessionHash),
+	}),
+);
+
+// One row per push that must send at most once, such as a Cap's view push for a 10-minute window.
+export const mobilePushClaims = mysqlTable(
+	"mobile_push_claims",
+	{
+		id: varchar("id", { length: 128 }).notNull().primaryKey(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		createdAtIndex: index("created_at_idx").on(table.createdAt),
 	}),
 );
 
