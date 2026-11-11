@@ -15808,7 +15808,12 @@ mod tests {
             })
         }
 
-        fn type_speed(editor: &Entity<EditorWindow>, cx: &mut gpui::VisualTestContext, keys: &str) {
+        fn type_speed(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+            text: &str,
+            confirm: bool,
+        ) {
             editor.update_in(cx, |editor, window, cx| {
                 let input = editor
                     .clip_speed_input
@@ -15817,12 +15822,16 @@ mod tests {
                 input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
             });
             cx.run_until_parked();
-            cx.simulate_keystrokes(keys);
+            cx.simulate_input(text);
+            if confirm {
+                cx.simulate_keystrokes("enter");
+            }
             cx.run_until_parked();
         }
 
         #[gpui::test]
         fn a_typed_clip_speed_lands_and_applies_to_every_clip(cx: &mut gpui::TestAppContext) {
+            cx.update(ui::bind_text_input_keys);
             let (editor, cx) = split_clip_view(cx, true);
             editor.update_in(cx, |editor, window, cx| {
                 editor.open_clip_menu_at(0, point(px(200.), px(500.)), window, cx);
@@ -15830,11 +15839,11 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(speed_field_text(&editor, cx), "");
 
-            type_speed(&editor, cx, "1 , 2 x enter");
+            type_speed(&editor, cx, "1,2x", true);
             assert_eq!(clip_speeds(&editor, cx), [1.2, 1.0]);
             assert_eq!(speed_field_text(&editor, cx), "1.2");
 
-            type_speed(&editor, cx, "f a s t enter");
+            type_speed(&editor, cx, "fast", true);
             assert_eq!(clip_speeds(&editor, cx), [1.2, 1.0]);
             assert_eq!(speed_field_text(&editor, cx), "1.2");
 
@@ -15844,7 +15853,7 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(clip_speeds(&editor, cx), [1.2, 1.2]);
 
-            type_speed(&editor, cx, "1 . 7 5");
+            type_speed(&editor, cx, "1.75", false);
             editor.update_in(cx, |editor, window, cx| {
                 editor.apply_clip_speed_to_all(0, window, cx);
             });
@@ -15856,7 +15865,7 @@ mod tests {
             );
             assert_eq!(speed_field_text(&editor, cx), "1.75");
 
-            type_speed(&editor, cx, "3");
+            type_speed(&editor, cx, "3", false);
             editor.update(cx, |editor, cx| {
                 editor.clip_speed = None;
                 cx.notify();
@@ -15890,7 +15899,7 @@ mod tests {
                 "",
                 "a preset leaves the field empty"
             );
-            type_speed(&editor, cx, "4 enter");
+            type_speed(&editor, cx, "4", true);
             assert_eq!(clip_speeds(&editor, cx), [1.75, 4.0]);
             assert_eq!(speed_field_text(&editor, cx), "");
         }
