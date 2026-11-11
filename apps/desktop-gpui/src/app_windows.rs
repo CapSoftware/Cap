@@ -6104,6 +6104,7 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 }
             }
         }
+        view.normalize_loaded_export_options();
         tracing::info!(path = %path.display(), "auto editor export requested");
         view.start_export(window, cx);
     });
@@ -6584,14 +6585,40 @@ async fn drive_auto_playback(
 /// as the frontmost surface (AppKit hands it key status as the editor goes
 /// away) rather than revealing main over it. The idle gate is this port's
 /// own: during a recording the main window is deliberately hidden and the
-/// session observer restores it when the recording ends.
+/// session observer restores it when the recording ends. `keep_hidden` is
+/// the `keepMainHiddenAfterEditor` setting.
 fn reveal_main_after_editor_close(
     editors_left: usize,
     settings_open: bool,
     idle: bool,
     main_closed_by_user: bool,
+    keep_hidden: bool,
 ) -> bool {
-    editors_left == 0 && !settings_open && idle && !main_closed_by_user
+    editors_left == 0 && !settings_open && idle && !main_closed_by_user && !keep_hidden
+}
+
+/// Whether `keepMainHiddenAfterEditor` is the only thing keeping the main
+/// window away. Nothing of Cap is on screen then, so the idle camera and
+/// microphone are released, as they are when the video editor opens; the
+/// screenshot editor opens without doing that. A recorder reopened with the
+/// editor still up (`main_hidden` false) keeps its inputs.
+fn main_kept_hidden_after_editor_close(
+    editors_left: usize,
+    settings_open: bool,
+    idle: bool,
+    main_closed_by_user: bool,
+    keep_hidden: bool,
+    main_hidden: bool,
+) -> bool {
+    keep_hidden
+        && main_hidden
+        && reveal_main_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            false,
+        )
 }
 
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
@@ -6694,11 +6721,14 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
         main_closed_by_user,
+        keep_hidden,
         "editor window closed"
     );
     let session = session.read(cx);
@@ -6708,9 +6738,20 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
         settings_open,
         capture_safe,
         main_closed_by_user,
+        keep_hidden,
     ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            capture_safe,
+            main_closed_by_user,
+            keep_hidden,
+            main_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         // A dock-activating window closed; the policy has to be recomputed
         // even when the main window is not the thing coming back.
         crate::menus::schedule_dock_sync(cx);
@@ -7680,17 +7721,36 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
         main_closed_by_user,
+        keep_hidden,
         "screenshot editor window closed"
     );
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle, main_closed_by_user) {
+    if reveal_main_after_editor_close(
+        editors_left,
+        settings_open,
+        idle,
+        main_closed_by_user,
+        keep_hidden,
+    ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            keep_hidden,
+            main_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         crate::menus::schedule_dock_sync(cx);
     }
 }
@@ -8798,21 +8858,66 @@ mod tests {
     #[test]
     fn main_window_never_returns_over_an_open_settings_window() {
         // The reported flow: last editor closes while Settings is open.
-        assert!(!reveal_main_after_editor_close(0, true, true, false));
+        assert!(!reveal_main_after_editor_close(0, true, true, false, false));
         // No Settings: the last editor closing reveals main.
-        assert!(reveal_main_after_editor_close(0, false, true, false));
+        assert!(reveal_main_after_editor_close(0, false, true, false, false));
         // Other editors still open keep main hidden either way.
-        assert!(!reveal_main_after_editor_close(1, false, true, false));
-        assert!(!reveal_main_after_editor_close(1, true, true, false));
+        assert!(!reveal_main_after_editor_close(
+            1, false, true, false, false
+        ));
+        assert!(!reveal_main_after_editor_close(1, true, true, false, false));
         // Mid-recording the session observer owns the reveal, not this path.
-        assert!(!reveal_main_after_editor_close(0, false, false, false));
+        assert!(!reveal_main_after_editor_close(
+            0, false, false, false, false
+        ));
     }
 
     /// A shortcut recording with the main window closed opens the editor
     /// afterwards; closing that editor must not bring the main window back.
     #[test]
     fn main_window_closed_by_the_user_stays_closed_after_the_last_editor() {
-        assert!(!reveal_main_after_editor_close(0, false, true, true));
+        assert!(!reveal_main_after_editor_close(0, false, true, true, false));
+    }
+
+    #[test]
+    fn closing_the_last_editor_keeps_main_hidden_only_when_asked() {
+        assert!(reveal_main_after_editor_close(0, false, true, false, false));
+        assert!(!reveal_main_after_editor_close(0, false, true, false, true));
+        assert!(!reveal_main_after_editor_close(1, false, true, false, true));
+        assert!(!reveal_main_after_editor_close(0, true, true, false, true));
+        assert!(!reveal_main_after_editor_close(
+            0, false, false, false, true
+        ));
+        assert!(!reveal_main_after_editor_close(0, false, true, true, true));
+    }
+
+    #[test]
+    fn inputs_are_released_only_when_the_setting_is_what_hides_main() {
+        assert!(main_kept_hidden_after_editor_close(
+            0, false, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            1, false, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, true, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, false, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, true, true, true
+        ));
+    }
+
+    #[test]
+    fn a_recorder_reopened_with_the_editor_open_keeps_its_inputs() {
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, true, false
+        ));
     }
 
     #[test]
