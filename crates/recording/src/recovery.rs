@@ -282,6 +282,14 @@ impl RecoveryManager {
         Self::remux_with_preparing(project_path, None)
     }
 
+    /// Removes the original media backups that a Studio stop left in
+    /// `recordings_dir` when the app ended before its editor released them,
+    /// and returns how many it removed. Blocking: it syncs each project
+    /// before it removes the backup.
+    pub fn retire_leftover_originals(recordings_dir: &Path) -> usize {
+        retirement::retire_leftover_originals(recordings_dir)
+    }
+
     fn remux_with_preparing(
         project_path: &Path,
         preparing: Option<PreparingStudioJob>,

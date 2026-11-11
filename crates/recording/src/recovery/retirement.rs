@@ -13,6 +13,11 @@ use super::{
     recovery_publication_workspace, reject_recovery_link,
 };
 
+/// Marks a publication workspace whose original media backup a lease armed
+/// for retirement. Recovery and salvage keep their backups, so they never
+/// write it.
+const RETIREMENT_ARMED: &str = "retire-original-segments";
+
 pub(super) struct RecoveryLease {
     lock: Option<RecoveryLock>,
     retirement: Mutex<Option<OriginalMediaRetirement>>,
@@ -37,6 +42,9 @@ impl RecoveryLease {
             receipt: read_recovery_publication(&workspace.join(RECOVERY_PUBLICATION_RECEIPT))?,
         };
         retirement.validate()?;
+        // Synced with the publication, so the next launch can finish a
+        // retirement that the process did not live to run.
+        fs::write(workspace.join(RETIREMENT_ARMED), [])?;
         sync_publication(project, workspace)?;
         *self.retirement.lock().map_err(|_| {
             RecoveryError::Validation("Original media retirement lease poisoned".into())
@@ -87,6 +95,81 @@ pub(super) fn retire_unread_originals(
     retirement.validate()?;
     sync_publication(project, workspace)?;
     retirement.remove_originals()
+}
+
+/// Removes the original media backups that outlived the process that
+/// published them, and returns how many it removed.
+///
+/// A shared lease retires its backup only when the last preparing reader
+/// closes. A quit, crash, or kill right after a Studio stop ends the process
+/// before that, which leaves the whole recording on disk twice. Only backups
+/// a lease armed go, after the same receipt checks and durability barrier as
+/// a live retirement, under the project's recovery lock, so a project that a
+/// reader or a finalizer still holds keeps its backup.
+pub(super) fn retire_leftover_originals(recordings_dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(recordings_dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .map(|project| {
+            retire_leftover_originals_in(&project).unwrap_or_else(|error| {
+                tracing::debug!(path = %project.display(), %error, "Leftover original media backup retained");
+                0
+            })
+        })
+        .sum()
+}
+
+fn retire_leftover_originals_in(project: &Path) -> Result<usize, RecoveryError> {
+    let workspaces = leftover_backups(project)?;
+    if workspaces.is_empty() {
+        return Ok(0);
+    }
+    let _lock = RecoveryLock::acquire(project)?;
+    let mut retired = 0;
+    for workspace in workspaces {
+        match retire_unread_originals(project, &workspace) {
+            Ok(()) => retired += 1,
+            Err(error) => {
+                tracing::debug!(path = %workspace.display(), %error, "Leftover original media backup retained");
+            }
+        }
+    }
+    Ok(retired)
+}
+
+/// The publication workspaces in `project` that still hold an armed original
+/// media backup. Touches nothing, so a project without one never gets a lock
+/// file.
+fn leftover_backups(project: &Path) -> Result<Vec<PathBuf>, RecoveryError> {
+    if !project.symlink_metadata()?.is_dir()
+        || !project.join("content/segments").try_exists()?
+        // Opening the project reconciles an interrupted publication first.
+        || project.join(RECOVERY_PUBLICATION).symlink_metadata().is_ok()
+    {
+        return Ok(Vec::new());
+    }
+    let mut workspaces = Vec::new();
+    for entry in fs::read_dir(project)? {
+        let name = entry?.file_name();
+        let Some(workspace) = name
+            .to_str()
+            .and_then(|name| recovery_publication_workspace(project, name).ok())
+        else {
+            continue;
+        };
+        if workspace
+            .join("original-segments")
+            .symlink_metadata()
+            .is_ok()
+            && workspace.join(RETIREMENT_ARMED).symlink_metadata().is_ok()
+        {
+            workspaces.push(workspace);
+        }
+    }
+    Ok(workspaces)
 }
 
 /// The durability barrier before a backup goes: the published tree and the
@@ -161,7 +244,7 @@ impl OriginalMediaRetirement {
         self.validate()?;
         remove_backup(&self.workspace.join("original-segments"))?;
         sync_directory(&self.workspace)?;
-        tracing::info!(path = %self.workspace.display(), "Retired original media after final preparing reader closed");
+        tracing::info!(path = %self.workspace.display(), "Retired original media backup");
         Ok(())
     }
 }
@@ -372,6 +455,85 @@ mod tests {
         assert_eq!(
             fs::read(saved.join("video.mp4")).unwrap(),
             b"original encoded media"
+        );
+    }
+
+    /// What a quit right after a Studio stop leaves on disk: the publication
+    /// armed its retirement, and the process ended before the reader closed.
+    fn leftover() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let (temporary, project, workspace) = fixture();
+        let lease = RecoveryLease::new(RecoveryLock::acquire(&project).unwrap());
+        super::super::publish_recovery(&project, &workspace).unwrap();
+        lease.retire_originals(&project, &workspace).unwrap();
+        lease.retirement.lock().unwrap().take();
+        drop(lease);
+        assert!(workspace.join("original-segments").is_dir());
+        (temporary, project, workspace)
+    }
+
+    #[test]
+    fn sweep_retires_a_backup_its_process_left_behind() {
+        let (temporary, project, workspace) = leftover();
+        let expected = super::super::recovery_snapshot(&project).unwrap();
+        assert_eq!(retire_leftover_originals(temporary.path()), 1);
+        assert!(!workspace.join("original-segments").exists());
+        assert!(workspace.join(RECOVERY_PUBLICATION_RECEIPT).is_file());
+        assert_eq!(super::super::recovery_snapshot(&project).unwrap(), expected);
+        assert!(RecoveryLock::acquire(&project).is_ok());
+        assert_eq!(retire_leftover_originals(temporary.path()), 0);
+    }
+
+    #[test]
+    fn sweep_keeps_a_backup_no_lease_armed() {
+        let (temporary, project, workspace) = fixture();
+        let lock = RecoveryLock::acquire(&project).unwrap();
+        super::super::publish_recovery(&project, &workspace).unwrap();
+        drop(lock);
+        assert_eq!(retire_leftover_originals(temporary.path()), 0);
+        assert!(workspace.join("original-segments").is_dir());
+    }
+
+    #[test]
+    fn sweep_keeps_the_backup_of_a_locked_project() {
+        let (temporary, project, workspace) = leftover();
+        let held = RecoveryLock::acquire(&project).unwrap();
+        assert_eq!(retire_leftover_originals(temporary.path()), 0);
+        assert!(workspace.join("original-segments").is_dir());
+        drop(held);
+        assert_eq!(retire_leftover_originals(temporary.path()), 1);
+    }
+
+    #[test]
+    fn sweep_keeps_a_changed_or_unfinished_publication() {
+        for changed in [
+            "content/segments/video.mp4",
+            "recording-meta.json",
+            ".recovery-00000000-0000-4000-8000-000000000042/original-segments/video.mp4",
+            ".recovery-00000000-0000-4000-8000-000000000042/publication-receipt.json",
+            RECOVERY_PUBLICATION,
+        ] {
+            let (temporary, project, workspace) = leftover();
+            fs::write(project.join(changed), b"changed").unwrap();
+            assert_eq!(
+                retire_leftover_originals(temporary.path()),
+                0,
+                "Accepted changed {changed}"
+            );
+            assert!(workspace.join("original-segments").is_dir());
+        }
+    }
+
+    #[test]
+    fn sweep_leaves_projects_without_a_backup_untouched() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("plain.cap");
+        fs::create_dir_all(project.join("content/segments")).unwrap();
+        fs::write(temporary.path().join("notes.txt"), b"not a project").unwrap();
+        assert_eq!(retire_leftover_originals(temporary.path()), 0);
+        assert!(!project.join(".recovery.lock").exists());
+        assert_eq!(
+            retire_leftover_originals(&temporary.path().join("missing")),
+            0
         );
     }
 }
