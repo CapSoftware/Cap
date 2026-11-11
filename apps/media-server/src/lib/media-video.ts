@@ -1620,7 +1620,7 @@ async function probeH264PixelFormat(
 	return stdout?.split(/\s+/)[0] || null;
 }
 
-async function probeVideoRotation(
+export async function probeVideoRotation(
 	inputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<number | null> {
@@ -1911,7 +1911,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	return ffmpegArgs;
 }
 
-async function runTranscodeCommand(
+export async function runTranscodeCommand(
 	ffmpegArgs: string[],
 	outputPath: string,
 	totalDurationUs: number,
