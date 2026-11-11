@@ -7,6 +7,7 @@ const typeLabels: Record<string, string> = {
 	topup: "Top-up",
 	video_create: "Video upload",
 	storage_daily: "Storage",
+	transcription: "Transcription",
 	refund: "Refund",
 	adjustment: "Adjustment",
 	pro_credit: "Cap Pro credit",
