@@ -37,7 +37,9 @@ import {
 	lookupPurchase,
 	type PurchasedLicense,
 	REDEEM_INTENT_STORAGE_KEY,
+	type RedeemIntent,
 	readRedeemIntent,
+	redeemIntentFromLocation,
 	retryAfterText,
 } from "@/lib/license-redeem";
 import { LicenseCard } from "./LicenseCard";
@@ -91,6 +93,26 @@ const storedIntent = () => {
 	} catch {
 		return null;
 	}
+};
+
+const rememberIntent = (intent: RedeemIntent) => {
+	(window as Window & { __capRedeemIntent?: unknown }).__capRedeemIntent =
+		intent;
+	try {
+		window.sessionStorage.setItem(
+			REDEEM_INTENT_STORAGE_KEY,
+			JSON.stringify(intent),
+		);
+	} catch {}
+};
+
+const stripIntentFromUrl = () => {
+	if (!window.location.hash && !window.location.search) return;
+	window.history.replaceState(
+		window.history.state,
+		"",
+		window.location.pathname,
+	);
 };
 
 const forgetIntent = () => {
@@ -257,6 +279,7 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 	const [pollRun, setPollRun] = useState(0);
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const emailRef = useRef<HTMLInputElement | null>(null);
+	const lookupRun = useRef(0);
 	const keyId = useId();
 	const emailId = useId();
 	const errorId = useId();
@@ -264,8 +287,11 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 
 	const openGift = useCallback(
 		async (licenseKey: string, source: "link" | "form") => {
+			lookupRun.current += 1;
+			const run = lookupRun.current;
 			const result = await lookupGift(licenseApiUrl, licenseKey);
 			trackEvent("license_gift_lookup", { source, result: result.status });
+			if (run !== lookupRun.current) return;
 			if (result.status === "claimable") {
 				setView({
 					kind: "claimable",
@@ -290,6 +316,25 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 		[licenseApiUrl],
 	);
 
+	const begin = useCallback(
+		(intent: RedeemIntent) => {
+			setEmail("");
+			setFormError(null);
+			if ("session" in intent) {
+				lookupRun.current += 1;
+				setView({ kind: "ordering" });
+				setSessionId(intent.session);
+				setPollRun((run) => run + 1);
+				return;
+			}
+			setSessionId(null);
+			setKeyInput(intent.key);
+			setView({ kind: "opening" });
+			void openGift(intent.key, "link");
+		},
+		[openGift],
+	);
+
 	useEffect(() => {
 		const intent = readRedeemIntent({
 			handedOver: (window as Window & { __capRedeemIntent?: unknown })
@@ -297,23 +342,30 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 			stored: storedIntent(),
 			location: window.location,
 		});
-		if (intent && (window.location.hash || window.location.search)) {
-			window.history.replaceState(
-				window.history.state,
-				"",
-				window.location.pathname,
-			);
-		}
-		if (intent && "session" in intent) {
-			setView({ kind: "ordering" });
-			setSessionId(intent.session);
-		} else if (intent) {
-			setKeyInput(intent.key);
-			setView({ kind: "opening" });
-			void openGift(intent.key, "link");
+		if (intent) {
+			stripIntentFromUrl();
+			begin(intent);
 		}
 		document.body.classList.remove("rd-pending");
-	}, [openGift]);
+
+		// Pasting another gift link while already on this page changes only the
+		// fragment, so nothing reloads and the inline script never sees it.
+		// Analytics reads the URL 50 ms after a change, and by then the key has
+		// been stripped here.
+		const takeFromUrl = () => {
+			const arrived = redeemIntentFromLocation(window.location);
+			if (!arrived) return;
+			stripIntentFromUrl();
+			rememberIntent(arrived);
+			begin(arrived);
+		};
+		window.addEventListener("popstate", takeFromUrl);
+		window.addEventListener("hashchange", takeFromUrl);
+		return () => {
+			window.removeEventListener("popstate", takeFromUrl);
+			window.removeEventListener("hashchange", takeFromUrl);
+		};
+	}, [begin]);
 
 	// Stripe redirects here the moment payment succeeds, usually a second or
 	// two before its webhook has created the license, so the order is polled.
@@ -721,9 +773,9 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					<Panel>
 						<ul className="space-y-2.5">
 							{view.licenses.map((license, index) => {
-								const link = license.licenseKey
-									? giftLink(window.location.origin, license.licenseKey)
-									: null;
+								const link = license.redeemed
+									? null
+									: giftLink(window.location.origin, license.licenseKey);
 								return (
 									<li
 										// biome-ignore lint/suspicious/noArrayIndexKey: claimed gifts carry no key, and the order is fixed

@@ -22,7 +22,9 @@ export type GiftClaim =
 	| { status: "not_found" }
 	| Refused;
 
-export type PurchasedLicense = { licenseKey: string | null; redeemed: boolean };
+export type PurchasedLicense =
+	| { licenseKey: string; redeemed: false }
+	| { licenseKey: null; redeemed: true };
 
 export type PurchaseLookup =
 	| { status: "pending" }
@@ -62,6 +64,23 @@ export function parseRedeemIntent(value: unknown): RedeemIntent | null {
 // session storage and leaves a bare /redeem in the address bar and history.
 export const TAKE_REDEEM_INTENT_FROM_URL = `(function(){try{var l=window.location,h=l.hash.slice(1),q=new URLSearchParams(l.search);var s=q.get("session_id")||(h.indexOf("session=")===0?h.slice(8):"");var k=q.get("key")||(s?"":h);var v=null;if(/^cs_(test|live)_[0-9A-Za-z]{10,200}$/.test(s)){v={session:s}}else if(/^[0-9A-Za-z]{30}$/.test(k)){v={key:k}}if(!v){try{v=JSON.parse(sessionStorage.getItem("${REDEEM_INTENT_STORAGE_KEY}"))}catch(e){}if(v){window.__capRedeemIntent=v;document.body.classList.add("rd-pending")}return}window.__capRedeemIntent=v;document.body.classList.add("rd-pending");history.replaceState(history.state,"",l.pathname);try{sessionStorage.setItem("${REDEEM_INTENT_STORAGE_KEY}",JSON.stringify(v))}catch(e){}}catch(e){}})();`;
 
+export function redeemIntentFromLocation(location: {
+	hash: string;
+	search: string;
+}): RedeemIntent | null {
+	const hash = location.hash.replace(/^#/, "");
+	const query = new URLSearchParams(location.search);
+	return (
+		parseRedeemIntent({
+			session:
+				query.get("session_id") ??
+				(hash.startsWith("session=")
+					? hash.slice("session=".length)
+					: undefined),
+		}) ?? parseRedeemIntent({ key: query.get("key") ?? hash })
+	);
+}
+
 // The redeem page's inline script normally hands the intent over on `window`
 // after stripping it from the URL. The URL is still read here for the case
 // where the page was reached by a client-side navigation, which runs no
@@ -74,16 +93,7 @@ export function readRedeemIntent(source: {
 	const handedOver = parseRedeemIntent(source.handedOver);
 	if (handedOver) return handedOver;
 
-	const hash = source.location.hash.replace(/^#/, "");
-	const query = new URLSearchParams(source.location.search);
-	const fromUrl =
-		parseRedeemIntent({
-			session:
-				query.get("session_id") ??
-				(hash.startsWith("session=")
-					? hash.slice("session=".length)
-					: undefined),
-		}) ?? parseRedeemIntent({ key: query.get("key") ?? hash });
+	const fromUrl = redeemIntentFromLocation(source.location);
 	if (fromUrl) return fromUrl;
 
 	if (!source.stored) return null;
@@ -206,16 +216,18 @@ export async function lookupPurchase(
 		isDuration(data.duration) &&
 		Array.isArray(data.licenses)
 	) {
-		const licenses = data.licenses.flatMap((entry): PurchasedLicense[] => {
-			if (!isRecord(entry)) return [];
+		const licenses: PurchasedLicense[] = [];
+		for (const entry of data.licenses) {
+			if (!isRecord(entry)) return { status: "unavailable" };
 			const key = entry.licenseKey;
-			return [
-				{
-					licenseKey: typeof key === "string" && isLicenseKey(key) ? key : null,
-					redeemed: entry.redeemed === true,
-				},
-			];
-		});
+			if (entry.redeemed === true) {
+				licenses.push({ licenseKey: null, redeemed: true });
+			} else if (typeof key === "string" && isLicenseKey(key)) {
+				licenses.push({ licenseKey: key, redeemed: false });
+			} else {
+				return { status: "unavailable" };
+			}
+		}
 		if (licenses.length === 0) return { status: "unavailable" };
 		return {
 			status: "ready",

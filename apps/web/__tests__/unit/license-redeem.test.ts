@@ -10,6 +10,7 @@ import {
 	parseRedeemIntent,
 	REDEEM_INTENT_STORAGE_KEY,
 	readRedeemIntent,
+	redeemIntentFromLocation,
 	retryAfterText,
 	TAKE_REDEEM_INTENT_FROM_URL,
 } from "@/lib/license-redeem";
@@ -99,6 +100,19 @@ describe("redeem intent", () => {
 				location: none,
 			}),
 		).toEqual({ key: KEY });
+	});
+
+	it("reads an intent straight from a location", () => {
+		expect(redeemIntentFromLocation({ hash: `#${KEY}`, search: "" })).toEqual({
+			key: KEY,
+		});
+		expect(
+			redeemIntentFromLocation({ hash: `#session=${SESSION}`, search: "" }),
+		).toEqual({ session: SESSION });
+		expect(redeemIntentFromLocation({ hash: "", search: "" })).toBeNull();
+		expect(
+			redeemIntentFromLocation({ hash: "#faq", search: "?ref=x" }),
+		).toBeNull();
 	});
 
 	it("reads the URL when nothing was handed over", () => {
@@ -341,8 +355,7 @@ describe("license server calls", () => {
 				licenses: [
 					{ licenseKey: KEY, redeemed: false },
 					{ licenseKey: null, redeemed: true },
-					{ licenseKey: "<script>", redeemed: false },
-					"junk",
+					{ licenseKey: KEY, redeemed: true },
 				],
 			}),
 		);
@@ -354,9 +367,33 @@ describe("license server calls", () => {
 			licenses: [
 				{ licenseKey: KEY, redeemed: false },
 				{ licenseKey: null, redeemed: true },
-				{ licenseKey: null, redeemed: false },
+				{ licenseKey: null, redeemed: true },
 			],
 		});
+	});
+
+	it("refuses a purchase where an unclaimed license has no usable key", async () => {
+		for (const broken of [
+			{ licenseKey: "<script>", redeemed: false },
+			{ licenseKey: null, redeemed: false },
+			{ redeemed: "yes" },
+			{},
+			"junk",
+			null,
+		]) {
+			vi.stubGlobal(
+				"fetch",
+				respond(200, {
+					status: "ready",
+					gift: true,
+					duration: "lifetime",
+					licenses: [{ licenseKey: KEY, redeemed: false }, broken],
+				}),
+			);
+			expect(await lookupPurchase(API, SESSION)).toEqual({
+				status: "unavailable",
+			});
+		}
 	});
 
 	it("handles a pending purchase and a ready one with nothing in it", async () => {
