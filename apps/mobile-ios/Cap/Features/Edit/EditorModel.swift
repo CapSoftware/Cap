@@ -191,9 +191,11 @@ final class EditorModel {
         let duration = timeline.sourceDuration
         let step = duration / Double(Self.detailCount)
         let centre = Int(time / step)
-        let wanted = (centre - Self.thumbnailCount...centre + Self.thumbnailCount)
-            .filter { $0 >= 0 && $0 < Self.detailCount && detailThumbnails[$0] == nil }
-            .sorted { abs($0 - centre) < abs($1 - centre) }
+        let first: Int = max(0, centre - Self.thumbnailCount)
+        let last: Int = min(Self.detailCount - 1, centre + Self.thumbnailCount)
+        guard first <= last else { return }
+        let missing: [Int] = (first...last).filter { (index: Int) -> Bool in detailThumbnails[index] == nil }
+        let wanted: [Int] = missing.sorted { (a: Int, b: Int) -> Bool in abs(a - centre) < abs(b - centre) }
         guard !wanted.isEmpty else { return }
         let scale = UITraitCollection.current.displayScale
         detailTask?.cancel()
