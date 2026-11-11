@@ -141,8 +141,9 @@ describe("CapCardContent title edit", () => {
 	});
 
 	const title = () => container.querySelector("p")?.textContent;
+	const editor = () => container.querySelector("textarea");
 
-	const editTo = async (value: string) => {
+	const mount = () =>
 		act(() => {
 			root.render(
 				createElement(CapCardContent, {
@@ -154,10 +155,14 @@ describe("CapCardContent title edit", () => {
 				}),
 			);
 		});
-		act(() => {
-			container.querySelector("p")?.click();
-		});
-		const textarea = container.querySelector("textarea");
+
+	const type = async (value: string) => {
+		if (!editor()) {
+			act(() => {
+				container.querySelector("p")?.click();
+			});
+		}
+		const textarea = editor();
 		if (!textarea) throw new Error("title editor did not open");
 		const setValue = Object.getOwnPropertyDescriptor(
 			HTMLTextAreaElement.prototype,
@@ -167,6 +172,11 @@ describe("CapCardContent title edit", () => {
 			setValue?.call(textarea, value);
 			textarea.dispatchEvent(new Event("input", { bubbles: true }));
 		});
+		return textarea;
+	};
+
+	const editTo = async (value: string) => {
+		const textarea = await type(value);
 		await act(async () => {
 			textarea.focus();
 			textarea.blur();
@@ -176,6 +186,7 @@ describe("CapCardContent title edit", () => {
 	it.each(["", "   "])(
 		"keeps the current title when cleared to %j",
 		async (value) => {
+			mount();
 			await editTo(value);
 
 			expect(mocks.editTitle).not.toHaveBeenCalled();
@@ -184,9 +195,41 @@ describe("CapCardContent title edit", () => {
 	);
 
 	it("saves the trimmed title", async () => {
+		mount();
 		await editTo("  Launch demo ");
 
 		expect(mocks.editTitle).toHaveBeenCalledWith("video-1", "Launch demo");
 		expect(title()).toBe("Launch demo");
+	});
+
+	it("compares and restores against the last saved title", async () => {
+		mount();
+		await editTo("Launch demo");
+		await editTo("");
+
+		expect(title()).toBe("Launch demo");
+
+		await editTo("Demo");
+
+		expect(mocks.editTitle.mock.calls).toEqual([
+			["video-1", "Launch demo"],
+			["video-1", "Demo"],
+		]);
+		expect(title()).toBe("Demo");
+	});
+
+	it("keeps text typed while a save is in flight", async () => {
+		let finish = () => {};
+		mocks.editTitle.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = () => resolve({ success: true });
+			}),
+		);
+		mount();
+		await editTo("Launch demo");
+		await type("Launch demo v2");
+		await act(async () => finish());
+
+		expect(editor()?.value).toBe("Launch demo v2");
 	});
 });

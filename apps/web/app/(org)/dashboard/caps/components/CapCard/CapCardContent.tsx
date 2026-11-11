@@ -1,7 +1,7 @@
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -42,11 +42,19 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const [title, setTitle] = useState(cap.name);
 	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
+	// The field stays editable while a save is in flight, so the save reads
+	// the latest draft to avoid replacing text typed after the blur.
+	const draftRef = useRef(cap.name);
+
+	const setDraft = (value: string) => {
+		draftRef.current = value;
+		setTitle(value);
+	};
 
 	const handleTitleBlur = async () => {
 		const next = title.trim();
 		if (!next || next === savedTitle) {
-			setTitle(savedTitle);
+			setDraft(savedTitle);
 			setIsEditing(false);
 			return;
 		}
@@ -54,9 +62,11 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		try {
 			await editTitle(cap.id, next);
 			setSavedTitle(next);
-			setTitle(next);
 			toast.success("Video title updated");
-			setIsEditing(false);
+			if (draftRef.current.trim() === next) {
+				setDraft(next);
+				setIsEditing(false);
+			}
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
@@ -191,7 +201,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 					<textarea
 						rows={1}
 						value={title}
-						onChange={(e) => setTitle(e.target.value)}
+						onChange={(e) => setDraft(e.target.value)}
 						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
