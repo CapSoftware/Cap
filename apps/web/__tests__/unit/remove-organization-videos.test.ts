@@ -22,10 +22,12 @@ const colleagueVideo = Video.VideoId.make("video-colleague");
 
 let memberRole: string | null;
 let sharedRows: { videoId: Video.VideoId; ownerId: string }[];
+let folderSql = "";
 const writes: { table: string; params: unknown[] }[] = [];
 
 beforeEach(() => {
 	writes.length = 0;
+	folderSql = "";
 	memberRole = "member";
 	sharedRows = [
 		{ videoId: ownVideo, ownerId: "member-user" },
@@ -42,7 +44,10 @@ beforeEach(() => {
 				return memberRole ? [{ id: "membership", role: memberRole }] : [];
 			if (table === "shared_videos")
 				return sharedRows.filter((row) => params.includes(row.videoId));
-			if (table === "folders") return [{ id: "folder-1" }];
+			if (table === "folders")
+				return folderSql.includes("spaceId")
+					? [{ id: "org-folder" }]
+					: [{ id: "personal-folder" }, { id: "org-folder" }];
 			return [];
 		};
 		const query = Object.assign(
@@ -54,7 +59,9 @@ beforeEach(() => {
 				},
 				leftJoin: () => query,
 				where(filter: SQL) {
-					params = dialect.sqlToQuery(filter).params;
+					const compiled = dialect.sqlToQuery(filter);
+					params = compiled.params;
+					if (table === "folders") folderSql = compiled.sql;
 					return query;
 				},
 				limit: () => query,
@@ -95,6 +102,16 @@ describe("removing videos from an organization", () => {
 		expect(writes).toEqual([]);
 	});
 
+	it("only unfiles videos from the organization's folders, not personal ones", async () => {
+		await removeVideosFromOrganization(organizationId, [ownVideo]);
+
+		expect(folderSql).toContain("spaceId");
+		expect(writes).toContainEqual({
+			table: "videos",
+			params: [ownVideo, "org-folder"],
+		});
+	});
+
 	it("only removes and unfiles the member's own videos from a mixed request", async () => {
 		const result = await removeVideosFromOrganization(organizationId, [
 			ownVideo,
@@ -104,7 +121,7 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, ownVideo] },
-			{ table: "videos", params: [ownVideo, "folder-1"] },
+			{ table: "videos", params: [ownVideo, "org-folder"] },
 		]);
 	});
 
@@ -122,7 +139,7 @@ describe("removing videos from an organization", () => {
 		expect(result).toMatchObject({ success: true });
 		expect(writes).toEqual([
 			{ table: "shared_videos", params: [organizationId, colleagueVideo] },
-			{ table: "videos", params: [colleagueVideo, "folder-1"] },
+			{ table: "videos", params: [colleagueVideo, "org-folder"] },
 		]);
 	});
 
