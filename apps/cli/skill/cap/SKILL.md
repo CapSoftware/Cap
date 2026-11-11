@@ -67,6 +67,14 @@ and `cap jobs` for account, organization, sharing, storage, billing, analytics, 
 operation workflows. Inspect each command's current arguments with `--help`; do not reconstruct them from this
 skill.
 
+For a developer app, `cap developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or
+video into text and `cap developers videos upload <app> <file>` uploads a video. Over MCP these are
+`developer_transcript_create` (with `file_path` or `url`), `developer_transcript_wait`,
+`developer_transcript_get`, and `developer_video_upload`. Both spend the app's prepaid credits, so name the
+app, the file, and the price and get confirmation first. A `queued` or `processing` transcript is not done:
+wait for `complete`. `INSUFFICIENT_CREDITS` means the app needs a top-up through
+`cap developers credits purchase`.
+
 Organization invites deliver email by default. Use `cap organizations invite add ... --no-email` only when the
 user explicitly wants a link-only invite, and report the returned `emailDelivery` state.
 
