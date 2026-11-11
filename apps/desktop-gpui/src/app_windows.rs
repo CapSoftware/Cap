@@ -6599,15 +6599,18 @@ fn reveal_main_after_editor_close(
 /// Whether `keepMainHiddenAfterEditor` is the only thing keeping the main
 /// window away. Nothing of Cap is on screen then, so the idle camera and
 /// microphone are released, as they are when the video editor opens; the
-/// screenshot editor opens without doing that.
+/// screenshot editor opens without doing that. A recorder reopened with the
+/// editor still up (`main_hidden` false) keeps its inputs.
 fn main_kept_hidden_after_editor_close(
     editors_left: usize,
     settings_open: bool,
     idle: bool,
     main_closed_by_user: bool,
     keep_hidden: bool,
+    main_hidden: bool,
 ) -> bool {
     keep_hidden
+        && main_hidden
         && reveal_main_after_editor_close(
             editors_left,
             settings_open,
@@ -6717,6 +6720,7 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
     let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
@@ -6743,6 +6747,7 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
             capture_safe,
             main_closed_by_user,
             keep_hidden,
+            main_hidden,
         ) {
             park_idle_camera_preview(cx);
         }
@@ -7715,6 +7720,7 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
     let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
@@ -7740,6 +7746,7 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
             idle,
             main_closed_by_user,
             keep_hidden,
+            main_hidden,
         ) {
             park_idle_camera_preview(cx);
         }
@@ -8886,22 +8893,29 @@ mod tests {
     #[test]
     fn inputs_are_released_only_when_the_setting_is_what_hides_main() {
         assert!(main_kept_hidden_after_editor_close(
-            0, false, true, false, true
+            0, false, true, false, true, true
         ));
         assert!(!main_kept_hidden_after_editor_close(
-            0, false, true, false, false
+            0, false, true, false, false, true
         ));
         assert!(!main_kept_hidden_after_editor_close(
-            1, false, true, false, true
+            1, false, true, false, true, true
         ));
         assert!(!main_kept_hidden_after_editor_close(
-            0, true, true, false, true
+            0, true, true, false, true, true
         ));
         assert!(!main_kept_hidden_after_editor_close(
-            0, false, false, false, true
+            0, false, false, false, true, true
         ));
         assert!(!main_kept_hidden_after_editor_close(
-            0, false, true, true, true
+            0, false, true, true, true, true
+        ));
+    }
+
+    #[test]
+    fn a_recorder_reopened_with_the_editor_open_keeps_its_inputs() {
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, true, false
         ));
     }
 
