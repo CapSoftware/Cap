@@ -9176,6 +9176,23 @@ impl EditorWindow {
         }
     }
 
+    /// gpui keeps focus on an element that is no longer drawn, and a focused
+    /// field mutes the editor's shortcuts, so every way the clip menu closes
+    /// hands focus back to the root. An uncommitted draft is dropped: the clip
+    /// it was typed for may have moved.
+    fn release_hidden_clip_speed_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.clip_speed.is_some() {
+            return;
+        }
+        let Some(input) = &self.clip_speed_input else {
+            return;
+        };
+        if input.read(cx).focus_handle().is_focused(window) {
+            self.clip_speed_draft = false;
+            self.focus_root(window, cx);
+        }
+    }
+
     fn draft_clip_speed(&self, cx: &gpui::App) -> Option<f64> {
         if !self.clip_speed_draft {
             return None;
@@ -12941,6 +12958,7 @@ impl Render for EditorWindow {
             this.sync_picker_hex(window, cx);
         });
         self.prepare_frame_fields(window, cx);
+        self.release_hidden_clip_speed_focus(window, cx);
         self.sync_clip_speed_input(cx);
         self.sync_crop_container(window);
         self.sidebar.release_retired_images(window);
@@ -15643,6 +15661,7 @@ mod tests {
                 let viewport_width = f32::from(window.viewport_size().width);
                 let clip_menu = self.clip_menu;
                 self.editor.update(cx, |editor, cx| {
+                    editor.release_hidden_clip_speed_focus(window, cx);
                     editor.sync_clip_speed_input(cx);
                     div()
                         .size_full()
@@ -15836,6 +15855,29 @@ mod tests {
                 "a typed speed applies without Enter"
             );
             assert_eq!(speed_field_text(&editor, cx), "1.75");
+
+            type_speed(&editor, cx, "3");
+            editor.update(cx, |editor, cx| {
+                editor.clip_speed = None;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            editor.update_in(cx, |editor, window, cx| {
+                assert!(
+                    editor.focus.is_focused(window),
+                    "closing the menu frees focus"
+                );
+                assert!(!ui::text_input_has_focus(window, cx));
+            });
+            assert_eq!(
+                clip_speeds(&editor, cx),
+                [1.75, 1.75],
+                "the draft is dropped"
+            );
+            editor.update_in(cx, |editor, window, cx| {
+                editor.open_clip_menu_at(0, point(px(200.), px(500.)), window, cx);
+            });
+            cx.run_until_parked();
 
             editor.update_in(cx, |editor, window, cx| {
                 editor.clip_speed = None;
