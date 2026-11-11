@@ -12,6 +12,7 @@ import { planPriceId } from "@/lib/checkout/plans";
 export type YearlySwitchPreview =
 	| {
 			ok: true;
+			quantity: number;
 			dueToday: number;
 			yearlyAmount: number;
 			renewsOn: number;
@@ -129,6 +130,7 @@ export async function previewYearlySwitch(): Promise<YearlySwitchPreview> {
 
 		return {
 			ok: true,
+			quantity,
 			dueToday: Math.max(0, preview.amount_due),
 			yearlyAmount,
 			renewsOn,
@@ -142,10 +144,23 @@ export async function previewYearlySwitch(): Promise<YearlySwitchPreview> {
 	}
 }
 
-export async function switchToYearly(): Promise<YearlySwitchResult> {
+export async function switchToYearly(
+	quotedQuantity: number,
+): Promise<YearlySwitchResult> {
 	try {
 		const { subscription, item, yearlyPriceId, quantity } =
 			await switchableSubscription();
+		// Stripe resets an item's quantity to 1 when its price changes without
+		// one, and has no compare-and-set, so the switch must send a quantity.
+		// Requiring the quoted one means seats added in another tab since the
+		// quote are never written back over, and the charge matches the quote.
+		if (quantity !== quotedQuantity) {
+			return {
+				ok: false,
+				message:
+					"Your seat count changed since this price was shown. Refresh the page to see the new yearly price.",
+			};
+		}
 
 		// pending_if_incomplete leaves the monthly plan untouched when the
 		// yearly charge fails or needs authentication, instead of switching

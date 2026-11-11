@@ -108,6 +108,7 @@ describe("switch to yearly", () => {
 
 		expect(preview).toEqual({
 			ok: true,
+			quantity: 3,
 			dueToday: 28200,
 			yearlyAmount: 29400,
 			renewsOn: 1825965166,
@@ -129,7 +130,7 @@ describe("switch to yearly", () => {
 			"@/actions/billing/switch-to-yearly"
 		);
 
-		await expect(switchToYearly()).resolves.toEqual({ ok: true });
+		await expect(switchToYearly(3)).resolves.toEqual({ ok: true });
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
 			items: [{ id: "si_1", price: YEARLY, quantity: 3 }],
 			proration_behavior: "always_invoice",
@@ -147,7 +148,7 @@ describe("switch to yearly", () => {
 			"@/actions/billing/switch-to-yearly"
 		);
 
-		const result = await switchToYearly();
+		const result = await switchToYearly(3);
 
 		expect(result.ok).toBe(false);
 		expect(revalidatePathMock).not.toHaveBeenCalled();
@@ -200,9 +201,21 @@ describe("switch to yearly", () => {
 		);
 
 		expect((await previewYearlySwitch()).ok).toBe(false);
-		expect((await switchToYearly()).ok).toBe(false);
+		expect((await switchToYearly(1)).ok).toBe(false);
 		expect(mockStripe.subscriptions.update).not.toHaveBeenCalled();
 		expect(mockStripe.invoices.retrieveUpcoming).not.toHaveBeenCalled();
+	});
+
+	it("refuses when the seat count changed since the quote", async () => {
+		setup();
+		const { switchToYearly } = await import(
+			"@/actions/billing/switch-to-yearly"
+		);
+
+		const result = await switchToYearly(2);
+
+		expect(result.ok).toBe(false);
+		expect(mockStripe.subscriptions.update).not.toHaveBeenCalled();
 	});
 
 	it("refuses when signed out", async () => {
@@ -211,7 +224,7 @@ describe("switch to yearly", () => {
 			"@/actions/billing/switch-to-yearly"
 		);
 
-		expect((await switchToYearly()).ok).toBe(false);
+		expect((await switchToYearly(1)).ok).toBe(false);
 		expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
 	});
 });
