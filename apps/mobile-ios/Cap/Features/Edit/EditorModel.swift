@@ -138,6 +138,7 @@ final class EditorModel {
     private func loadThumbnails(asset: AVURLAsset) {
         let duration = timeline.sourceDuration
         let scale = UITraitCollection.current.displayScale
+        thumbnailTask?.cancel()
         thumbnailTask = Task { [weak self] in
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
@@ -265,14 +266,23 @@ final class EditorModel {
         // showed black until the frame arrived. Once the item is ready, the seek completing means the frame is there.
         itemReady?.invalidate()
         itemReady = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
-            guard item.status != .unknown else { return }
+            let status = item.status
+            guard status != .unknown else { return }
             Task { @MainActor in
                 guard let self, generation == self.rebuildGeneration, self.itemReady != nil else { return }
                 self.itemReady?.invalidate()
                 self.itemReady = nil
-                incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                guard status == .readyToPlay else {
+                    self.previewFailed()
+                    return
+                }
+                incoming.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                     Task { @MainActor in
-                        guard let self, generation == self.rebuildGeneration else { return }
+                        guard let self, generation == self.rebuildGeneration, !self.closed else { return }
+                        guard finished else {
+                            self.previewFailed()
+                            return
+                        }
                         if !self.isTrimming { self.showsSource = false }
                         let outgoing = self.players[self.activePlayer]
                         self.activePlayer = next
@@ -292,6 +302,15 @@ final class EditorModel {
         }
     }
 
+    /// The last good preview stays on its player, and Try again rebuilds from the timeline as it stands.
+    private func previewFailed() {
+        guard !closed else { return }
+        rebuildPending = false
+        showsSource = false
+        isPlaying = false
+        phase = .failed("Cap couldn't load the preview for this edit. Try again.")
+    }
+
     private func show(_ next: EditTimeline, previous: EditTimeline, seekTo output: Double) {
         if next.playsSame(as: previous) {
             outputTime = min(max(0, output), next.outputDuration)
@@ -306,6 +325,7 @@ final class EditorModel {
     }
 
     private func observePlayback() {
+        removePlaybackObservers()
         timeObservers = players.enumerated().map { index, player in
             player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
                 MainActor.assumeIsolated {
@@ -611,11 +631,15 @@ final class EditorModel {
         itemReady = nil
         for player in players { player.pause() }
         sourcePlayer.pause()
+        removePlaybackObservers()
+        metrics.finish(sourceSeconds: timeline.sourceDuration, clips: timeline.clips.count)
+    }
+
+    private func removePlaybackObservers() {
         for (player, observer) in zip(players, timeObservers) { player.removeTimeObserver(observer) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         timeObservers = []
         endObserver = nil
-        metrics.finish(sourceSeconds: timeline.sourceDuration, clips: timeline.clips.count)
     }
 
     enum EditorError: Error { case noVideo }
