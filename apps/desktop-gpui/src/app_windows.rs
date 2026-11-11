@@ -6596,6 +6596,27 @@ fn reveal_main_after_editor_close(
     editors_left == 0 && !settings_open && idle && !main_closed_by_user && !keep_hidden
 }
 
+/// Whether `keepMainHiddenAfterEditor` is the only thing keeping the main
+/// window away. Nothing of Cap is on screen then, so the idle camera and
+/// microphone are released, as they are when the video editor opens; the
+/// screenshot editor opens without doing that.
+fn main_kept_hidden_after_editor_close(
+    editors_left: usize,
+    settings_open: bool,
+    idle: bool,
+    main_closed_by_user: bool,
+    keep_hidden: bool,
+) -> bool {
+    keep_hidden
+        && reveal_main_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            false,
+        )
+}
+
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
 /// drops it from `EditorWindowIds`, disposes the instance, and calls
 /// `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`) -- so the main
@@ -6716,6 +6737,15 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            capture_safe,
+            main_closed_by_user,
+            keep_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         // A dock-activating window closed; the policy has to be recomputed
         // even when the main window is not the thing coming back.
         crate::menus::schedule_dock_sync(cx);
@@ -7704,6 +7734,15 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            keep_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         crate::menus::schedule_dock_sync(cx);
     }
 }
@@ -8842,6 +8881,28 @@ mod tests {
             0, false, false, false, true
         ));
         assert!(!reveal_main_after_editor_close(0, false, true, true, true));
+    }
+
+    #[test]
+    fn inputs_are_released_only_when_the_setting_is_what_hides_main() {
+        assert!(main_kept_hidden_after_editor_close(
+            0, false, true, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, false
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            1, false, true, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, true, true, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, false, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, true, true
+        ));
     }
 
     #[test]
