@@ -12,14 +12,18 @@ export const Lockup = ({ height }: { height: number }) => {
 	const scale = height / UNIT_HEIGHT;
 	return (
 		<span
+			role="img"
+			aria-label="Cap Infra"
 			className="relative block shrink-0"
 			style={{ width: LOCKUP_WIDTH * scale, height }}
 		>
-			<Logo
-				white
-				viewBoxDimensions={`0 0 ${LOGO_WIDTH} ${UNIT_HEIGHT}`}
-				style={{ width: LOGO_WIDTH * scale, height }}
-			/>
+			<span aria-hidden="true">
+				<Logo
+					white
+					viewBoxDimensions={`0 0 ${LOGO_WIDTH} ${UNIT_HEIGHT}`}
+					style={{ width: LOGO_WIDTH * scale, height }}
+				/>
+			</span>
 			<svg
 				aria-hidden="true"
 				viewBox={`0 0 ${LOCKUP_WIDTH} ${UNIT_HEIGHT}`}

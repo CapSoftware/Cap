@@ -340,6 +340,7 @@ export const CapPlayer = ({
 		const videoEvents: [string, () => void][] = [
 			["play", onPlay],
 			["pause", onPause],
+			["emptied", onPause],
 			["ended", onEnded],
 			["volumechange", onVolume],
 			["resize", onResize],

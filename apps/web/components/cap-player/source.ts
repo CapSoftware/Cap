@@ -85,44 +85,52 @@ export const attachSource = (
 		wasPlaying: !video.paused,
 	});
 
-	const playFile = ({ resumeAt, wasPlaying } = position()) => {
+	let fileAttached = false;
+
+	function onNativeError() {
+		playFile();
+	}
+
+	function playFile({ resumeAt, wasPlaying } = position()) {
 		if (cancelled) return;
-		if (!source.mp4 || video.getAttribute("src") === source.mp4) {
+		if (!source.mp4 || fileAttached) {
 			onFatal();
 			return;
 		}
+		fileAttached = true;
+		video.removeEventListener("error", onNativeError);
+		video.addEventListener("error", onFatal);
+		detach = () => {
+			video.removeEventListener("error", onFatal);
+			release(video);
+		};
 		video.src = source.mp4;
 		if (resumeAt > 0) video.currentTime = resumeAt;
 		if (wasPlaying) void video.play().catch(() => undefined);
 		else if (resumeAt === 0) start();
-	};
+	}
 
-	const onNativeError = () => playFile();
+	const stop = () => {
+		cancelled = true;
+		video.removeEventListener("error", onNativeError);
+		detach();
+	};
 
 	if (mode === "none") {
 		onFatal();
 		return () => undefined;
 	}
 
-	if (mode === "file" && source.mp4) {
-		video.src = source.mp4;
-		video.addEventListener("error", onFatal);
-		start();
-		return () => {
-			video.removeEventListener("error", onFatal);
-			release(video);
-		};
+	if (mode === "file") {
+		playFile({ resumeAt: 0, wasPlaying: false });
+		return stop;
 	}
 
 	if (mode === "native" && source.hls) {
 		video.src = source.hls;
 		video.addEventListener("error", onNativeError);
 		start();
-		return () => {
-			cancelled = true;
-			video.removeEventListener("error", onNativeError);
-			release(video);
-		};
+		return stop;
 	}
 
 	loadHls()
@@ -159,11 +167,6 @@ export const attachSource = (
 				}
 				const reached = position();
 				hls.destroy();
-				detach = () => {
-					video.removeEventListener("error", onFatal);
-					release(video);
-				};
-				video.addEventListener("error", onFatal);
 				playFile(reached);
 			});
 			hls.loadSource(source.hls);
@@ -173,8 +176,5 @@ export const attachSource = (
 		})
 		.catch(() => playFile());
 
-	return () => {
-		cancelled = true;
-		detach();
-	};
+	return stop;
 };
