@@ -24,6 +24,7 @@ import {
 	int,
 	json,
 	longtext,
+	mediumtext,
 	mysqlTable,
 	primaryKey,
 	text,
@@ -1894,6 +1895,90 @@ export const developerVideos = mysqlTable(
 	],
 );
 
+export type DeveloperTranscriptStatus =
+	| "uploading"
+	| "queued"
+	| "processing"
+	| "complete"
+	| "error";
+
+export type DeveloperTranscriptSourceType = "upload" | "url";
+
+export const developerTranscripts = mysqlTable(
+	"developer_transcripts",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		externalUserId: varchar("externalUserId", { length: 255 }),
+		name: varchar("name", { length: 255 }).notNull().default("Untitled"),
+		status: varchar("status", {
+			length: 16,
+			enum: ["uploading", "queued", "processing", "complete", "error"],
+		})
+			.notNull()
+			.$type<DeveloperTranscriptStatus>(),
+		sourceType: varchar("sourceType", {
+			length: 8,
+			enum: ["upload", "url"],
+		})
+			.notNull()
+			.$type<DeveloperTranscriptSourceType>(),
+		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		s3Key: varchar("s3Key", { length: 512 }),
+		resultKey: varchar("resultKey", { length: 512 }),
+		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
+		durationSeconds: float("durationSeconds"),
+		requestedLanguage: varchar("requestedLanguage", { length: 16 }),
+		language: varchar("language", { length: 16 }),
+		text: mediumtext("text"),
+		wordCount: int("wordCount"),
+		reservedMicroCredits: bigint("reservedMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		billedMicroCredits: bigint("billedMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		errorCode: varchar("errorCode", { length: 64 }),
+		errorMessage: varchar("errorMessage", { length: 512 }),
+		metadata: json("metadata"),
+		startedAt: timestamp("startedAt"),
+		completedAt: timestamp("completedAt"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("dev_transcripts_app_list_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.createdAt,
+			table.id,
+		),
+		index("dev_transcripts_app_user_idx").on(
+			table.appId,
+			table.externalUserId,
+			table.createdAt,
+		),
+		index("dev_transcripts_app_status_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+		),
+		index("dev_transcripts_status_updated_idx").on(
+			table.status,
+			table.updatedAt,
+		),
+	],
+);
+
 export const developerCreditAccounts = mysqlTable(
 	"developer_credit_accounts",
 	{
@@ -1928,12 +2013,14 @@ export type DeveloperCreditTransactionType =
 	| "topup"
 	| "video_create"
 	| "storage_daily"
+	| "transcription"
 	| "refund"
 	| "adjustment"
 	| "pro_credit";
 
 export type DeveloperCreditReferenceType =
 	| "developer_video"
+	| "developer_transcript"
 	| "stripe_payment_intent"
 	| "manual"
 	| "pro_monthly_credit";
@@ -1949,6 +2036,7 @@ export const developerCreditTransactions = mysqlTable(
 				"topup",
 				"video_create",
 				"storage_daily",
+				"transcription",
 				"refund",
 				"adjustment",
 				"pro_credit",
@@ -1968,6 +2056,7 @@ export const developerCreditTransactions = mysqlTable(
 			length: 32,
 			enum: [
 				"developer_video",
+				"developer_transcript",
 				"stripe_payment_intent",
 				"manual",
 				"pro_monthly_credit",
@@ -2060,6 +2149,16 @@ export const developerVideosRelations = relations(
 	({ one }) => ({
 		app: one(developerApps, {
 			fields: [developerVideos.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerTranscriptsRelations = relations(
+	developerTranscripts,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerTranscripts.appId],
 			references: [developerApps.id],
 		}),
 	}),
