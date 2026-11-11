@@ -21,8 +21,8 @@ export type DeveloperVideoPartOutcome =
 
 export type DeveloperVideoRedrive = "start" | "retry-hls";
 
-function trimReason(reason: string): string {
-	return reason.slice(0, MAX_REASON_LENGTH);
+export function developerVideoFailureReason(reason: string): string {
+	return reason.replace(/https?:\/\/\S+/g, "[url]").slice(0, MAX_REASON_LENGTH);
 }
 
 export function createDeveloperVideoProcessingState(input: {
@@ -132,7 +132,7 @@ export function settlePart(
 			...state,
 			[part]: {
 				state: "unavailable",
-				reason: trimReason(outcome.reason),
+				reason: developerVideoFailureReason(outcome.reason),
 				retryAt: outcome.now + hlsRetryDelayMs(state.attempts[part]),
 			},
 		};
@@ -142,7 +142,10 @@ export function settlePart(
 		[part]:
 			state.attempts[part] < DEVELOPER_VIDEO_MAX_PART_ATTEMPTS
 				? { state: "pending" }
-				: { state: "failed", reason: trimReason(outcome.reason) },
+				: {
+						state: "failed",
+						reason: developerVideoFailureReason(outcome.reason),
+					},
 	};
 }
 
@@ -154,7 +157,10 @@ export function failUnfinishedParts(
 	for (const part of DEVELOPER_VIDEO_PARTS) {
 		const current = state[part];
 		if (current.state === "pending" || current.state === "running") {
-			next[part] = { state: "failed", reason: trimReason(reason) };
+			next[part] = {
+				state: "failed",
+				reason: developerVideoFailureReason(reason),
+			};
 		}
 	}
 	return next;

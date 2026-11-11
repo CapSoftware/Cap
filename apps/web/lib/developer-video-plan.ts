@@ -54,10 +54,10 @@ function even(value: number): number {
 	return Math.max(2, Math.round(value / 2) * 2);
 }
 
-function topRenditionPixels(
+function topRendition(
 	source: DeveloperVideoSource,
 	shortSide: number,
-): number {
+): { width: number; height: number } {
 	const sourceShort = Math.min(source.width, source.height);
 	const sourceLong = Math.max(source.width, source.height);
 	const scale = Math.min(
@@ -65,7 +65,14 @@ function topRenditionPixels(
 		shortSide / sourceShort,
 		MAX_ENCODE_DIMENSION / sourceLong,
 	);
-	return even(source.width * scale) * even(source.height * scale);
+	return {
+		width: even(source.width * scale),
+		height: even(source.height * scale),
+	};
+}
+
+function pixels(size: { width: number; height: number }): number {
+	return size.width * size.height;
 }
 
 export function planDeveloperVideoEncode(
@@ -80,13 +87,14 @@ export function planDeveloperVideoEncode(
 	const fitting = LADDER_TIERS.findIndex(
 		(tier, index) =>
 			index >= firstIndex &&
-			topRenditionPixels(source, tier.shortSide) <=
+			pixels(topRendition(source, tier.shortSide)) <=
 				pixelBudget * DEVELOPER_VIDEO_TIER_PIXEL_TOLERANCE,
 	);
-	const ladderTiers = LADDER_TIERS.slice(
+	const tiers = LADDER_TIERS.slice(
 		fitting === -1 ? LADDER_TIERS.length - 1 : fitting,
-	).map((tier) => tier.name);
-	const ladderMaxTier = ladderTiers[0] ?? "360p";
+	);
+	const ladderTiers = tiers.map((tier) => tier.name);
+	const top = topRendition(source, tiers[0]?.shortSide ?? 360);
 
 	const uploads = [
 		{
@@ -99,18 +107,11 @@ export function planDeveloperVideoEncode(
 		]),
 	];
 
-	const sourceLong = Math.max(source.width, source.height);
-	const pixelScale = Math.min(
-		1,
-		Math.sqrt(pixelBudget / (source.width * source.height)),
-		MAX_ENCODE_DIMENSION / sourceLong,
-	);
-	const mp4MaxDimension =
-		pixelScale >= 1
-			? sourceLong
-			: Math.max(2, Math.floor((sourceLong * pixelScale) / 2) * 2);
-
-	return { ladderMaxTier, uploads, mp4MaxDimension };
+	return {
+		ladderMaxTier: ladderTiers[0] ?? "360p",
+		uploads,
+		mp4MaxDimension: Math.max(top.width, top.height),
+	};
 }
 
 export function createDeveloperPlaybackId(): string {

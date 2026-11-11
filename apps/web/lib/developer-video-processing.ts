@@ -23,6 +23,7 @@ import {
 	createDeveloperVideoProcessingState,
 	type DeveloperVideoPartOutcome,
 	type DeveloperVideoRedrive,
+	developerVideoFailureReason,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
@@ -395,7 +396,10 @@ export async function failDeveloperVideoProcessing(
 	await mutateDeveloperVideo(videoId, (video) => {
 		if (!video.processing) {
 			return video.status === "processing"
-				? { status: "errored", errorReason: reason.slice(0, 500) }
+				? {
+						status: "errored",
+						errorReason: developerVideoFailureReason(reason),
+					}
 				: null;
 		}
 		return processingUpdate(
