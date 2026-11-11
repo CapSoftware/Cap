@@ -144,6 +144,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .readableWidth()
         .navigationTitle("Settings")
         .toolbarTitleDisplayMode(.inlineLarge)
         .refreshable {
@@ -252,6 +253,7 @@ struct ProfileSettingsView: View {
                 Section { ErrorText(error) }
             }
         }
+        .readableWidth()
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -364,6 +366,7 @@ struct DeleteAccountView: View {
                 .disabled(confirmation != "DELETE" || isDeleting)
             }
         }
+        .readableWidth()
         .navigationTitle("Delete account")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Delete your Cap account?", isPresented: $confirming, titleVisibility: .visible) {

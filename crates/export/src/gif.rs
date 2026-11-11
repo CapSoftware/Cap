@@ -8,6 +8,8 @@ use tracing::trace;
 
 use crate::{ExportError, ExporterBase, prepare_new_output};
 
+pub const DEFAULT_GIF_QUALITY: u8 = 90;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
     /// Encoding quality from 1-100 (default: 90)
@@ -104,7 +106,7 @@ impl GifExportSettings {
         let quality = self
             .quality
             .map(|q| cap_enc_gif::GifQuality {
-                quality: q.quality.unwrap_or(90),
+                quality: q.quality.unwrap_or(DEFAULT_GIF_QUALITY),
                 fast: q.fast.unwrap_or(false),
             })
             .unwrap_or_default();

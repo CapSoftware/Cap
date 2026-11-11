@@ -198,7 +198,7 @@ pub fn free_bytes_for_path(path: &Path) -> io::Result<u64> {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
 
-    let probe_path = extended_length_path(resolve_existing_ancestor(path));
+    let probe_path = extended_length_path(existing_directory(path));
     let mut wide: Vec<u16> = probe_path.as_os_str().encode_wide().collect();
     if wide.last().copied() != Some(0) {
         wide.push(0);
@@ -257,6 +257,21 @@ fn extended_length_path(path: PathBuf) -> PathBuf {
     let mut extended = OsString::from(prefix);
     extended.push(OsString::from_wide(&rest[..end]));
     PathBuf::from(extended)
+}
+
+// GetDiskFreeSpaceExW only takes a directory and fails on a file, which is
+// what an export passes when it overwrites an earlier export.
+#[cfg(windows)]
+fn existing_directory(path: &Path) -> PathBuf {
+    let existing = resolve_existing_ancestor(path);
+    if existing.is_dir() {
+        return existing;
+    }
+    match existing.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        Some(_) => PathBuf::from("."),
+        None => existing,
+    }
 }
 
 fn resolve_existing_ancestor(path: &Path) -> std::path::PathBuf {
@@ -622,6 +637,19 @@ mod tests {
         let sampled = RecordingStorageMonitor::default().sample(&project).unwrap();
         assert_eq!(sampled.recording_bytes, 144);
         assert!(sampled.available_bytes > 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_bytes_for_an_existing_file() {
+        let root = tempfile::tempdir().unwrap();
+        let export = root.path().join("export.mp4");
+        std::fs::write(&export, [0; 16]).unwrap();
+        assert!(free_bytes_for_path(&export).unwrap() > 0);
+
+        let long = directory_of_length(root.path(), 286).join("export.mp4");
+        std::fs::write(&long, [0; 16]).unwrap();
+        assert!(free_bytes_for_path(&long).unwrap() > 0);
     }
 
     #[cfg(windows)]
