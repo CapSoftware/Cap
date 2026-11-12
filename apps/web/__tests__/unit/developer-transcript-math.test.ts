@@ -12,6 +12,8 @@ import {
 	isStaleDeveloperUpload,
 	isTranscriptStatus,
 	measuredTranscriptDuration,
+	publicSourceUrl,
+	publicTranscriptWords,
 	serializeTranscript,
 	type TranscriptSummaryRow,
 	toAgentDeveloperTranscript,
@@ -19,6 +21,7 @@ import {
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptUploadExpiry,
 	transcriptWordCount,
 } from "@/lib/developer-transcripts";
 
@@ -155,13 +158,8 @@ describe("transcript result", () => {
 			],
 		});
 		expect(result.text).toBe("Hello there. General Kenobi");
-		expect(result.words[0]).toEqual({
-			text: "Hello",
-			start: 0,
-			end: 0.4,
-			confidence: 0.99,
-		});
-		expect(result.words[1]?.confidence).toBeNull();
+		expect(result.words[0]).toEqual({ text: "Hello", start: 0, end: 0.4 });
+		expect(JSON.stringify(result)).not.toContain("confidence");
 		expect(result.segments).toEqual([
 			{ text: "Hello there.", start: 0, end: 0.9 },
 			{ text: "General Kenobi", start: 2.6, end: 3.5 },
@@ -410,8 +408,8 @@ describe("audio with no speech", () => {
 			transcriptWordCount({
 				text: "hello world",
 				words: [
-					{ text: "hello", start: 0, end: 0.4, confidence: null },
-					{ text: "world", start: 0.5, end: 0.9, confidence: null },
+					{ text: "hello", start: 0, end: 0.4 },
+					{ text: "world", start: 0.5, end: 0.9 },
 				],
 			}),
 		).toBe(2);
@@ -478,5 +476,99 @@ describe("audio with no speech", () => {
 			costMicroCredits: 0,
 			error: { code: "no_speech", message: "No speech was found in the audio" },
 		});
+	});
+});
+
+describe("what a response never carries", () => {
+	it("returns a URL source without its query string or fragment", () => {
+		const signed = row({
+			sourceType: "url",
+			sourceUrl:
+				"https://files.example.com/private/call.mp3?sig=abc123&expires=1794500000#t=10",
+		});
+		expect(serializeTranscript(signed).source).toEqual({
+			type: "url",
+			url: "https://files.example.com/private/call.mp3",
+		});
+		expect(toAgentDeveloperTranscript(signed).sourceUrl).toBe(
+			"https://files.example.com/private/call.mp3",
+		);
+		for (const shape of [
+			serializeTranscript(signed, { includeText: true }),
+			toAgentDeveloperTranscript(signed),
+		]) {
+			const body = JSON.stringify(shape);
+			expect(body).not.toContain("abc123");
+			expect(body).not.toContain("expires=");
+			expect(body).not.toContain("#t=10");
+		}
+	});
+
+	it("leaves a URL with no query string as it is", () => {
+		expect(publicSourceUrl("https://a.example/talk.mp3")).toBe(
+			"https://a.example/talk.mp3",
+		);
+		expect(publicSourceUrl("https://a.example/t.mp3#frag")).toBe(
+			"https://a.example/t.mp3",
+		);
+		expect(publicSourceUrl("https://a.example/?only=query")).toBe(
+			"https://a.example/",
+		);
+		expect(publicSourceUrl(null)).toBeNull();
+	});
+
+	it("drops word confidence from results stored before it was removed", () => {
+		expect(
+			publicTranscriptWords([
+				{ text: "hello", start: 0, end: 0.4, confidence: null } as never,
+				{ text: "world", start: 0.5, end: 0.9, confidence: 0.9 } as never,
+			]),
+		).toEqual([
+			{ text: "hello", start: 0, end: 0.4 },
+			{ text: "world", start: 0.5, end: 0.9 },
+		]);
+	});
+});
+
+describe("transcript timestamps", () => {
+	it("never reports updatedAt earlier than completedAt", () => {
+		const settled = row({
+			status: "complete",
+			updatedAt: new Date("2026-11-12T14:00:05.000Z"),
+			completedAt: new Date("2026-11-12T14:00:06.000Z"),
+		});
+		expect(serializeTranscript(settled)).toMatchObject({
+			updatedAt: "2026-11-12T14:00:06.000Z",
+			completedAt: "2026-11-12T14:00:06.000Z",
+		});
+		expect(toAgentDeveloperTranscript(settled)).toMatchObject({
+			updatedAt: "2026-11-12T14:00:06.000Z",
+			completedAt: "2026-11-12T14:00:06.000Z",
+		});
+	});
+
+	it("keeps a later updatedAt and an unfinished transcript as they are", () => {
+		const later = row({
+			updatedAt: new Date("2026-11-12T14:00:09.000Z"),
+			completedAt: new Date("2026-11-12T14:00:06.000Z"),
+		});
+		expect(serializeTranscript(later).updatedAt).toBe(
+			"2026-11-12T14:00:09.000Z",
+		);
+		const running = row({
+			updatedAt: new Date("2026-11-12T14:00:02.000Z"),
+			completedAt: null,
+		});
+		expect(serializeTranscript(running).updatedAt).toBe(
+			"2026-11-12T14:00:02.000Z",
+		);
+	});
+
+	it("puts an upload URL's expiry one hour after it was issued", () => {
+		expect(
+			transcriptUploadExpiry({
+				updatedAt: new Date("2026-11-12T14:28:41.000Z"),
+			}).toISOString(),
+		).toBe("2026-11-12T15:28:41.000Z");
 	});
 });
