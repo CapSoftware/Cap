@@ -185,9 +185,21 @@ export async function fetchPublicMedia(
 	}
 }
 
+export class StreamTooLargeError extends Error {
+	constructor(readonly maxBytes: number) {
+		super(`The stream is larger than ${maxBytes} bytes`);
+		this.name = "StreamTooLargeError";
+	}
+}
+
 export function limitStreamBytes(
 	stream: ReadableStream<Uint8Array>,
 	maxBytes: number,
+	tooLarge: () => Error = () =>
+		new PublicMediaFetchError(
+			"too_large",
+			"The file at the URL is larger than the limit",
+		),
 ): ReadableStream<Uint8Array> {
 	let total = 0;
 	return stream.pipeThrough(
@@ -195,16 +207,29 @@ export function limitStreamBytes(
 			transform(chunk, controller) {
 				total += chunk.byteLength;
 				if (total > maxBytes) {
-					controller.error(
-						new PublicMediaFetchError(
-							"too_large",
-							"The file at the URL is larger than the limit",
-						),
-					);
+					controller.error(tooLarge());
 					return;
 				}
 				controller.enqueue(chunk);
 			},
 		}),
 	);
+}
+
+export async function readStreamBounded(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes: number,
+): Promise<Buffer> {
+	const reader = limitStreamBytes(
+		stream,
+		maxBytes,
+		() => new StreamTooLargeError(maxBytes),
+	).getReader();
+	const chunks: Uint8Array[] = [];
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks);
 }

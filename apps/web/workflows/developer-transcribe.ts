@@ -7,7 +7,12 @@ import { pipeline } from "node:stream/promises";
 import { db } from "@cap/database";
 import { developerTranscripts } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { extractAudioFromUrl } from "@/lib/audio-extract";
+import {
+	extractTranscriptAudioBytes,
+	TRANSCRIPT_AUDIO_BITS_PER_SECOND,
+	TRANSCRIPT_AUDIO_MAX_BYTES,
+	TRANSCRIPT_AUDIO_MAX_SECONDS,
+} from "@/lib/developer-transcript-audio";
 import {
 	INSUFFICIENT_CREDITS_MESSAGE,
 	reserveTranscriptCredits,
@@ -33,7 +38,6 @@ import {
 import {
 	buildTranscriptResult,
 	measuredTranscriptDuration,
-	TRANSCRIPT_MAX_DURATION_SECONDS,
 	TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_BYTES,
@@ -41,11 +45,6 @@ import {
 	type TranscriptResultObject,
 	transcriptObjectKeys,
 } from "@/lib/developer-transcripts";
-import {
-	checkHasAudioTrackViaMediaServer,
-	convertAudioToMp3ViaMediaServer,
-	isMediaServerConfigured,
-} from "@/lib/media-client";
 import {
 	isSelfContainedMedia,
 	MEDIA_CONTAINER_SNIFF_BYTES,
@@ -55,12 +54,12 @@ import {
 	fetchPublicMedia,
 	limitStreamBytes,
 	PublicMediaFetchError,
+	readStreamBounded,
+	StreamTooLargeError,
 } from "@/lib/public-media-fetch";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
 
 const URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
-const EXTRACTED_AUDIO_BITS_PER_SECOND = 128_000;
-const DURATION_LIMIT_SLACK_SECONDS = 1;
 
 type StepFailure = { ok: false; code: TranscriptErrorCode; message: string };
 
@@ -310,36 +309,6 @@ async function sourceIsSelfContainedMedia(sourceUrl: string) {
 	return isSelfContainedMedia(head.subarray(0, filled));
 }
 
-const LOCAL_NO_AUDIO_PATTERN =
-	/does not contain any stream|matches no streams/i;
-
-async function extractAudioBytes(sourceUrl: string): Promise<Buffer | null> {
-	if (isMediaServerConfigured()) {
-		try {
-			return await convertAudioToMp3ViaMediaServer(sourceUrl);
-		} catch (error) {
-			const hasAudio = await checkHasAudioTrackViaMediaServer(sourceUrl).catch(
-				() => null,
-			);
-			if (hasAudio === false) return null;
-			throw error;
-		}
-	}
-
-	try {
-		const extracted = await extractAudioFromUrl(sourceUrl);
-		try {
-			return await fs.readFile(extracted.filePath);
-		} finally {
-			await extracted.cleanup();
-		}
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		if (LOCAL_NO_AUDIO_PATTERN.test(message)) return null;
-		throw error;
-	}
-}
-
 async function extractTranscriptAudio(
 	transcriptId: string,
 ): Promise<{ ok: true } | StepFailure> {
@@ -354,20 +323,20 @@ async function extractTranscriptAudio(
 	if (!(await sourceIsSelfContainedMedia(sourceUrl))) {
 		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
 	}
-	const audio = await extractAudioBytes(sourceUrl);
-
-	if (audio === null || audio.length === 0) {
+	const extracted = await extractTranscriptAudioBytes(sourceUrl);
+	if (extracted.state === "too_long") {
+		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+	}
+	if (extracted.state === "no_audio" || extracted.audio.length === 0) {
 		return failure("no_audio_track", FAILURE_MESSAGES.no_audio_track);
 	}
+	const { audio } = extracted;
 
 	const durationSeconds =
 		measureMp3DurationSeconds(audio) ??
-		(audio.length * 8) / EXTRACTED_AUDIO_BITS_PER_SECOND;
+		(audio.length * 8) / TRANSCRIPT_AUDIO_BITS_PER_SECOND;
 
-	if (
-		durationSeconds >
-		TRANSCRIPT_MAX_DURATION_SECONDS + DURATION_LIMIT_SLACK_SECONDS
-	) {
+	if (durationSeconds > TRANSCRIPT_AUDIO_MAX_SECONDS) {
 		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
 	}
 
@@ -418,10 +387,21 @@ async function transcribeTranscriptAudio(
 	const audioResponse = await fetchStorageUrl(
 		await developerObjectUrl(keys.audio),
 	);
-	if (!audioResponse.ok) {
+	if (!audioResponse.ok || !audioResponse.body) {
 		throw new Error(`Extracted audio is not readable: ${audioResponse.status}`);
 	}
-	const audio = Buffer.from(await audioResponse.arrayBuffer());
+	let audio: Buffer;
+	try {
+		audio = await readStreamBounded(
+			audioResponse.body,
+			TRANSCRIPT_AUDIO_MAX_BYTES,
+		);
+	} catch (error) {
+		if (error instanceof StreamTooLargeError) {
+			return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+		}
+		throw error;
+	}
 
 	const speech = await transcribeSpeech(
 		audio,
