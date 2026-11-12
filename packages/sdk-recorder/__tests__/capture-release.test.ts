@@ -109,7 +109,9 @@ test.each(["recording", "paused", "upload failure"] as const)(
 				}
 				if (input.endsWith("/presign-part")) {
 					return Response.json({
-						presignedUrl: "https://fixture.invalid/part",
+						parts: [
+							{ partNumber: 1, presignedUrl: "https://fixture.invalid/part" },
+						],
 					});
 				}
 				if (input === "https://fixture.invalid/part") {
@@ -192,7 +194,9 @@ test.each(["explicit replacement", "source-ended replacement", "destroy only"])(
 				}
 				if (input.endsWith("/presign-part")) {
 					return Response.json({
-						presignedUrl: "https://fixture.invalid/part",
+						parts: [
+							{ partNumber: 1, presignedUrl: "https://fixture.invalid/part" },
+						],
 					});
 				}
 				if (input === "https://fixture.invalid/part") {
@@ -318,7 +322,12 @@ test.each([
 					return Response.json({ uploadId: "upload" });
 				if (input.endsWith("/presign-part"))
 					return Response.json({
-						presignedUrl: `https://fixture.invalid/part/${body.videoId}`,
+						parts: [
+							{
+								partNumber: 1,
+								presignedUrl: `https://fixture.invalid/part/${body.videoId}`,
+							},
+						],
 					});
 				if (input.startsWith("https://fixture.invalid/part/")) {
 					if (input.endsWith("/old") && stage === "upload")

@@ -104,7 +104,9 @@ beforeEach(() => {
 	vi.stubGlobal("fetch", async (url: string) => {
 		if (url.endsWith("/initiate")) return Response.json({ uploadId: "upload" });
 		if (url.endsWith("/presign-part"))
-			return Response.json({ presignedUrl: "https://storage.test/part" });
+			return Response.json({
+				parts: [{ partNumber: 1, presignedUrl: "https://storage.test/part" }],
+			});
 		return new Response("{}", {
 			headers: { ETag: "etag", "Content-Type": "application/json" },
 		});
