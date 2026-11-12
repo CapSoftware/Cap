@@ -9,11 +9,13 @@ vi.mock("@cap/env", () => ({
 
 import {
 	developerVideoIsReady,
+	developerVideoPageUrls,
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
 import {
 	INFRA_VIDEO_FAILURE_FALLBACK,
 	infraRefreshDelayMs,
+	infraVideoEmbedCode,
 	infraVideoFailure,
 	infraVideoIsChanging,
 	infraVideoState,
@@ -41,11 +43,13 @@ const LIST_FIELDS = [
 
 const DETAIL_FIELDS = [
 	...LIST_FIELDS,
+	"embedCode",
 	"failure",
 	"height",
 	"hlsUrl",
 	"mp4Url",
 	"posterUrl",
+	"shareUrl",
 	"sizes",
 	"stillEncoding",
 	"storedBytes",
@@ -194,6 +198,66 @@ describe("console video payload", () => {
 			toInfraVideoDetail(video, developerVideoPlaybackUrls(video))
 				.stillEncoding,
 		).toBe(false);
+	});
+
+	describe("share link and embed code", () => {
+		const PAGE = "https://web.example/dev/playback-id-0123456789ab";
+		const page = developerVideoPageUrls("playback-id-0123456789ab");
+
+		it("gives a video its hosted player link and an iframe in its own shape", () => {
+			const video = row({ status: "ready", width: 1080, height: 1920 });
+
+			const detail = toInfraVideoDetail(
+				video,
+				developerVideoPlaybackUrls(video),
+				page,
+			);
+
+			expect(detail.shareUrl).toBe(PAGE);
+			expect(detail.embedCode).toBe(
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`,
+			);
+		});
+
+		it("offers them while the video is still processing", () => {
+			const video = row({ status: "processing", width: null, height: null });
+
+			const detail = toInfraVideoDetail(
+				video,
+				developerVideoPlaybackUrls(video),
+				page,
+			);
+
+			expect(detail.hlsUrl).toBeNull();
+			expect(detail.shareUrl).toBe(PAGE);
+			expect(detail.embedCode).toContain("aspect-ratio: 16 / 9;");
+		});
+
+		it("offers neither for a failed video or one with no player page", () => {
+			const failed = row({ status: "errored", errorReason: "x" });
+			const ready = row({ status: "ready" });
+
+			expect(
+				toInfraVideoDetail(failed, developerVideoPlaybackUrls(failed), page),
+			).toMatchObject({ shareUrl: null, embedCode: null });
+			expect(
+				toInfraVideoDetail(ready, developerVideoPlaybackUrls(ready)),
+			).toMatchObject({ shareUrl: null, embedCode: null });
+		});
+
+		it("keeps a video name from breaking out of the title attribute", () => {
+			const code = infraVideoEmbedCode(`${PAGE}/embed`, {
+				name: 'Demo "one" <script>alert(1)</script> & more',
+				width: 1920,
+				height: 1080,
+			});
+
+			expect(code).toContain(
+				'title="Demo &quot;one&quot; &lt;script&gt;alert(1)&lt;/script&gt; &amp; more"',
+			);
+			expect(code.match(/<script/g)).toBeNull();
+			expect(code.split('"').length).toBe(9);
+		});
 	});
 
 	it("gives a failed video a customer-worded reason and no links", () => {

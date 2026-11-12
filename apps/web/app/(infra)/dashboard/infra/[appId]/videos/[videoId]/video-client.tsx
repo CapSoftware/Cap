@@ -330,6 +330,16 @@ export function VideoClient({
 				</dl>
 			</div>
 
+			{video.shareUrl && video.embedCode && (
+				<Block
+					title="Share and embed"
+					description="A hosted player for this video. Send the link to a viewer, or paste the embed code into a page."
+				>
+					<KeyRow label="Share link" value={video.shareUrl} />
+					<KeyRow label="Embed code" value={video.embedCode} />
+				</Block>
+			)}
+
 			<Block
 				title="Links"
 				description={
