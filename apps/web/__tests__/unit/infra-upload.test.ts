@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	BUSY_COMPLETE_ATTEMPTS,
+	COMPLETION_IN_PROGRESS,
+	completeRetryPlan,
 	isDefinitiveRejection,
 	partBytesFor,
 	presignBatch,
@@ -77,5 +80,42 @@ describe("presignBatch", () => {
 			part += presignBatch(part, 200).length;
 		}
 		expect(requests).toBe(10);
+	});
+});
+
+describe("a completion another request is already running", () => {
+	it("is not a final rejection, unlike other 4xx answers", () => {
+		expect(isDefinitiveRejection(409, COMPLETION_IN_PROGRESS)).toBe(false);
+		expect(isDefinitiveRejection(409, "upload_removed")).toBe(true);
+		expect(isDefinitiveRejection(409)).toBe(true);
+		expect(isDefinitiveRejection(402, "insufficient_credits")).toBe(true);
+		expect(isDefinitiveRejection(500, null)).toBe(false);
+	});
+
+	it("is retried more times, at a steady pace", () => {
+		expect(completeRetryPlan(1, COMPLETION_IN_PROGRESS, 3)).toEqual({
+			retry: true,
+			waitMs: 3000,
+		});
+		expect(
+			completeRetryPlan(BUSY_COMPLETE_ATTEMPTS - 1, COMPLETION_IN_PROGRESS, 3)
+				.retry,
+		).toBe(true);
+		expect(
+			completeRetryPlan(BUSY_COMPLETE_ATTEMPTS, COMPLETION_IN_PROGRESS, 3)
+				.retry,
+		).toBe(false);
+	});
+
+	it("keeps the usual plan for a lost response", () => {
+		expect(completeRetryPlan(1, null, 3)).toEqual({
+			retry: true,
+			waitMs: 1500,
+		});
+		expect(completeRetryPlan(2, null, 3)).toEqual({
+			retry: true,
+			waitMs: 3000,
+		});
+		expect(completeRetryPlan(3, null, 3).retry).toBe(false);
 	});
 });

@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
 	deleteObject: vi.fn(),
 	unrecorded: [] as { id: string; appId: string; s3Key: string | null }[],
 	deletedAt: null as Date | null,
+	maxTier: "1080p" as string,
+	status: "uploading" as string,
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
@@ -42,16 +44,21 @@ vi.mock("@/lib/infra-standing", async (importOriginal) => ({
 
 vi.mock("@cap/database", async () => {
 	const { developerVideos } = await import("@cap/database/schema");
+	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
+	const dialect = new MySqlDialect();
+	type Condition = Parameters<typeof dialect.sqlToQuery>[0];
 
-	const selectRows = (fields: Record<string, unknown>) => {
+	const selectRows = (fields: Record<string, unknown>, where?: Condition) => {
 		const keys = Object.keys(fields).sort().join(",");
-		if (keys === "appId,deletedAt,duration,s3Key") {
+		if (keys === "appId,deletedAt,duration,maxResolutionTier,s3Key,status") {
 			return [
 				{
 					appId: "app-1",
 					s3Key: S3_KEY,
 					duration: mocks.storedDuration,
 					deletedAt: mocks.deletedAt,
+					maxResolutionTier: mocks.maxTier,
+					status: mocks.status,
 				},
 			];
 		}
@@ -59,7 +66,18 @@ vi.mock("@cap/database", async () => {
 			return [{ id: "video-1" }];
 		}
 		if (keys === "appId,id,s3Key") {
-			return mocks.unrecorded;
+			const cursor = where
+				? dialect
+						.sqlToQuery(where)
+						.params.filter(
+							(param): param is string =>
+								typeof param === "string" && !/^\d{4}-/.test(param),
+						)
+				: [];
+			const [after = "", upTo] = cursor;
+			return mocks.unrecorded.filter(
+				(row) => row.id > after && (upTo === undefined || row.id <= upTo),
+			);
 		}
 		if (keys === "deletedAt,duration,status,updatedAt") {
 			return [
@@ -107,10 +125,11 @@ vi.mock("@cap/database", async () => {
 
 	const selectChain = (fields: Record<string, unknown>) => ({
 		from: () => ({
-			where: () => {
-				const rows = Promise.resolve().then(() => selectRows(fields));
+			where: (where?: Condition) => {
+				const rows = Promise.resolve().then(() => selectRows(fields, where));
 				const result = Object.assign(rows, {
 					limit: () => result,
+					orderBy: () => result,
 					for: () => {
 						mocks.events.push("lock");
 						return result;
@@ -271,6 +290,8 @@ describe("developer SDK multipart completion", () => {
 		mocks.creditTransactions = [];
 		mocks.videoUpdates = [];
 		mocks.deletedAt = null;
+		mocks.maxTier = "1080p";
+		mocks.status = "uploading";
 		mocks.admission.mockReset();
 		mocks.admission.mockResolvedValue(admitted);
 		mocks.claim.mockReset();
@@ -371,6 +392,9 @@ describe("developer SDK multipart completion", () => {
 		const response = await complete({ durationInSecs: 60 });
 
 		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "completion_in_progress",
+		});
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(mocks.videoUpdates).toEqual([]);
 		expect(mocks.startProcessing).not.toHaveBeenCalled();
@@ -530,6 +554,8 @@ describe("developer SDK multipart completion", () => {
 			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
 		];
 
+		mocks.maxTier = "2160p";
+
 		await complete({ durationInSecs: 90, width: 3840, height: 2160 });
 
 		const video = {
@@ -554,6 +580,24 @@ describe("developer SDK multipart completion", () => {
 			expect.anything(),
 			own,
 		);
+	});
+
+	it("prices a 4K source capped at 1080p as 1080p in both admission checks", async () => {
+		mocks.storedParts = [
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
+		];
+		mocks.maxTier = "1080p";
+
+		await complete({ durationInSecs: 90, width: 3840, height: 2160 });
+
+		expect(mocks.admission).toHaveBeenCalledTimes(2);
+		for (const call of mocks.admission.mock.calls) {
+			expect(call[1]).toMatchObject({
+				width: 3840,
+				height: 2160,
+				tier: "1080p",
+			});
+		}
 	});
 
 	it("refuses with 402 and the amount needed, and leaves the upload open for a retry", async () => {
@@ -797,6 +841,47 @@ describe("removing files that were assembled but never recorded", () => {
 
 		expect(response.status).toBe(404);
 		expect(mocks.storedDuration).toBe(null);
+	});
+
+	it("leaves an old video's freshly assembled file alone until the file is a day old, then removes it", async () => {
+		mocks.unrecorded = [row("late")];
+		const assembledAt = hoursAgo(1);
+		mocks.headObject.mockImplementation(() =>
+			Effect.succeed({ LastModified: assembledAt }),
+		);
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
+
+		const nextDay = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+		expect(await removeUnrecordedInfraFiles(nextDay)).toBe(1);
+		expect(mocks.videoUpdates).toEqual([{ deletedAt: nextDay }]);
+		expect(mocks.deleteObject).toHaveBeenCalledWith(
+			"developer/app-1/late/video",
+		);
+	});
+
+	it("visits every unfinished video once from any starting point", async () => {
+		mocks.unrecorded = ["a", "h", "p", "z"].map((id) => ({
+			id,
+			appId: "app-1",
+			s3Key: `developer/app-1/${id}/video`,
+		}));
+		mocks.headObject.mockImplementation(() =>
+			Effect.fail(new Error("not found")),
+		);
+
+		for (const start of ["", "k", "zz"]) {
+			mocks.headObject.mockClear();
+			await removeUnrecordedInfraFiles(now, start);
+			expect(
+				mocks.headObject.mock.calls.map(([key]) => String(key)).sort(),
+			).toEqual(
+				["a", "h", "p", "z"].map((id) => `developer/app-1/${id}/video`),
+			);
+		}
 	});
 
 	it("leaves a file assembled within the last day, and a video with no file", async () => {

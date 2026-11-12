@@ -37,7 +37,14 @@ const video = (
 	width: number,
 	height: number,
 	extra: { status?: string | null; maxResolutionTier?: string | null } = {},
-) => billableVideo({ duration: seconds, width, height, ...extra });
+) =>
+	billableVideo({
+		duration: seconds,
+		width,
+		height,
+		maxResolutionTier: null,
+		...extra,
+	});
 
 describe("storage tier by pixel count", () => {
 	it("keeps 1920x1080 in the 1080p tier and moves one pixel more to 1440p", () => {
@@ -83,9 +90,14 @@ describe("billable video", () => {
 	});
 
 	it("does not bill a video with no duration yet", () => {
-		expect(billableVideo({ duration: null, width: 1920, height: 1080 })).toBe(
-			null,
-		);
+		expect(
+			billableVideo({
+				duration: null,
+				width: 1920,
+				height: 1080,
+				maxResolutionTier: null,
+			}),
+		).toBe(null);
 		expect(video(0, 1920, 1080)).toBe(null);
 		expect(video(Number.NaN, 1920, 1080)).toBe(null);
 		expect(video(-5, 1920, 1080)).toBe(null);
@@ -93,7 +105,12 @@ describe("billable video", () => {
 
 	it("bills a video with no known size at the lowest tier", () => {
 		expect(
-			billableVideo({ duration: 60, width: null, height: null })?.tier,
+			billableVideo({
+				duration: 60,
+				width: null,
+				height: null,
+				maxResolutionTier: null,
+			})?.tier,
 		).toBe("1080p");
 	});
 

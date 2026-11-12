@@ -46,14 +46,16 @@ export function videoStorageTier(
 		: sourceTier;
 }
 
-export function billableVideo(video: {
+export type BillableVideoRow = {
 	duration: number | null | undefined;
 	width: number | null | undefined;
 	height: number | null | undefined;
+	maxResolutionTier: string | null | undefined;
 	status?: string | null;
-	maxResolutionTier?: string | null;
 	includeProcessing?: boolean;
-}): BillableVideo | null {
+};
+
+export function billableVideo(video: BillableVideoRow): BillableVideo | null {
 	if (
 		video.status !== undefined &&
 		video.status !== "ready" &&

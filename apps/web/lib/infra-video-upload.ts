@@ -1,15 +1,11 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import {
-	developerApps,
-	developerCreditAccounts,
-	developerVideos,
-} from "@cap/database/schema";
+import { developerApps, developerVideos } from "@cap/database/schema";
 import type { DeveloperVideoResolutionTier } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import type { User } from "@cap/web-domain";
-import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
 import {
@@ -23,10 +19,12 @@ import {
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
 import { canUseInfra } from "@/lib/infra-access";
+import { lockInfraAccount } from "@/lib/infra-balance";
 import {
 	getInfraUploadAdmission,
 	uploadAdmissionError,
 } from "@/lib/infra-standing";
+import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { runPromise } from "@/lib/server";
 
 export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
@@ -97,6 +95,8 @@ async function findAppVideo(appId: string, videoId: string) {
 			s3Key: developerVideos.s3Key,
 			duration: developerVideos.duration,
 			deletedAt: developerVideos.deletedAt,
+			maxResolutionTier: developerVideos.maxResolutionTier,
+			status: developerVideos.status,
 		})
 		.from(developerVideos)
 		.where(eq(developerVideos.id, videoId))
@@ -330,6 +330,7 @@ export async function completeInfraUpload({
 			durationSeconds: storedDuration,
 			width,
 			height,
+			maxResolutionTier: video.maxResolutionTier,
 		};
 
 		if (!measured.assembled) {
@@ -346,7 +347,11 @@ export async function completeInfraUpload({
 		}
 		if (!claim) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			return fail(409, "This upload is already being completed");
+			return fail(
+				409,
+				"Another request is completing this upload. Try again shortly.",
+				{ code: COMPLETION_IN_PROGRESS },
+			);
 		}
 
 		if (!measured.assembled) {
@@ -375,12 +380,7 @@ export async function completeInfraUpload({
 		if (fps !== undefined) updates.fps = fps;
 
 		const admission = await db().transaction(async (tx) => {
-			await tx
-				.select({ id: developerCreditAccounts.id })
-				.from(developerCreditAccounts)
-				.where(eq(developerCreditAccounts.appId, appId))
-				.limit(1)
-				.for("update");
+			await lockInfraAccount(tx, appId);
 
 			const [current] = await tx
 				.select({
@@ -462,8 +462,8 @@ async function removeStoredFile(s3Key: string) {
 }
 
 const UNRECORDED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const UNRECORDED_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
-const UNRECORDED_BATCH = 500;
+const UNRECORDED_PAGE = 200;
+const UNRECORDED_ROWS_PER_RUN = 1_000;
 
 async function retireUnrecordedVideo(
 	appId: string,
@@ -471,12 +471,7 @@ async function retireUnrecordedVideo(
 	now: Date,
 ) {
 	return db().transaction(async (tx) => {
-		await tx
-			.select({ id: developerCreditAccounts.id })
-			.from(developerCreditAccounts)
-			.where(eq(developerCreditAccounts.appId, appId))
-			.limit(1)
-			.for("update");
+		await lockInfraAccount(tx, appId);
 
 		const [current] = await tx
 			.select({
@@ -499,8 +494,12 @@ async function retireUnrecordedVideo(
 	});
 }
 
-export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
-	const rows = await db()
+async function unrecordedVideosPage(
+	now: Date,
+	after: string,
+	upTo: string | null,
+) {
+	return db()
 		.select({
 			id: developerVideos.id,
 			appId: developerVideos.appId,
@@ -510,39 +509,67 @@ export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
 		.where(
 			and(
 				isNull(developerVideos.duration),
+				isNull(developerVideos.deletedAt),
 				isNotNull(developerVideos.s3Key),
 				lt(
 					developerVideos.createdAt,
 					new Date(now.getTime() - UNRECORDED_FILE_MAX_AGE_MS),
 				),
-				gt(
-					developerVideos.createdAt,
-					new Date(now.getTime() - UNRECORDED_LOOKBACK_MS),
-				),
+				gt(developerVideos.id, after),
+				upTo === null ? undefined : lte(developerVideos.id, upTo),
 			),
 		)
-		.limit(UNRECORDED_BATCH);
+		.orderBy(asc(developerVideos.id))
+		.limit(UNRECORDED_PAGE);
+}
 
+async function removeUnrecordedFile(
+	row: { id: string; appId: string; s3Key: string | null },
+	now: Date,
+) {
+	const s3Key = row.s3Key;
+	if (!s3Key) return false;
+	const stale = await Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const object = yield* bucket.headObject(s3Key);
+		const modified = object.LastModified?.getTime() ?? 0;
+		return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
+	})
+		.pipe(provideOptionalAuth, runPromise)
+		.catch(() => false);
+	if (!stale) return false;
+	const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
+		(error) => {
+			console.error("Error retiring an unrecorded upload:", row.id, error);
+			return false;
+		},
+	);
+	return retired && (await removeStoredFile(s3Key));
+}
+
+export async function removeUnrecordedInfraFiles(
+	now: Date = new Date(),
+	start: string = nanoId(),
+) {
 	let removed = 0;
-	for (const row of rows) {
-		const s3Key = row.s3Key;
-		if (!s3Key) continue;
-		const stale = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-			const object = yield* bucket.headObject(s3Key);
-			const modified = object.LastModified?.getTime() ?? 0;
-			return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
-		})
-			.pipe(provideOptionalAuth, runPromise)
-			.catch(() => false);
-		if (!stale) continue;
-		const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
-			(error) => {
-				console.error("Error retiring an unrecorded upload:", row.id, error);
-				return false;
-			},
-		);
-		if (retired && (await removeStoredFile(s3Key))) removed++;
+	let examined = 0;
+	let after = start;
+	let wrapped = false;
+	while (examined < UNRECORDED_ROWS_PER_RUN) {
+		const rows = await unrecordedVideosPage(now, after, wrapped ? start : null);
+		for (const row of rows) {
+			examined++;
+			if (await removeUnrecordedFile(row, now)) removed++;
+		}
+		const last = rows.at(-1);
+		if (rows.length === UNRECORDED_PAGE && last) {
+			after = last.id;
+		} else if (wrapped) {
+			break;
+		} else {
+			wrapped = true;
+			after = "";
+		}
 	}
 	return removed;
 }
@@ -605,6 +632,13 @@ export async function abortInfraUpload({
 	const video = await findAppVideo(appId, videoId);
 	if (!video) return fail(404, "Video not found");
 	if (!video.s3Key) return fail(400, "Video has no S3 key");
+	if (video.status === "processing" && video.duration === null) {
+		return fail(
+			409,
+			"Another request is completing this upload, so it cannot be aborted.",
+			{ code: COMPLETION_IN_PROGRESS },
+		);
+	}
 	const s3Key = video.s3Key;
 
 	try {

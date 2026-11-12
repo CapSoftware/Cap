@@ -72,7 +72,9 @@ vi.mock("@/workflows/process-developer-video", () => ({
 	processDeveloperVideoWorkflow: "workflow",
 }));
 
-const { completeInfraUpload } = await import("@/lib/infra-video-upload");
+const { abortInfraUpload, completeInfraUpload } = await import(
+	"@/lib/infra-video-upload"
+);
 
 const uploading = (overrides: Partial<DeveloperVideoFixture> = {}) =>
 	developerVideo({
@@ -168,10 +170,51 @@ describe("completing an upload through the processing claim", () => {
 		const result = await complete();
 
 		expect(result.status).toBe(409);
+		expect(result.body).toMatchObject({ code: "completion_in_progress" });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
 		expect(mocks.updates).toEqual([]);
 		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("refuses to abort while a completion holds the claim, then lets that completion finish", async () => {
+		mocks.video = uploading({
+			status: "processing",
+			processing: processingState({ startedAt: Date.now(), probe: null }),
+			updatedAt: new Date(),
+		});
+
+		const aborted = await abortInfraUpload({
+			appId: "app-1",
+			videoId: "video-1",
+			uploadId: "upload-1",
+		});
+
+		expect(aborted.status).toBe(409);
+		expect(aborted.body).toMatchObject({ code: "completion_in_progress" });
+		expect(mocks.video).toMatchObject({
+			status: "processing",
+			deletedAt: null,
+		});
+	});
+
+	it("passes the video's saved resolution cap to admission", async () => {
+		mocks.video = uploading({ maxResolutionTier: "1080p" });
+
+		await completeInfraUpload({
+			appId: "app-1",
+			videoId: "video-1",
+			uploadId: "upload-1",
+			parts: [{ partNumber: 1, etag: "etag-1", size: 10_000_000 }],
+			durationInSecs: 60,
+			width: 3840,
+			height: 2160,
+		});
+
+		expect(mocks.admission).toHaveBeenCalledTimes(2);
+		for (const call of mocks.admission.mock.calls) {
+			expect(call[1]).toMatchObject({ tier: "1080p" });
+		}
 	});
 
 	it("takes over a claim left by a completion that died before recording the video", async () => {

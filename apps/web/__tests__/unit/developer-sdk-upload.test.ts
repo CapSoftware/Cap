@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 		appId: string;
 		duration: number | null;
 		deletedAt: string | null;
+		status?: string;
 	},
 	admission: vi.fn(),
 	claim: vi.fn(),
@@ -123,7 +124,16 @@ beforeEach(() => {
 			}
 			return {
 				rows: video
-					? [[video.appId, s3Key, video.duration, video.deletedAt]]
+					? [
+							[
+								video.appId,
+								s3Key,
+								video.duration,
+								video.deletedAt,
+								"1080p",
+								video.status ?? "uploading",
+							],
+						]
 					: [],
 			};
 		}
@@ -262,6 +272,18 @@ describe("developer SDK multipart upload", () => {
 		});
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(writes()).toHaveLength(0);
+	});
+
+	it("refuses to abort an upload that another request is completing", async () => {
+		mocks.video = { ...inProgress, status: "processing" };
+
+		const response = await post("/abort", { uploadId: "upload-1" });
+
+		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "completion_in_progress",
+		});
+		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 
 	it("refuses to complete an upload for a deleted video", async () => {

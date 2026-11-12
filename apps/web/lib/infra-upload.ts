@@ -22,6 +22,23 @@ export function retryAfterMs(header: string | null) {
 	return Math.min(MAX_RETRY_MS, Math.ceil(seconds * 1000));
 }
 
-export function isDefinitiveRejection(status: number) {
+export const COMPLETION_IN_PROGRESS = "completion_in_progress";
+export const BUSY_COMPLETE_ATTEMPTS = 8;
+const BUSY_RETRY_MS = 3_000;
+
+export function isDefinitiveRejection(status: number, code?: string | null) {
+	if (code === COMPLETION_IN_PROGRESS) return false;
 	return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+export function completeRetryPlan(
+	attempt: number,
+	code: string | null | undefined,
+	attempts: number,
+) {
+	const busy = code === COMPLETION_IN_PROGRESS;
+	return {
+		retry: attempt < (busy ? BUSY_COMPLETE_ATTEMPTS : attempts),
+		waitMs: busy ? BUSY_RETRY_MS : 1500 * attempt,
+	};
 }

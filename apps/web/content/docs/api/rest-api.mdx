@@ -503,9 +503,18 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 
 Completing an upload charges nothing. The video's stored `duration` is the greater of the submitted duration and a minimum based on the part sizes reported by storage, bounded by what the uploaded bytes could hold and capped at four hours. Storage for the video is billed daily from then on, by its length and resolution tier. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
 
-The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as create, and the upload stays open so the same request succeeds after a top-up.
+The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as create, and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
 
-Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }`. Uploads for deleted videos return `404`. To upload a new file, create a new video.
+Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }`.
+
+Complete can itself return `409` with a `code`:
+
+| `code` | Meaning | What to do |
+|--------|---------|------------|
+| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
+| `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new video and upload the file again. |
+
+Abort also returns `409` with `completion_in_progress` while a completion holds the video. Uploads for deleted videos return `404`. To upload a new file, create a new video.
 
 #### Abort Upload
 

@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { infraAppPath } from "@/lib/infra-routes";
 import {
+	COMPLETION_IN_PROGRESS,
+	completeRetryPlan,
 	isDefinitiveRejection,
 	partBytesFor,
 	presignBatch,
@@ -24,6 +26,7 @@ class UploadError extends Error {
 	constructor(
 		message: string,
 		readonly status = 0,
+		readonly code: string | null = null,
 	) {
 		super(message);
 	}
@@ -80,11 +83,13 @@ async function call<T>(
 		const data = (await res.json().catch(() => ({}))) as T & {
 			error?: string;
 			message?: string;
+			code?: string;
 		};
 		if (!res.ok) {
 			throw new UploadError(
 				data.message ?? data.error ?? "The upload could not be started",
 				res.status,
+				typeof data.code === "string" ? data.code : null,
 			);
 		}
 		return data;
@@ -283,12 +288,14 @@ export function UploadDrop({ appId }: { appId: string }) {
 					outcome = "done";
 				} catch (error) {
 					const status = error instanceof UploadError ? error.status : 0;
-					if (isDefinitiveRejection(status)) {
+					const code = error instanceof UploadError ? error.code : null;
+					if (isDefinitiveRejection(status, code)) {
 						outcome = "open";
 						throw error;
 					}
-					if (attempt >= COMPLETE_ATTEMPTS) throw error;
-					await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+					const plan = completeRetryPlan(attempt, code, COMPLETE_ATTEMPTS);
+					if (!plan.retry) throw error;
+					await new Promise((resolve) => setTimeout(resolve, plan.waitMs));
 				}
 			}
 			setUpload({ phase: "idle" });
@@ -305,10 +312,17 @@ export function UploadDrop({ appId }: { appId: string }) {
 				router.refresh();
 				return;
 			}
+			let completingElsewhere = false;
 			if (videoId && uploadId) {
-				await call("/abort", { appId, videoId, uploadId }).catch(() => {});
+				await call("/abort", { appId, videoId, uploadId }).catch((failure) => {
+					completingElsewhere =
+						failure instanceof UploadError &&
+						failure.code === COMPLETION_IN_PROGRESS;
+				});
 			}
-			if (videoId) await deleteDeveloperVideo(appId, videoId).catch(() => {});
+			if (videoId && !completingElsewhere) {
+				await deleteDeveloperVideo(appId, videoId).catch(() => {});
+			}
 			if (signal.aborted) {
 				setUpload({ phase: "idle" });
 				return;

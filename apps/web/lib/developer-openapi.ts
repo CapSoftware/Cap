@@ -382,13 +382,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed and the upload stays open to complete after a top-up. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload completed."),
 					"402": response("PaymentRequired"),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -403,6 +404,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("AbortUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload was aborted."),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -700,6 +702,10 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				"A production app was called without an allowed Origin.",
 			),
 			NotFound: json(ref("Error"), "The video or route does not exist."),
+			CompletionInProgress: json(
+				ref("Error"),
+				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new video and upload again.",
+			),
 			UploadCompleted: json(
 				ref("Error"),
 				"The video's upload already completed. Create a new video to upload again.",
