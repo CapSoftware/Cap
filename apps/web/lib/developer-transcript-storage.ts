@@ -3,6 +3,7 @@ import { S3Buckets } from "@cap/web-backend/src/S3Buckets/index";
 import { Effect, ManagedRuntime, Option, Stream } from "effect";
 import {
 	DEVELOPER_UPLOAD_PREFIX,
+	isStaleDeveloperUpload,
 	TRANSCRIPT_UPLOAD_URL_TTL_SECONDS,
 } from "@/lib/developer-transcripts";
 
@@ -158,7 +159,7 @@ export function copyDeveloperObject(fromKey: string, toKey: string) {
 
 const SWEEP_MAX_PAGES = 50;
 
-export function sweepStaleDeveloperUploads(olderThan: Date) {
+export function sweepStaleDeveloperUploads(now: Date) {
 	return run(
 		Effect.gen(function* () {
 			const bucket = yield* defaultBucket;
@@ -173,7 +174,7 @@ export function sweepStaleDeveloperUploads(olderThan: Date) {
 				const stale = (listing.Contents ?? []).flatMap((object) =>
 					object.Key &&
 					object.LastModified &&
-					object.LastModified.getTime() < olderThan.getTime()
+					isStaleDeveloperUpload(object.Key, object.LastModified, now)
 						? [{ Key: object.Key }]
 						: [],
 				);

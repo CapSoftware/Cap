@@ -8,7 +8,7 @@ import {
 	createTranscriptUpload,
 	deleteTranscript,
 	getTranscript,
-	listTranscripts,
+	listConsoleTranscripts,
 	startTranscriptUpload,
 	type TranscriptUploadTarget,
 } from "@/lib/developer-transcript-store";
@@ -50,7 +50,18 @@ async function ownsApp(appId: string) {
 	return Boolean(app);
 }
 
-const toRow = (row: TranscriptSummaryRow): AudioTranscriptRow => ({
+type ConsoleTranscript = Pick<
+	TranscriptSummaryRow,
+	| "id"
+	| "name"
+	| "status"
+	| "durationSeconds"
+	| "billedMicroCredits"
+	| "errorMessage"
+	| "createdAt"
+>;
+
+const toRow = (row: ConsoleTranscript): AudioTranscriptRow => ({
 	id: row.id,
 	name: row.name,
 	status: row.status,
@@ -75,9 +86,7 @@ export async function listAudioTranscripts(
 		? Math.min(AUDIO_MAX_ROWS, Math.max(AUDIO_PAGE_SIZE, Math.floor(limit)))
 		: AUDIO_PAGE_SIZE;
 	try {
-		const { transcripts, hasMore } = await listTranscripts(appId, {
-			limit: rows,
-		});
+		const { transcripts, hasMore } = await listConsoleTranscripts(appId, rows);
 		return { ok: true, transcripts: transcripts.map(toRow), hasMore };
 	} catch (error) {
 		console.error("[infra-audio] Transcripts unavailable", error);

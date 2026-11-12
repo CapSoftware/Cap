@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "c9ccbbea-f152-4cec-8551-137e2fc2e621",
+	"id": "002a6a93-a2d5-4db6-9f41-42712e2edf63",
 	"prevId": "f231f465-a0b5-4669-928d-444ffc2ac65a",
 	"tables": {
 		"accounts": {
@@ -1417,6 +1417,13 @@
 				"metadata": {
 					"name": "metadata",
 					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"queuedAt": {
+					"name": "queuedAt",
+					"type": "timestamp",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false

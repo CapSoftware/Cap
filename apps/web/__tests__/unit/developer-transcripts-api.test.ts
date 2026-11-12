@@ -74,6 +74,7 @@ const transcript = (overrides: Record<string, unknown> = {}) => ({
 	errorCode: null,
 	errorMessage: null,
 	metadata: null,
+	queuedAt: null,
 	startedAt: null,
 	completedAt: null,
 	deletedAt: null,

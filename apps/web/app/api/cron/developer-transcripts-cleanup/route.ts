@@ -10,7 +10,6 @@ import {
 import { Effect, Layer, Schema } from "effect";
 import { sweepStaleDeveloperUploads } from "@/lib/developer-transcript-storage";
 import { expireStaleTranscripts } from "@/lib/developer-transcript-store";
-import { DEVELOPER_UPLOAD_MAX_AGE_MS } from "@/lib/developer-transcripts";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("DeveloperTranscriptsCleanupApi").add(
@@ -46,9 +45,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 					return yield* Effect.tryPromise(async () => {
 						const { expired, redispatched } = await expireStaleTranscripts();
-						const { deleted } = await sweepStaleDeveloperUploads(
-							new Date(Date.now() - DEVELOPER_UPLOAD_MAX_AGE_MS),
-						);
+						const { deleted } = await sweepStaleDeveloperUploads(new Date());
 						return { expired, redispatched, swept: deleted };
 					}).pipe(
 						Effect.tapError((error) =>

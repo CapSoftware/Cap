@@ -1949,6 +1949,7 @@ export const developerTranscripts = mysqlTable(
 		errorCode: varchar("errorCode", { length: 64 }),
 		errorMessage: varchar("errorMessage", { length: 512 }),
 		metadata: json("metadata"),
+		queuedAt: timestamp("queuedAt"),
 		startedAt: timestamp("startedAt"),
 		completedAt: timestamp("completedAt"),
 		deletedAt: timestamp("deletedAt"),

@@ -249,6 +249,16 @@ async function dispatchTranscript(
 		);
 	if (affectedRows(claim) === 0) return "already_dispatched" as const;
 
+	const firstQueue = await db()
+		.update(developerTranscripts)
+		.set({ queuedAt: now })
+		.where(
+			and(
+				eq(developerTranscripts.id, transcriptId),
+				isNull(developerTranscripts.queuedAt),
+			),
+		);
+
 	try {
 		await start(developerTranscribeWorkflow, [{ transcriptId }]);
 		return "dispatched" as const;
@@ -259,7 +269,11 @@ async function dispatchTranscript(
 		);
 		await db()
 			.update(developerTranscripts)
-			.set({ status: from, startedAt: null })
+			.set({
+				status: from,
+				startedAt: null,
+				...(affectedRows(firstQueue) > 0 ? { queuedAt: null } : {}),
+			})
 			.where(
 				and(
 					eq(developerTranscripts.id, transcriptId),
@@ -357,6 +371,7 @@ export async function createTranscriptFromUrl(
 			externalUserId: options.externalUserId,
 			name: options.name ?? transcriptNameFromUrl(url),
 			status: "queued",
+			queuedAt: new Date(),
 			sourceType: "url",
 			sourceUrl: url,
 			s3Key: transcriptObjectKeys(appId, id).source,
@@ -584,6 +599,7 @@ const summaryColumns = {
 	errorCode: developerTranscripts.errorCode,
 	errorMessage: developerTranscripts.errorMessage,
 	metadata: developerTranscripts.metadata,
+	queuedAt: developerTranscripts.queuedAt,
 	startedAt: developerTranscripts.startedAt,
 	completedAt: developerTranscripts.completedAt,
 	deletedAt: developerTranscripts.deletedAt,
@@ -639,6 +655,33 @@ export async function listTranscripts(
 	};
 }
 
+export async function listConsoleTranscripts(appId: string, limit: number) {
+	const rows = await db()
+		.select({
+			id: developerTranscripts.id,
+			name: developerTranscripts.name,
+			status: developerTranscripts.status,
+			durationSeconds: developerTranscripts.durationSeconds,
+			billedMicroCredits: developerTranscripts.billedMicroCredits,
+			errorMessage: developerTranscripts.errorMessage,
+			createdAt: developerTranscripts.createdAt,
+		})
+		.from(developerTranscripts)
+		.where(
+			and(
+				eq(developerTranscripts.appId, appId),
+				isNull(developerTranscripts.deletedAt),
+			),
+		)
+		.orderBy(
+			desc(developerTranscripts.createdAt),
+			desc(developerTranscripts.id),
+		)
+		.limit(limit + 1);
+
+	return { transcripts: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
 export async function deleteTranscript(
 	appId: string,
 	transcriptId: string,
@@ -671,6 +714,7 @@ export async function deleteTranscriptObjects(
 export async function expireStaleTranscripts(now = new Date()) {
 	const uploadCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 	const jobCutoff = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+	const dispatchCutoff = new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS);
 
 	const stale = await db()
 		.select({
@@ -687,7 +731,7 @@ export async function expireStaleTranscripts(now = new Date()) {
 				),
 				and(
 					eq(developerTranscripts.status, "queued"),
-					lt(developerTranscripts.createdAt, jobCutoff),
+					lt(developerTranscripts.queuedAt, jobCutoff),
 				),
 				and(
 					eq(developerTranscripts.status, "processing"),
@@ -729,9 +773,12 @@ export async function expireStaleTranscripts(now = new Date()) {
 		.where(
 			and(
 				eq(developerTranscripts.status, "queued"),
-				lt(
-					developerTranscripts.startedAt,
-					new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+				or(
+					lt(developerTranscripts.startedAt, dispatchCutoff),
+					and(
+						isNull(developerTranscripts.startedAt),
+						lt(developerTranscripts.createdAt, dispatchCutoff),
+					),
 				),
 				isNull(developerTranscripts.deletedAt),
 			),

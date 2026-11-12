@@ -66,7 +66,21 @@ export function isTranscriptStatus(
 }
 
 export const DEVELOPER_UPLOAD_PREFIX = "developer/_uploads/";
-export const DEVELOPER_UPLOAD_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+export const DEVELOPER_TRANSCRIPT_UPLOAD_MAX_AGE_MS = 8 * 60 * 60 * 1000;
+export const DEVELOPER_VIDEO_UPLOAD_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+export function isStaleDeveloperUpload(
+	key: string,
+	lastModified: Date,
+	now: Date,
+) {
+	if (!key.startsWith(DEVELOPER_UPLOAD_PREFIX)) return false;
+	const name = key.split("/").pop() ?? "";
+	const maxAge = name.startsWith("v-")
+		? DEVELOPER_VIDEO_UPLOAD_MAX_AGE_MS
+		: DEVELOPER_TRANSCRIPT_UPLOAD_MAX_AGE_MS;
+	return now.getTime() - lastModified.getTime() > maxAge;
+}
 
 export function transcriptObjectKeys(appId: string, transcriptId: string) {
 	const base = `developer/${appId}/transcripts/${transcriptId}`;

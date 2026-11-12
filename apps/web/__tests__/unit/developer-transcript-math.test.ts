@@ -9,6 +9,7 @@ import {
 import {
 	buildTranscriptResult,
 	DEVELOPER_UPLOAD_PREFIX,
+	isStaleDeveloperUpload,
 	isTranscriptStatus,
 	measuredTranscriptDuration,
 	serializeTranscript,
@@ -40,6 +41,7 @@ const row = (
 	errorCode: null,
 	errorMessage: null,
 	metadata: null,
+	queuedAt: new Date("2026-11-11T10:00:00Z"),
 	startedAt: new Date("2026-11-11T10:00:00Z"),
 	completedAt: new Date("2026-11-11T10:00:20Z"),
 	deletedAt: null,
@@ -244,6 +246,35 @@ describe("transcript serialization", () => {
 			type: "upload",
 			url: null,
 		});
+	});
+});
+
+describe("stale upload sweep", () => {
+	const now = new Date("2026-11-11T12:00:00Z");
+	const hoursAgo = (hours: number) =>
+		new Date(now.getTime() - hours * 60 * 60 * 1000);
+
+	it("removes transcript uploads after 8 hours", () => {
+		const key = "developer/_uploads/app-1/t-tr-1";
+		expect(isStaleDeveloperUpload(key, hoursAgo(7.9), now)).toBe(false);
+		expect(isStaleDeveloperUpload(key, hoursAgo(8.1), now)).toBe(true);
+	});
+
+	it("keeps video uploads for 48 hours so a top-up can finish them", () => {
+		const key = "developer/_uploads/app-1/v-video-1";
+		expect(isStaleDeveloperUpload(key, hoursAgo(9), now)).toBe(false);
+		expect(isStaleDeveloperUpload(key, hoursAgo(47.9), now)).toBe(false);
+		expect(isStaleDeveloperUpload(key, hoursAgo(48.1), now)).toBe(true);
+	});
+
+	it("never touches anything outside the upload prefix", () => {
+		for (const key of [
+			"developer/app-1/transcripts/tr-1/result.json",
+			"developer/app-1/video-1/video-abc",
+			"user-1/video-1/result.mp4",
+		]) {
+			expect(isStaleDeveloperUpload(key, hoursAgo(10_000), now)).toBe(false);
+		}
 	});
 });
 

@@ -42,6 +42,7 @@ vi.mock("@cap/database", async () => {
 					errorCode: null,
 					errorMessage: null,
 					metadata: null,
+					queuedAt: null,
 					startedAt: null,
 					completedAt: null,
 					deletedAt: null,
@@ -729,6 +730,7 @@ describe("expiring stale transcripts", () => {
 			appId: "app-1",
 			status,
 			sourceType: "upload",
+			queuedAt: status === "uploading" ? null : at(updatedAt),
 			createdAt: at(updatedAt),
 			updatedAt: at(updatedAt),
 		});
@@ -772,6 +774,7 @@ describe("recovering a job that was claimed but never started", () => {
 			status: "queued",
 			sourceType,
 			sourceUrl: sourceType === "url" ? URL_A : null,
+			queuedAt: startedAt,
 			startedAt,
 			createdAt: startedAt,
 			updatedAt: startedAt,
@@ -834,6 +837,78 @@ describe("recovering a job that was claimed but never started", () => {
 			redispatched: 0,
 		});
 		expect(context.start).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("queue expiry", () => {
+	const hoursAgo = (hours: number) =>
+		new Date(Date.now() - hours * 60 * 60 * 1000);
+
+	it("counts from when a job was queued, not from when the upload was created", async () => {
+		fake().seed(developerTranscripts, {
+			id: "late-start",
+			appId: "app-1",
+			status: "queued",
+			sourceType: "upload",
+			createdAt: hoursAgo(7),
+			updatedAt: new Date(),
+			queuedAt: new Date(),
+			startedAt: new Date(),
+		});
+		fake().seed(developerTranscripts, {
+			id: "long-queued",
+			appId: "app-1",
+			status: "queued",
+			sourceType: "upload",
+			createdAt: hoursAgo(7),
+			updatedAt: new Date(),
+			queuedAt: hoursAgo(7),
+			startedAt: new Date(),
+		});
+
+		await expireStaleTranscripts();
+
+		const status = (id: string) =>
+			transcripts().find((row) => row.id === id)?.status;
+		expect(status("late-start")).toBe("queued");
+		expect(status("long-queued")).toBe("error");
+	});
+
+	it("records the first queue time once and keeps it across restarts", async () => {
+		const created = await createTranscriptUpload("app-1", {
+			fileName: "a.mp3",
+			contentLength: 1024,
+		});
+		if (!created.ok) throw new Error("create failed");
+		expect(transcripts()[0]?.queuedAt).toBeNull();
+
+		context.objectSize = 1024;
+		await startTranscriptUpload("app-1", created.transcript.id);
+		const firstQueued = transcripts()[0]?.queuedAt;
+		expect(firstQueued).toBeInstanceOf(Date);
+
+		const row = transcripts()[0];
+		if (row) row.startedAt = new Date(Date.now() - 10 * 60 * 1000);
+		await startTranscriptUpload("app-1", created.transcript.id);
+		expect(context.start).toHaveBeenCalledTimes(2);
+		expect(transcripts()[0]?.queuedAt).toBe(firstQueued);
+	});
+
+	it("forgets the queue time when the first start could not be launched", async () => {
+		const created = await createTranscriptUpload("app-1", {
+			fileName: "a.mp3",
+			contentLength: 1024,
+		});
+		if (!created.ok) throw new Error("create failed");
+		context.objectSize = 1024;
+		context.start.mockRejectedValueOnce(new Error("queue unavailable"));
+
+		await startTranscriptUpload("app-1", created.transcript.id);
+		expect(transcripts()[0]).toMatchObject({
+			status: "uploading",
+			queuedAt: null,
+			startedAt: null,
+		});
 	});
 });
 

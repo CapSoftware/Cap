@@ -19,6 +19,7 @@ CREATE TABLE `developer_transcripts` (
 	`errorCode` varchar(64),
 	`errorMessage` varchar(512),
 	`metadata` json,
+	`queuedAt` timestamp,
 	`startedAt` timestamp,
 	`completedAt` timestamp,
 	`deletedAt` timestamp,

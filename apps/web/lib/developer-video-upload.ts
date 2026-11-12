@@ -244,7 +244,11 @@ export async function completeDeveloperVideoUpload(
 	const uploadKey = developerVideoUploadKey(appId, video.id);
 	const totalBytes = await developerObjectSize(uploadKey);
 	if (totalBytes === null || totalBytes === 0) {
-		return fail(409, "upload_not_found", "The file has not been uploaded yet");
+		return fail(
+			409,
+			"upload_not_found",
+			"The file is not in storage. Uploads are kept for 48 hours, so upload it again if it has been longer",
+		);
 	}
 	if (totalBytes > DEVELOPER_VIDEO_MAX_UPLOAD_BYTES) {
 		await deleteDeveloperObjects([uploadKey]);
