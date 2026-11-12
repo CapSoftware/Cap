@@ -311,6 +311,7 @@ export async function completeInfraUpload({
 		});
 
 		if (!measured.assembled) {
+			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
 			const admission = await getInfraUploadAdmission(appId, newVideo);
 			if (!admission.allowed) {
 				return { status: 402, body: uploadAdmissionError(admission) };
@@ -348,6 +349,8 @@ export async function completeInfraUpload({
 				.limit(1)
 				.for("update");
 
+			if (await videoIsRecorded(tx, videoId)) return ALREADY_RECORDED;
+
 			const admission = await getInfraUploadAdmission(appId, newVideo, tx);
 			if (!admission.allowed) return admission;
 
@@ -372,6 +375,20 @@ export async function completeInfraUpload({
 		console.error("Error completing multipart upload:", error);
 		return fail(500, "Failed to complete upload");
 	}
+}
+
+const ALREADY_RECORDED = { allowed: true } as const;
+
+async function videoIsRecorded(
+	executor: Pick<ReturnType<typeof db>, "select">,
+	videoId: string,
+) {
+	const [row] = await executor
+		.select({ duration: developerVideos.duration })
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId))
+		.limit(1);
+	return !!row && row.duration !== null;
 }
 
 export async function abortInfraUpload({

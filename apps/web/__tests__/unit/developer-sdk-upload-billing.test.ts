@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	listPartsFails: false,
 	completeFailures: 0,
 	storedDuration: null as number | null,
+	recordedReads: [] as (number | null)[],
 	events: [] as string[],
 	complete: vi.fn(),
 	listParts: vi.fn(),
@@ -44,6 +45,9 @@ vi.mock("@cap/database", async () => {
 		}
 		if (keys === "id") {
 			return [{ id: "video-1" }];
+		}
+		if (keys === "duration") {
+			return [{ duration: mocks.recordedReads.shift() ?? null }];
 		}
 		if (keys === "total") {
 			return [
@@ -219,6 +223,7 @@ describe("developer SDK multipart completion", () => {
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 1_000 }];
 		mocks.listPartsFails = false;
 		mocks.completeFailures = 0;
+		mocks.recordedReads = [];
 		mocks.storedDuration = null;
 		mocks.events = [];
 		mocks.creditTransactions = [];
@@ -507,6 +512,32 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.admission).not.toHaveBeenCalled();
 		expect(mocks.listParts).not.toHaveBeenCalled();
 		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it("answers success when another request recorded the video before storage completion", async () => {
+		mocks.recordedReads = [60];
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.admission).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
+	});
+
+	it("answers success when another request recorded the video while this one waited for the lock", async () => {
+		mocks.recordedReads = [null, 60];
+		mocks.admission.mockResolvedValueOnce({ allowed: true });
+		mocks.admission.mockResolvedValue({
+			allowed: false,
+			reason: "insufficient_balance",
+		});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.admission).toHaveBeenCalledTimes(1);
+		expect(mocks.videoUpdates).toEqual([]);
 	});
 
 	it("records nothing when storage fails, so the upload can be retried", async () => {

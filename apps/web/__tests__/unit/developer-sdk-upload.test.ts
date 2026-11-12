@@ -105,6 +105,9 @@ beforeEach(() => {
 	mocks.query.mockImplementation(async (query: string) => {
 		if (query.includes("from `developer_videos`")) {
 			const video = mocks.video;
+			if (/^select `duration` from/i.test(query)) {
+				return { rows: video ? [[video.duration]] : [] };
+			}
 			return {
 				rows: video
 					? [[video.appId, s3Key, video.duration, video.deletedAt]]
