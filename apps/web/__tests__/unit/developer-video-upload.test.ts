@@ -28,6 +28,8 @@ const context = vi.hoisted(() => ({
 	onProbe: null as null | (() => void),
 	started: [] as { videoId: string; encodeId: string }[],
 	startFails: false,
+	selfContained: true,
+	sniffedUrls: [] as string[],
 }));
 
 vi.mock("@cap/database", async () => {
@@ -150,6 +152,13 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	},
 }));
 
+vi.mock("@/lib/media-container", () => ({
+	urlIsSelfContainedMedia: async (url: string) => {
+		context.sniffedUrls.push(url);
+		return context.selfContained;
+	},
+}));
+
 vi.mock("@/lib/media-client", () => ({
 	isMediaServerConfigured: () => context.mediaServer,
 	probeVideoViaMediaServer: async (url: string) => {
@@ -234,6 +243,8 @@ beforeEach(() => {
 	context.onProbe = null;
 	context.started = [];
 	context.startFails = false;
+	context.selfContained = true;
+	context.sniffedUrls = [];
 	fake().seed(developerCreditAccounts, {
 		id: "account-1",
 		appId: "app-1",
@@ -619,6 +630,30 @@ describe("completing a developer video upload", () => {
 		expect(
 			await completeDeveloperVideoUpload("app-1", created.video.id, {}),
 		).toMatchObject({ ok: false, status: 409, code: "upload_not_found" });
+	});
+
+	it("refuses a file that is not self-contained media before it is probed, and removes it", async () => {
+		context.selfContained = false;
+		const id = await createAndUpload();
+
+		expect(await completeDeveloperVideoUpload("app-1", id, {})).toMatchObject({
+			ok: false,
+			status: 400,
+			code: "unsupported_format",
+		});
+		expect(context.sniffedUrls).toHaveLength(1);
+		expect(context.probedUrls).toEqual([]);
+		expect(context.started).toEqual([]);
+		expect(context.objects.size).toBe(0);
+		expect(videos()[0]?.duration ?? null).toBeNull();
+	});
+
+	it("checks the stored copy before every probe", async () => {
+		const id = await createAndUpload();
+		await completeDeveloperVideoUpload("app-1", id, {});
+
+		expect(context.sniffedUrls).toHaveLength(1);
+		expect(context.probedUrls).toEqual(context.sniffedUrls);
 	});
 
 	it("rejects and removes an upload over 5 GB", async () => {

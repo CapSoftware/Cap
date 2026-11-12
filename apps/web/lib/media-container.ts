@@ -59,3 +59,30 @@ export function isSelfContainedMedia(bytes: Uint8Array) {
 	if (startsWith(bytes, WAVE64_RIFF_GUID)) return true;
 	return false;
 }
+
+const SNIFF_TIMEOUT_MS = 30_000;
+
+export async function urlIsSelfContainedMedia(url: string) {
+	const response = await fetch(url, {
+		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
+		signal: AbortSignal.timeout(SNIFF_TIMEOUT_MS),
+	});
+	if (!response.ok || !response.body) {
+		throw new Error(`Could not read the stored file (${response.status})`);
+	}
+	const reader = response.body.getReader();
+	const head = new Uint8Array(MEDIA_CONTAINER_SNIFF_BYTES);
+	let filled = 0;
+	try {
+		while (filled < head.length) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			const take = Math.min(value.length, head.length - filled);
+			head.set(value.subarray(0, take), filled);
+			filled += take;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	return isSelfContainedMedia(head.subarray(0, filled));
+}

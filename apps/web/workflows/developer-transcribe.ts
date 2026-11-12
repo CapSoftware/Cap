@@ -45,10 +45,7 @@ import {
 	type TranscriptResultObject,
 	transcriptObjectKeys,
 } from "@/lib/developer-transcripts";
-import {
-	isSelfContainedMedia,
-	MEDIA_CONTAINER_SNIFF_BYTES,
-} from "@/lib/media-container";
+import { urlIsSelfContainedMedia } from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
 import {
 	fetchPublicMedia,
@@ -282,33 +279,6 @@ async function prepareTranscriptSource(
 	}
 }
 
-const SNIFF_TIMEOUT_MS = 30_000;
-
-async function sourceIsSelfContainedMedia(sourceUrl: string) {
-	const response = await fetch(sourceUrl, {
-		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
-		signal: AbortSignal.timeout(SNIFF_TIMEOUT_MS),
-	});
-	if (!response.ok || !response.body) {
-		throw new Error(`Could not read the stored source (${response.status})`);
-	}
-	const reader = response.body.getReader();
-	const head = new Uint8Array(MEDIA_CONTAINER_SNIFF_BYTES);
-	let filled = 0;
-	try {
-		while (filled < head.length) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			const take = Math.min(value.length, head.length - filled);
-			head.set(value.subarray(0, take), filled);
-			filled += take;
-		}
-	} finally {
-		await reader.cancel().catch(() => {});
-	}
-	return isSelfContainedMedia(head.subarray(0, filled));
-}
-
 async function extractTranscriptAudio(
 	transcriptId: string,
 ): Promise<{ ok: true } | StepFailure> {
@@ -320,7 +290,7 @@ async function extractTranscriptAudio(
 	}
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
 	const sourceUrl = await developerObjectUrl(keys.source);
-	if (!(await sourceIsSelfContainedMedia(sourceUrl))) {
+	if (!(await urlIsSelfContainedMedia(sourceUrl))) {
 		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
 	}
 	const extracted = await extractTranscriptAudioBytes(sourceUrl);

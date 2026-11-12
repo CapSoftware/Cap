@@ -42,6 +42,7 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
+import { urlIsSelfContainedMedia } from "@/lib/media-container";
 
 export const DEVELOPER_VIDEO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 
@@ -346,6 +347,14 @@ export async function completeDeveloperVideoUpload(
 	let kept = false;
 	let claim: DeveloperVideoClaim | null = null;
 	try {
+		if (!(await urlIsSelfContainedMedia(await developerObjectUrl(storedKey)))) {
+			await deleteDeveloperObjects([uploadKey]);
+			return fail(
+				400,
+				"unsupported_format",
+				"The file is not a supported video format. Playlists and manifests are not accepted",
+			);
+		}
 		let measuredSeconds: number | null = null;
 		let width = positive(input.width);
 		let height = positive(input.height);
