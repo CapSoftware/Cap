@@ -34,6 +34,7 @@
 		"nanoid": "^5.0.4",
 		"next": "16.4.5",
 		"next-auth": "^4.24.15",
+		"nodemailer": "^10.3.1",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
 		"zod": "^4.6.7"
@@ -46,7 +47,6 @@
 		"@types/react-dom": "19.1.9",
 		"dotenv-cli": "latest",
 		"drizzle-kit": "0.31.0",
-		"nodemailer": "^10.3.1",
 		"react": "^19.1.1",
 		"react-dom": "^19.1.1",
 		"react-router-dom": "^6.30.6",
