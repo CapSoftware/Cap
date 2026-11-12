@@ -122,7 +122,11 @@ export async function chargeStorageDay({
 						})
 				: Promise.resolve();
 
-		if (unresolvedShortSince && account.balanceMicroCredits <= 0) {
+		if (
+			unresolvedShortSince &&
+			usage.dailyMicroCredits > 0 &&
+			account.balanceMicroCredits <= 0
+		) {
 			await recordSnapshot(0);
 			return { state: "unpaid" as const, shortSince: unresolvedShortSince };
 		}

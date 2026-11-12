@@ -280,6 +280,26 @@ describe("standing through the ledger", () => {
 		expect(ledger.account.balanceMicroCredits).toBe(0);
 	});
 
+	it("clears the short state once the app stores nothing that costs anything", async () => {
+		await charge();
+		advanceDays(8);
+		expect((await standing()).state).toBe("paused");
+
+		ledger.videos = [];
+		advanceDays(1);
+		const result = await charge();
+
+		expect(result).toMatchObject({
+			state: "billed",
+			owedMicroCredits: 0,
+			chargedMicroCredits: 0,
+			shortSince: null,
+		});
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+		advanceDays(1);
+		expect(await charge()).toEqual({ state: "skipped" });
+	});
+
 	it("is active for an app with no credit account, and refuses its uploads", async () => {
 		ledger.account.exists = false;
 
