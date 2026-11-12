@@ -22,6 +22,7 @@ import {
 	getGoogleDriveRateLimitDelayMs,
 	getGoogleDriveRecordingDownload,
 	getGoogleDriveRecordingResponse,
+	listGoogleDriveFolders,
 	syncGoogleDriveVideoNames,
 } from "../../../../packages/web-backend/src/Storage/GoogleDrive";
 import { getGoogleDriveVideoNames } from "../../../../packages/web-backend/src/Storage/google-drive-names";
@@ -2450,5 +2451,96 @@ describe("Google Drive uploads with a stored checksum", () => {
 		await expect(
 			Effect.runPromise(access.putObjectWithChecksum(resultKey, '{"a":1}')),
 		).resolves.toEqual({ sha256Checksum: null });
+	});
+});
+
+describe("Google Drive folder listing", () => {
+	it.each([100, 0])(
+		"follows a continuation token after a page with %s folders",
+		async (count) => {
+			const firstPage = Array.from({ length: count }, (_, index) => ({
+				id: `folder-${index}`,
+				name: `Project ${index}`,
+				driveId: "shared-drive",
+			}));
+			const destination = {
+				id: "destination",
+				name: "Team Recordings",
+				driveId: "shared-drive",
+			};
+			const fetchMock = vi
+				.spyOn(globalThis, "fetch")
+				.mockImplementation(async (input) => {
+					const url = new URL(String(input));
+					return jsonResponse(
+						url.searchParams.has("pageToken")
+							? { files: [destination] }
+							: { files: firstPage, nextPageToken: "next-page" },
+					);
+				});
+			const folders = await Effect.runPromise(
+				listGoogleDriveFolders(
+					{ ...makeConfig(), driveId: "shared-drive" },
+					"shared-parent",
+					makeTokenStore(),
+				),
+			);
+			expect(folders).toEqual(
+				[...firstPage, destination].map((folder) => ({
+					...folder,
+					driveName: null,
+				})),
+			);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			const requests = fetchMock.mock.calls.map(
+				([input]) => new URL(String(input)),
+			);
+			expect(requests.map((url) => url.searchParams.get("pageToken"))).toEqual([
+				null,
+				"next-page",
+			]);
+			for (const url of requests) {
+				expect(url.searchParams.get("fields")).toContain("nextPageToken");
+				expect(url.searchParams.get("q")).toContain(
+					"'shared-parent' in parents",
+				);
+				expect(url.searchParams.get("driveId")).toBe("shared-drive");
+				expect(url.searchParams.get("corpora")).toBe("drive");
+			}
+		},
+	);
+
+	it("keeps a one-page My Drive listing unchanged", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			jsonResponse({
+				files: [{ id: "folder", name: "Recordings" }],
+			}),
+		);
+		await expect(
+			Effect.runPromise(
+				listGoogleDriveFolders(makeConfig(), "root", makeTokenStore()),
+			),
+		).resolves.toEqual([
+			{ id: "folder", name: "Recordings", driveId: null, driveName: null },
+		]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a later page failure instead of returning an incomplete folder list", async () => {
+		vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				jsonResponse({
+					files: [{ id: "folder", name: "Recordings" }],
+					nextPageToken: "next-page",
+				}),
+			)
+			.mockResolvedValueOnce(new Response("Permission lost", { status: 403 }));
+		const error = await Effect.runPromise(
+			listGoogleDriveFolders(makeConfig(), "root", makeTokenStore()).pipe(
+				Effect.flip,
+			),
+		);
+		expect(error.cause).toBeInstanceOf(Error);
+		expect((error.cause as Error).message).toContain("403 Permission lost");
 	});
 });

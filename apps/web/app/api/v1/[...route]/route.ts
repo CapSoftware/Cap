@@ -19,11 +19,11 @@ import {
 	collectPasswordHashes,
 	Database,
 	type GoogleDriveIntegrationConfig,
-	getGoogleDriveAccessToken,
 	getGoogleDriveAuthUrl,
 	getGoogleDriveFolderLocation,
 	getGoogleDriveUserEmail,
 	ImageUploads,
+	listGoogleDriveFolders,
 	resolveEffectiveVideoRules,
 	Storage,
 	Videos,
@@ -3603,57 +3603,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							);
 						}
 						const config = yield* parseAgentDriveConfig(drive.encryptedConfig);
-						const accessToken = yield* getGoogleDriveAccessToken(config);
 						const parentId = urlParams.parentId?.trim() || "root";
-						const escapedParentId = parentId
-							.replace(/\\/g, "\\\\")
-							.replace(/'/g, "\\'");
-						const url = new URL("https://www.googleapis.com/drive/v3/files");
-						url.searchParams.set(
-							"q",
-							`'${escapedParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-						);
-						url.searchParams.set("fields", "files(id,name,driveId)");
-						url.searchParams.set("spaces", "drive");
-						url.searchParams.set("supportsAllDrives", "true");
-						url.searchParams.set("includeItemsFromAllDrives", "true");
-						if (config.driveId) {
-							url.searchParams.set("corpora", "drive");
-							url.searchParams.set("driveId", config.driveId);
-						}
-						const body = yield* Effect.tryPromise(async () => {
-							const response = await fetch(url, {
-								headers: { Authorization: `Bearer ${accessToken}` },
-							});
-							if (!response.ok) {
-								throw new Error(
-									`Google Drive returned HTTP ${response.status}`,
-								);
-							}
-							return (await response.json()) as {
-								files?: Array<{
-									id?: string;
-									name?: string;
-									driveId?: string | null;
-								}>;
-							};
-						});
-						return {
-							folders:
-								body.files?.flatMap((folder) =>
-									folder.id && folder.name
-										? [
-												{
-													id: folder.id,
-													name: folder.name,
-													driveId: folder.driveId ?? null,
-													driveName: null,
-												},
-											]
-										: [],
-								) ?? [],
-							requestId,
-						};
+						const folders = yield* listGoogleDriveFolders(config, parentId);
+						return { folders, requestId };
 					}),
 					requestId,
 				);
