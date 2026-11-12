@@ -214,6 +214,7 @@ const Menu = ({
 		else return;
 		event.preventDefault();
 		buttons[next]?.focus({ preventScroll: true });
+		buttons[next]?.scrollIntoView({ block: "nearest" });
 	};
 
 	return (
@@ -319,6 +320,11 @@ export const CapPlayer = ({
 		if (focusOnMount) playRef.current?.focus({ preventScroll: true });
 	}, [focusOnMount]);
 
+	const showsVolume = !hideControls.includes("volume");
+	useLayoutEffect(() => {
+		if (showsVolume) videoRef.current?.dispatchEvent(new Event("volumechange"));
+	}, [showsVolume]);
+
 	useEffect(() => {
 		if (!menu) return;
 		const onPointerDown = (event: PointerEvent) => {
@@ -339,7 +345,6 @@ export const CapPlayer = ({
 		const video = videoRef.current;
 		const track = trackRef.current;
 		if (!root || !video || !track) return;
-		const volumeTrack = volumeRef.current;
 
 		let frame = 0;
 		let idleTimer = 0;
@@ -510,7 +515,7 @@ export const CapPlayer = ({
 					silent ? 0 : video.volume
 				})`;
 			}
-			volumeTrack?.setAttribute(
+			volumeRef.current?.setAttribute(
 				"aria-valuenow",
 				String(silent ? 0 : Math.round(video.volume * 100)),
 			);
@@ -577,13 +582,23 @@ export const CapPlayer = ({
 			if (!scrubbing) track.dataset.hover = "false";
 		};
 
+		const volumeTrackFor = (event: PointerEvent) => {
+			const volumeTrack = volumeRef.current;
+			return volumeTrack &&
+				event.target instanceof Node &&
+				volumeTrack.contains(event.target)
+				? volumeTrack
+				: null;
+		};
 		const onVolumeDown = (event: PointerEvent) => {
+			const volumeTrack = volumeTrackFor(event);
 			if (event.button !== 0 || !volumeTrack) return;
 			settingVolume = true;
 			volumeTrack.setPointerCapture(event.pointerId);
 			setVolume(fractionAt(volumeTrack, event.clientX));
 		};
 		const onVolumeMove = (event: PointerEvent) => {
+			const volumeTrack = volumeTrackFor(event);
 			if (settingVolume && volumeTrack) {
 				setVolume(fractionAt(volumeTrack, event.clientX));
 			}
@@ -591,7 +606,7 @@ export const CapPlayer = ({
 		const onVolumeUp = (event: PointerEvent) => {
 			if (!settingVolume) return;
 			settingVolume = false;
-			volumeTrack?.releasePointerCapture(event.pointerId);
+			volumeTrackFor(event)?.releasePointerCapture(event.pointerId);
 			wake();
 		};
 
@@ -600,7 +615,7 @@ export const CapPlayer = ({
 			const target = event.target instanceof Element ? event.target : null;
 			if (target?.closest('[role="menu"]')) return;
 			const onButton = target instanceof HTMLButtonElement;
-			const onVolumeSlider = target === volumeTrack;
+			const onVolumeSlider = target !== null && target === volumeRef.current;
 			const key = event.key.toLowerCase();
 			const level = video.muted ? 0 : video.volume;
 			if (key === " " || key === "k") {
@@ -705,7 +720,7 @@ export const CapPlayer = ({
 			["pointercancel", onVolumeUp],
 		];
 		for (const [name, handler] of volumeEvents) {
-			volumeTrack?.addEventListener(name, handler as EventListener);
+			root.addEventListener(name, handler as EventListener);
 		}
 		root.addEventListener("keydown", onKey);
 		root.addEventListener("click", onAction);
@@ -743,7 +758,7 @@ export const CapPlayer = ({
 				track.removeEventListener(name, handler as EventListener);
 			}
 			for (const [name, handler] of volumeEvents) {
-				volumeTrack?.removeEventListener(name, handler as EventListener);
+				root.removeEventListener(name, handler as EventListener);
 			}
 			root.removeEventListener("keydown", onKey);
 			root.removeEventListener("click", onAction);
