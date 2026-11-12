@@ -112,7 +112,8 @@ app.post(
 		const upload = boundUpload(c, videoId);
 		if (!upload) return c.json(videoMismatch, 403);
 		const result = await completeInfraUpload({ ...upload, ...body });
-		return c.json(result.body, result.status);
+		if (result.status === 200) return c.json(result.body);
+		return c.json(result.body, result.status, result.headers);
 	},
 );
 
