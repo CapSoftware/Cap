@@ -162,6 +162,15 @@ export class AgentApprovalRequiredError extends Schema.TaggedError<AgentApproval
 	HttpApiSchema.annotations({ status: 428 }),
 ) {}
 
+export class AgentPaymentRequiredError extends Schema.TaggedError<AgentPaymentRequiredError>()(
+	"AgentPaymentRequiredError",
+	{
+		...ErrorFields,
+		code: Schema.Literal("INSUFFICIENT_CREDITS"),
+	},
+	HttpApiSchema.annotations({ status: 402 }),
+) {}
+
 export class AgentHttpAuthMiddleware extends HttpApiMiddleware.Tag<AgentHttpAuthMiddleware>()(
 	"AgentHttpAuthMiddleware",
 	{
@@ -1096,6 +1105,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"topup",
 		"video_create",
 		"storage_daily",
+		"transcription",
 		"refund",
 		"adjustment",
 		"pro_credit",
@@ -1112,6 +1122,133 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 export const AgentDeveloperTransactionsResponse = Schema.Struct({
 	transactions: Schema.Array(AgentDeveloperCreditTransaction),
 	nextCursor: Schema.NullOr(Schema.String),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperTranscriptPath = Schema.Struct({
+	appId: Schema.String,
+	transcriptId: Schema.String,
+});
+
+export const AgentDeveloperTranscriptParams = Schema.Struct({
+	userId: Schema.optional(Schema.String),
+	status: Schema.optional(Schema.String),
+	cursor: Schema.optional(Schema.String),
+	limit: Schema.optional(Schema.String),
+});
+
+export const AgentDeveloperTranscriptGetParams = Schema.Struct({
+	include: Schema.optional(Schema.String),
+});
+
+export const AgentDeveloperTranscriptCreateInput = Schema.Struct({
+	url: Schema.optional(Schema.String),
+	fileName: Schema.optional(Schema.String),
+	contentLength: Schema.optional(Schema.Number),
+	name: Schema.optional(Schema.String),
+	language: Schema.optional(Schema.String),
+	userId: Schema.optional(Schema.String),
+});
+
+export const AgentDeveloperUploadTarget = Schema.Struct({
+	method: Schema.Literal("PUT"),
+	url: Schema.String,
+	headers: Schema.Record({ key: Schema.String, value: Schema.String }),
+	expiresAt: Schema.String,
+});
+
+export const AgentDeveloperTranscript = Schema.Struct({
+	id: Schema.String,
+	appId: Schema.String,
+	status: Schema.Literal(
+		"uploading",
+		"queued",
+		"processing",
+		"complete",
+		"error",
+	),
+	name: Schema.String,
+	sourceType: Schema.Literal("upload", "url"),
+	sourceUrl: Schema.NullOr(Schema.String),
+	durationSeconds: Schema.NullOr(Schema.Number),
+	language: Schema.NullOr(Schema.String),
+	wordCount: Schema.NullOr(Schema.Number),
+	costMicroCredits: Schema.Number,
+	errorCode: Schema.NullOr(Schema.String),
+	errorMessage: Schema.NullOr(Schema.String),
+	externalUserId: Schema.NullOr(Schema.String),
+	createdAt: Schema.String,
+	updatedAt: Schema.String,
+	completedAt: Schema.NullOr(Schema.String),
+});
+
+export const AgentDeveloperTranscriptsResponse = Schema.Struct({
+	transcripts: Schema.Array(AgentDeveloperTranscript),
+	nextCursor: Schema.NullOr(Schema.String),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperTranscriptSegment = Schema.Struct({
+	text: Schema.String,
+	start: Schema.Number,
+	end: Schema.Number,
+});
+
+export const AgentDeveloperTranscriptResponse = Schema.Struct({
+	transcript: AgentDeveloperTranscript,
+	text: Schema.NullOr(Schema.String),
+	segments: Schema.NullOr(Schema.Array(AgentDeveloperTranscriptSegment)),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperTranscriptCreateResponse = Schema.Struct({
+	transcript: AgentDeveloperTranscript,
+	upload: Schema.NullOr(AgentDeveloperUploadTarget),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperTranscriptStartResponse = Schema.Struct({
+	transcript: AgentDeveloperTranscript,
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperVideoCreateInput = Schema.Struct({
+	fileName: Schema.String,
+	contentLength: Schema.Number,
+	name: Schema.optional(Schema.String),
+	userId: Schema.optional(Schema.String),
+});
+
+export const AgentDeveloperVideoCreateResponse = Schema.Struct({
+	video: Schema.Struct({
+		id: Schema.String,
+		appId: Schema.String,
+		name: Schema.String,
+		playbackId: Schema.String,
+	}),
+	upload: AgentDeveloperUploadTarget,
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperVideoCompleteInput = Schema.Struct({
+	durationSeconds: Schema.optional(Schema.Number),
+	width: Schema.optional(Schema.Number),
+	height: Schema.optional(Schema.Number),
+	fps: Schema.optional(Schema.Number),
+});
+
+export const AgentDeveloperVideoCompleteResponse = Schema.Struct({
+	video: Schema.Struct({
+		id: Schema.String,
+		appId: Schema.String,
+		name: Schema.String,
+		status: Schema.String,
+		playbackId: Schema.NullOr(Schema.String),
+		durationSeconds: Schema.Number,
+		width: Schema.NullOr(Schema.Number),
+		height: Schema.NullOr(Schema.Number),
+		fps: Schema.NullOr(Schema.Number),
+	}),
 	requestId: Schema.String,
 });
 
@@ -1688,6 +1825,85 @@ export class AgentManagementHttpApi extends HttpApiGroup.make("agentManagement")
 			),
 		)
 			.setPath(AgentDeveloperVideoPath)
+			.addSuccess(AgentMutationResponse),
+	)
+	.add(
+		addMutationErrors(
+			HttpApiEndpoint.post(
+				"createDeveloperVideo",
+				"/developer/apps/:appId/videos",
+			),
+		)
+			.setPath(AgentDeveloperAppPath)
+			.setPayload(AgentDeveloperVideoCreateInput)
+			.addError(AgentPaymentRequiredError)
+			.addSuccess(AgentDeveloperVideoCreateResponse),
+	)
+	.add(
+		addMutationErrors(
+			HttpApiEndpoint.post(
+				"completeDeveloperVideo",
+				"/developer/apps/:appId/videos/:videoId/complete",
+			),
+		)
+			.setPath(AgentDeveloperVideoPath)
+			.setPayload(AgentDeveloperVideoCompleteInput)
+			.addError(AgentPaymentRequiredError)
+			.addSuccess(AgentDeveloperVideoCompleteResponse),
+	)
+	.add(
+		withReadErrors(
+			HttpApiEndpoint.get(
+				"listDeveloperTranscripts",
+				"/developer/apps/:appId/transcripts",
+			),
+		)
+			.setPath(AgentDeveloperAppPath)
+			.setUrlParams(AgentDeveloperTranscriptParams)
+			.addSuccess(AgentDeveloperTranscriptsResponse),
+	)
+	.add(
+		withReadErrors(
+			HttpApiEndpoint.get(
+				"getDeveloperTranscript",
+				"/developer/apps/:appId/transcripts/:transcriptId",
+			),
+		)
+			.setPath(AgentDeveloperTranscriptPath)
+			.setUrlParams(AgentDeveloperTranscriptGetParams)
+			.addSuccess(AgentDeveloperTranscriptResponse),
+	)
+	.add(
+		addMutationErrors(
+			HttpApiEndpoint.post(
+				"createDeveloperTranscript",
+				"/developer/apps/:appId/transcripts",
+			),
+		)
+			.setPath(AgentDeveloperAppPath)
+			.setPayload(AgentDeveloperTranscriptCreateInput)
+			.addError(AgentPaymentRequiredError)
+			.addSuccess(AgentDeveloperTranscriptCreateResponse),
+	)
+	.add(
+		addMutationErrors(
+			HttpApiEndpoint.post(
+				"startDeveloperTranscript",
+				"/developer/apps/:appId/transcripts/:transcriptId/start",
+			),
+		)
+			.setPath(AgentDeveloperTranscriptPath)
+			.addError(AgentPaymentRequiredError)
+			.addSuccess(AgentDeveloperTranscriptStartResponse),
+	)
+	.add(
+		addMutationErrors(
+			HttpApiEndpoint.del(
+				"deleteDeveloperTranscript",
+				"/developer/apps/:appId/transcripts/:transcriptId",
+			),
+		)
+			.setPath(AgentDeveloperTranscriptPath)
 			.addSuccess(AgentMutationResponse),
 	)
 	.add(

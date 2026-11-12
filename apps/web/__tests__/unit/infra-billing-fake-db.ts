@@ -2,6 +2,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
+	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -59,6 +60,7 @@ export const ledger = {
 	rows: [] as LedgerRow[],
 	snapshots: [] as SnapshotRow[],
 	videos: [] as VideoGroup[],
+	heldMicroCredits: 0,
 };
 
 export function resetLedger() {
@@ -67,6 +69,7 @@ export function resetLedger() {
 	ledger.rows = [];
 	ledger.snapshots = [];
 	ledger.videos = [];
+	ledger.heldMicroCredits = 0;
 }
 
 export function advanceDays(days: number) {
@@ -161,6 +164,10 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					row.referenceType === referenceType,
 			);
 		}
+	}
+
+	if (query.table === developerTranscripts) {
+		return [{ total: ledger.heldMicroCredits }];
 	}
 
 	if (query.table === developerDailyStorageSnapshots) {

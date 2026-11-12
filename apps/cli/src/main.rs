@@ -8,6 +8,7 @@ mod automation;
 mod caps;
 mod confirmation;
 mod credentials;
+mod developer_media;
 mod developers;
 mod doctor;
 mod export;

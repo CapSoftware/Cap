@@ -7,7 +7,10 @@ import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import type { User } from "@cap/web-domain";
 import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
+import {
+	admitDeveloperVideoUpload,
+	type DeveloperVideoUpload,
+} from "@/lib/developer-video-charge";
 import {
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_DEFAULT_TIER,
@@ -262,6 +265,66 @@ export async function presignInfraUploadParts({
 	}
 }
 
+export function recordedUploadDuration(
+	reportedSeconds: number,
+	totalBytes: number,
+) {
+	const plausibleDuration = Math.min(
+		Math.min(reportedSeconds, MAX_UPLOAD_DURATION_SECS),
+		totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
+	);
+	const sizeBasedMinDuration = totalBytes / STORED_BYTES_PER_SECOND;
+	return Math.min(
+		Math.max(plausibleDuration, sizeBasedMinDuration),
+		MAX_UPLOAD_DURATION_SECS,
+	);
+}
+
+export async function claimInfraUploadCompletion(videoId: string) {
+	const claim = await claimDeveloperVideoUpload(videoId);
+	if (claim || !(await releaseStaleUploadClaim(videoId, Date.now()))) {
+		return claim;
+	}
+	return claimDeveloperVideoUpload(videoId);
+}
+
+export function recordAdmittedInfraUpload(
+	upload: DeveloperVideoUpload,
+	updates: Partial<typeof developerVideos.$inferInsert>,
+) {
+	return db().transaction(async (tx) => {
+		await lockInfraAccount(tx, upload.appId);
+
+		const [current] = await tx
+			.select({
+				duration: developerVideos.duration,
+				deletedAt: developerVideos.deletedAt,
+			})
+			.from(developerVideos)
+			.where(eq(developerVideos.id, upload.videoId))
+			.limit(1);
+		if (!current || current.deletedAt) return REMOVED;
+		if (current.duration !== null) return ALREADY_RECORDED;
+
+		const admission = await admitDeveloperVideoUpload({
+			...upload,
+			executor: tx,
+		});
+		if (!admission.allowed) return admission;
+
+		await tx
+			.update(developerVideos)
+			.set(updates)
+			.where(
+				and(
+					eq(developerVideos.id, upload.videoId),
+					isNull(developerVideos.duration),
+				),
+			);
+		return admission;
+	});
+}
+
 export async function completeInfraUpload({
 	appId,
 	videoId,
@@ -281,8 +344,6 @@ export async function completeInfraUpload({
 	height?: number;
 	fps?: number;
 }): Promise<UploadResult<{ success: true }>> {
-	const clampedDuration = Math.min(durationInSecs, MAX_UPLOAD_DURATION_SECS);
-
 	const video = await findAppVideo(appId, videoId);
 	if (!video || video.deletedAt) return fail(404, "Video not found");
 	if (video.duration !== null) return ok({ success: true });
@@ -315,15 +376,7 @@ export async function completeInfraUpload({
 		if (totalBytes === null) {
 			return fail(400, "Uploaded parts do not match the request");
 		}
-		const plausibleDuration = Math.min(
-			clampedDuration,
-			totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
-		);
-		const sizeBasedMinDuration = totalBytes / STORED_BYTES_PER_SECOND;
-		const storedDuration = Math.min(
-			Math.max(plausibleDuration, sizeBasedMinDuration),
-			MAX_UPLOAD_DURATION_SECS,
-		);
+		const storedDuration = recordedUploadDuration(durationInSecs, totalBytes);
 		const upload = {
 			appId,
 			videoId,
@@ -341,10 +394,7 @@ export async function completeInfraUpload({
 			}
 		}
 
-		claim = await claimDeveloperVideoUpload(videoId);
-		if (!claim && (await releaseStaleUploadClaim(videoId, Date.now()))) {
-			claim = await claimDeveloperVideoUpload(videoId);
-		}
+		claim = await claimInfraUploadCompletion(videoId);
 		if (!claim) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
 			return fail(
@@ -379,37 +429,7 @@ export async function completeInfraUpload({
 		if (height !== undefined) updates.height = height;
 		if (fps !== undefined) updates.fps = fps;
 
-		const admission = await db().transaction(async (tx) => {
-			await lockInfraAccount(tx, appId);
-
-			const [current] = await tx
-				.select({
-					duration: developerVideos.duration,
-					deletedAt: developerVideos.deletedAt,
-				})
-				.from(developerVideos)
-				.where(eq(developerVideos.id, videoId))
-				.limit(1);
-			if (!current || current.deletedAt) return REMOVED;
-			if (current.duration !== null) return ALREADY_RECORDED;
-
-			const admission = await admitDeveloperVideoUpload({
-				...upload,
-				executor: tx,
-			});
-			if (!admission.allowed) return admission;
-
-			await tx
-				.update(developerVideos)
-				.set(updates)
-				.where(
-					and(
-						eq(developerVideos.id, videoId),
-						isNull(developerVideos.duration),
-					),
-				);
-			return admission;
-		});
+		const admission = await recordAdmittedInfraUpload(upload, updates);
 
 		if ("removed" in admission) {
 			await releaseDeveloperVideoUpload(videoId, claim);
@@ -605,10 +625,10 @@ async function releaseStaleUploadClaim(videoId: string, now: number) {
 	});
 }
 
-const ALREADY_RECORDED = { allowed: true } as const;
+export const ALREADY_RECORDED = { allowed: true } as const;
 const REMOVED = { allowed: false, removed: true } as const;
 
-async function videoIsRecorded(
+export async function videoIsRecorded(
 	executor: Pick<ReturnType<typeof db>, "select">,
 	videoId: string,
 ) {

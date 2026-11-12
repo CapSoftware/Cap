@@ -7,6 +7,7 @@ import {
 	developerSdkCors,
 } from "../../../utils";
 
+import * as transcripts from "./transcripts";
 import * as usage from "./usage";
 import * as videos from "./videos";
 
@@ -15,6 +16,7 @@ const app = new Hono()
 	.use(developerSdkCors)
 	.use(developerRateLimiter)
 	.route("/videos", videos.app)
+	.route("/transcripts", transcripts.app)
 	.route("/usage", usage.app)
 	.notFound(developerApiNotFound)
 	.onError(developerApiError);

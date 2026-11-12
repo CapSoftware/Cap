@@ -22,6 +22,10 @@
 		{
 			"path": "/api/cron/developer-storage",
 			"schedule": "41 */6 * * *"
+		},
+		{
+			"path": "/api/cron/developer-transcripts-cleanup",
+			"schedule": "47 * * * *"
 		}
 	],
 	"functions": {
