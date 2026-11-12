@@ -354,7 +354,7 @@ export async function createInfraVideo({
 		.values({
 			id: videoId,
 			appId,
-			externalUserId: userId,
+			externalUserId: userId?.trim() || null,
 			name: name ?? "Untitled",
 			s3Key,
 			metadata,
