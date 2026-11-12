@@ -70,8 +70,9 @@ skill.
 For a developer app, `cap developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or
 video into text and `cap developers videos upload <app> <file>` uploads a video. Over MCP these are
 `developer_transcript_create` (with `file_path` or `url`), `developer_transcript_wait`,
-`developer_transcript_get`, and `developer_video_upload`. Both spend the app's prepaid credits, so name the
-app, the file, and the price and get confirmation first. A `queued` or `processing` transcript is not done:
+`developer_transcript_get`, and `developer_video_upload`. A transcript spends the app's prepaid credits and
+an uploaded video is billed daily for storage, so name the app, the file, and the price and get confirmation
+first. An uploaded video comes back as `processing` until its playback files are ready. A `queued` or `processing` transcript is not done:
 wait for `complete`. `INSUFFICIENT_CREDITS` means the app needs a top-up through
 `cap developers credits purchase`.
 

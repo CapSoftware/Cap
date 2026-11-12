@@ -202,7 +202,7 @@ struct DeveloperVideosArgs {
 #[derive(Subcommand)]
 enum DeveloperVideoCommands {
     List(DeveloperVideoListArgs),
-    /// Upload a local video file to the app, billed per minute from its credits
+    /// Upload a local video file to the app. Uploading is free; stored video is billed daily
     Upload(DeveloperVideoUploadArgs),
     Delete(DeveloperVideoDeleteArgs),
 }
@@ -564,7 +564,7 @@ impl DevelopersArgs {
                 DeveloperVideoCommands::Upload(args) => {
                     confirmation::require(
                         args.yes,
-                        "Upload the video and charge the app's credits per minute",
+                        "Upload the video to the app, where its storage is billed daily from the app's credits",
                     )?;
                     let client =
                         AgentClient::from_credentials().map_err(|error| error.to_string())?;

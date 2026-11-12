@@ -167,7 +167,7 @@ For CSV limits, owner and space mapping, large-batch controls, and source-unavai
 
 ## Transcribe a file or upload a video to a developer app
 
-With the `full` login profile an agent can turn audio or video into text and upload a video to a developer app, from a local file or a public URL. Both spend the app's prepaid credits, so the agent confirms the app, the file and the price first.
+With the `full` login profile an agent can turn audio or video into text and upload a video to a developer app, from a local file or a public URL. A transcript spends the app's prepaid credits and a stored video is billed daily, so the agent confirms the app, the file and the price first.
 
 ```sh
 cap developers list
@@ -180,7 +180,7 @@ cap developers videos upload <app-id> ./demo.mp4 --yes
 
 Over MCP the same work is `developer_transcript_create` (with `file_path` or `url`, and `wait` to block until the text is ready), `developer_transcript_wait`, `developer_transcript_get`, `developer_transcripts_list`, `developer_transcript_delete`, and `developer_video_upload`. Transcription is billed per audio hour and video uploads per minute. The signed upload URL stays inside the CLI and is never printed or returned to the agent.
 
-**Success check:** The transcript status is `complete` and its text is returned, or the upload returns a video with a duration. A `queued` or `processing` status is not treated as done. If the app is out of credits the command reports `INSUFFICIENT_CREDITS`; create a checkout link with `cap developers credits purchase`.
+**Success check:** The transcript status is `complete` and its text is returned, or the upload returns a video with a playback id and the status `processing`. A `queued` or `processing` status is not treated as done. If the app is out of credits the command reports `INSUFFICIENT_CREDITS`; create a checkout link with `cap developers credits purchase`.
 
 ## Use Cap for administration or development
 

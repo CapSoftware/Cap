@@ -2463,7 +2463,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_video_upload",
-        description = "Upload a local video file to a developer app after explicit user confirmation. Only files that contain a video stream are accepted. Charges the app's credits per minute of video and returns the stored video",
+        description = "Upload a local video file to a developer app after explicit user confirmation. Only files that contain a video stream are accepted. Uploading is free and the stored video is billed daily from the app's credits. Returns the video, which is processing until its playback files are ready",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

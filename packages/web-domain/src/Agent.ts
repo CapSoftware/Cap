@@ -1224,6 +1224,7 @@ export const AgentDeveloperVideoCreateResponse = Schema.Struct({
 		id: Schema.String,
 		appId: Schema.String,
 		name: Schema.String,
+		playbackId: Schema.String,
 	}),
 	upload: AgentDeveloperUploadTarget,
 	requestId: Schema.String,
@@ -1241,12 +1242,13 @@ export const AgentDeveloperVideoCompleteResponse = Schema.Struct({
 		id: Schema.String,
 		appId: Schema.String,
 		name: Schema.String,
+		status: Schema.String,
+		playbackId: Schema.NullOr(Schema.String),
 		durationSeconds: Schema.Number,
 		width: Schema.NullOr(Schema.Number),
 		height: Schema.NullOr(Schema.Number),
 		fps: Schema.NullOr(Schema.Number),
 	}),
-	chargedMicroCredits: Schema.Number,
 	requestId: Schema.String,
 });
 

@@ -147,6 +147,7 @@ import {
 import { startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
+import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
@@ -428,7 +429,7 @@ const developerMediaFailure = (
 		return new Agent.AgentPaymentRequiredError({
 			...commonError(
 				requestId,
-				"The app does not have enough credits. Create a checkout link with `cap developers credits purchase`, then retry.",
+				`${failure.message} Create a checkout link with \`cap developers credits purchase\`, then retry.`,
 			),
 			code: "INSUFFICIENT_CREDITS",
 		});
@@ -441,7 +442,8 @@ const developerMediaFailure = (
 		});
 	}
 	if (failure.status === 409) {
-		return failure.code === "upload_not_found"
+		return failure.code === "upload_not_found" ||
+			failure.code === COMPLETION_IN_PROGRESS
 			? notReady(requestId, failure.message)
 			: new Agent.AgentConflictError({
 					...commonError(requestId, failure.message),
@@ -4621,11 +4623,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								developerMediaFailure(requestId, result),
 							);
 						}
-						return {
-							video: result.video,
-							chargedMicroCredits: result.chargedMicroCredits,
-							requestId,
-						};
+						return { video: result.video, requestId };
 					}),
 					requestId,
 				);

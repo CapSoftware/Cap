@@ -1,16 +1,8 @@
 import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import {
-	developerCreditTransactions,
-	developerVideos,
-} from "@cap/database/schema";
-import { and, eq, isNull, sql } from "drizzle-orm";
-import {
-	debitDeveloperUsage,
-	getAvailableDeveloperBalance,
-} from "@/lib/developer-credits";
-import { UPLOAD_MICRO_CREDITS_PER_MINUTE } from "@/lib/developer-pricing";
+import { developerVideos } from "@cap/database/schema";
+import { and, eq, isNull } from "drizzle-orm";
 import {
 	copyDeveloperObject,
 	deleteDeveloperObjects,
@@ -24,22 +16,41 @@ import {
 	TRANSCRIPT_UPLOAD_URL_TTL_SECONDS,
 	transcriptNameFromFile,
 } from "@/lib/developer-transcripts";
+import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
+import {
+	createDeveloperPlaybackId,
+	DEVELOPER_VIDEO_DEFAULT_TIER,
+} from "@/lib/developer-video-plan";
+import type { DeveloperVideoClaim } from "@/lib/developer-video-processing";
+import {
+	releaseDeveloperVideoUpload,
+	startDeveloperVideoProcessing,
+} from "@/lib/developer-video-start";
+import {
+	getInfraUploadAdmission,
+	type InfraUploadAdmission,
+} from "@/lib/infra-standing";
+import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
+import {
+	ALREADY_RECORDED,
+	claimInfraUploadCompletion,
+	MAX_UPLOAD_DURATION_SECS,
+	recordAdmittedInfraUpload,
+	recordedUploadDuration,
+} from "@/lib/infra-video-upload";
 import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
 
 export const DEVELOPER_VIDEO_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
-export const DEVELOPER_VIDEO_MAX_DURATION_SECONDS = 4 * 60 * 60;
-export const DEVELOPER_VIDEO_MIN_BALANCE_MICRO_CREDITS = 5_000;
-const BILLED_BYTES_PER_SECOND = 2_500_000;
-const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
 export type DeveloperVideoFailure = {
 	ok: false;
 	status: 400 | 402 | 404 | 409;
 	code: string;
 	message: string;
+	shortfallMicroCredits?: number;
 };
 
 const fail = (
@@ -54,6 +65,25 @@ const KEY_RETIRED = fail(
 	"idempotency_conflict",
 	"Idempotency key belongs to a video that was deleted or already uploaded",
 );
+const DURATION_REQUIRED = fail(
+	400,
+	"duration_required",
+	"durationSeconds is required when the file cannot be measured",
+);
+const BUSY = fail(
+	409,
+	COMPLETION_IN_PROGRESS,
+	"Another request is completing this upload. Try again shortly.",
+);
+
+const refused = (admission: InfraUploadAdmission): DeveloperVideoFailure => ({
+	...fail(
+		402,
+		admission.reason ?? "insufficient_credits",
+		admission.message ?? "Insufficient credits",
+	),
+	shortfallMicroCredits: admission.shortfallMicroCredits,
+});
 
 const VIDEO_CONTENT_TYPES: Record<string, string> = {
 	mp4: "video/mp4",
@@ -68,12 +98,6 @@ export function developerVideoContentType(fileName: string) {
 	const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
 	return VIDEO_CONTENT_TYPES[extension] ?? "video/mp4";
 }
-const INSUFFICIENT = fail(402, "insufficient_credits", "Insufficient credits");
-const DURATION_REQUIRED = fail(
-	400,
-	"duration_required",
-	"durationSeconds is required when the file cannot be measured",
-);
 
 export function developerVideoUploadKey(appId: string, videoId: string) {
 	return `${DEVELOPER_UPLOAD_PREFIX}${appId}/v-${videoId}`;
@@ -86,100 +110,22 @@ export function developerVideoIdForIdempotencyKey(appId: string, key: string) {
 		.slice(0, 15);
 }
 
-export function developerVideoBillingSeconds(input: {
+export function developerVideoRecordedSeconds(input: {
 	measuredSeconds: number | null;
 	claimedSeconds: number | null;
 	totalBytes: number;
 }) {
-	const seconds =
-		input.measuredSeconds !== null
-			? input.measuredSeconds
-			: Math.max(
-					Math.min(
-						input.claimedSeconds ?? 0,
-						input.totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
-					),
-					input.totalBytes / BILLED_BYTES_PER_SECOND,
-				);
-	return Math.min(Math.max(seconds, 0), DEVELOPER_VIDEO_MAX_DURATION_SECONDS);
-}
-
-export function developerVideoUploadMicroCredits(durationSeconds: number) {
-	return Math.floor((durationSeconds / 60) * UPLOAD_MICRO_CREDITS_PER_MINUTE);
-}
-
-type DeveloperVideoCharge =
-	| "recorded"
-	| "superseded"
-	| "missing"
-	| "insufficient"
-	| "no-account";
-
-async function chargeAndRecordDeveloperVideo(input: {
-	appId: string;
-	videoId: string;
-	durationSeconds: number;
-	metadata: Record<string, unknown>;
-	record: Partial<typeof developerVideos.$inferInsert>;
-}): Promise<DeveloperVideoCharge> {
-	const owed = developerVideoUploadMicroCredits(input.durationSeconds);
-
-	return db().transaction(async (tx) => {
-		const [locked] = await tx
-			.select({
-				duration: developerVideos.duration,
-				deletedAt: developerVideos.deletedAt,
-			})
-			.from(developerVideos)
-			.where(eq(developerVideos.id, input.videoId))
-			.limit(1)
-			.for("update");
-		if (!locked || locked.deletedAt) return "missing";
-		if (locked.duration !== null) return "superseded";
-
-		if (owed > 0) {
-			const debit = await debitDeveloperUsage(tx, {
-				appId: input.appId,
-				microCredits: owed,
-				type: "video_create",
-				referenceId: input.videoId,
-				referenceType: "developer_video",
-				metadata: input.metadata,
-			});
-			if (debit.state === "no_account") return "no-account";
-			if (debit.state === "insufficient") return "insufficient";
-		}
-
-		await tx
-			.update(developerVideos)
-			.set(input.record)
-			.where(eq(developerVideos.id, input.videoId));
-		return "recorded";
-	});
-}
-
-async function developerVideoPaidMicroCredits(videoId: string) {
-	const [paid] = await db()
-		.select({
-			total: sql<
-				string | number | null
-			>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
-		})
-		.from(developerCreditTransactions)
-		.where(
-			and(
-				eq(developerCreditTransactions.referenceId, videoId),
-				eq(developerCreditTransactions.referenceType, "developer_video"),
-				eq(developerCreditTransactions.type, "video_create"),
-			),
-		);
-	return Number(paid?.total ?? 0) || 0;
+	return input.measuredSeconds !== null
+		? Math.min(Math.max(input.measuredSeconds, 0), MAX_UPLOAD_DURATION_SECS)
+		: recordedUploadDuration(input.claimedSeconds ?? 0, input.totalBytes);
 }
 
 export type DeveloperVideoView = {
 	id: string;
 	appId: string;
 	name: string;
+	status: string;
+	playbackId: string | null;
 	durationSeconds: number;
 	width: number | null;
 	height: number | null;
@@ -190,6 +136,8 @@ type DeveloperVideoRecord = {
 	id: string;
 	appId: string;
 	name: string;
+	status: string;
+	playbackId: string | null;
 	duration: number | null;
 	width: number | null;
 	height: number | null;
@@ -203,6 +151,8 @@ export function toDeveloperVideoView(
 		id: video.id,
 		appId: video.appId,
 		name: video.name,
+		status: video.status,
+		playbackId: video.playbackId,
 		durationSeconds: video.duration ?? 0,
 		width: video.width,
 		height: video.height,
@@ -216,10 +166,13 @@ async function findVideo(appId: string, videoId: string) {
 			id: developerVideos.id,
 			appId: developerVideos.appId,
 			name: developerVideos.name,
+			status: developerVideos.status,
+			playbackId: developerVideos.playbackId,
 			duration: developerVideos.duration,
 			width: developerVideos.width,
 			height: developerVideos.height,
 			fps: developerVideos.fps,
+			maxResolutionTier: developerVideos.maxResolutionTier,
 		})
 		.from(developerVideos)
 		.where(
@@ -245,7 +198,7 @@ export async function createDeveloperVideoUpload(
 ): Promise<
 	| {
 			ok: true;
-			video: { id: string; appId: string; name: string };
+			video: { id: string; appId: string; name: string; playbackId: string };
 			upload: TranscriptUploadTarget;
 	  }
 	| DeveloperVideoFailure
@@ -271,10 +224,8 @@ export async function createDeveloperVideoUpload(
 		);
 	}
 
-	const balance = await getAvailableDeveloperBalance(appId);
-	if (balance === null || balance < DEVELOPER_VIDEO_MIN_BALANCE_MICRO_CREDITS) {
-		return INSUFFICIENT;
-	}
+	const admission = await getInfraUploadAdmission(appId);
+	if (!admission.allowed) return refused(admission);
 
 	const id = input.idempotencyKey
 		? developerVideoIdForIdempotencyKey(appId, input.idempotencyKey)
@@ -283,7 +234,15 @@ export async function createDeveloperVideoUpload(
 
 	await db()
 		.insert(developerVideos)
-		.values({ id, appId, externalUserId, name, s3Key })
+		.values({
+			id,
+			appId,
+			externalUserId,
+			name,
+			s3Key,
+			playbackId: createDeveloperPlaybackId(),
+			maxResolutionTier: DEVELOPER_VIDEO_DEFAULT_TIER,
+		})
 		.onDuplicateKeyUpdate({ set: { id } });
 
 	const [video] = await db()
@@ -291,13 +250,14 @@ export async function createDeveloperVideoUpload(
 			id: developerVideos.id,
 			name: developerVideos.name,
 			s3Key: developerVideos.s3Key,
+			playbackId: developerVideos.playbackId,
 			duration: developerVideos.duration,
 			deletedAt: developerVideos.deletedAt,
 		})
 		.from(developerVideos)
 		.where(and(eq(developerVideos.id, id), eq(developerVideos.appId, appId)))
 		.limit(1);
-	if (!video || video.s3Key !== s3Key) return NOT_FOUND;
+	if (!video || video.s3Key !== s3Key || !video.playbackId) return NOT_FOUND;
 	if (video.deletedAt || video.duration !== null) return KEY_RETIRED;
 
 	const contentType = developerVideoContentType(fileName);
@@ -308,7 +268,12 @@ export async function createDeveloperVideoUpload(
 	);
 	return {
 		ok: true,
-		video: { id: video.id, appId, name: video.name },
+		video: {
+			id: video.id,
+			appId,
+			name: video.name,
+			playbackId: video.playbackId,
+		},
 		upload: {
 			method: "PUT",
 			url,
@@ -328,6 +293,9 @@ const positive = (value: number | undefined | null) =>
 		? value
 		: null;
 
+const rounded = (value: number | null) =>
+	value === null ? undefined : Math.round(value);
+
 export async function completeDeveloperVideoUpload(
 	appId: string,
 	videoId: string,
@@ -337,19 +305,20 @@ export async function completeDeveloperVideoUpload(
 		height?: number;
 		fps?: number;
 	},
-): Promise<
-	| { ok: true; video: DeveloperVideoView; chargedMicroCredits: number }
-	| DeveloperVideoFailure
-> {
+): Promise<{ ok: true; video: DeveloperVideoView } | DeveloperVideoFailure> {
 	const video = await findVideo(appId, videoId);
 	if (!video) return NOT_FOUND;
 	if (video.duration !== null) {
-		return {
-			ok: true,
-			video: toDeveloperVideoView(video),
-			chargedMicroCredits: 0,
-		};
+		return { ok: true, video: toDeveloperVideoView(video) };
 	}
+
+	const settled = async (unsettled: DeveloperVideoFailure) => {
+		const current = await findVideo(appId, video.id);
+		if (!current) return NOT_FOUND;
+		return current.duration !== null
+			? { ok: true as const, video: toDeveloperVideoView(current) }
+			: unsettled;
+	};
 
 	const claimedSeconds = positive(input.durationSeconds);
 	const canMeasure = isMediaServerConfigured();
@@ -358,10 +327,12 @@ export async function completeDeveloperVideoUpload(
 	const uploadKey = developerVideoUploadKey(appId, video.id);
 	const totalBytes = await developerObjectSize(uploadKey);
 	if (totalBytes === null || totalBytes === 0) {
-		return fail(
-			409,
-			"upload_not_found",
-			"The file is not in storage. Uploads are kept for 48 hours, so upload it again if it has been longer",
+		return settled(
+			fail(
+				409,
+				"upload_not_found",
+				"The file is not in storage. Uploads are kept for 48 hours, so upload it again if it has been longer",
+			),
 		);
 	}
 	if (totalBytes > DEVELOPER_VIDEO_MAX_UPLOAD_BYTES) {
@@ -373,6 +344,7 @@ export async function completeDeveloperVideoUpload(
 	await copyDeveloperObject(uploadKey, storedKey);
 
 	let kept = false;
+	let claim: DeveloperVideoClaim | null = null;
 	try {
 		let measuredSeconds: number | null = null;
 		let width = positive(input.width);
@@ -399,44 +371,56 @@ export async function completeDeveloperVideoUpload(
 			return DURATION_REQUIRED;
 		}
 
-		const durationSeconds = developerVideoBillingSeconds({
-			measuredSeconds,
-			claimedSeconds,
-			totalBytes,
-		});
-
-		const outcome = await chargeAndRecordDeveloperVideo({
+		const upload = {
 			appId,
 			videoId: video.id,
-			durationSeconds,
-			metadata: {
-				durationSeconds,
+			durationSeconds: developerVideoRecordedSeconds({
+				measuredSeconds,
+				claimedSeconds,
 				totalBytes,
-				measured: measuredSeconds !== null,
-			},
-			record: {
-				s3Key: storedKey,
-				duration: durationSeconds,
-				width: width === null ? undefined : Math.round(width),
-				height: height === null ? undefined : Math.round(height),
-				fps: fps === null ? undefined : Math.round(fps),
-			},
+			}),
+			width: rounded(width),
+			height: rounded(height),
+			maxResolutionTier: video.maxResolutionTier,
+		};
+
+		const admission = await admitDeveloperVideoUpload(upload);
+		if (!admission.allowed) return settled(refused(admission));
+
+		claim = await claimInfraUploadCompletion(video.id);
+		if (!claim) return settled(BUSY);
+
+		const recorded = await recordAdmittedInfraUpload(upload, {
+			s3Key: storedKey,
+			duration: upload.durationSeconds,
+			width: upload.width,
+			height: upload.height,
+			fps: rounded(fps),
 		});
-		if (outcome === "missing") return NOT_FOUND;
-		if (outcome === "insufficient" || outcome === "no-account") {
-			return INSUFFICIENT;
+		if ("removed" in recorded) {
+			await releaseDeveloperVideoUpload(video.id, claim);
+			claim = null;
+			return NOT_FOUND;
 		}
-		kept = outcome === "recorded";
+		if (!recorded.allowed) {
+			await releaseDeveloperVideoUpload(video.id, claim);
+			claim = null;
+			return refused(recorded);
+		}
+		kept = recorded !== ALREADY_RECORDED;
+
+		const held = claim;
+		claim = null;
+		await startDeveloperVideoProcessing(video.id, held);
 
 		const completed = await findVideo(appId, video.id);
 		if (!completed) return NOT_FOUND;
-		return {
-			ok: true,
-			video: toDeveloperVideoView(completed),
-			chargedMicroCredits: kept
-				? await developerVideoPaidMicroCredits(video.id)
-				: 0,
-		};
+		return { ok: true, video: toDeveloperVideoView(completed) };
+	} catch (error) {
+		if (claim) {
+			await releaseDeveloperVideoUpload(video.id, claim).catch(() => {});
+		}
+		throw error;
 	} finally {
 		await deleteDeveloperObjects([kept ? uploadKey : storedKey]);
 	}
