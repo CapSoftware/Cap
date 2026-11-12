@@ -126,6 +126,7 @@ jobs:
           __tests__/unit/folder-delete.test.ts
           __tests__/unit/folder-videos.test.ts
           __tests__/unit/generate-ai-duration.test.ts
+          __tests__/unit/hls-recording-readiness.test.ts
           __tests__/unit/homepage-demo-accessibility.test.ts
           __tests__/unit/invite-decline-pro-seat.test.ts
           __tests__/unit/invite-decline.test.ts
