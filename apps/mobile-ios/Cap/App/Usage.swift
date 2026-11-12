@@ -49,7 +49,6 @@ enum Usage {
 }
 
 extension View {
-    /// Counts the screen each time it comes into view.
     func usageScreen(_ name: String) -> some View {
         onAppear { Usage.screen(name) }
     }
