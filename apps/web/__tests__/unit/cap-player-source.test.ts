@@ -662,6 +662,51 @@ describe("attachSource with hls.js", () => {
 		expect(video.currentTime).toBe(45);
 	});
 
+	it("carries the start time into the MP4 when HLS fails after its playlists loaded", async () => {
+		chrome(true);
+		const video = new FakeVideo(false);
+
+		attach(video, { hls: HLS, mp4: MP4 }, { startAt: 45 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.emit("levelLoaded", { details: { totalduration: 120 } });
+		hls.emit("error", { fatal: true, type: "networkError" });
+		video.reach(120);
+
+		expect(video.src).toBe(MP4);
+		expect(video.currentTime).toBe(45);
+	});
+
+	it("does not repeat the start time in the MP4 once HLS has reached it", async () => {
+		chrome(true);
+		const video = new FakeVideo(false);
+
+		attach(video, { hls: HLS, mp4: MP4 }, { startAt: 45 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.emit("levelLoaded", { details: { totalduration: 120 } });
+		video.dispatchEvent(new Event("seeked"));
+		hls.emit("error", { fatal: true, type: "networkError" });
+		video.reach(120);
+
+		expect(video.src).toBe(MP4);
+		expect(video.currentTime).toBe(0);
+	});
+
+	it("does not send the MP4 to a start time past the end", async () => {
+		chrome(true);
+		const video = new FakeVideo(false);
+
+		attach(video, { hls: HLS, mp4: MP4 }, { startAt: 450 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.emit("levelLoaded", { details: { totalduration: 120 } });
+		hls.emit("error", { fatal: true, type: "networkError" });
+		video.reach(120);
+
+		expect(video.currentTime).toBe(0);
+	});
+
 	it("releases hls.js when it is detached", async () => {
 		chrome();
 		const video = new FakeVideo(false);

@@ -124,6 +124,7 @@ export const attachSource = (
 	let detach = () => release(video);
 	let cancelWarm: () => void = () => undefined;
 	let startPending = startAt > 0;
+	let hlsSeeks = false;
 
 	const start = () => {
 		if (autoPlay) void playAllowingMuted(video);
@@ -135,7 +136,7 @@ export const attachSource = (
 	});
 
 	const seekToStart = () => {
-		if (!startPending) return;
+		if (!startPending || hlsSeeks) return;
 		startPending = false;
 		const at = startWithin(startAt, video.duration);
 		if (at > 0) video.currentTime = at;
@@ -246,10 +247,20 @@ export const attachSource = (
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
 				hls.loadLevel = -1;
 			};
+			// hls.js seeks to the start time itself. The time stays pending
+			// until that seek lands, so a fallback to the MP4 before then
+			// still starts at it.
+			const reachedStart = () => {
+				startPending = false;
+			};
 			const destroy = () => {
+				hlsSeeks = false;
 				video.removeEventListener("play", bufferFreely);
+				video.removeEventListener("seeked", reachedStart);
 				hls.destroy();
 			};
+			hlsSeeks = true;
+			video.addEventListener("seeked", reachedStart, { once: true });
 			video.addEventListener("play", bufferFreely);
 			if (!video.paused) bufferFreely();
 			// Until play, hls.js keeps to one rendition and one segment. The
@@ -267,8 +278,8 @@ export const attachSource = (
 			});
 			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
 				if (!startPending) return;
-				startPending = false;
 				if (startWithin(startAt, data.details.totalduration) === 0) {
+					startPending = false;
 					hls.startLoad(0);
 				}
 			});
