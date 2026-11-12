@@ -24,7 +24,7 @@ How to call Cap:
 
 - **On the user's machine:** the `cap` CLI that ships with Cap Desktop. Run `cap guide --json` first for the installed command and output contract. `cap mcp serve` exposes the same actions to MCP clients over stdio.
 - **Remote MCP (read-only):** Streamable HTTP at https://cap.so/api/mcp with OAuth. Server card: https://cap.so/.well-known/mcp
-- **Developer API (HTTP):** OpenAPI 3.1 description at https://cap.so/openapi.json. Create an app and keys at https://cap.so/dashboard/developers. Development apps accept any origin, so test with one before switching to production. Errors are JSON with `error`, `code`, `hint`, and `docs` fields.
+- **Developer API (HTTP):** OpenAPI 3.1 description at https://cap.so/openapi.json. Create an app and keys at https://cap.so/dashboard/infra. Development apps accept any origin, so test with one before switching to production. Errors are JSON with `error`, `code`, `hint`, and `docs` fields.
 - **Markdown:** requesting https://cap.so with `Accept: text/markdown` returns this file, and missing pages return a Markdown 404.
 
 ## Recording Modes

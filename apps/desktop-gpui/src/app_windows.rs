@@ -6104,6 +6104,7 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 }
             }
         }
+        view.normalize_loaded_export_options();
         tracing::info!(path = %path.display(), "auto editor export requested");
         view.start_export(window, cx);
     });
@@ -6584,14 +6585,40 @@ async fn drive_auto_playback(
 /// as the frontmost surface (AppKit hands it key status as the editor goes
 /// away) rather than revealing main over it. The idle gate is this port's
 /// own: during a recording the main window is deliberately hidden and the
-/// session observer restores it when the recording ends.
+/// session observer restores it when the recording ends. `keep_hidden` is
+/// the `keepMainHiddenAfterEditor` setting.
 fn reveal_main_after_editor_close(
     editors_left: usize,
     settings_open: bool,
     idle: bool,
     main_closed_by_user: bool,
+    keep_hidden: bool,
 ) -> bool {
-    editors_left == 0 && !settings_open && idle && !main_closed_by_user
+    editors_left == 0 && !settings_open && idle && !main_closed_by_user && !keep_hidden
+}
+
+/// Whether `keepMainHiddenAfterEditor` is the only thing keeping the main
+/// window away. Nothing of Cap is on screen then, so the idle camera and
+/// microphone are released, as they are when the video editor opens; the
+/// screenshot editor opens without doing that. A recorder reopened with the
+/// editor still up (`main_hidden` false) keeps its inputs.
+fn main_kept_hidden_after_editor_close(
+    editors_left: usize,
+    settings_open: bool,
+    idle: bool,
+    main_closed_by_user: bool,
+    keep_hidden: bool,
+    main_hidden: bool,
+) -> bool {
+    keep_hidden
+        && main_hidden
+        && reveal_main_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            false,
+        )
 }
 
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
@@ -6694,11 +6721,14 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
         main_closed_by_user,
+        keep_hidden,
         "editor window closed"
     );
     let session = session.read(cx);
@@ -6708,9 +6738,20 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
         settings_open,
         capture_safe,
         main_closed_by_user,
+        keep_hidden,
     ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            capture_safe,
+            main_closed_by_user,
+            keep_hidden,
+            main_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         // A dock-activating window closed; the policy has to be recomputed
         // even when the main window is not the thing coming back.
         crate::menus::schedule_dock_sync(cx);
@@ -6785,13 +6826,20 @@ pub(crate) fn request_editor_deletion(
 /// it open, that editor is closed the way its own Delete closes it, and the
 /// delete starts once the engine has let go of the media, so the delete is
 /// not refused and does not pull the folder from under a live editor.
+/// A delete requested while an earlier one is still closing the editor joins
+/// that one: it holds the recording until the editor lets go, so a second
+/// delete would only fail and report an error for a delete that succeeds.
 /// Returns false when no editor has the recording open, leaving the delete to
 /// the caller.
 pub(crate) fn delete_closing_open_editor(project_path: &Path, cx: &mut App) -> bool {
+    let key = editor_key(project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        tracing::info!(path = %key.display(), "recording is already being deleted");
+        return true;
+    }
     let Some(handle) = editor_window_handle(project_path, cx) else {
         return false;
     };
-    let key = editor_key(project_path);
     cx.spawn(async move |cx| close_editor_and_delete(key, handle, cx).await)
         .detach();
     true
@@ -7647,6 +7695,37 @@ pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
     refresh_screenshot_surfaces(cx);
 }
 
+/// The key a screenshot editor opened from `path` (a `.cap` bundle or the
+/// image inside it) is registered under. Taken before the bundle is deleted:
+/// a deleted path no longer canonicalizes to that key.
+pub(crate) fn screenshot_editor_key(path: &Path) -> Option<PathBuf> {
+    screenshot_editor::resolve_bundle(path).map(|bundle| editor_key(&bundle))
+}
+
+/// A library list (Settings or the main window) deleted a screenshot. An
+/// editor still open on it closes the way the editor's own Delete closes it,
+/// so it stops saving into a folder that is gone, and every list of
+/// screenshots refreshes, not only the one the Delete came from.
+pub(crate) fn screenshot_deleted_from_library(key: Option<PathBuf>, cx: &mut App) {
+    let open = key.filter(|key| {
+        cx.global::<AppWindows>()
+            .screenshot_editors
+            .iter()
+            .any(|(path, _)| path == key)
+    });
+    match open {
+        Some(key) => close_screenshot_editor_after_delete(&key, cx),
+        None => refresh_screenshot_surfaces(cx),
+    }
+}
+
+/// Runs [`screenshot_deleted_from_library`] once a library delete finishes.
+/// It goes through the app, not the window that started the delete, so it
+/// still runs when that window (Settings, say) closed while the delete ran.
+pub(crate) fn finish_library_screenshot_delete(key: Option<PathBuf>, cx: &gpui::AsyncApp) {
+    cx.update(|cx| cx.defer(move |cx| screenshot_deleted_from_library(key, cx)));
+}
+
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -7680,17 +7759,36 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
     let main_closed_by_user = windows.main_closed_by_user;
+    let main_hidden = windows.main_hidden_by_app;
+    let keep_hidden = crate::store::GeneralSettings::load().keep_main_hidden_after_editor;
     tracing::info!(
         path = %key.display(),
         editors_left,
         settings_open,
         main_closed_by_user,
+        keep_hidden,
         "screenshot editor window closed"
     );
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle, main_closed_by_user) {
+    if reveal_main_after_editor_close(
+        editors_left,
+        settings_open,
+        idle,
+        main_closed_by_user,
+        keep_hidden,
+    ) {
         show_main_window(cx);
     } else {
+        if main_kept_hidden_after_editor_close(
+            editors_left,
+            settings_open,
+            idle,
+            main_closed_by_user,
+            keep_hidden,
+            main_hidden,
+        ) {
+            park_idle_camera_preview(cx);
+        }
         crate::menus::schedule_dock_sync(cx);
     }
 }
@@ -8068,6 +8166,99 @@ mod tests {
             clean_capture: None,
             clean_capture_generation: 0,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct DeleteOrigin;
+
+    #[cfg(target_os = "linux")]
+    impl gpui::Render for DeleteOrigin {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::Empty
+        }
+    }
+
+    /// A screenshot deleted from a library list (Settings passes the image,
+    /// the main window the bundle) closes an editor still open on it, which
+    /// would otherwise keep saving edits into a folder that no longer exists.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_library_screenshot_delete_closes_the_editor_open_on_it(cx: &mut gpui::TestAppContext) {
+        let library = tempfile::tempdir().unwrap();
+        let bundle = library.path().join("Screenshot.cap");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let image = bundle.join("Screenshot.png");
+        std::fs::write(&image, b"png").unwrap();
+        let key = editor_key(&bundle);
+        assert_eq!(screenshot_editor_key(&image).as_ref(), Some(&key));
+        assert_eq!(screenshot_editor_key(&bundle).as_ref(), Some(&key));
+
+        for listed in [image.clone(), bundle.clone()] {
+            std::fs::create_dir_all(&bundle).unwrap();
+            let deleted = screenshot_editor_key(&listed);
+            let handle = cx.add_window({
+                let key = key.clone();
+                move |window, cx| ScreenshotEditorWindow::new(key, window, cx)
+            });
+            cx.update(|cx| {
+                crate::session::RecordingSession::init(cx);
+                let mut windows = test_app_windows(Vec::new());
+                windows.main_closed_by_user = true;
+                windows.screenshot_editors.push((key.clone(), handle));
+                cx.set_global(windows);
+            });
+            std::fs::remove_dir_all(&bundle).unwrap();
+
+            // The window the delete came from closes before the delete
+            // finishes; the editor must still close.
+            let origin = cx.add_window(|_, _| DeleteOrigin);
+            origin
+                .update(cx, |_, window, cx| {
+                    window
+                        .spawn(cx, async move |cx| {
+                            finish_library_screenshot_delete(deleted, cx)
+                        })
+                        .detach();
+                    window.remove_window();
+                })
+                .unwrap();
+            cx.run_until_parked();
+
+            assert!(
+                handle.update(cx, |_, _, _| ()).is_err(),
+                "the editor on {} closed",
+                listed.display()
+            );
+            cx.update(|cx| assert!(cx.global::<AppWindows>().screenshot_editors.is_empty()));
+        }
+    }
+
+    /// A second library delete while the first is still closing the editor
+    /// joins it rather than starting a delete that fails on the first one's
+    /// hold on the recording.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_library_delete_while_its_editor_is_closing_joins_that_delete(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let library = tempfile::tempdir().unwrap();
+        let project_path = library.path().join("closing.cap");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let key = editor_key(&project_path);
+        cx.update(|cx| {
+            let mut windows = test_app_windows(Vec::new());
+            windows.deleting_editors.insert(key.clone());
+            cx.set_global(windows);
+            assert!(delete_closing_open_editor(&project_path, cx));
+
+            cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+            assert!(!delete_closing_open_editor(&project_path, cx));
+        });
+        assert!(project_path.is_dir());
     }
 
     /// Deleting from the library a recording an editor window has open closes
@@ -8798,21 +8989,66 @@ mod tests {
     #[test]
     fn main_window_never_returns_over_an_open_settings_window() {
         // The reported flow: last editor closes while Settings is open.
-        assert!(!reveal_main_after_editor_close(0, true, true, false));
+        assert!(!reveal_main_after_editor_close(0, true, true, false, false));
         // No Settings: the last editor closing reveals main.
-        assert!(reveal_main_after_editor_close(0, false, true, false));
+        assert!(reveal_main_after_editor_close(0, false, true, false, false));
         // Other editors still open keep main hidden either way.
-        assert!(!reveal_main_after_editor_close(1, false, true, false));
-        assert!(!reveal_main_after_editor_close(1, true, true, false));
+        assert!(!reveal_main_after_editor_close(
+            1, false, true, false, false
+        ));
+        assert!(!reveal_main_after_editor_close(1, true, true, false, false));
         // Mid-recording the session observer owns the reveal, not this path.
-        assert!(!reveal_main_after_editor_close(0, false, false, false));
+        assert!(!reveal_main_after_editor_close(
+            0, false, false, false, false
+        ));
     }
 
     /// A shortcut recording with the main window closed opens the editor
     /// afterwards; closing that editor must not bring the main window back.
     #[test]
     fn main_window_closed_by_the_user_stays_closed_after_the_last_editor() {
-        assert!(!reveal_main_after_editor_close(0, false, true, true));
+        assert!(!reveal_main_after_editor_close(0, false, true, true, false));
+    }
+
+    #[test]
+    fn closing_the_last_editor_keeps_main_hidden_only_when_asked() {
+        assert!(reveal_main_after_editor_close(0, false, true, false, false));
+        assert!(!reveal_main_after_editor_close(0, false, true, false, true));
+        assert!(!reveal_main_after_editor_close(1, false, true, false, true));
+        assert!(!reveal_main_after_editor_close(0, true, true, false, true));
+        assert!(!reveal_main_after_editor_close(
+            0, false, false, false, true
+        ));
+        assert!(!reveal_main_after_editor_close(0, false, true, true, true));
+    }
+
+    #[test]
+    fn inputs_are_released_only_when_the_setting_is_what_hides_main() {
+        assert!(main_kept_hidden_after_editor_close(
+            0, false, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, false, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            1, false, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, true, true, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, false, false, true, true
+        ));
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, true, true, true
+        ));
+    }
+
+    #[test]
+    fn a_recorder_reopened_with_the_editor_open_keeps_its_inputs() {
+        assert!(!main_kept_hidden_after_editor_close(
+            0, false, true, false, true, false
+        ));
     }
 
     #[test]

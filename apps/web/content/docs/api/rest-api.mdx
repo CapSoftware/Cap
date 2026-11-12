@@ -17,14 +17,14 @@ These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with
 
 ### Getting Your API Keys
 
-API keys are managed through the Developer dashboard, not the general Settings page.
+API keys are managed in Cap Infra, not the general Settings page.
 
-1. Go to [Cap.so/dashboard/developers](https://cap.so/dashboard/developers).
-2. Click **Create App** and give it a name and environment (development or production).
+1. Go to [cap.so/dashboard/infra](https://cap.so/dashboard/infra).
+2. Create an app and give it a name and environment (development or production).
 3. Two keys are generated for each app:
    - **Public key** (`cpk_...`) -- Safe to use in client-side code. Used with the SDK API.
    - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API.
-4. Store both keys securely. You can regenerate them from the app settings, which revokes the previous pair.
+4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair.
 
 ### Using Your Keys
 
@@ -71,7 +71,7 @@ All error responses return a JSON object with an `error` string. Authentication,
   "error": "Invalid secret key",
   "code": "invalid_secret_key",
   "message": "Invalid secret key",
-  "hint": "Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/developers.",
+  "hint": "Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
   "docs": "https://cap.so/docs/api/rest-api"
 }
 ```
@@ -193,9 +193,22 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "s3Key": "developer/app_789/abc123def456/result.mp4",
     "transcriptionStatus": "COMPLETE",
     "metadata": null,
+    "status": "ready",
+    "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "maxResolutionTier": "1080p",
+    "renditions": [
+      { "name": "1080p", "width": 1920, "height": 1080, "bitrate": 3565000, "bytes": 55480000, "codecs": "avc1.640028,mp4a.40.2" },
+      { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
+      { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
+    ],
+    "storedBytes": 142300000,
+    "errorReason": null,
     "deletedAt": null,
     "createdAt": "2025-06-15T10:30:00.000Z",
-    "updatedAt": "2025-06-15T10:32:00.000Z"
+    "updatedAt": "2025-06-15T10:32:00.000Z",
+    "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
+    "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
   }
 }
 ```
@@ -231,12 +244,23 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     "width": 1920,
     "height": 1080,
     "transcriptionStatus": "COMPLETE",
-    "ready": true
+    "ready": true,
+    "status": "ready",
+    "errorReason": null,
+    "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "renditions": [
+      { "name": "1080p", "width": 1920, "height": 1080, "bitrate": 3565000, "bytes": 55480000, "codecs": "avc1.640028,mp4a.40.2" }
+    ],
+    "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
+    "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
   }
 }
 ```
 
-The `ready` field is `true` when both `duration` and `width` are present, indicating the video has been fully uploaded and processed.
+The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
+
+The playback URLs are `null` until the video is ready. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted. `hlsUrl` can be `null` on a ready video when only the MP4 is available; it is filled in later without the video leaving `ready`.
 
 The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, or `NO_AUDIO`.
 
@@ -321,6 +345,7 @@ POST /api/developer/sdk/v1/videos/create
 |-------|------|----------|-------------|
 | `name` | string | No | Video name (defaults to "Untitled") |
 | `userId` | string | No | Your external user ID for filtering |
+| `maxResolutionTier` | string | No | Highest resolution to encode: `1080p` (default), `1440p` or `2160p` |
 | `metadata` | object | No | Arbitrary metadata to store with the video |
 
 **Example request:**
@@ -337,6 +362,7 @@ curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
 ```json
 {
   "videoId": "abc123def456",
+  "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
   "s3Key": "developer/app_789/abc123def456/result.mp4",
   "shareUrl": "https://cap.so/dev/abc123def456",
   "embedUrl": "https://cap.so/embed/abc123def456?sdk=1"
@@ -473,13 +499,22 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Billed duration in seconds: the submitted duration, or the storage size minimum when that is longer (null until upload completes) |
-| `width` | number \| null | Video width in pixels (null until upload completes) |
-| `height` | number \| null | Video height in pixels (null until upload completes) |
-| `fps` | number \| null | Frames per second (null until upload completes) |
+| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file |
+| `width` | number \| null | Measured source width in pixels (null until upload completes) |
+| `height` | number \| null | Measured source height in pixels (null until upload completes) |
+| `fps` | number \| null | Measured frames per second (null until upload completes) |
 | `s3Key` | string \| null | Storage key for the video file |
 | `transcriptionStatus` | string \| null | One of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, `NO_AUDIO` |
 | `metadata` | object \| null | Custom metadata provided during creation |
+| `status` | string | One of: `uploading`, `processing`, `ready`, `errored` |
+| `errorReason` | string \| null | Why processing failed (null unless `status` is `errored`) |
+| `playbackId` | string \| null | Unguessable ID the playback URLs are built from |
+| `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
+| `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate`, `bytes` and `codecs` |
+| `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
+| `hlsUrl` | string \| null | Adaptive HLS master playlist (null until ready) |
+| `mp4Url` | string \| null | Progressive MP4 (null until ready) |
+| `posterUrl` | string \| null | Poster image (null until ready) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |
@@ -489,6 +524,6 @@ The full video object returned by list and get endpoints:
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
 - **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true` before displaying the video.
 - **Store your keys securely.** Use environment variables or a secrets manager.
-- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in the Developer dashboard.
-- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and set up auto top-up in the Developer dashboard to avoid service interruptions.
+- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
+- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and top up from your app's Billing page in Cap Infra to avoid service interruptions.
 - **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.

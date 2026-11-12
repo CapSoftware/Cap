@@ -8,6 +8,34 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+enum CaptureMode: String, CaseIterable, Identifiable {
+    case instant
+    case studio
+    case screenshot
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .instant: "Instant Mode"
+        case .studio: "Studio Mode"
+        case .screenshot: "Screenshot Mode"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .instant: "bolt.fill"
+        case .studio: "film"
+        case .screenshot: "camera.viewfinder"
+        }
+    }
+
+    var isAvailable: Bool { self == .instant }
+
+    var comingSoonMessage: String { "\(title) is coming soon" }
+}
+
 enum RecordMode: String, CaseIterable, Identifiable {
     case camera
     case screen
