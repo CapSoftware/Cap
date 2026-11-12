@@ -112,28 +112,18 @@ export function infraVideoState(video: StateInput): InfraVideoState {
 const ABOUT_THE_FILE =
 	/^(This (file|video) |The uploaded file |Video is longer than )/;
 const ABOUT_CREDIT = /^Not enough credit /;
-const MENTIONS_BILLING = /credit|balance|billing|payment|top.?up|\$/i;
 
 export const INFRA_VIDEO_FAILURE_FALLBACK =
 	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
-export const INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK =
-	"Its owner can see what went wrong.";
+// All a viewer of the public page is told. A stored reason is written for
+// the uploader and says what to do next, which on someone else's site reads
+// as an instruction to their visitor, so no reason is passed on at all.
+export const INFRA_VIDEO_PUBLIC_FAILURE = "This video is not available.";
 
 // Some stored reasons come from the encoder and are worded for operators, so
-// only the sentences written for customers are passed on. The owner also gets
-// the ones about their credit. A viewer of the public page gets only the ones
-// about the file, and never a sentence that mentions billing, whatever it
-// starts with.
-export function infraVideoFailure(
-	reason: string | null | undefined,
-	audience: "owner" | "viewer" = "owner",
-): string {
+// the owner gets only the sentences written for customers.
+export function infraVideoFailure(reason: string | null | undefined): string {
 	const text = reason?.trim() ?? "";
-	if (audience === "viewer") {
-		return ABOUT_THE_FILE.test(text) && !MENTIONS_BILLING.test(text)
-			? text
-			: INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK;
-	}
 	return ABOUT_THE_FILE.test(text) || ABOUT_CREDIT.test(text)
 		? text
 		: INFRA_VIDEO_FAILURE_FALLBACK;
@@ -188,7 +178,7 @@ export function infraVideoEmbedCode(
 		video.width > 0 &&
 		video.height > 0;
 	const shape = measured ? `${video.width} / ${video.height}` : "16 / 9";
-	return `<iframe src="${escapeAttribute(embedUrl)}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`;
+	return `<iframe src="${escapeAttribute(embedUrl)}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`;
 }
 
 export function toInfraVideoDetail(
