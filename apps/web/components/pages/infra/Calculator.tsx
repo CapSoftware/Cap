@@ -92,6 +92,22 @@ const toPosition = (meter: Meter, value: number) => {
 	return Math.min(STEPS, Math.max(1, Math.round(position)));
 };
 
+const valueAfterMove = (meter: Meter, from: number, requested: number) => {
+	const direction = Math.sign(requested - from);
+	let position = requested;
+	let value = toValue(meter, position);
+	while (
+		direction !== 0 &&
+		position > 0 &&
+		position < STEPS &&
+		toPosition(meter, value) === from
+	) {
+		position += direction;
+		value = toValue(meter, position);
+	}
+	return value;
+};
+
 const ticksFor = (meter: Meter) => {
 	const ticks: number[] = [];
 	for (
@@ -201,7 +217,9 @@ const MeterInput = ({
 					aria-label={meter.label}
 					aria-valuetext={`${grouped.format(value)} ${meter.unit === "hr" ? "hours" : "minutes"}`}
 					onChange={(event) =>
-						onChange(toValue(meter, Number(event.target.value)))
+						onChange(
+							valueAfterMove(meter, position, Number(event.target.value)),
+						)
 					}
 					className={SLIDER}
 					style={trackStyle}
