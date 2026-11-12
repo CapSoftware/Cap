@@ -1,54 +1,81 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	CAP_INFRA_AGENT_COMMANDS,
-	CAP_INFRA_AGENT_PROMPT,
-} from "@/data/infra-agent-prompt";
+import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
+import { developerOpenApiSpec } from "@/lib/developer-openapi";
 
-const withoutCommands = CAP_INFRA_AGENT_COMMANDS.reduce(
-	(text, command) => text.split(command).join(""),
-	CAP_INFRA_AGENT_PROMPT,
+const METHODS = ["get", "post", "put", "patch", "delete"] as const;
+
+const documented = new Set(
+	Object.entries(developerOpenApiSpec("https://cap.so").paths).flatMap(
+		([path, operations]) =>
+			METHODS.filter((method) => method in operations).map(
+				(method) => `${method.toUpperCase()} ${path}`,
+			),
+	),
 );
 
+const named = (text: string) =>
+	[...text.matchAll(/\b(GET|POST|PUT|PATCH|DELETE) (\/api\/[^\s,.;:)]+)/g)].map(
+		([, method, path]) => `${method} ${path}`,
+	);
+
 describe("Cap Infra agent prompt", () => {
-	it("names every CLI command through the checked command list", () => {
-		for (const command of CAP_INFRA_AGENT_COMMANDS) {
-			expect(command.startsWith("cap ")).toBe(true);
-			expect(CAP_INFRA_AGENT_PROMPT).toContain(command);
+	it("names only methods and paths that the OpenAPI document has", () => {
+		const calls = named(CAP_INFRA_AGENT_PROMPT);
+		expect(calls.length).toBeGreaterThanOrEqual(12);
+		for (const call of calls) {
+			expect(documented, `${call} is not in the OpenAPI document`).toContain(
+				call,
+			);
 		}
-		expect(withoutCommands).not.toMatch(/\bcap\s+[a-z-]/);
+		const pathMentions =
+			CAP_INFRA_AGENT_PROMPT.match(/\/api\/developer\//g) ?? [];
+		expect(pathMentions).toHaveLength(calls.length);
 	});
 
-	it("links only to pages that exist", () => {
+	it("catches a path or a method the API does not have", () => {
+		expect(documented).not.toContain("GET /api/developer/v1/apps");
+		expect(documented).not.toContain("DELETE /api/developer/v1/usage");
+		expect(named("call POST /api/developer/v1/apps, then stop")).toEqual([
+			"POST /api/developer/v1/apps",
+		]);
+	});
+
+	it("covers the whole job with the secret key and the REST API", () => {
+		for (const call of [
+			"POST /api/developer/v1/uploads",
+			"POST /api/developer/v1/uploads/{id}/token",
+			"POST /api/developer/sdk/v1/upload/multipart/initiate",
+			"POST /api/developer/sdk/v1/upload/multipart/presign-part",
+			"POST /api/developer/sdk/v1/upload/multipart/complete",
+			"GET /api/developer/v1/videos/{id}/status",
+			"POST /api/developer/v1/transcripts",
+			"GET /api/developer/v1/usage",
+		]) {
+			expect(named(CAP_INFRA_AGENT_PROMPT)).toContain(call);
+		}
+		expect(CAP_INFRA_AGENT_PROMPT).toContain("every 2 seconds");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain("Retry-After");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain("60 requests a minute");
+	});
+
+	it("links only to the API reference", () => {
 		const links = CAP_INFRA_AGENT_PROMPT.match(/https?:\/\/[^\s)]+/g) ?? [];
 		expect([...new Set(links)].sort()).toEqual([
 			"https://cap.so/docs/api/rest-api",
-			"https://cap.so/install-cli.ps1",
-			"https://cap.so/install-cli.sh",
 			"https://cap.so/openapi.json",
 		]);
 	});
 
-	it("connects the MCP server and proves the upload from the CLI", () => {
-		expect(CAP_INFRA_AGENT_PROMPT).toContain("cap agents install --target");
+	it("never asks for the Cap CLI, an MCP server or a pasted key", () => {
+		expect(CAP_INFRA_AGENT_PROMPT).not.toMatch(/\bcap [a-z]/);
+		expect(CAP_INFRA_AGENT_PROMPT).not.toMatch(/\bCLI\b|\bMCP\b|curl|install/i);
+		expect(CAP_INFRA_AGENT_PROMPT).not.toContain("cpk_");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain(
-			"cap developers videos upload <app> <file> --wait --yes --json",
+			"Never ask me to paste the key into the chat",
 		);
-		expect(CAP_INFRA_AGENT_PROMPT).toContain(
-			"cap developers videos get <app> <video> --json",
-		);
-	});
-
-	it("confirms every command an agent runs to change something", () => {
-		const changes = CAP_INFRA_AGENT_COMMANDS.filter((command) =>
-			/ (create|rotate|upload|delete|purchase|install) /.test(`${command} `),
-		);
-		expect(changes.length).toBeGreaterThanOrEqual(6);
-		for (const command of changes) {
-			expect(command).toMatch(/ --(yes|dry-run)\b/);
-		}
-		expect(
-			CAP_INFRA_AGENT_COMMANDS.find((command) => command.includes("purchase")),
-		).toContain("--no-open");
+		expect(CAP_INFRA_AGENT_PROMPT).not.toContain("—");
 	});
 
 	it("opens with a line the console can show by itself", () => {
@@ -56,5 +83,17 @@ describe("Cap Infra agent prompt", () => {
 		expect(opening).toBe(
 			"Set up Cap Infra in this project so it can upload and play video.",
 		);
+	});
+
+	it("is introduced in the console without the Cap CLI or an MCP server", () => {
+		const source = readFileSync(
+			join(
+				process.cwd(),
+				"app/(infra)/dashboard/infra/_components/agent-setup.tsx",
+			),
+			"utf8",
+		);
+		expect(source).not.toMatch(/\bCLI\b|\bMCP\b/);
+		expect(source).toContain("secret key");
 	});
 });

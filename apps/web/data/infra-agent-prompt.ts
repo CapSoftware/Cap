@@ -1,43 +1,33 @@
-const commands = {
-	version: "cap version --json",
-	guide: "cap guide --json",
-	videosHelp: "cap developers videos --help",
-	update: "cap update --json",
-	agentsInstall:
-		"cap agents install --target <claude|codex|cursor> --component all --yes --json",
-	authStatus: "cap auth status --json",
-	authLogin: "cap auth login --profile full --json",
-	list: "cap developers list --json",
-	create: 'cap developers create "<name>" --yes --json',
-	rotatePreview: "cap developers keys rotate <app> --dry-run --json",
-	rotate: "cap developers keys rotate <app> --yes --json",
-	upload: "cap developers videos upload <app> <file> --wait --yes --json",
-	videoGet: "cap developers videos get <app> <video> --json",
-	videoDelete: "cap developers videos delete <app> <video> --yes --json",
-	usage: "cap developers usage <app> --json",
-	purchase:
-		"cap developers credits purchase <app> --amount-cents 1000 --no-open --yes --json",
-} as const;
+const api = "/api/developer/v1";
+const sdk = "/api/developer/sdk/v1/upload/multipart";
 
-export const CAP_INFRA_AGENT_COMMANDS: readonly string[] =
-	Object.values(commands);
+const calls = {
+	createUpload: `POST ${api}/uploads`,
+	renewToken: `POST ${api}/uploads/{id}/token`,
+	initiate: `POST ${sdk}/initiate`,
+	presignPart: `POST ${sdk}/presign-part`,
+	complete: `POST ${sdk}/complete`,
+	videoStatus: `GET ${api}/videos/{id}/status`,
+	video: `GET ${api}/videos/{id}`,
+	transcribeUrl: `POST ${api}/transcripts`,
+	transcribeFile: `POST ${api}/transcripts/uploads`,
+	startTranscript: `POST ${api}/transcripts/{id}/start`,
+	transcript: `GET ${api}/transcripts/{id}`,
+	usage: `GET ${api}/usage`,
+} as const;
 
 export const CAP_INFRA_AGENT_PROMPT = `Set up Cap Infra in this project so it can upload and play video.
 
-Cap Infra is Cap's video API. Use the Cap CLI for the account side and the documented HTTP API for the code. Do not guess. Check every command with ${commands.guide} or by adding --help to it, and take every request from https://cap.so/docs/api/rest-api (OpenAPI at https://cap.so/openapi.json). Use only the endpoints documented there. You run without a terminal prompt, so a command that changes something needs --yes. Pass it only after I agreed to that change.
+Cap Infra is Cap's video and speech API. All you need is the app's secret key and the REST API. Read https://cap.so/openapi.json and https://cap.so/docs/api/rest-api first. Use only the methods and paths documented there, and take every field name from the OpenAPI document.
 
-1. Find the Cap CLI. Run ${commands.version}. If the command is missing, install it yourself:
-   - macOS or Linux: curl -fsSL https://cap.so/install-cli.sh | sh
-   - Windows PowerShell: irm https://cap.so/install-cli.ps1 | iex
-   Then run ${commands.videosHelp}. If it does not list upload, get and wait, run ${commands.update} and check again. If they are still missing, tell me, skip step 9 and check the upload through the HTTP API instead.
-2. Connect Cap to yourself. Run ${commands.agentsInstall} with the one target that names you. This adds the Cap MCP server and skill. They load the next time you start, so keep using the CLI for the rest of this setup.
-3. Sign in. Run ${commands.authStatus}. Developer apps need the developer:read, developer:write and developer:secrets scopes. If scopes does not list them, run ${commands.authLogin}, let me approve it in the browser, then check the status again.
-4. Choose an app. Run ${commands.list}, then ask me whether to create a new app or use one that exists. Wait for my answer.
-5. Get the keys without showing them. A new app returns its public key (cpk_) and secret key (csk_) once, from ${commands.create}. The keys of an existing app cannot be read again, so ask me to put them in the environment file myself. Only if I agree to revoke the keys in use, run ${commands.rotatePreview} to show me which keys would stop working, then ${commands.rotate}. Redirect the output of create or rotate to a temporary file. Never let it reach the chat, the terminal or a log.
-6. Store the keys. Write both into this project's local environment file, using the names the project already uses or CAP_PUBLIC_KEY and CAP_SECRET_KEY. Check the file is ignored by git, then delete the temporary file. The secret key stays on the server and is never printed, committed or sent to a browser. The public key cannot create or upload videos.
-7. Wire up uploads. On the server, with the secret key, create an upload (POST /api/developer/v1/uploads) only for a signed-in user, and return its upload token (cut_) to the browser. In the browser, with that token as the Bearer credential, upload the file with the multipart endpoints, then complete the upload. Never send a key to the browser.
-8. Wire up playback. From the server, with the secret key, check the video's status until it is ready, then show it with the embed URL returned when the upload was created.
-9. Prove the app works. Ask me first, because stored video is billed daily. ${commands.upload} uploads a short test video and returns once its status is ready, with its shareUrl and embedUrl. If it fails or times out, the error still carries the videoId. ${commands.videoGet} reads the same fields later. Give me the shareUrl, and once I have seen it remove the test video with ${commands.videoDelete}.
-10. Watch the credits. ${commands.usage} shows the balance and whether uploads are allowed. If a request returns 402 or INSUFFICIENT_CREDITS the app is out of credits. Tell me, and offer ${commands.purchase}, which returns a checkout link for me to pay. The amount is in cents, from 500 ($5) to 100000 ($1,000). Before production, set corsOrigin to the site's origin when you create each upload.
+1. Find the secret key. I created the app in the Cap Infra console and put its secret key (csk_) in this project's local environment file as CAP_SECRET_KEY. Check that the variable is set without printing its value, and that the file is ignored by git. If it is missing, stop and ask me to add it to the file. Never ask me to paste the key into the chat, and never print, log or commit it.
+2. Keep the key on the server. Send it only from server code, as Authorization: Bearer followed by the key. It never goes into browser code, a client bundle or a public environment variable.
+3. Create uploads on the server. For a signed-in user, call ${calls.createUpload} and give the browser only what it returns for that one video: the upload token (cut_), the video id and the embed URL. In production, set corsOrigin to the site's origin.
+4. Upload from the browser. With the upload token as the Bearer credential, call ${calls.initiate}, then ${calls.presignPart} with up to 50 part numbers in one request. PUT each part to its signed URL and keep the ETag it answers with, then call ${calls.complete}. If a call answers 401 with the code upload_token_expired, get a new token from the server with ${calls.renewToken} and continue with the same uploadId and ETags.
+5. Wait until it plays. From the server, poll ${calls.videoStatus} no faster than once every 2 seconds. Stop when status is ready or errored, and show errorReason if it failed.
+6. Play it. Show the video with its embedUrl, or build a player from hlsUrl and mp4Url in ${calls.video}. Use hlsUrl when it is present and mp4Url otherwise. shareUrl is the link to send to someone.
+7. Transcribe when I ask. Transcripts are billed per audio hour, so confirm with me first. For a public URL call ${calls.transcribeUrl}. For a file call ${calls.transcribeFile}, PUT the file to the signed URL it returns, then call ${calls.startTranscript}. Poll ${calls.transcript} at the same pace until status is complete or error.
+8. Stay inside the limit. A secret key allows 60 requests a minute across every endpoint. After a 429, wait for the number of seconds in the Retry-After header before you send the request again.
+9. Watch the credits. ${calls.usage} shows the balance and whether uploads are allowed. A 402 means the app needs credit, so tell me and I will add it in the console.
 
-Finish by telling me what you changed, where the keys live and the share link of the test video, then ask what I want to build next.`;
+Finish by uploading one short test video through the code you wrote. Ask me first, because stored video is billed daily. Then tell me what you changed and give me the video's shareUrl, and ask what I want to build next.`;
