@@ -303,19 +303,24 @@ describe("auto top-up settings action", () => {
 	it("refuses to switch on without a saved card", async () => {
 		mocks.selects = [[account({ stripePaymentMethodId: null })]];
 
-		await expect(save()).rejects.toThrow(
-			"Save a card before switching auto top-up on",
-		);
+		await expect(save()).resolves.toEqual({
+			success: false,
+			message: "Save a card before switching auto top-up on",
+		});
 		expect(mocks.sets).toHaveLength(0);
 	});
 
 	it("refuses an amount under $5 or a threshold under $1", async () => {
 		mocks.selects = [[account()], [account()]];
 
-		await expect(save({ amountCents: 100 })).rejects.toThrow("amount");
-		await expect(save({ thresholdMicroCredits: 10 })).rejects.toThrow(
-			"threshold",
-		);
+		await expect(save({ amountCents: 100 })).resolves.toEqual({
+			success: false,
+			message: expect.stringContaining("amount"),
+		});
+		await expect(save({ thresholdMicroCredits: 10 })).resolves.toEqual({
+			success: false,
+			message: expect.stringContaining("threshold"),
+		});
 		expect(mocks.sets).toHaveLength(0);
 	});
 
