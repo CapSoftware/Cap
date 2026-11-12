@@ -84,7 +84,7 @@ function isHttpUrl(path: string): boolean {
 	}
 }
 
-function isHlsPath(path: string): boolean {
+export function isHlsPath(path: string): boolean {
 	const normalized = (path.split("?")[0] ?? "").toLowerCase();
 	return normalized.endsWith(".m3u8") || normalized.endsWith(".m3u");
 }
@@ -135,13 +135,32 @@ function createLocalHlsSource(path: string): Source {
 	});
 }
 
+// MediaBunny's dispose() chains onto the demuxer promise without a catch. For
+// an input whose format was never recognised that promise is rejected, so
+// disposing it surfaced as an unhandled rejection for every unreadable upload.
+function withSafeDispose<S extends Source>(input: Input<S>): Input<S> {
+	const dispose = input.dispose.bind(input);
+	input.dispose = () => {
+		const internal = input as unknown as {
+			_demuxerPromise?: Promise<{ dispose(): void }>;
+		};
+		internal._demuxerPromise = internal._demuxerPromise?.catch(() => ({
+			dispose() {},
+		}));
+		dispose();
+	};
+	return input;
+}
+
 export function createMediaInput(path: string): Input<Source> {
 	registerMediaEngine();
 	if (isHttpUrl(path)) {
-		return new Input({
-			source: createHttpSource(path),
-			formats: ALL_FORMATS,
-		});
+		return withSafeDispose(
+			new Input({
+				source: createHttpSource(path),
+				formats: ALL_FORMATS,
+			}),
+		);
 	}
 
 	const normalizedPath = normalizeLocalPath(path);
@@ -149,12 +168,14 @@ export function createMediaInput(path: string): Input<Source> {
 		throw new Error(`Media input does not exist: ${normalizedPath}`);
 	}
 
-	return new Input({
-		source: isHlsPath(normalizedPath)
-			? createLocalHlsSource(normalizedPath)
-			: new FilePathSource(normalizedPath),
-		formats: ALL_FORMATS,
-	});
+	return withSafeDispose(
+		new Input({
+			source: isHlsPath(normalizedPath)
+				? createLocalHlsSource(normalizedPath)
+				: new FilePathSource(normalizedPath),
+			formats: ALL_FORMATS,
+		}),
+	);
 }
 
 export function parseBitrate(value: string | number | undefined): number {

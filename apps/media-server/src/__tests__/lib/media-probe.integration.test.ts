@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkVideoAccessible, probeVideo } from "../../lib/media-probe";
+import {
+	checkVideoAccessible,
+	isUnreadableMediaInput,
+	probeVideo,
+} from "../../lib/media-probe";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const TEST_VIDEO_WITH_AUDIO_PATH = join(FIXTURES_DIR, "test-with-audio.mp4");
@@ -79,6 +83,113 @@ describe("mediaProbe integration tests", () => {
 				await expect(probeVideo(`${server.url}missing.mp4`)).rejects.toThrow(
 					"Media input is not accessible",
 				);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		function serve(body: Uint8Array | string, requests: string[] = []) {
+			const data = typeof body === "string" ? Buffer.from(body) : body;
+			return Bun.serve({
+				port: 0,
+				fetch(request) {
+					requests.push(new URL(request.url).pathname);
+					if (data.length === 0) {
+						return new Response(null, { status: 416 });
+					}
+					const match = request.headers
+						.get("range")
+						?.match(/^bytes=(\d+)-(\d*)$/);
+					if (!match) return new Response(data);
+					const start = Number.parseInt(match[1] ?? "0", 10);
+					const end = Math.min(
+						match[2] ? Number.parseInt(match[2], 10) : data.length - 1,
+						data.length - 1,
+					);
+					return new Response(data.subarray(start, end + 1), {
+						status: 206,
+						headers: {
+							"Content-Range": `bytes ${start}-${end}/${data.length}`,
+						},
+					});
+				},
+			});
+		}
+
+		async function unhandledDuring(run: () => Promise<void>) {
+			const seen: unknown[] = [];
+			const listener = (reason: unknown) => {
+				seen.push(reason);
+			};
+			process.on("unhandledRejection", listener);
+			try {
+				await run();
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			} finally {
+				process.off("unhandledRejection", listener);
+			}
+			return seen;
+		}
+
+		test("refuses a remote playlist without fetching what it lists", async () => {
+			const requests: string[] = [];
+			const server = serve(
+				"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment0.ts\n#EXT-X-ENDLIST\n",
+				requests,
+			);
+
+			try {
+				const unhandled = await unhandledDuring(async () => {
+					await expect(probeVideo(`${server.url}video`)).rejects.toThrow(
+						"the file is a playlist or resource list, not a media file",
+					);
+				});
+
+				expect(unhandled).toEqual([]);
+				expect(requests).toEqual(["/video"]);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		test("says an empty remote file is empty", async () => {
+			const server = serve(new Uint8Array(0));
+
+			try {
+				await expect(probeVideo(`${server.url}video`)).rejects.toThrow(
+					"Media input is empty",
+				);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		test("refuses a file that is not media without an unhandled rejection", async () => {
+			const server = serve("this is a text file renamed to .mp4\n".repeat(200));
+
+			try {
+				const unhandled = await unhandledDuring(async () => {
+					await expect(probeVideo(`${server.url}video.mp4`)).rejects.toThrow(
+						"Media input could not be read",
+					);
+				});
+
+				expect(unhandled).toEqual([]);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		test("marks unusable inputs so callers can tell them from server faults", async () => {
+			const server = serve("not media at all");
+
+			try {
+				const error = await probeVideo(`${server.url}video.mp4`).catch(
+					(caught: unknown) => caught,
+				);
+
+				expect(isUnreadableMediaInput(error)).toBe(true);
+				expect(isUnreadableMediaInput(new Error("Server is busy"))).toBe(false);
 			} finally {
 				await server.stop(true);
 			}
