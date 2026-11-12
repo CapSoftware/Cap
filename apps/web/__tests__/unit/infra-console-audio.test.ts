@@ -294,6 +294,54 @@ describe("an Audio upload that finished", () => {
 	});
 });
 
+describe("a second Audio upload started while the list catches up", () => {
+	let listed: Deferred<{
+		ok: true;
+		transcripts: AudioTranscriptRow[];
+		hasMore: boolean;
+	}>;
+
+	beforeEach(() => {
+		stubStorageUploads();
+		listed = deferred();
+		mocks.list.mockReturnValue(listed.promise);
+	});
+
+	it("still reads as uploading once the first upload's list arrives", async () => {
+		await show([]);
+		await chooseFiles([audio("first.mp3")]);
+		await until(() => mocks.start.mock.calls.length === 1, "the first start");
+		await flush();
+
+		const starting: Deferred<{ ok: true }> = deferred();
+		mocks.create.mockResolvedValue({
+			ok: true,
+			transcript: { id: "t-second" },
+			upload: { url: "https://storage.example/t-second" },
+		});
+		mocks.start.mockReturnValue(starting.promise);
+		await chooseFiles([audio("second.mp3")]);
+		await until(() => mocks.start.mock.calls.length === 2, "the second start");
+
+		listed.resolve({
+			ok: true,
+			transcripts: [
+				transcript("t-second", "uploading", { name: "second" }),
+				transcript("t-new", "queued", { name: "first" }),
+			],
+			hasMore: false,
+		});
+		await flush();
+
+		expect(rowFor("second")).toContain("Uploading");
+		expect(rowFor("second")).not.toContain("Upload not finished");
+		expect(leaving()).toBe(true);
+
+		starting.resolve({ ok: true });
+		await flush();
+	});
+});
+
 describe("a file Audio cannot transcribe", () => {
 	it("says an empty file is empty, without asking the server", async () => {
 		await show([]);

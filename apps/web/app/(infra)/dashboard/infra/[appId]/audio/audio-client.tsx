@@ -342,7 +342,7 @@ export function AudioClient({
 			});
 			await refresh();
 		} finally {
-			setSendingId(null);
+			setSendingId((current) => (current === transcriptId ? null : current));
 			if (controller.current === abort) controller.current = null;
 		}
 	};
