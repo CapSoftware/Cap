@@ -36,8 +36,8 @@ function parseUserScope(
 		);
 	}
 
-	const userId = queries.userId?.[0]?.trim();
-	const externalUserId = queries.externalUserId?.[0]?.trim();
+	const userId = queries.userId?.[0];
+	const externalUserId = queries.externalUserId?.[0];
 	if (
 		userId !== undefined &&
 		externalUserId !== undefined &&
@@ -75,7 +75,8 @@ export function parseDeveloperVideoScope(
 // The column's collation treats case and accent variants as equal, so two
 // different user IDs could match each other. The plain equality keeps the
 // lookup on the (appId, externalUserId) index and the binary comparison then
-// drops every row that is not the same bytes.
+// drops every row that is not the same bytes. The value is compared as sent,
+// because creating an upload stores userId as sent.
 export const exactUserIdMatch = (column: AnyMySqlColumn, userId: string) =>
 	and(
 		eq(column, userId),

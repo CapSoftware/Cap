@@ -269,14 +269,31 @@ describe("developer video API", () => {
 			});
 		});
 
-		it("ignores spaces around the value, as creating a video does", async () => {
-			const padded = await get("/?userId=%20user-1%20");
-			const both = await get("/?userId=user-1&externalUserId=%20user-1");
+		it("finds a video by the externalUserId it returns, spaces included", async () => {
+			mocks.store.video = { ...ready(), externalUserId: " user 1 " };
+			const stored = (await get("/video-1")).body.data.externalUserId;
+			const scope = `userId=${encodeURIComponent(stored)}`;
 
-			expect(padded.status).toBe(200);
-			expect(padded.body.data).toHaveLength(1);
-			expect(both.status).toBe(200);
-			expect(both.body.data).toHaveLength(1);
+			expect(stored).toBe(" user 1 ");
+			expect((await get(`/?${scope}`)).body.data).toHaveLength(1);
+			expect((await get(`/video-1?${scope}`)).status).toBe(200);
+			expect((await get(`/video-1/status?${scope}`)).status).toBe(200);
+			expect((await get("/?userId=user%201")).body.data).toEqual([]);
+			expect((await get("/video-1?userId=user%201")).status).toBe(404);
+
+			const removed = await app.request(`/video-1?${scope}`, {
+				method: "DELETE",
+			});
+			expect(removed.status).toBe(200);
+		});
+
+		it("treats a padded copy of the same value in both names as a conflict", async () => {
+			const { status, body } = await get(
+				"/?userId=user-1&externalUserId=%20user-1",
+			);
+
+			expect(status).toBe(400);
+			expect(body).toMatchObject({ code: "conflicting_parameters" });
 		});
 	});
 
@@ -287,6 +304,8 @@ describe("developer video API", () => {
 			"àlice",
 			"Alicé",
 			"ÀLICÉ",
+			"alice ",
+			" alice",
 			"alic",
 			"a lice",
 			"alice%",
@@ -428,11 +447,6 @@ describe("developer video API", () => {
 			});
 			expect(repeated.status).toBe(200);
 			expect(mocks.store.updates).toHaveLength(1);
-		});
-
-		it("ignores spaces around the value", async () => {
-			expect((await get("/video-1?userId=%20alice%20")).status).toBe(200);
-			expect((await get("/video-1/status?userId=alice%20")).status).toBe(200);
 		});
 
 		it("says the filter was empty and how to drop it", async () => {

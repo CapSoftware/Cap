@@ -258,7 +258,7 @@ GET /api/developer/v1/videos
 
 Any other query parameter returns `400`. See [Pagination](/docs/api/rest-api#pagination).
 
-The `userId` filter matches the exact value: `alice`, `Alice` and `àlice` are three different users. Spaces around the value are ignored, as they are when a video is created. A filter that is sent always filters: a `userId` or `externalUserId` that is present but empty returns `400` with the code `invalid_user_id` and never the whole list, and a parameter sent more than once returns `400` with the code `repeated_parameter`. Leave the parameter out to list every user's videos.
+The `userId` filter matches the exact value: `alice`, `Alice` and `àlice` are three different users. Spaces count too, so send the value as the video returns it in `externalUserId`. A filter that is sent always filters: a `userId` or `externalUserId` that is present but empty, or only spaces, returns `400` with the code `invalid_user_id` and never the whole list, and a parameter sent more than once returns `400` with the code `repeated_parameter`. Leave the parameter out to list every user's videos.
 
 **Example request:**
 

@@ -47,7 +47,7 @@ const videoIdParam = {
 };
 
 const USER_SCOPE_RULES =
-	"The match is exact: case and accents count. Spaces around the value are ignored, as they are when a video is created. An empty value returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
+	"The match is exact: case, accents and spaces all count, so send the value as the video returns it in externalUserId. A value that is empty or only spaces returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
 
 const videoUserScopeParams = [
 	{
