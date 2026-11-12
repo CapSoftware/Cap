@@ -55,9 +55,6 @@ export type DeveloperApp = typeof developerApps.$inferSelect & {
 	videoCount: number;
 };
 
-export type DeveloperTransaction =
-	typeof developerCreditTransactions.$inferSelect;
-
 export type InfraAppSummary = {
 	id: string;
 	name: string;
@@ -256,15 +253,6 @@ export async function getDeveloperAppVideo(
 		developerVideoPlaybackUrls(row),
 		row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
 	);
-}
-
-export async function getDeveloperTransactions(accountId: string, limit = 50) {
-	return db()
-		.select()
-		.from(developerCreditTransactions)
-		.where(eq(developerCreditTransactions.accountId, accountId))
-		.orderBy(desc(developerCreditTransactions.createdAt))
-		.limit(limit);
 }
 
 const getInfraAppsForUser = cache((userId: (typeof userSelectProps)["id"]) =>

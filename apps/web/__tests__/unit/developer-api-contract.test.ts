@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	keyRows: [] as { appId: string; environment?: string }[],
 	accounts: [] as { balanceMicroCredits: number }[],
 	videoStats: [] as Record<string, unknown>[],
+	storedVideos: [] as Record<string, unknown>[],
 	selected: [] as Record<string, unknown>[],
 	createVideo: vi.fn(),
 	initiate: vi.fn(),
@@ -14,18 +15,23 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@cap/database", async () => {
 	const schema = await import("@cap/database/schema");
-	const rowsFor = (table: unknown) => {
+	const rowsFor = (table: unknown, fields?: Record<string, unknown>) => {
 		if (table === schema.developerApiKeys) return mocks.keyRows;
 		if (table === schema.developerCreditAccounts) return mocks.accounts;
-		if (table === schema.developerVideos) return mocks.videoStats;
+		if (table === schema.developerVideos) {
+			return fields && "createdVideos" in fields
+				? mocks.videoStats
+				: mocks.storedVideos;
+		}
 		return [];
 	};
 	const select = (fields?: Record<string, unknown>) => ({
 		from: (table: unknown) => {
 			if (fields) mocks.selected.push(fields);
 			const where = () =>
-				Object.assign(Promise.resolve(rowsFor(table)), {
-					limit: async () => rowsFor(table),
+				Object.assign(Promise.resolve(rowsFor(table, fields)), {
+					limit: async () => rowsFor(table, fields),
+					groupBy: async () => rowsFor(table, fields),
 				});
 			const query = { innerJoin: () => query, where };
 			return query;
@@ -58,7 +64,8 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 	listTranscripts: mocks.listTranscripts,
 	isTranscriptIdempotencyKey: () => true,
 }));
-vi.mock("@/lib/infra-standing", () => ({
+vi.mock("@/lib/infra-standing", async (original) => ({
+	...(await original<typeof import("@/lib/infra-standing")>()),
 	getInfraBilling: mocks.billing,
 	infraBillingJson: (billing: Record<string, unknown>) => billing,
 }));
@@ -130,8 +137,26 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
 	mocks.accounts = [{ balanceMicroCredits: 4_532_000 }];
-	mocks.videoStats = [
-		{ createdVideos: 5, uploadedVideos: 3, totalDurationMinutes: 12.5 },
+	mocks.videoStats = [{ createdVideos: 5, uploadedVideos: 4 }];
+	mocks.storedVideos = [
+		{
+			appId: "app-1",
+			width: 1920,
+			height: 1080,
+			status: "ready",
+			maxResolutionTier: "1080p",
+			seconds: 750,
+			count: 3,
+		},
+		{
+			appId: "app-1",
+			width: 1920,
+			height: 1080,
+			status: "errored",
+			maxResolutionTier: "1080p",
+			seconds: 345.21,
+			count: 1,
+		},
 	];
 	mocks.selected = [];
 	mocks.billing.mockResolvedValue({ standing: { state: "active" } });
@@ -480,15 +505,18 @@ describe("usage", () => {
 		return (await response.json()).data;
 	};
 
-	it("counts only videos whose upload completed and reports the rest as uploading", async () => {
+	it("counts only stored videos and reports those without a file as uploading", async () => {
 		const data = await usage();
 
 		expect(data).toMatchObject({
 			balanceMicroCredits: 4_532_000,
 			balanceDollars: "45.32",
 			totalVideos: 3,
-			uploadingVideos: 2,
+			uploadingVideos: 1,
 			totalDurationMinutes: 12.5,
+			storage: {
+				minutesByTier: { "1080p": 12.5, "1440p": 0, "2160p": 0 },
+			},
 		});
 
 		const stats = mocks.selected.find((fields) => "uploadedVideos" in fields);
@@ -505,6 +533,7 @@ describe("usage", () => {
 
 	it("reports zero for an app with no videos", async () => {
 		mocks.videoStats = [];
+		mocks.storedVideos = [];
 		mocks.accounts = [];
 
 		expect(await usage()).toMatchObject({

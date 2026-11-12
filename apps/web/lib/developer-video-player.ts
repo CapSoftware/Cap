@@ -6,10 +6,10 @@ import {
 import { redriveDeveloperVideoProcessing } from "./developer-video-start";
 import { developerVideoRedrive } from "./developer-video-state";
 import { getInfraAppStanding } from "./infra-standing";
+import { infraVideoFailure } from "./infra-video-view";
 
 const DEFAULT_WIDTH = 16;
 const DEFAULT_HEIGHT = 9;
-const UNEXPLAINED_FAILURE = "This video could not be processed.";
 
 interface DeveloperVideoFrame {
 	name: string;
@@ -68,7 +68,7 @@ export async function loadDeveloperVideoPlayer(
 		return {
 			...frame,
 			kind: "failed",
-			reason: video.errorReason?.trim() || UNEXPLAINED_FAILURE,
+			reason: infraVideoFailure(video.errorReason, "viewer"),
 		};
 	}
 

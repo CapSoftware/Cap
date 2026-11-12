@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
 
 export async function updateDeveloperApp(data: {
@@ -14,7 +15,7 @@ export async function updateDeveloperApp(data: {
 	logoUrl?: string | null;
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const [app] = await db()
 		.select()

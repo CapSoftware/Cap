@@ -388,7 +388,7 @@ describe("developer video upload target", () => {
 			status: 402,
 			code: "insufficient_credits",
 			message:
-				"Uploading needs $0.03 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.02.",
+				"Uploading needs $0.02380 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.01380.",
 			shortfallMicroCredits: 1_380,
 		});
 	});
@@ -704,7 +704,7 @@ describe("admission when the upload is recorded", () => {
 			status: 402,
 			code: "insufficient_credits",
 			message:
-				"Uploading needs $0.03 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.02.",
+				"Uploading needs $0.02380 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.01380.",
 			shortfallMicroCredits: CAPPED_4K_ADMISSION - 1_000,
 		});
 		expect(videos()[0]).toMatchObject({

@@ -153,7 +153,7 @@ List endpoints support pagination via query parameters:
 
 Lists are strict about their query string. A `limit` or `offset` that is not a whole number in range returns `400` with the code `invalid_limit` or `invalid_offset`, and a query parameter the list does not know returns `400` with the code `unknown_parameter`. Parameter names are case-sensitive. Nothing is clamped or ignored, so a mistyped filter never returns an unfiltered list.
 
-Video lists do not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`. Transcript lists also return `pagination.hasMore`.
+Video lists do not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`. Transcript and transaction lists also return `pagination.hasMore`.
 
 ---
 
@@ -226,7 +226,7 @@ Creating an upload is free. It returns `402` if the app is out of credit or its 
 {
   "error": "Insufficient credits",
   "code": "insufficient_credits",
-  "message": "Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.15.",
+  "message": "Uploading needs $0.19834 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.14834.",
   "standing": "active",
   "pausesAt": null,
   "balanceMicroCredits": 5000,
@@ -437,6 +437,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 
 The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
 
+A failed video is not billed. It stays in the list with its `errorReason`, and its uploaded file is removed 24 hours after processing started, after which `storedBytes` is `0`. It cannot be processed again, so create a new video and upload the file to that one.
+
 Poll this endpoint every few seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 60 requests per minute.
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
@@ -594,8 +596,8 @@ Returns the transcript. Once the status is `complete` the response includes `tex
     "language": "en",
     "wordCount": 1893,
     "text": "Morning everyone. Quick update from my side...",
-    "costMicroCredits": 2097,
-    "costDollars": 0.02097,
+    "costMicroCredits": 2094,
+    "costDollars": 0.02094,
     "error": null,
     "userId": null,
     "metadata": null,
@@ -606,7 +608,9 @@ Returns the transcript. Once the status is `complete` the response includes `tex
 }
 ```
 
-A failed transcript has the status `error` and an `error` object with one of these codes:
+Audio with no speech is not a failure. The transcript completes with `text` set to `""` and `wordCount` set to `0`, and it is billed for its length like any other transcript. A complete transcript with a `wordCount` of `0` is how you tell that no speech was found.
+
+A failed transcript has the status `error` and an `error` object with one of these codes. A failed transcript is never charged:
 
 | Code | Meaning |
 |------|---------|
@@ -617,7 +621,7 @@ A failed transcript has the status `error` and an `error` object with one of the
 | `source_missing` | The uploaded file was not found |
 | `no_audio_track` | The file has no audio |
 | `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted |
-| `no_speech` | No speech was found |
+| `no_speech` | No longer returned. Audio with no speech now completes with empty text. Transcripts that failed this way before the change keep the code |
 | `duration_too_long` | The audio is longer than 4 hours |
 | `upload_expired` | The file was not uploaded within 24 hours |
 | `timed_out` | The transcript did not finish in time |
@@ -648,9 +652,11 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 
 #### Transcript billing
 
-- The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio length itself and bills it to the nearest second, with a minimum of one second. A length sent by the client is never used.
+- The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio itself, rounds its length to the nearest whole second with a minimum of one, and charges those seconds at the hourly rate, rounded down to a whole micro-credit and never less than one. The example above is 754.2 seconds, billed as 754 seconds: 754 × 10,000 ÷ 3,600 is 2,094.4, so it costs 2,094 micro-credits. A length sent by the client is never used.
 - Creating or starting a transcript needs an app in good standing and an available balance of at least 1,000 micro-credits ($0.01). Otherwise the API answers `402`, with `code` set to `out_of_credit` when the app is in `grace` or `paused` and `insufficient_credits` when the balance is under the minimum. The `message` says how much to add.
-- Credits are taken once, when the transcript completes. Failed and deleted transcripts cost nothing, and a transcript that is retried internally is never charged twice.
+- Credits are taken once, when the transcript completes. A transcript that is retried internally is never charged twice.
+- Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
+- Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before it completes.
 - Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. The available balance is your balance minus those holds.
 - If the available balance cannot cover the hold, the transcript ends with `insufficient_credits` before the file is downloaded or processed, and the error message says how much was needed. When other running transcripts hold the credit, it waits for them for up to 15 minutes first, so a batch started together runs through as holds are released.
 - Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
@@ -704,13 +710,13 @@ curl https://cap.so/api/developer/v1/usage \
 }
 ```
 
-Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
+Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
 
-**Totals.** `totalVideos` counts videos whose upload completed, and `totalDurationMinutes` is their combined length. `uploadingVideos` counts videos that were created and have not completed an upload.
+**Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 
 **Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
 
-**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days.
+**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
 
 | Tier | Pixels (width times height) | Storage per 1,000 minutes per month |
 |------|-----------------------------|-------------------------------------|
@@ -720,7 +726,9 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
 
 A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
-**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
+**Storage.** `storage` describes the videos counted in `totalVideos`: their minutes in each tier, and what they cost per day and per 30 day month.
+
+**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores, counting videos that are still encoding. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 
 **Standing.** `standing.state` is one of:
 
@@ -731,6 +739,84 @@ A video is billed at the lower of two tiers: the tier its source falls in by pix
 | `paused` | Playback is paused until credits are added. Videos stay stored. |
 
 Adding credits that cover one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
+
+### List Transactions
+
+Retrieve the app's ledger: every credit added and every charge taken, newest first.
+
+```
+GET /api/developer/v1/transactions
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | No | Number of results (default 50, max 100) |
+| `offset` | integer | No | Number of results to skip (default 0) |
+
+**Example request:**
+
+```bash
+curl "https://cap.so/api/developer/v1/transactions?limit=2" \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": [
+    {
+      "id": "p4w8n2k6x1m9q3z",
+      "type": "transcription",
+      "description": "Transcription",
+      "note": null,
+      "amountMicroCredits": -2094,
+      "amountDollars": "-0.02094",
+      "balanceAfterMicroCredits": 497906,
+      "balanceAfterDollars": "4.97906",
+      "referenceType": "developer_transcript",
+      "referenceId": "8kq2m4x7n1p3v5w",
+      "createdAt": "2026-11-11T10:30:21.000Z"
+    },
+    {
+      "id": "h7c3v9b5t2r8y4d",
+      "type": "topup",
+      "description": "Top-up",
+      "note": null,
+      "amountMicroCredits": 500000,
+      "amountDollars": "5.00",
+      "balanceAfterMicroCredits": 500000,
+      "balanceAfterDollars": "5.00",
+      "referenceType": "stripe_payment_intent",
+      "referenceId": "pi_3Example",
+      "createdAt": "2026-11-11T10:00:00.000Z"
+    }
+  ],
+  "pagination": { "limit": 2, "offset": 0, "hasMore": false }
+}
+```
+
+`amountMicroCredits` is positive for credit added, negative for a charge and 0 for a row that moved nothing, such as a declined auto top-up. `balanceAfterMicroCredits` is the balance once the row was applied, so each row's balance is the balance of the row before it plus its amount. The dollar fields are the same figures written exactly, never rounded.
+
+`id` is the row's own ID. `referenceType` says what `referenceId` identifies:
+
+| `type` | `description` | `referenceType` | `referenceId` |
+|--------|---------------|-----------------|---------------|
+| `topup` | Top-up | `stripe_payment_intent` | The payment |
+| `topup` | Code redeemed | `stripe_checkout_session` | The checkout a code covered in full |
+| `topup` | Auto top-up | `auto_top_up` | The payment |
+| `topup_failed` | Auto top-up declined | `auto_top_up_failed` | The payment, or `declined-` and the UTC day when there was none |
+| `topup_pending` | Auto top-up pending | `auto_top_up_pending` | The payment |
+| `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
+| `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
+| `transcription` | Transcription | `developer_transcript` | The transcript ID |
+| `adjustment` | Adjustment | `manual` | A note, when there is one |
+
+A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
+
+Rows written in the same second have the same `createdAt`. Within a page they are ordered so each balance follows from the row beneath it.
+
+The console's Billing page shows the same rows and exports them all as CSV.
 
 ---
 
@@ -752,7 +838,7 @@ The SDK API uploads a video's file from a browser or app. Every endpoint takes t
 After creating an upload, send its file in parts with the upload token:
 
 1. Initiate the upload to get an `uploadId`.
-2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts.
+2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts. The whole file can be up to 36 GB.
 3. For each part, get a presigned URL, `PUT` the bytes to it and keep the `ETag` response header.
 4. Complete the upload with the list of parts.
 
@@ -883,6 +969,7 @@ A mistake in the request returns one of these:
 | `400` | `parts_required` | `parts` is empty. | Send the `partNumber` and ETag of every part you uploaded. |
 | `400` | `parts_mismatch` | A listed part is missing from storage, is listed twice or has a different ETag. | Upload the missing part again, then send each part once with the ETag its `PUT` returned. |
 | `400` | `part_too_small` | A part other than the last is under 5 MB. | Initiate again and upload the file in larger parts. |
+| `400` | `file_too_large` | The parts add up to more than 36 GB. The upload was aborted and its parts were discarded. | Export the video at a lower bitrate or split it, then initiate again on the same video and upload the smaller file. |
 | `404` | `upload_not_found` | No open upload matches the `uploadId`. It was aborted or the ID is wrong. | Initiate again and upload the parts again. |
 
 The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as [Create Upload](/docs/api/rest-api#create-upload), and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
@@ -1076,7 +1163,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 ></iframe>
 ```
 
-Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it shows `errorReason`. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it says so. It gives the reason only when the reason is about the file itself, such as a file with no video track. Any other reason, such as a credit shortfall, is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
 ## Video Object Reference
 
@@ -1099,7 +1186,7 @@ The full video object returned by list and get endpoints:
 | `playbackId` | string \| null | Unguessable ID the playback URLs are built from |
 | `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
 | `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate` (average bits per second), `bytes` and `codecs`. Empty until `hlsUrl` is set |
-| `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
+| `storedBytes` | number \| null | Bytes stored for the source and every encoded output. `0` once a failed video's files have been removed |
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |

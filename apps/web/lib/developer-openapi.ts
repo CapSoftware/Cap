@@ -115,16 +115,20 @@ const transcriptSchema = {
 			description: "Measured audio length. Set when the transcript finishes.",
 		},
 		language: { type: ["string", "null"] },
-		wordCount: { type: ["integer", "null"] },
+		wordCount: {
+			type: ["integer", "null"],
+			description:
+				"Words in the transcript. 0 on a complete transcript means no speech was found in the audio.",
+		},
 		text: {
 			type: ["string", "null"],
 			description:
-				"The transcript text. Returned by getTranscript once status is complete.",
+				"The transcript text. Returned by getTranscript once status is complete. An empty string when the audio has no speech.",
 		},
 		costMicroCredits: {
 			type: "integer",
 			description:
-				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second.",
+				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second. Audio with no speech is billed for its length and completes with empty text.",
 		},
 		costDollars: { type: "number" },
 		error: {
@@ -204,7 +208,8 @@ const playbackProperties = {
 	},
 	errorReason: {
 		type: ["string", "null"],
-		description: "Why processing failed, when status is errored.",
+		description:
+			"Why processing failed, when status is errored. A failed video is not billed and its files are removed 24 hours after processing started.",
 	},
 	playbackId: {
 		type: ["string", "null"],
@@ -305,7 +310,8 @@ const developerVideoSchema = {
 		},
 		storedBytes: {
 			type: ["integer", "null"],
-			description: "Bytes stored for the source and every encoded output.",
+			description:
+				"Bytes stored for the source and every encoded output. 0 once a failed video's files have been removed.",
 		},
 		deletedAt: {
 			type: ["string", "null"],
@@ -589,7 +595,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getTranscript",
 				summary: "Get a transcript",
 				description:
-					"Returns the transcript with its status and, once complete, its text. Add include=words or include=segments for timings in seconds.",
+					"Returns the transcript with its status and, once complete, its text. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
@@ -634,6 +640,37 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				security: secretAuth,
 				responses: {
 					"200": json(dataEnvelope(ref("Usage")), "The app's usage."),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/transactions": {
+			get: {
+				operationId: "listTransactions",
+				summary: "List transactions",
+				description:
+					"Returns every credit and charge on the app's balance, newest first: top-ups, codes, the Cap Pro credit, daily storage, transcripts and adjustments. Each row carries its amount, the balance it left, and the ID of what it paid for. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
+				tags: ["Usage"],
+				security: secretAuth,
+				parameters: [
+					{
+						name: "limit",
+						in: "query",
+						required: false,
+						description: "Number of transactions to return.",
+						schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+					},
+					{
+						name: "offset",
+						in: "query",
+						required: false,
+						description: "Number of transactions to skip.",
+						schema: { type: "integer", minimum: 0, default: 0 },
+					},
+				],
+				responses: {
+					"200": json(ref("TransactionList"), "A page of transactions."),
+					"400": response("BadRequest"),
 					...restErrors,
 				},
 			},
@@ -693,7 +730,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag) or part_too_small (a part other than the last is under 5 MB), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
@@ -945,6 +982,98 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					...playbackProperties,
 				},
 			},
+			Transaction: {
+				type: "object",
+				required: [
+					"id",
+					"type",
+					"description",
+					"note",
+					"amountMicroCredits",
+					"amountDollars",
+					"balanceAfterMicroCredits",
+					"balanceAfterDollars",
+					"referenceType",
+					"referenceId",
+					"createdAt",
+				],
+				properties: {
+					id: {
+						type: "string",
+						description:
+							"The transaction's ID. Quote it when asking about a row.",
+					},
+					type: {
+						type: "string",
+						description:
+							"The kind of row: topup, topup_failed, topup_pending, pro_credit, storage_daily, transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+					},
+					description: {
+						type: "string",
+						description:
+							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment.",
+					},
+					note: {
+						type: ["string", "null"],
+						description:
+							"A sentence of explanation for rows that need one, such as an adjustment or a declined auto top-up.",
+					},
+					amountMicroCredits: {
+						type: "integer",
+						description:
+							"Positive for credit added, negative for a charge, 0 for a row that moved nothing. 100,000 micro-credits = $1.",
+					},
+					amountDollars: {
+						type: "string",
+						description:
+							"The same amount in dollars, exact: two decimals for whole cents, five otherwise.",
+					},
+					balanceAfterMicroCredits: {
+						type: "integer",
+						description: "The balance once this row was applied.",
+					},
+					balanceAfterDollars: { type: "string" },
+					referenceType: {
+						type: ["string", "null"],
+						enum: [
+							"developer_video",
+							"developer_transcript",
+							"stripe_payment_intent",
+							"stripe_checkout_session",
+							"manual",
+							"pro_monthly_credit",
+							"storage_day",
+							"auto_top_up",
+							"auto_top_up_failed",
+							"auto_top_up_pending",
+							null,
+						],
+						description: "What referenceId identifies.",
+					},
+					referenceId: {
+						type: ["string", "null"],
+						description:
+							"The transcript ID, the UTC day a storage charge is for, the month of a Cap Pro credit, or the payment or checkout a top-up came from.",
+					},
+					createdAt: { type: "string", format: "date-time" },
+				},
+			},
+			TransactionList: {
+				type: "object",
+				required: ["data", "pagination"],
+				properties: {
+					data: { type: "array", items: ref("Transaction") },
+					pagination: {
+						type: "object",
+						required: ["limit", "offset", "hasMore"],
+						properties: {
+							limit: { type: "integer" },
+							offset: { type: "integer" },
+							hasMore: { type: "boolean" },
+						},
+					},
+				},
+			},
 			Usage: {
 				type: "object",
 				required: [
@@ -965,19 +1094,24 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 					balanceDollars: {
 						type: "string",
-						description: "Remaining balance in dollars, two decimals.",
+						description:
+							"Remaining balance in dollars, exact and never rounded up: two decimals for whole cents, five otherwise.",
 					},
 					totalVideos: {
 						type: "integer",
 						description:
-							"Videos whose upload completed. Created videos still waiting for their file are counted in uploadingVideos.",
+							"Videos that are stored and ready to play. A video that is still uploading or encoding, or that failed or was refused, is not counted.",
 					},
 					uploadingVideos: {
 						type: "integer",
 						description:
 							"Videos that were created and have not completed an upload.",
 					},
-					totalDurationMinutes: { type: "number" },
+					totalDurationMinutes: {
+						type: "number",
+						description:
+							"Combined length of the videos counted in totalVideos. Equal to the sum of storage.minutesByTier.",
+					},
 					standing: {
 						type: "object",
 						required: ["state", "pausesAt"],

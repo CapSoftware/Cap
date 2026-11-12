@@ -12,7 +12,10 @@ import {
 	startTranscriptUpload,
 	type TranscriptUploadTarget,
 } from "@/lib/developer-transcript-store";
-import type { TranscriptSummaryRow } from "@/lib/developer-transcripts";
+import {
+	type TranscriptSummaryRow,
+	transcriptHasNoSpeech,
+} from "@/lib/developer-transcripts";
 import { canUseInfra } from "@/lib/infra-access";
 
 export type AudioTranscriptRow = {
@@ -21,6 +24,7 @@ export type AudioTranscriptRow = {
 	status: TranscriptSummaryRow["status"];
 	durationSeconds: number | null;
 	costMicroCredits: number;
+	noSpeech: boolean;
 	errorMessage: string | null;
 	createdAt: string;
 };
@@ -57,6 +61,8 @@ type ConsoleTranscript = Pick<
 	| "status"
 	| "durationSeconds"
 	| "billedMicroCredits"
+	| "wordCount"
+	| "hasText"
 	| "errorMessage"
 	| "createdAt"
 >;
@@ -67,6 +73,7 @@ const toRow = (row: ConsoleTranscript): AudioTranscriptRow => ({
 	status: row.status,
 	durationSeconds: row.durationSeconds,
 	costMicroCredits: row.billedMicroCredits,
+	noSpeech: transcriptHasNoSpeech(row),
 	errorMessage: row.status === "error" ? row.errorMessage : null,
 	createdAt: row.createdAt.toISOString(),
 });
