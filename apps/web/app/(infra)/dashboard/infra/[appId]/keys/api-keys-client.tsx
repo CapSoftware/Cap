@@ -41,7 +41,7 @@ export function ApiKeysClient({
 		<>
 			<PageHeader
 				title="API keys"
-				description="Use the public key in the browser to create and upload videos. Use the secret key on your server to read and delete them."
+				description="Keep the secret key on your server. It creates uploads and reads and deletes videos. The public key cannot create or upload videos."
 			/>
 
 			<div>

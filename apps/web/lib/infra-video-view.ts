@@ -32,6 +32,8 @@ export type InfraVideoDetail = InfraVideoListItem & {
 	hlsUrl: string | null;
 	mp4Url: string | null;
 	posterUrl: string | null;
+	shareUrl: string | null;
+	embedCode: string | null;
 	stillEncoding: boolean;
 };
 
@@ -101,6 +103,26 @@ type DetailRow = ListRow & {
 
 const UNFINISHED_PARTS = new Set(["pending", "running", "unavailable"]);
 
+const escapeAttribute = (value: string) =>
+	value
+		.replaceAll("&", "&amp;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;");
+
+export function infraVideoEmbedCode(
+	embedUrl: string,
+	video: { name: string; width: number | null; height: number | null },
+): string {
+	const measured =
+		video.width !== null &&
+		video.height !== null &&
+		video.width > 0 &&
+		video.height > 0;
+	const shape = measured ? `${video.width} / ${video.height}` : "16 / 9";
+	return `<iframe src="${escapeAttribute(embedUrl)}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`;
+}
+
 export function toInfraVideoDetail(
 	row: DetailRow,
 	urls: {
@@ -108,8 +130,10 @@ export function toInfraVideoDetail(
 		mp4Url: string | null;
 		posterUrl: string | null;
 	},
+	page: { shareUrl: string; embedUrl: string } | null = null,
 ): InfraVideoDetail {
 	const item = toInfraVideoListItem(row);
+	const shared = page !== null && item.state !== "failed";
 	return {
 		...item,
 		width: row.width,
@@ -126,6 +150,8 @@ export function toInfraVideoDetail(
 		hlsUrl: urls.hlsUrl,
 		mp4Url: urls.mp4Url,
 		posterUrl: urls.posterUrl,
+		shareUrl: shared ? page.shareUrl : null,
+		embedCode: shared ? infraVideoEmbedCode(page.embedUrl, row) : null,
 		stillEncoding:
 			item.state === "ready" &&
 			row.processing !== null &&
