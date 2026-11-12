@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { resolveMediaDuration } from "@/lib/media-duration";
 import { formatClock } from "@/lib/player-time";
 
 const SPEED_OPTIONS = [
@@ -95,10 +96,18 @@ export const SpeedController = () => {
 			URL.revokeObjectURL(url);
 		};
 		videoElement.preload = "metadata";
-		videoElement.onloadedmetadata = () => {
+		videoElement.onloadedmetadata = async () => {
+			if (disposed) return;
+			let duration: number;
+			try {
+				duration = await resolveMediaDuration(videoElement);
+			} catch {
+				dispose();
+				return;
+			}
 			if (disposed) return;
 			setVideoInfo({
-				duration: videoElement.duration,
+				duration,
 				dimensions: `${videoElement.videoWidth}x${videoElement.videoHeight}`,
 			});
 			dispose();
@@ -187,7 +196,10 @@ export const SpeedController = () => {
 			video.muted = false;
 
 			video.oncanplay = async () => {
+				// Reading a WebM's duration seeks the video, which fires canplay again.
+				video.oncanplay = null;
 				try {
+					const duration = await resolveMediaDuration(video);
 					const canvas = document.createElement("canvas");
 					canvas.width = video.videoWidth;
 					canvas.height = video.videoHeight;
@@ -327,7 +339,7 @@ export const SpeedController = () => {
 						cancelAnimationFrame(animationFrameId);
 					};
 
-					const totalDuration = video.duration / selectedSpeed;
+					const totalDuration = duration / selectedSpeed;
 					let lastProgress = 0;
 					let stuckCounter = 0;
 					let isFrameStuck = false;
@@ -337,7 +349,7 @@ export const SpeedController = () => {
 					const renderFrame = () => {
 						if (video.readyState >= 2) {
 							const currentTime = video.currentTime;
-							const currentProgress = (currentTime / video.duration) * 100;
+							const currentProgress = (currentTime / duration) * 100;
 
 							if (currentTime !== lastFrameTime) {
 								ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
