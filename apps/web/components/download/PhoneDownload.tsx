@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import { classNames } from "@cap/utils/helpers";
 import { type FormEvent, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
@@ -10,6 +11,10 @@ const INPUT =
 	"h-[48px] w-full rounded-[12px] border border-[#D3DCE6] bg-white px-4 text-[16px] text-[#111111] placeholder:text-[rgba(17,17,17,0.4)] focus:border-[#3F7FCD] focus:outline-none focus:ring-2 focus:ring-[rgba(63,127,205,0.25)]";
 
 const HINT = "text-[14px] leading-[1.45] text-[rgba(17,17,17,0.6)]";
+
+// The download email goes out from Cap's own sending domain, so only the
+// hosted site can send it. Anywhere else the form would fail on every submit.
+const HOSTED_DOWNLOAD_URL = "https://cap.so/download";
 
 const SEND_FAILED =
 	"We couldn't send that. Check your connection and try again.";
@@ -92,16 +97,37 @@ export const PhoneDownload = ({
 }: {
 	sourcePage: string;
 	className?: string;
-}) => (
-	<div
-		className={classNames(
-			"flex w-full max-w-[380px] flex-col gap-3 text-left",
-			className,
-		)}
-	>
-		<p className={`${HINT} text-center`}>
-			Cap runs on Mac, Windows and Linux. Send the link to your computer.
-		</p>
-		<EmailDownloadLink sourcePage={sourcePage} />
-	</div>
-);
+}) => {
+	const canEmail = buildEnv.NEXT_PUBLIC_IS_CAP === "true";
+
+	return (
+		<div
+			className={classNames(
+				"flex w-full max-w-[380px] flex-col gap-3 text-left",
+				className,
+			)}
+		>
+			<p className={`${HINT} text-center`}>
+				Cap runs on Mac, Windows and Linux. Send the link to your computer.
+			</p>
+			{canEmail ? (
+				<EmailDownloadLink sourcePage={sourcePage} />
+			) : (
+				<a
+					href={HOSTED_DOWNLOAD_URL}
+					onClick={() =>
+						trackEvent("download_cta_clicked", {
+							source_page: sourcePage,
+							cta_location: "email_link",
+							target: "hosted_download_page",
+							target_url: HOSTED_DOWNLOAD_URL,
+						})
+					}
+					className={classNames(BTN_PRIMARY, "w-full")}
+				>
+					Email me the download link
+				</a>
+			)}
+		</div>
+	);
+};

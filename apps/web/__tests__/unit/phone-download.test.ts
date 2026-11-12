@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendDownloadLinkMock = vi.hoisted(() => vi.fn());
 const trackEventMock = vi.hoisted(() => vi.fn());
+const buildEnvMock = vi.hoisted(() => ({ NEXT_PUBLIC_IS_CAP: "true" }));
+
+vi.mock("@cap/env", () => ({ buildEnv: buildEnvMock }));
 
 vi.mock("@/actions/send-download-link", () => ({
 	sendDownloadLink: sendDownloadLinkMock,
@@ -24,6 +27,7 @@ describe("PhoneDownload", () => {
 	beforeEach(() => {
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		vi.clearAllMocks();
+		buildEnvMock.NEXT_PUBLIC_IS_CAP = "true";
 		container = document.createElement("div");
 		document.body.append(container);
 		root = createRoot(container);
@@ -63,6 +67,16 @@ describe("PhoneDownload", () => {
 		await render();
 		expect(container.querySelector("form")).not.toBeNull();
 		expect(container.querySelector("a")).toBeNull();
+	});
+
+	it("links to the hosted form where the email cannot be sent", async () => {
+		buildEnvMock.NEXT_PUBLIC_IS_CAP = "false";
+		await render();
+		expect(container.querySelector("form")).toBeNull();
+		expect(container.querySelector("a")?.getAttribute("href")).toBe(
+			"https://cap.so/download",
+		);
+		expect(sendDownloadLinkMock).not.toHaveBeenCalled();
 	});
 
 	it("confirms where the link was sent", async () => {
