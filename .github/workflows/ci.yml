@@ -104,6 +104,7 @@ jobs:
       - name: Test web React compatibility
         run: >-
           bun run --cwd apps/web test
+          __tests__/integration/live-transcribe-workflow.test.ts
           __tests__/unit/add-videos-dialog-retry.test.ts
           __tests__/unit/agent-download-access.test.ts
           __tests__/unit/analytics-track-route.test.ts
