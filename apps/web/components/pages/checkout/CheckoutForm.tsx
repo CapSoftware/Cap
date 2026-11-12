@@ -130,21 +130,21 @@ export function CheckoutForm({
 					<div>
 						<h2 className="text-[24px] font-normal leading-[1.1] tracking-[-0.02em]">
 							{complete
-								? "This checkout is already paid"
+								? "This checkout is complete"
 								: "This checkout has expired"}
 						</h2>
 						<p className="mt-2.5 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.66)]">
 							{complete
-								? "Your Cap Pro subscription is set up. Head to your dashboard to get started."
+								? "View your payment status and next steps."
 								: "Checkouts close after a while for your security. Start a fresh one below."}
 						</p>
 					</div>
 					{complete ? (
 						<Link
-							href="/dashboard/caps"
+							href={`/checkout/complete?session_id=${checkout.id}`}
 							className={classNames(BTN_PRIMARY, "w-full")}
 						>
-							Go to your dashboard
+							View checkout status
 						</Link>
 					) : (
 						<button
