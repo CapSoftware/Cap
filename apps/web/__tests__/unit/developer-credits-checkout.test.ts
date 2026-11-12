@@ -605,6 +605,40 @@ describe("POST /api/developer/credits/checkout", () => {
 		}
 	});
 
+	it("stops opening checkouts after twenty attempts by one user", async () => {
+		const attempt = async (userId: string) => {
+			mockGetCurrentUser.mockResolvedValue({
+				...mockUser,
+				id: userId,
+				stripeCustomerId: "cus_exist",
+			});
+			mockDb.limit
+				.mockResolvedValueOnce([{ ...mockApp, ownerId: userId }])
+				.mockResolvedValueOnce([
+					{ ...mockAccount, stripeCustomerId: "cus_exist" },
+				]);
+			mockStripe.checkout.sessions.create.mockResolvedValue({
+				url: "https://checkout.stripe.com/test",
+			});
+			return POST(makeRequest({ appId: "app-456", amountCents: 1000 }));
+		};
+
+		for (let i = 0; i < 20; i++) {
+			expect((await attempt("user-repeat-buyer")).status).toBe(200);
+		}
+		const reads = mockDb.limit.mock.calls.length;
+		const blocked = await attempt("user-repeat-buyer");
+
+		expect(blocked.status).toBe(429);
+		expect(await blocked.json()).toEqual({
+			error: "Too many checkout attempts. Try again in a few minutes",
+		});
+		expect(mockStripe.checkout.sessions.create).toHaveBeenCalledTimes(20);
+		expect(mockDb.limit.mock.calls.length).toBe(reads);
+		resetMockDb();
+		expect((await attempt("user-another-buyer")).status).toBe(200);
+	});
+
 	it("returns 400 for an empty or oversized code", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 
