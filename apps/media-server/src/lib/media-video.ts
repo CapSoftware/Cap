@@ -19,6 +19,7 @@ import {
 } from "./hdr";
 import type { VideoMetadata } from "./job-manager";
 import {
+	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
 	normalizeLocalPath,
@@ -50,6 +51,7 @@ import {
 	selectedVideoEncoder,
 } from "./nvenc-encoder";
 import {
+	DownloadTooLargeError,
 	downloadUrlToPathParallel,
 	parallelDownloadOptionsFromEnv,
 } from "./parallel-download";
@@ -92,6 +94,9 @@ const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
 const MAX_DASH_SEGMENTS = 200_000;
 export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
+// Four hours, the longest source the web app accepts, at 70 Mbit/s. Without a
+// cap a source is bounded only by the download clock, on a disk every job shares.
+export const MAX_SOURCE_DOWNLOAD_BYTES = 128 * 1024 ** 3;
 
 export type StorageUploadTarget =
 	| {
@@ -1342,6 +1347,8 @@ export async function downloadVideoToTemp(
 			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
 				...parallel,
 				signal: combinedSignal,
+				maxBytes: MAX_SOURCE_DOWNLOAD_BYTES,
+				fetchImpl: createGuardedMediaFetch(videoUrl, { fetchImpl: fetch }),
 			});
 			if (file(tempFile.path).size === 0) {
 				throw new Error("Downloaded video is empty");
@@ -1364,9 +1371,14 @@ export async function downloadVideoToTemp(
 		if (!response.body) {
 			throw new Error("No response body");
 		}
-		if (maxBytes && Number(response.headers.get("content-length")) > maxBytes) {
+		const byteLimit = maxBytes ?? MAX_SOURCE_DOWNLOAD_BYTES;
+		const tooLarge = () =>
+			maxBytes
+				? new Error("Loom imports are limited to 10 GB")
+				: new DownloadTooLargeError(byteLimit);
+		if (Number(response.headers.get("content-length")) > byteLimit) {
 			await response.body.cancel();
-			throw new Error("Loom imports are limited to 10 GB");
+			throw tooLarge();
 		}
 
 		const reader = response.body.getReader();
@@ -1378,9 +1390,7 @@ export async function downloadVideoToTemp(
 				const { done, value } = await reader.read();
 				if (done) break;
 				downloadedBytes += value.byteLength;
-				if (maxBytes && downloadedBytes > maxBytes) {
-					throw new Error("Loom imports are limited to 10 GB");
-				}
+				if (downloadedBytes > byteLimit) throw tooLarge();
 				writer.write(value);
 			}
 			writerEnded = true;
