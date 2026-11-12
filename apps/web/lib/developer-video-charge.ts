@@ -36,7 +36,10 @@ export async function chargeDeveloperVideoUpload(input: {
 			.for("update");
 
 		const [account] = await tx
-			.select({ id: developerCreditAccounts.id })
+			.select({
+				id: developerCreditAccounts.id,
+				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			})
 			.from(developerCreditAccounts)
 			.where(eq(developerCreditAccounts.appId, input.appId))
 			.limit(1);

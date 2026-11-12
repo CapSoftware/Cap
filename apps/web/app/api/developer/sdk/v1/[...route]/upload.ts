@@ -9,6 +9,7 @@ import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
 } from "@/lib/developer-video-charge";
+import { createDeveloperPlaybackId } from "@/lib/developer-video-plan";
 import { startDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
@@ -52,6 +53,7 @@ async function findAppVideo(appId: string, videoId: string) {
 			appId: developerVideos.appId,
 			s3Key: developerVideos.s3Key,
 			duration: developerVideos.duration,
+			playbackId: developerVideos.playbackId,
 			deletedAt: developerVideos.deletedAt,
 		})
 		.from(developerVideos)
@@ -274,6 +276,12 @@ app.post(
 
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
 				duration: billingDuration,
+				// A video created before playback ids existed gets one here, so a
+				// failed processing start can't leave it looking like a legacy row
+				// that is never encoded.
+				...(video.playbackId
+					? {}
+					: { playbackId: createDeveloperPlaybackId() }),
 			};
 			if (width !== undefined) updates.width = width;
 			if (height !== undefined) updates.height = height;

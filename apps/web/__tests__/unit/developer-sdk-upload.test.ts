@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	video: null as null | {
 		appId: string;
 		duration: number | null;
+		playbackId?: string | null;
 		deletedAt: string | null;
 	},
 	paidMicroCredits: 0,
@@ -99,7 +100,17 @@ beforeEach(() => {
 			const video = mocks.video;
 			return {
 				rows: video
-					? [[video.appId, s3Key, video.duration, video.deletedAt]]
+					? [
+							[
+								video.appId,
+								s3Key,
+								video.duration,
+								video.playbackId === undefined
+									? "playback-1"
+									: video.playbackId,
+								video.deletedAt,
+							],
+						]
 					: [],
 			};
 		}
@@ -188,6 +199,32 @@ describe("developer SDK multipart upload", () => {
 		expect(savedAt).toBeLessThan(
 			mocks.startProcessing.mock.invocationCallOrder[0] ?? 0,
 		);
+	});
+
+	it("gives a video created before playback ids existed one on completion", async () => {
+		mocks.video = { ...inProgress, playbackId: null };
+
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		const [update, params] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).toContain("`playbackId` = ?");
+		expect(params).toEqual(
+			expect.arrayContaining([expect.stringMatching(/^[A-Za-z0-9_-]{16,}$/)]),
+		);
+	});
+
+	it("keeps an existing playback id on completion", async () => {
+		const response = await post("/complete", completeBody);
+
+		const [update] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).not.toContain("`playbackId`");
 	});
 
 	it("answers a repeated complete without charging or touching storage again", async () => {
