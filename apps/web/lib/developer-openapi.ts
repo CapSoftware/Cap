@@ -27,6 +27,107 @@ const videoIdParam = {
 	schema: { type: "string" },
 };
 
+const transcriptIdParam = {
+	name: "id",
+	in: "path",
+	required: true,
+	description: "Transcript ID returned when the transcript was created.",
+	schema: { type: "string" },
+};
+
+const idempotencyKeyParam = {
+	name: "Idempotency-Key",
+	in: "header",
+	required: false,
+	description:
+		"8 to 128 characters. Repeating a create request with the same key returns the same transcript instead of creating and billing a second one.",
+	schema: { type: "string", minLength: 8, maxLength: 128 },
+};
+
+const transcriptOptionProperties = {
+	name: {
+		type: "string",
+		maxLength: 255,
+		description: "Display name. Defaults to the file name.",
+	},
+	language: {
+		type: "string",
+		description:
+			'Two-letter language code such as "en", or "auto" to detect it. Defaults to "auto".',
+	},
+	userId: {
+		type: "string",
+		maxLength: 255,
+		description: "Your own identifier for the end user, used to filter lists.",
+	},
+	metadata: {
+		type: "object",
+		additionalProperties: true,
+		description: "Your own JSON object, under 8KB.",
+	},
+};
+
+const transcriptSchema = {
+	type: "object",
+	required: [
+		"id",
+		"status",
+		"name",
+		"source",
+		"costMicroCredits",
+		"costDollars",
+		"createdAt",
+		"updatedAt",
+	],
+	properties: {
+		id: { type: "string" },
+		status: {
+			type: "string",
+			enum: ["uploading", "queued", "processing", "complete", "error"],
+			description:
+				"uploading waits for the file. queued and processing are in progress. complete and error are final.",
+		},
+		name: { type: "string" },
+		source: {
+			type: "object",
+			required: ["type"],
+			properties: {
+				type: { type: "string", enum: ["upload", "url"] },
+				url: { type: ["string", "null"] },
+			},
+		},
+		durationSeconds: {
+			type: ["number", "null"],
+			description: "Measured audio length. Set when the transcript finishes.",
+		},
+		language: { type: ["string", "null"] },
+		wordCount: { type: ["integer", "null"] },
+		text: {
+			type: ["string", "null"],
+			description:
+				"The transcript text. Returned by getTranscript once status is complete.",
+		},
+		costMicroCredits: {
+			type: "integer",
+			description:
+				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second.",
+		},
+		costDollars: { type: "number" },
+		error: {
+			type: ["object", "null"],
+			properties: {
+				code: { type: "string" },
+				message: { type: "string" },
+			},
+		},
+		userId: { type: ["string", "null"] },
+		metadata: { type: ["object", "null"], additionalProperties: true },
+		createdAt: { type: "string", format: "date-time" },
+		updatedAt: { type: "string", format: "date-time" },
+		completedAt: { type: ["string", "null"], format: "date-time" },
+	},
+};
+
 const secretAuth = [{ secretKey: [] }];
 const publicAuth = [{ publicKey: [] }];
 
@@ -79,7 +180,7 @@ const playbackProperties = {
 		type: "string",
 		enum: ["uploading", "processing", "ready", "errored"],
 		description:
-			"uploading until the upload completes, processing while it encodes, then ready or errored.",
+			"uploading until the upload completes, processing until the first output can be played, then ready or errored.",
 	},
 	errorReason: {
 		type: ["string", "null"],
@@ -91,7 +192,8 @@ const playbackProperties = {
 	},
 	renditions: {
 		type: "array",
-		description: "Encoded HLS renditions, largest first. Empty until ready.",
+		description:
+			"Encoded HLS renditions, largest first. Empty until hlsUrl is set.",
 		items: {
 			type: "object",
 			required: ["name", "width", "height", "bitrate", "bytes"],
@@ -112,12 +214,13 @@ const playbackProperties = {
 		type: ["string", "null"],
 		format: "uri",
 		description:
-			"Adaptive HLS master playlist. Null until ready, or when only the MP4 is available.",
+			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready.",
 	},
 	mp4Url: {
 		type: ["string", "null"],
 		format: "uri",
-		description: "Progressive MP4. Null until ready.",
+		description:
+			"Progressive MP4. Null until it is encoded, which can be after the video is ready.",
 	},
 	posterUrl: {
 		type: ["string", "null"],
@@ -215,6 +318,10 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			description: "Manage developer videos (secret key).",
 		},
 		{
+			name: "Transcripts",
+			description: "Turn audio or video into text (secret key).",
+		},
+		{
 			name: "Usage",
 			description: "Credit balance and totals (secret key).",
 		},
@@ -310,6 +417,164 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				parameters: [videoIdParam],
 				responses: {
 					"200": json(dataEnvelope(ref("VideoStatus")), "The video status."),
+					"404": response("NotFound"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/transcripts": {
+			get: {
+				operationId: "listTranscripts",
+				summary: "List transcripts",
+				description:
+					"Returns the app's transcripts, newest first, without their text. Paginate with limit and offset until pagination.hasMore is false.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [
+					{
+						name: "userId",
+						in: "query",
+						required: false,
+						description: "Only return transcripts created with this userId.",
+						schema: { type: "string", maxLength: 255 },
+					},
+					{
+						name: "status",
+						in: "query",
+						required: false,
+						description: "Only return transcripts in this status.",
+						schema: {
+							type: "string",
+							enum: ["uploading", "queued", "processing", "complete", "error"],
+						},
+					},
+					{
+						name: "limit",
+						in: "query",
+						required: false,
+						description: "Number of transcripts to return.",
+						schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+					},
+					{
+						name: "offset",
+						in: "query",
+						required: false,
+						description: "Number of transcripts to skip.",
+						schema: { type: "integer", minimum: 0, default: 0 },
+					},
+				],
+				responses: {
+					"200": json(ref("TranscriptList"), "A page of transcripts."),
+					"400": response("BadRequest"),
+					...restErrors,
+				},
+			},
+			post: {
+				operationId: "createTranscript",
+				summary: "Transcribe a URL",
+				description:
+					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Poll getTranscript every few seconds until status is complete or error.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [idempotencyKeyParam],
+				requestBody: jsonBody("CreateTranscriptRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("Transcript")),
+						"The queued transcript.",
+					),
+					"400": response("BadRequest"),
+					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
+					"409": response("Conflict"),
+					"503": response("Unavailable"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/transcripts/uploads": {
+			post: {
+				operationId: "createTranscriptUpload",
+				summary: "Transcribe a file",
+				description:
+					"Creates a transcript in the uploading status and returns a signed URL. PUT the file to upload.url with a Content-Length equal to contentLength, then call startTranscript. Files can be up to 2 GB. Requires a credit balance of at least 1,000 micro-credits.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [idempotencyKeyParam],
+				requestBody: jsonBody("CreateTranscriptUploadRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("TranscriptUpload")),
+						"The transcript and where to upload its file.",
+					),
+					"400": response("BadRequest"),
+					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
+					"409": response("Conflict"),
+					"503": response("Unavailable"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/transcripts/{id}/start": {
+			post: {
+				operationId: "startTranscript",
+				summary: "Start an uploaded transcript",
+				description:
+					"Checks that the file was uploaded and starts transcription. Calling it again for a transcript that already started returns the transcript unchanged.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [transcriptIdParam],
+				responses: {
+					"200": json(
+						dataEnvelope(ref("Transcript")),
+						"The queued transcript.",
+					),
+					"400": response("BadRequest"),
+					"402": response("PaymentRequired"),
+					"403": response("Forbidden"),
+					"404": response("NotFound"),
+					"409": response("Conflict"),
+					"503": response("Unavailable"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/transcripts/{id}": {
+			get: {
+				operationId: "getTranscript",
+				summary: "Get a transcript",
+				description:
+					"Returns the transcript with its status and, once complete, its text. Add include=words or include=segments for timings in seconds.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [
+					transcriptIdParam,
+					{
+						name: "include",
+						in: "query",
+						required: false,
+						description:
+							"Comma-separated extras to return with a complete transcript: words, segments.",
+						schema: { type: "string" },
+					},
+				],
+				responses: {
+					"200": json(dataEnvelope(ref("TranscriptDetail")), "The transcript."),
+					"404": response("NotFound"),
+					...restErrors,
+				},
+			},
+			delete: {
+				operationId: "deleteTranscript",
+				summary: "Delete a transcript",
+				description:
+					"Deletes the transcript, its text and its stored files. A transcript deleted before it completes is not charged.",
+				tags: ["Transcripts"],
+				security: secretAuth,
+				parameters: [transcriptIdParam],
+				responses: {
+					"200": json(ref("Success"), "The transcript was deleted."),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -447,6 +712,111 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: { success: { type: "boolean", const: true } },
 			},
 			DeveloperVideo: developerVideoSchema,
+			Transcript: transcriptSchema,
+			TranscriptList: {
+				type: "object",
+				required: ["data", "pagination"],
+				properties: {
+					data: { type: "array", items: ref("Transcript") },
+					pagination: {
+						type: "object",
+						required: ["limit", "offset", "hasMore"],
+						properties: {
+							limit: { type: "integer" },
+							offset: { type: "integer" },
+							hasMore: { type: "boolean" },
+						},
+					},
+				},
+			},
+			TranscriptDetail: {
+				allOf: [
+					ref("Transcript"),
+					{
+						type: "object",
+						properties: {
+							words: {
+								type: ["array", "null"],
+								items: {
+									type: "object",
+									required: ["text", "start", "end"],
+									properties: {
+										text: { type: "string" },
+										start: { type: "number" },
+										end: { type: "number" },
+										confidence: { type: ["number", "null"] },
+									},
+								},
+							},
+							segments: {
+								type: ["array", "null"],
+								items: {
+									type: "object",
+									required: ["text", "start", "end"],
+									properties: {
+										text: { type: "string" },
+										start: { type: "number" },
+										end: { type: "number" },
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+			TranscriptUpload: {
+				allOf: [
+					ref("Transcript"),
+					{
+						type: "object",
+						required: ["upload"],
+						properties: {
+							upload: {
+								type: ["object", "null"],
+								description:
+									"Where to PUT the file. null when a repeated request finds the transcript already started.",
+								required: ["method", "url", "headers", "expiresAt"],
+								properties: {
+									method: { type: "string", const: "PUT" },
+									url: { type: "string", format: "uri" },
+									headers: {
+										type: "object",
+										additionalProperties: { type: "string" },
+									},
+									expiresAt: { type: "string", format: "date-time" },
+								},
+							},
+						},
+					},
+				],
+			},
+			CreateTranscriptRequest: {
+				type: "object",
+				required: ["url"],
+				properties: {
+					url: {
+						type: "string",
+						format: "uri",
+						maxLength: 2048,
+						description: "Public http or https URL of an audio or video file.",
+					},
+					...transcriptOptionProperties,
+				},
+			},
+			CreateTranscriptUploadRequest: {
+				type: "object",
+				required: ["contentLength"],
+				properties: {
+					fileName: { type: "string", maxLength: 255 },
+					contentLength: {
+						type: "integer",
+						minimum: 1,
+						maximum: 2147483648,
+						description: "Exact size of the file in bytes.",
+					},
+					...transcriptOptionProperties,
+				},
+			},
 			VideoStatus: {
 				type: "object",
 				required: ["id", "ready"],
@@ -695,13 +1065,24 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			PaymentRequired: json(
 				ref("Error"),
-				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits.",
+				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits. For transcripts the code is out_of_credit when the app is not in good standing and insufficient_credits when the available balance is under the minimum, and the message says how much to add.",
 			),
 			Forbidden: json(
 				ref("Error"),
-				"A production app was called without an allowed Origin.",
+				"A production app was called without an allowed Origin, or the account cannot use this feature yet.",
 			),
-			NotFound: json(ref("Error"), "The video or route does not exist."),
+			NotFound: json(
+				ref("Error"),
+				"The video, transcript or route does not exist.",
+			),
+			Conflict: json(
+				ref("Error"),
+				"The request conflicts with the current state, for example a file that has not been uploaded yet or a reused Idempotency-Key.",
+			),
+			Unavailable: json(
+				ref("Error"),
+				"Transcription is temporarily unavailable. Retry later.",
+			),
 			CompletionInProgress: json(
 				ref("Error"),
 				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new video and upload again.",

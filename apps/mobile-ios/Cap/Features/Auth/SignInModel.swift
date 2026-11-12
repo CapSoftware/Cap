@@ -50,8 +50,10 @@ final class SignInModel {
         activity = .email
         errorMessage = nil
         defer { activity = nil }
+        Usage.track("auth_started", ["method": "email"])
         do {
             try await api.requestEmailCode(email: normalized)
+            Usage.track("auth_email_sent")
             code = ""
             resendAvailableAt = .now.addingTimeInterval(30)
             step = .code(email: normalized)

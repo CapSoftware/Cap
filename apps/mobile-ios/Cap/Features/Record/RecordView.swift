@@ -73,7 +73,10 @@ struct RecordView: View {
             ScreenRecordingSession.shared.began(withCamera: mode == .screenAndCamera)
             if mode == .screenAndCamera { bubble.float() }
         }
-        .onAppear { recent.isRecorderVisible = true }
+        .onAppear {
+            recent.isRecorderVisible = true
+            Usage.screen("record")
+        }
         .onDisappear {
             recent.isRecorderVisible = false
             model.teardown()
@@ -342,6 +345,7 @@ private struct FreeLimitNote: View {
                 .multilineTextAlignment(.center)
             if let upgradeURL {
                 Button {
+                    Usage.track("upgrade_clicked", ["source": "recorder"])
                     UIApplication.shared.open(upgradeURL)
                 } label: {
                     Label("Upgrade in your Cap dashboard", systemImage: "arrow.up.forward")

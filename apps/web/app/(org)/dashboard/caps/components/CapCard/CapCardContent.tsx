@@ -1,7 +1,7 @@
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { editDate } from "@/actions/videos/edit-date";
 import { editTitle } from "@/actions/videos/edit-title";
@@ -40,18 +40,40 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const [isDateEditing, setIsDateEditing] = useState(false);
 	const [showFullDate, setShowFullDate] = useState(false);
 	const [title, setTitle] = useState(cap.name);
+	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
+	// The field stays editable while a save is in flight, so the save reads
+	// the latest draft and the editor state to avoid replacing text typed
+	// after the blur.
+	const draftRef = useRef(cap.name);
+	const editingRef = useRef(false);
 
-	const handleTitleBlur = async (capName: string) => {
-		if (!title || capName === title) {
-			setIsEditing(false);
+	const setEditing = (value: boolean) => {
+		editingRef.current = value;
+		setIsEditing(value);
+	};
+
+	const setDraft = (value: string) => {
+		draftRef.current = value;
+		setTitle(value);
+	};
+
+	const handleTitleBlur = async () => {
+		const next = title.trim();
+		if (!next || next === savedTitle) {
+			setDraft(savedTitle);
+			setEditing(false);
 			return;
 		}
 
 		try {
-			await editTitle(cap.id, title);
+			await editTitle(cap.id, next);
+			setSavedTitle(next);
 			toast.success("Video title updated");
-			setIsEditing(false);
+			if (!editingRef.current || draftRef.current.trim() === next) {
+				setDraft(next);
+				setEditing(false);
+			}
 			router.refresh();
 		} catch (error) {
 			if (error instanceof Error) {
@@ -186,8 +208,8 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 					<textarea
 						rows={1}
 						value={title}
-						onChange={(e) => setTitle(e.target.value)}
-						onBlur={() => handleTitleBlur(cap.name)}
+						onChange={(e) => setDraft(e.target.value)}
+						onBlur={handleTitleBlur}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
 					/>
@@ -197,7 +219,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
-									setIsEditing(true);
+									setEditing(true);
 								}
 							}
 						}}

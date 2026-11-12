@@ -6,6 +6,7 @@ import {
 	type DeveloperVideoPreparation,
 	dispatchDeveloperVideoPart,
 	failDeveloperVideoProcessing,
+	isDeveloperVideoRefusal,
 	prepareDeveloperVideoProcessing,
 	readDeveloperVideoParts,
 	sweepSupersededDeveloperVideoOutputs,
@@ -19,8 +20,32 @@ interface ProcessDeveloperVideoPayload {
 
 const PROCESSING_DEADLINE_MS = 3 * 60 * 60 * 1000;
 const RETRY_SECONDS = 20;
+const PROBING_POLL_SECONDS = 2;
 const MAX_POLL_SECONDS = 20;
-const TIMED_OUT = "Video processing timed out";
+const TIMED_OUT =
+	"Processing took too long and was stopped. Upload the video again.";
+const INTERNAL_FAILURE =
+	"Processing failed because of a problem on our side. Upload the video again.";
+const UNOPENABLE = "The uploaded file could not be opened. Upload it again.";
+// An unclear probe error is tried again after 20, 40, 80, 160 and 320
+// seconds, so a storage or media-server fault has about ten minutes to clear
+// and a file that never opens costs six probes.
+const MAX_UNCLEAR_PROBES = 6;
+const MAX_UNCLEAR_WAIT_SECONDS = 320;
+
+type Prepared = DeveloperVideoPreparation | { refused: string };
+
+function prepareWaitSeconds(
+	prepared: DeveloperVideoPreparation,
+	unclear: number,
+): number {
+	if (prepared === "probing") return PROBING_POLL_SECONDS;
+	if (prepared !== "unclear") return RETRY_SECONDS;
+	return Math.min(
+		MAX_UNCLEAR_WAIT_SECONDS,
+		RETRY_SECONDS * 2 ** Math.max(0, unclear - 1),
+	);
+}
 
 export async function processDeveloperVideoWorkflow(
 	payload: ProcessDeveloperVideoPayload,
@@ -32,15 +57,23 @@ export async function processDeveloperVideoWorkflow(
 	try {
 		const deadline = Date.now() + PROCESSING_DEADLINE_MS;
 
-		for (;;) {
+		for (let unclear = 0; ; ) {
 			const prepared = await prepareVideo(videoId, encodeId);
+			if (typeof prepared === "object") {
+				await failVideo(videoId, encodeId, prepared.refused);
+				return { success: false };
+			}
 			if (prepared === "stale") return { success: false };
 			if (prepared === "ready") break;
+			if (prepared === "unclear" && ++unclear >= MAX_UNCLEAR_PROBES) {
+				await failVideo(videoId, encodeId, UNOPENABLE);
+				return { success: false };
+			}
 			if (Date.now() >= deadline) {
 				await failVideo(videoId, encodeId, TIMED_OUT);
 				return { success: false };
 			}
-			await sleep(`${RETRY_SECONDS}s`);
+			await sleep(`${prepareWaitSeconds(prepared, unclear)}s`);
 		}
 
 		for (let poll = 0; ; poll++) {
@@ -59,12 +92,10 @@ export async function processDeveloperVideoWorkflow(
 				break;
 			}
 
-			let busy = false;
-			for (const part of pending) {
-				if ((await dispatchPart(videoId, encodeId, part)) === "busy") {
-					busy = true;
-				}
-			}
+			const dispatched = await Promise.all(
+				pending.map((part) => dispatchPart(videoId, encodeId, part)),
+			);
+			const busy = dispatched.includes("busy");
 			await sleep(
 				`${busy ? RETRY_SECONDS : Math.min(MAX_POLL_SECONDS, 2 + poll * 2)}s`,
 			);
@@ -74,7 +105,8 @@ export async function processDeveloperVideoWorkflow(
 		return { success: true };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await failVideo(videoId, encodeId, message);
+		console.error("[developer-video] Processing failed", { videoId, message });
+		await failVideo(videoId, encodeId, INTERNAL_FAILURE);
 		throw new FatalError(message);
 	}
 }
@@ -82,10 +114,17 @@ export async function processDeveloperVideoWorkflow(
 async function prepareVideo(
 	videoId: string,
 	encodeId: string,
-): Promise<DeveloperVideoPreparation> {
+): Promise<Prepared> {
 	"use step";
 
-	return prepareDeveloperVideoProcessing(videoId, encodeId);
+	// A refusal is an answer, not a failed step: thrown, the step would be run
+	// again and the same file probed several more times for the same result.
+	try {
+		return await prepareDeveloperVideoProcessing(videoId, encodeId);
+	} catch (error) {
+		if (isDeveloperVideoRefusal(error)) return { refused: error.message };
+		throw error;
+	}
 }
 
 async function readParts(

@@ -204,6 +204,34 @@ describe("developer video API", () => {
 		});
 	});
 
+	it("offers the MP4 while adaptive streaming is still encoding", async () => {
+		mocks.store.video = developerVideo({
+			status: "ready",
+			processing: processingState({
+				hls: {
+					state: "running",
+					token: "t-hls",
+					jobId: "job-1",
+					startedAt: Date.now(),
+				},
+				mp4: { state: "complete", output: "mp4-out" },
+				poster: { output: "mp4-out" },
+			}),
+		});
+
+		const { body } = await get("/video-1/status");
+
+		expect(body.data).toMatchObject({
+			ready: true,
+			status: "ready",
+			hlsUrl: null,
+			mp4Url: `${BASE}/video.mp4`,
+			posterUrl: `${BASE}/poster.jpg`,
+			renditions: [],
+		});
+		expect(mocks.redrive).not.toHaveBeenCalled();
+	});
+
 	it("offers only the MP4 while adaptive streaming is unavailable", async () => {
 		mocks.store.video = developerVideo({
 			status: "ready",
