@@ -12,12 +12,14 @@ vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: () => ({
 			from: () => ({
-				where: (where: unknown) => {
-					mocks.where = where;
-					return {
-						orderBy: () => ({ limit: async () => mocks.rows }),
-					};
-				},
+				innerJoin: () => ({
+					where: (where: unknown) => {
+						mocks.where = where;
+						return {
+							orderBy: () => ({ limit: async () => mocks.rows }),
+						};
+					},
+				}),
 			}),
 		}),
 		update: () => ({
@@ -84,16 +86,18 @@ describe("deleted developer video purge", () => {
 		expect(mocks.updates.map((update) => update.id)).toEqual(["video-2"]);
 	});
 
-	it("selects deleted videos not yet purged, plus one late pass", () => {
+	it("selects deleted videos and videos of deleted apps, plus one late pass", () => {
 		void purgeDeletedDeveloperVideos();
 		const { sql } = new MySqlDialect().sqlToQuery(mocks.where as never);
-		expect(sql).toContain("`developer_videos`.`deletedAt` is not null");
+		const deletedAt =
+			"COALESCE(`developer_videos`.`deletedAt`, `developer_apps`.`deletedAt`)";
+		expect(sql).toContain(
+			"(`developer_videos`.`deletedAt` is not null or `developer_apps`.`deletedAt` is not null)",
+		);
 		expect(sql).toContain("`developer_videos`.`filesDeletedAt` is null");
 		expect(sql).toContain(
-			"`developer_videos`.`filesDeletedAt` < `developer_videos`.`deletedAt` + INTERVAL 4 HOUR",
+			`\`developer_videos\`.\`filesDeletedAt\` < ${deletedAt} + INTERVAL 4 HOUR`,
 		);
-		expect(sql).toContain(
-			"`developer_videos`.`deletedAt` <= NOW() - INTERVAL 4 HOUR",
-		);
+		expect(sql).toContain(`${deletedAt} <= NOW() - INTERVAL 4 HOUR`);
 	});
 });

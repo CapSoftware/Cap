@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { developerVideos } from "@cap/database/schema";
+import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
 	deleteDeveloperVideoObjects,
@@ -15,23 +15,31 @@ const PURGE_BATCH = 100;
 export async function purgeDeletedDeveloperVideos(
 	limit = PURGE_BATCH,
 ): Promise<{ purged: number; failed: number }> {
-	const hours = DEVELOPER_VIDEO_LATE_WRITE_HOURS;
+	const hours = sql.raw(String(DEVELOPER_VIDEO_LATE_WRITE_HOURS));
+	// A video counts as deleted when it was deleted itself or its app was.
+	// Apps deleted before videos were marked along with them only carry the
+	// app's timestamp.
+	const deletedAt = sql`COALESCE(${developerVideos.deletedAt}, ${developerApps.deletedAt})`;
 	const rows = await db()
 		.select({ id: developerVideos.id, appId: developerVideos.appId })
 		.from(developerVideos)
+		.innerJoin(developerApps, eq(developerApps.id, developerVideos.appId))
 		.where(
 			and(
-				isNotNull(developerVideos.deletedAt),
+				or(
+					isNotNull(developerVideos.deletedAt),
+					isNotNull(developerApps.deletedAt),
+				),
 				or(
 					isNull(developerVideos.filesDeletedAt),
 					and(
-						sql`${developerVideos.filesDeletedAt} < ${developerVideos.deletedAt} + INTERVAL ${sql.raw(String(hours))} HOUR`,
-						sql`${developerVideos.deletedAt} <= NOW() - INTERVAL ${sql.raw(String(hours))} HOUR`,
+						sql`${developerVideos.filesDeletedAt} < ${deletedAt} + INTERVAL ${hours} HOUR`,
+						sql`${deletedAt} <= NOW() - INTERVAL ${hours} HOUR`,
 					),
 				),
 			),
 		)
-		.orderBy(asc(developerVideos.deletedAt))
+		.orderBy(asc(deletedAt))
 		.limit(limit);
 
 	let purged = 0;
