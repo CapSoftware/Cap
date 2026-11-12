@@ -213,7 +213,8 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 		(invite) => !memberEmails.has(invite.invitedEmail.toLowerCase()),
 	);
 	const query = search.trim().toLowerCase();
-	const showSearch = members.length + invites.length >= SEARCH_THRESHOLD;
+	const showSearch =
+		query.length > 0 || members.length + invites.length >= SEARCH_THRESHOLD;
 	const visibleMembers = query
 		? members.filter((member) =>
 				`${member.user.name ?? ""} ${member.user.lastName ?? ""} ${member.user.email}`
