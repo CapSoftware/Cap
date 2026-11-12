@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { actionFailure } from "@/lib/infra-action-result";
 
 export async function updateDeveloperApp(data: {
 	appId: string;
@@ -32,7 +33,7 @@ export async function updateDeveloperApp(data: {
 	const updates: Partial<typeof developerApps.$inferInsert> = {};
 	if (data.name !== undefined) {
 		const trimmed = data.name.trim();
-		if (!trimmed) throw new Error("App name cannot be empty");
+		if (!trimmed) return actionFailure("Give the app a name.");
 		updates.name = trimmed;
 	}
 	if (data.environment !== undefined) updates.environment = data.environment;
@@ -46,5 +47,5 @@ export async function updateDeveloperApp(data: {
 	}
 
 	revalidatePath("/dashboard/infra", "layout");
-	return { success: true };
+	return { success: true as const };
 }

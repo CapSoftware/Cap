@@ -1,12 +1,13 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { claimDeveloperProCredit } from "@/actions/developers/claim-pro-credit";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import type { InfraProCredit } from "../infra-data";
+import { actionMessage, runAction } from "./run-action";
 import { Button, TEXT_LINK } from "./ui";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
@@ -28,19 +29,17 @@ export function ProCredit({
 	refresh?: boolean;
 }) {
 	const router = useRouter();
-	const [claimed, setClaimed] = useState(credit.status === "claimed");
+	const [claimedHere, setClaimedHere] = useState(false);
 
-	const claim = useMutation({
-		mutationFn: () => claimDeveloperProCredit(appId),
+	const claim = useEffectMutation({
+		mutationFn: () => runAction(() => claimDeveloperProCredit(appId)),
 		onSuccess: () => {
-			setClaimed(true);
-			toast.success("$5 credit added");
+			setClaimedHere(true);
+			toast.success("$5 credit added to this app");
 			if (refresh) router.refresh();
 		},
-		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Could not claim the credit",
-			),
+		onError: (cause) =>
+			toast.error(actionMessage(cause, "Could not claim the credit")),
 	});
 
 	if (credit.status === "not_pro") {
@@ -54,10 +53,13 @@ export function ProCredit({
 		);
 	}
 
-	if (claimed) {
+	if (claimedHere || credit.status === "claimed") {
 		return (
 			<p className={NOTE}>
-				This month's $5 Cap Pro credit is in your balance. The next one is ready
+				{claimedHere
+					? "This month's $5 Cap Pro credit is in this app's balance."
+					: "This month's $5 Cap Pro credit is already claimed."}{" "}
+				It is one per account each month, not one per app. The next one is ready
 				on {dateFormat.format(new Date(credit.nextDate))}.
 			</p>
 		);
@@ -69,7 +71,9 @@ export function ProCredit({
 				Claim $5 credit
 			</Button>
 			<p className={NOTE}>
-				Your Cap Pro plan includes $5 of Infra credit every month.
+				Cap Pro includes one $5 Infra credit a month for your whole account, not
+				one per app. Claiming it here adds it to this app, and it cannot be
+				moved afterwards.
 			</p>
 		</div>
 	);

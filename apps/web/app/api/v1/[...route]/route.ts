@@ -147,6 +147,7 @@ import {
 import { startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
+import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -4093,13 +4094,11 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireAgentWrites(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
-						const domain = payload.domain.trim().toLowerCase();
-						if (!/^https?:\/\/[a-z0-9.-]+(:[0-9]+)?$/.test(domain)) {
-							return yield* badRequest(
-								requestId,
-								"Domain must be a valid HTTP or HTTPS origin",
-							);
+						const allowed = normalizeAllowedOrigin(payload.domain);
+						if (!allowed.ok) {
+							return yield* badRequest(requestId, allowed.message);
 						}
+						const domain = allowed.origin;
 						return yield* runAgentMutation({
 							principal,
 							operation: "add_developer_domain",

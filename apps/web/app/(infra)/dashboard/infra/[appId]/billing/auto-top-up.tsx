@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { Cause, Effect } from "effect";
+import { Effect } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
@@ -10,10 +10,13 @@ import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
+import { actionMessage, runAction } from "../../_components/run-action";
 import { Button, FOCUS, Input, MONO } from "../../_components/ui";
 
 const DEFAULT_THRESHOLD_DOLLARS = 5;
 const DEFAULT_AMOUNT_DOLLARS = 25;
+const THRESHOLD_DOLLARS = { min: 1, max: 1000 };
+const AMOUNT_DOLLARS = { min: 5, max: 1000 };
 const CARD_CHECKS = 6;
 
 const NOTE =
@@ -23,11 +26,6 @@ const dollars = (value: string) => Number.parseFloat(value);
 
 const asError = (error: unknown) =>
 	error instanceof Error ? error : new Error(String(error));
-
-const messageOf = (cause: Cause.Cause<Error>, fallback: string) => {
-	const error = Cause.squash(cause);
-	return error instanceof Error && error.message ? error.message : fallback;
-};
 
 export function AutoTopUp({
 	appId,
@@ -96,7 +94,7 @@ export function AutoTopUp({
 				catch: asError,
 			}),
 		onError: (cause) =>
-			toast.error(messageOf(cause, "Could not open the card form")),
+			toast.error(actionMessage(cause, "Could not open the card form")),
 	});
 
 	const removeCard = useEffectMutation({
@@ -115,24 +113,22 @@ export function AutoTopUp({
 
 	const save = useEffectMutation({
 		mutationFn: () =>
-			Effect.tryPromise({
-				try: () =>
-					updateDeveloperAutoTopUp({
-						appId,
-						enabled,
-						thresholdMicroCredits: Math.round(
-							dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
-						),
-						amountCents: Math.round(dollars(amount) * 100),
-					}),
-				catch: asError,
-			}),
+			runAction(() =>
+				updateDeveloperAutoTopUp({
+					appId,
+					enabled,
+					thresholdMicroCredits: Math.round(
+						dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
+					),
+					amountCents: Math.round(dollars(amount) * 100),
+				}),
+			),
 		onSuccess: () => {
 			toast.success(enabled ? "Auto top-up is on" : "Auto top-up is off");
 			router.refresh();
 		},
 		onError: (cause) =>
-			toast.error(messageOf(cause, "Could not save auto top-up")),
+			toast.error(actionMessage(cause, "Could not save auto top-up")),
 	});
 
 	if (!hasCard) {
@@ -146,8 +142,12 @@ export function AutoTopUp({
 					{waitingForCard ? "Saving your card" : "Save a card"}
 				</Button>
 				<p className={NOTE}>
-					Save a card and Cap can add credits for you when the balance runs low.
-					Nothing is charged until you switch it on.
+					Saving a card charges nothing and leaves auto top-up off. Once you
+					switch it on, Cap adds ${initialAmount} from that card whenever this
+					app's balance falls below ${initialThreshold}. You can change both
+					amounts, the card is charged at most once a day, and auto top-up
+					switches itself off if a charge is declined. Remove the card at any
+					time.
 				</p>
 			</div>
 		);
@@ -155,10 +155,10 @@ export function AutoTopUp({
 
 	const valid =
 		!enabled ||
-		(dollars(threshold) >= 1 &&
-			dollars(threshold) <= 1000 &&
-			dollars(amount) >= 5 &&
-			dollars(amount) <= 1000);
+		(dollars(threshold) >= THRESHOLD_DOLLARS.min &&
+			dollars(threshold) <= THRESHOLD_DOLLARS.max &&
+			dollars(amount) >= AMOUNT_DOLLARS.min &&
+			dollars(amount) <= AMOUNT_DOLLARS.max);
 	const dirty =
 		enabled !== initialEnabled ||
 		(enabled && (threshold !== initialThreshold || amount !== initialAmount));

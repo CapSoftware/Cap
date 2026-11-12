@@ -49,16 +49,42 @@ export function formatCredits(microCredits: number) {
 	})}`;
 }
 
+const SMALLEST_CHARGE_DOLLARS = 1 / MICRO_CREDITS_PER_DOLLAR;
+
+// Amounts under a cent are shown to the digit they are charged at, so a real
+// charge never reads as zero.
 export function formatCharge(microCredits: number) {
 	const dollars =
 		Math.abs(Number(microCredits) || 0) / MICRO_CREDITS_PER_DOLLAR;
-	if (dollars > 0 && dollars < 0.01) {
-		return `$${dollars.toFixed(4)}`;
+	const exact = dollars.toFixed(5);
+	if (dollars > 0 && Number(exact) < 0.01) {
+		if (dollars < SMALLEST_CHARGE_DOLLARS / 2) {
+			return `<$${SMALLEST_CHARGE_DOLLARS.toFixed(5)}`;
+		}
+		return `$${exact.replace(/0$/, "")}`;
 	}
 	return `$${dollars.toLocaleString("en-US", {
 		minimumFractionDigits: 2,
 		maximumFractionDigits: 2,
 	})}`;
+}
+
+const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;
+
+export function formatBytes(bytes: number | null | undefined) {
+	if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) {
+		return null;
+	}
+	if (bytes < 1000) return `${Math.max(0, Math.round(bytes))} B`;
+	let value = bytes / 1000;
+	let unit = 0;
+	while (value >= 999.5 && unit < BYTE_UNITS.length - 1) {
+		value /= 1000;
+		unit += 1;
+	}
+	return `${value.toLocaleString("en-US", {
+		maximumFractionDigits: value < 10 ? 1 : 0,
+	})} ${BYTE_UNITS[unit]}`;
 }
 
 export function formatMinutes(minutes: number) {

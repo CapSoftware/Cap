@@ -10,6 +10,7 @@ import {
 	developerCreditAccounts,
 } from "@cap/database/schema";
 import { hashKey } from "@/lib/developer-key-hash";
+import { actionFailure } from "@/lib/infra-action-result";
 
 export async function createDeveloperApp(data: {
 	name: string;
@@ -18,7 +19,7 @@ export async function createDeveloperApp(data: {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 
-	if (!data.name.trim()) throw new Error("App name is required");
+	if (!data.name.trim()) return actionFailure("Give the app a name.");
 
 	const appId = nanoId();
 	const publicKeyRaw = `cpk_${nanoIdLong()}`;
