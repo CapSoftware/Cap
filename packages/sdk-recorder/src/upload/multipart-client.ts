@@ -2,11 +2,11 @@ const CHUNK_SIZE = 5 * 1024 * 1024;
 
 export class MultipartClient {
 	private apiBase: string;
-	private publicKey: string;
+	private token: string;
 
-	constructor(apiBase: string, publicKey: string) {
+	constructor(apiBase: string, token: string) {
 		this.apiBase = apiBase;
-		this.publicKey = publicKey;
+		this.token = token;
 	}
 
 	private async request(path: string, body: unknown, signal?: AbortSignal) {
@@ -16,7 +16,7 @@ export class MultipartClient {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					Authorization: `Bearer ${this.publicKey}`,
+					Authorization: `Bearer ${this.token}`,
 				},
 				body: JSON.stringify(body),
 				signal,
@@ -41,18 +41,6 @@ export class MultipartClient {
 		} finally {
 			clearTimeout(timeout);
 		}
-	}
-
-	async createVideo(options?: {
-		name?: string;
-		userId?: string;
-		metadata?: Record<string, unknown>;
-	}): Promise<{
-		videoId: string;
-		shareUrl: string;
-		embedUrl: string;
-	}> {
-		return this.request("/videos/create", options ?? {});
 	}
 
 	async uploadBlob(
