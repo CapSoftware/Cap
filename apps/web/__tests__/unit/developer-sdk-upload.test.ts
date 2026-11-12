@@ -399,6 +399,40 @@ describe("client mistakes on complete and abort", () => {
 		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		["SlowDown", 503],
+		["InternalError", 500],
+		["AccessDenied", 403],
+	] as const)(
+		"keeps a retryable 500 when the upload is gone and the file check fails with %s",
+		async (code, status) => {
+			mocks.listParts.mockImplementation(fails("NoSuchUpload", 404));
+			mocks.headObject.mockImplementation(fails(code, status));
+
+			const response = await post("/complete", completeBody);
+
+			expect(await refusal(response)).toMatchObject({
+				status: 500,
+				code: "internal_error",
+				hint: expect.stringContaining("Retry with backoff"),
+			});
+			expect(console.error).toHaveBeenCalled();
+			expect(mocks.claim).not.toHaveBeenCalled();
+		},
+	);
+
+	it("answers 404 when storage names the missing file NoSuchKey", async () => {
+		mocks.listParts.mockImplementation(fails("NoSuchUpload", 404));
+		mocks.headObject.mockImplementation(fails("NoSuchKey", 404));
+
+		const response = await post("/complete", completeBody);
+
+		expect(await refusal(response)).toMatchObject({
+			status: 404,
+			code: "upload_not_found",
+		});
+	});
+
 	it("names the minimum part size when a part other than the last is too small", async () => {
 		mocks.complete.mockImplementation(fails("EntityTooSmall", 400));
 

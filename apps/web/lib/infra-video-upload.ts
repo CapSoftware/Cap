@@ -123,6 +123,11 @@ function storageErrorCode(error: unknown): string | null {
 	return typeof name === "string" ? name : null;
 }
 
+function storedObjectIsMissing(error: unknown) {
+	const code = storageErrorCode(error);
+	return code === "NotFound" || code === "NoSuchKey";
+}
+
 function completeRefusal(error: unknown) {
 	switch (storageErrorCode(error)) {
 		case "NoSuchUpload":
@@ -463,7 +468,11 @@ export async function completeInfraUpload({
 							assembled: true as const,
 							totalBytes: object.ContentLength ?? null,
 						})),
-						Effect.catchAll(() => Effect.fail(listError)),
+						Effect.catchAll((headError) =>
+							Effect.fail(
+								storedObjectIsMissing(headError) ? listError : headError,
+							),
+						),
 					),
 				),
 			);
