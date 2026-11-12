@@ -104,7 +104,7 @@ export function isMediaServerConfigured(): boolean {
 
 export async function checkMediaServerHealth(): Promise<{
 	status: string;
-	ffmpeg: { available: boolean; version: string };
+	ffmpeg: { available: boolean; version?: string };
 }> {
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {

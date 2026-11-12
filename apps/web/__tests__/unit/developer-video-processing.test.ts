@@ -1426,6 +1426,10 @@ describe("developer video dispatch", () => {
 			"Input has an unsupported or unrecognizable format.",
 			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
 		],
+		[
+			"Video frame is larger than 8K, the largest size this server accepts",
+			"This video is larger than 8K. Export it at 8K or smaller and upload that.",
+		],
 	])(
 		"turns the probe error %j into a plain reason",
 		async (message, reason) => {
@@ -1738,6 +1742,31 @@ describe("developer video dispatch", () => {
 			}),
 		);
 		warnings.mockRestore();
+	});
+
+	it("tells the customer when an encode stopped on a frame that is too large", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: { state: "failed", reason: "x" },
+				mp4: runningPart("t-mp4"),
+				attempts: { hls: 2, mp4: 2 },
+			}),
+		});
+
+		await applyDeveloperVideoProgress(
+			{
+				videoId: "video-1",
+				phase: "error",
+				error:
+					"FFmpeg exited with code 234. Last stderr: Picture size 16000x16000 exceeds specified max pixel count 40000000",
+			},
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(video().errorReason).toBe(
+			"This video is larger than 8K. Export it at 8K or smaller and upload that.",
+		);
 	});
 
 	it("leaves a restarted video alone when an older run comes back", async () => {

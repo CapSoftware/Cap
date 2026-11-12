@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { file } from "bun";
+import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
 import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import { redactLogText } from "./log-redaction";
@@ -248,15 +249,20 @@ async function drainStream(stream: ReadableStream<Uint8Array> | null) {
 	}
 }
 
-async function readStream(stream: ReadableStream<Uint8Array> | null) {
+async function readStream(
+	stream: ReadableStream<Uint8Array> | null,
+	onText?: (text: string) => void,
+) {
 	if (!stream) return "";
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
+	const live = new TextDecoder();
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			chunks.push(value);
+			onText?.(live.decode(value, { stream: true }));
 		}
 	} finally {
 		reader.releaseLock();
@@ -295,10 +301,11 @@ async function withTimeout<T>(
 	}
 }
 
-async function runFfmpegCommand(
+export async function runFfmpegCommand(
 	args: string[],
 	timeoutMs: number,
 	abortSignal?: AbortSignal,
+	stallWindows?: EncodeStallWindows,
 ) {
 	abortSignal?.throwIfAborted();
 
@@ -318,11 +325,21 @@ async function runFfmpegCommand(
 		abortSignal.addEventListener("abort", abortCleanup, { once: true });
 	}
 
+	const progressWatch = watchEncodeProgress(args.at(-1) ?? "", stallWindows);
+	let stallError: unknown;
+	progressWatch.stalled.catch((error: unknown) => {
+		stallError = error;
+		void terminateProcess(proc);
+	});
+
 	try {
 		await withTimeout(
 			(async () => {
 				const [stderrText, exitCode] = await Promise.all([
-					readStream(proc.stderr as ReadableStream<Uint8Array>),
+					readStream(
+						proc.stderr as ReadableStream<Uint8Array>,
+						progressWatch.observe,
+					),
 					drainStream(proc.stdout as ReadableStream<Uint8Array>).then(
 						() => proc.exited,
 					),
@@ -338,7 +355,10 @@ async function runFfmpegCommand(
 			timeoutMs,
 			() => terminateProcess(proc),
 		);
+	} catch (error) {
+		throw stallError ?? error;
 	} finally {
+		progressWatch.stop();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
