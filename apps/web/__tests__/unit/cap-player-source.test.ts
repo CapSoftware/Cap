@@ -207,10 +207,14 @@ const page = (options: {
 	if (options.mediaSource) Object.assign(view, { MediaSource: class {} });
 	vi.stubGlobal("window", view);
 	vi.stubGlobal("navigator", { vendor: options.vendor });
-	vi.stubGlobal("document", {
-		readyState: options.loaded ? "complete" : "loading",
-	});
-	return { finishLoading: () => view.dispatchEvent(new Event("load")) };
+	const doc = { readyState: options.loaded ? "complete" : "loading" };
+	vi.stubGlobal("document", doc);
+	return {
+		finishLoading: () => {
+			doc.readyState = "complete";
+			view.dispatchEvent(new Event("load"));
+		},
+	};
 };
 
 const safari = (loaded = false) =>
@@ -224,12 +228,12 @@ const attach = (
 	options: { autoPlay?: boolean; startAt?: number } = {},
 ) => {
 	const onFatal = vi.fn();
-	const stop = attachSource(video as unknown as HTMLVideoElement, source, {
+	const attached = attachSource(video as unknown as HTMLVideoElement, source, {
 		autoPlay: options.autoPlay ?? false,
 		startAt: options.startAt,
 		onFatal,
 	});
-	return { stop, onFatal };
+	return { ...attached, onFatal };
 };
 
 const hlsFor = async () => {
@@ -417,6 +421,79 @@ describe("attachSource before play", () => {
 
 		expect(onFatal).toHaveBeenCalledTimes(1);
 		expect(video.src).toBe("");
+	});
+});
+
+describe("attachSource warm-up on intent", () => {
+	it("lets Safari load ahead once the document has loaded", () => {
+		const { finishLoading } = safari();
+		const video = new FakeVideo(true);
+
+		const { warm } = attach(video, { hls: HLS, mp4: MP4 });
+		warm();
+
+		expect(video.preload).toBe("none");
+
+		finishLoading();
+		warm();
+
+		expect(video.preload).toBe("auto");
+	});
+
+	it("leaves a playing video alone", () => {
+		safari(true);
+		const video = new FakeVideo(true);
+
+		const { warm } = attach(video, { hls: HLS });
+		void video.play();
+		warm();
+
+		expect(video.preload).toBe("metadata");
+	});
+
+	it("never lifts the MP4 above metadata", () => {
+		safari(true);
+		const fallback = new FakeVideo(true);
+		const file = new FakeVideo(false);
+		page({ vendor: "", mediaSource: false, loaded: true });
+
+		const direct = attach(file, { mp4: MP4 });
+		direct.warm();
+
+		expect(file.preload).toBe("metadata");
+
+		safari(true);
+		const native = attach(fallback, { hls: HLS, mp4: MP4 });
+		fallback.dispatchEvent(new Event("error"));
+		native.warm();
+
+		expect(fallback.src).toBe(MP4);
+		expect(fallback.preload).toBe("metadata");
+	});
+
+	it("does nothing with hls.js, which already holds one segment", async () => {
+		chrome(true);
+		const video = new FakeVideo(false);
+
+		const { warm } = attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		warm();
+
+		expect(video.preload).toBe("auto");
+		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
+	});
+
+	it("does nothing once detached", () => {
+		safari(true);
+		const video = new FakeVideo(true);
+
+		const { stop, warm } = attach(video, { hls: HLS });
+		stop();
+		video.preload = "none";
+		warm();
+
+		expect(video.preload).toBe("none");
 	});
 });
 

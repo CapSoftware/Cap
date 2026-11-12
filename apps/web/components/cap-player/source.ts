@@ -5,6 +5,11 @@ export interface CapPlayerSource {
 
 export type PlaybackMode = "native" | "mse" | "file" | "none";
 
+export interface Attachment {
+	stop: () => void;
+	warm: () => void;
+}
+
 export interface AttachOptions {
 	autoPlay: boolean;
 	startAt?: number;
@@ -111,7 +116,7 @@ export const attachSource = (
 	video: HTMLVideoElement,
 	source: CapPlayerSource,
 	options: AttachOptions,
-): (() => void) => {
+): Attachment => {
 	const { autoPlay, onFatal } = options;
 	const startAt = options.startAt ?? 0;
 	const mode = pickPlaybackMode(video, source);
@@ -186,16 +191,28 @@ export const attachSource = (
 		detach();
 	};
 
+	// Safari plays HLS itself and cannot preload a single segment: at
+	// preload="auto" it keeps downloading and cannot be stopped again. So it
+	// holds only the playlists until the viewer is about to press play.
+	const warm = () => {
+		if (mode !== "native" || fileAttached || cancelled) return;
+		if (video.paused && document.readyState === "complete") {
+			video.preload = "auto";
+		}
+	};
+
+	const attachment = { stop, warm };
+
 	if (mode === "none") {
 		onFatal();
-		return () => undefined;
+		return { stop: () => undefined, warm: () => undefined };
 	}
 
 	video.addEventListener("loadedmetadata", seekToStart);
 
 	if (mode === "file") {
 		playFile({ resumeAt: 0, wasPlaying: false });
-		return stop;
+		return attachment;
 	}
 
 	if (mode === "native" && source.hls) {
@@ -203,7 +220,7 @@ export const attachSource = (
 		video.src = source.hls;
 		video.addEventListener("error", onNativeError);
 		warmAfterLoad(true);
-		return stop;
+		return attachment;
 	}
 
 	loadHls()
@@ -275,5 +292,5 @@ export const attachSource = (
 		})
 		.catch(() => playFile());
 
-	return stop;
+	return attachment;
 };

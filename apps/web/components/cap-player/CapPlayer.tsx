@@ -123,6 +123,7 @@ export const CapPlayer = ({
 	const bufferedRef = useRef<HTMLDivElement>(null);
 	const timeRef = useRef<HTMLSpanElement>(null);
 	const qualityRef = useRef<HTMLSpanElement>(null);
+	const warmSource = useRef<() => void>(() => undefined);
 	const callbacks = useRef({ onFirstPlay, onEnded });
 	callbacks.current = { onFirstPlay, onEnded };
 
@@ -141,11 +142,13 @@ export const CapPlayer = ({
 		const video = videoRef.current;
 		if (!video) return;
 		setFailed(false);
-		return attachSource(
+		const attached = attachSource(
 			video,
 			{ hls, mp4 },
 			{ autoPlay, startAt, onFatal: () => setFailed(true) },
 		);
+		warmSource.current = attached.warm;
+		return attached.stop;
 	}, [hls, mp4, autoPlay, startAt]);
 
 	useLayoutEffect(() => {
@@ -343,17 +346,18 @@ export const CapPlayer = ({
 			wake();
 		};
 
-		// Safari plays HLS itself and cannot preload a single segment, so it
-		// holds only the playlists until the viewer shows intent: a mouse over
-		// the player or keyboard focus inside it. Never before the document has
-		// loaded, when a preloading video would hold the load event again.
-		const warm = () => {
-			if (video.paused && document.readyState === "complete") {
-				video.preload = "auto";
-			}
-		};
-		const onPointer = (event: PointerEvent) => {
-			if (event.pointerType === "mouse") warm();
+		// Loading may start a moment before the click that plays: when the
+		// mouse is on a play button, or pressed anywhere that plays. A mouse
+		// that only crosses the video must not start a download.
+		const onIntent = (event: PointerEvent) => {
+			if (event.pointerType !== "mouse") return;
+			if (!(event.target instanceof Element)) return;
+			const pressed = event.type === "pointerdown";
+			if (pressed && event.button !== 0) return;
+			const play = pressed
+				? '[data-action="toggle"]'
+				: 'button[data-action="toggle"]';
+			if (event.target.closest(play)) warmSource.current();
 		};
 
 		const onAction = (event: Event) => {
@@ -391,9 +395,8 @@ export const CapPlayer = ({
 		track.addEventListener("pointerup", onTrackUp);
 		track.addEventListener("pointercancel", onTrackUp);
 		root.addEventListener("keydown", onKey);
-		root.addEventListener("pointermove", onPointer);
-		root.addEventListener("pointerdown", onPointer);
-		root.addEventListener("focusin", warm);
+		root.addEventListener("pointerover", onIntent);
+		root.addEventListener("pointerdown", onIntent);
 		root.addEventListener("click", onAction);
 		root.addEventListener("pointermove", wake);
 		root.addEventListener("focusin", wake);
@@ -416,9 +419,8 @@ export const CapPlayer = ({
 			track.removeEventListener("pointerup", onTrackUp);
 			track.removeEventListener("pointercancel", onTrackUp);
 			root.removeEventListener("keydown", onKey);
-			root.removeEventListener("pointermove", onPointer);
-			root.removeEventListener("pointerdown", onPointer);
-			root.removeEventListener("focusin", warm);
+			root.removeEventListener("pointerover", onIntent);
+			root.removeEventListener("pointerdown", onIntent);
 			root.removeEventListener("click", onAction);
 			root.removeEventListener("pointermove", wake);
 			root.removeEventListener("focusin", wake);
