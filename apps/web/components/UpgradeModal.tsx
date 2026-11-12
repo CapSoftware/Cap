@@ -188,14 +188,16 @@ const UpgradeModalImpl = ({
 				return;
 			}
 
-			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
-				onOpenChange(false);
-			}
-
 			if (response.status === 429) {
 				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
 				return;
+			}
+
+			if (data.subscription === true) {
+				toast.success("You are already on the Cap Pro plan");
+				onOpenChange(false);
+			} else if (!response.ok || typeof data.url !== "string" || !data.url) {
+				throw new Error("Unable to start checkout");
 			}
 
 			await onCheckout?.();
@@ -203,6 +205,9 @@ const UpgradeModalImpl = ({
 			if (data.url) {
 				window.location.href = data.url;
 			}
+		},
+		onError: () => {
+			toast.error("Unable to start checkout. Please try again.");
 		},
 	});
 
