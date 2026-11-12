@@ -110,6 +110,7 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 
 const MAX_PLAYLIST_BYTES = 1_000_000;
 const MAX_NESTED_PLAYLISTS = 16;
+const PLAYLIST_WALK_TIMEOUT_MS = 15_000;
 const OFF_HOST_PLAYLIST =
 	"a remote playlist may only reference files on its own host";
 
@@ -147,13 +148,18 @@ export function playlistReferences(playlist: string): string[] {
 // Read before the demuxer sees a remote playlist, so one that names another
 // host is refused without any of its entries being requested. Playlists it
 // links to on its own host are checked the same way.
-async function assertRemotePlaylistStaysOnHost(rootUrl: string): Promise<void> {
+export async function assertRemotePlaylistStaysOnHost(
+	rootUrl: string,
+	timeoutMs = PLAYLIST_WALK_TIMEOUT_MS,
+): Promise<void> {
+	// One budget for the whole walk, shorter than the probe's own timeout, so
+	// no request from it is still running once the probe has given up.
+	const signal = AbortSignal.timeout(timeoutMs);
 	const root = new URL(rootUrl);
 	const fetchPlaylist = createGuardedMediaFetch(rootUrl);
 	const queue = [rootUrl];
 	const seen = new Set<string>();
-	while (queue.length > 0) {
-		const current = queue.shift() as string;
+	for (let current = queue.shift(); current; current = queue.shift()) {
 		if (seen.has(current)) continue;
 		seen.add(current);
 		if (seen.size > MAX_NESTED_PLAYLISTS) {
@@ -161,16 +167,19 @@ async function assertRemotePlaylistStaysOnHost(rootUrl: string): Promise<void> {
 				"the playlist links to too many other playlists",
 			);
 		}
-		const response = await fetchPlaylist(current, {
-			signal: AbortSignal.timeout(10_000),
-		});
-		if (!response.ok) {
-			await response.body?.cancel().catch(() => {});
-			continue;
+		let playlist: string | null = null;
+		try {
+			const response = await fetchPlaylist(current, { signal });
+			if (response.ok) playlist = await readBoundedText(response);
+			else await response.body?.cancel().catch(() => {});
+		} catch (error) {
+			if (!signal.aborted) throw error;
+			throw new Error(
+				`Operation timed out after ${timeoutMs}ms reading the playlist`,
+			);
 		}
-		for (const reference of playlistReferences(
-			await readBoundedText(response),
-		)) {
+		if (playlist === null) continue;
+		for (const reference of playlistReferences(playlist)) {
 			let target: URL;
 			try {
 				target = new URL(reference, current);

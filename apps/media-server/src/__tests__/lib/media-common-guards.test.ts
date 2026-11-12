@@ -19,8 +19,29 @@ describe("isPrivateHostLiteral", () => {
 		"[fd00:ec2::254]",
 		"[fe80::1]",
 		"[::ffff:10.0.0.1]",
+		"[::ffff:a9fe:a9fe]",
+		"[::ffff:7f00:1]",
+		"[0:0:0:0:0:ffff:c0a8:101]",
+		"[::127.0.0.1]",
+		"localhost.",
+		"127.0.0.1.",
+		"FE80::1",
+		"[fec0::1]",
 	])("%s is private", (host) => {
 		expect(isPrivateHostLiteral(host)).toBe(true);
+	});
+
+	test("recognises the form URL parsing gives a mapped address", () => {
+		for (const address of ["169.254.169.254", "127.0.0.1", "10.0.0.1"]) {
+			const { hostname } = new URL(`http://[::ffff:${address}]/x`);
+			expect(isPrivateHostLiteral(hostname)).toBe(true);
+		}
+		expect(
+			isPrivateHostLiteral(new URL("http://[::ffff:8.8.8.8]/").hostname),
+		).toBe(false);
+		expect(isPrivateHostLiteral(new URL("http://localhost./").hostname)).toBe(
+			true,
+		);
 	});
 
 	test.each([
@@ -31,6 +52,8 @@ describe("isPrivateHostLiteral", () => {
 		"100.128.0.1",
 		"169.253.1.1",
 		"[2606:4700::1111]",
+		"[::ffff:808:808]",
+		"not:an:address",
 		"localhost.example.com",
 	])("%s is not private", (host) => {
 		expect(isPrivateHostLiteral(host)).toBe(false);

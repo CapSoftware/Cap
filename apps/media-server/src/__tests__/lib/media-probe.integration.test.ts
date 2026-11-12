@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	assertRemotePlaylistStaysOnHost,
 	checkVideoAccessible,
 	isUnreadableMediaInput,
 	playlistReferences,
@@ -267,6 +268,36 @@ describe("mediaProbe integration tests", () => {
 			} finally {
 				await server.stop(true);
 				await other.stop(true);
+			}
+		});
+
+		test("stops reading playlists when its time is up", async () => {
+			const requests: string[] = [];
+			const server = Bun.serve({
+				port: 0,
+				async fetch(request) {
+					const path = new URL(request.url).pathname;
+					requests.push(path);
+					if (path === "/master.m3u8") {
+						return new Response(
+							"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2\nb.m3u8\n",
+						);
+					}
+					await new Promise((resolve) => setTimeout(resolve, 2_000));
+					return new Response("#EXTM3U\n");
+				},
+			});
+
+			try {
+				const started = Date.now();
+				await expect(
+					assertRemotePlaylistStaysOnHost(`${server.url}master.m3u8`, 200),
+				).rejects.toThrow("timed out");
+				expect(Date.now() - started).toBeLessThan(1_500);
+				await new Promise((resolve) => setTimeout(resolve, 300));
+				expect(requests).toEqual(["/master.m3u8", "/a.m3u8"]);
+			} finally {
+				await server.stop(true);
 			}
 		});
 
