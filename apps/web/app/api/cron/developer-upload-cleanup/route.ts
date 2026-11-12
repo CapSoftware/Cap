@@ -21,6 +21,7 @@ const INCOMPLETE_UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ABORT_CONCURRENCY = 16;
 const ABORT_BUDGET = 5_000;
 const ABORT_DEADLINE_MS = 120_000;
+const ABORT_TIMEOUT_MS = 10_000;
 
 class Api extends HttpApi.make("DeveloperUploadCleanupApi").add(
 	HttpApiGroup.make("root").add(
@@ -69,22 +70,34 @@ const abortStaleUploads = Effect.gen(function* () {
 		const batch = stale.slice(0, remaining);
 		const outcomes = yield* Effect.forEach(
 			batch,
-			({ key, uploadId }) =>
-				Effect.either(bucket.multipart.abort(key, uploadId)).pipe(
+			({ key, uploadId }) => {
+				// Checked before each abort, so queued work stops when time is up
+				// and only the aborts already in flight are left to finish.
+				if (Date.now() - startedAt >= ABORT_DEADLINE_MS) {
+					return Effect.succeed("skipped" as const);
+				}
+				return bucket.multipart.abort(key, uploadId).pipe(
+					Effect.timeoutFail({
+						duration: ABORT_TIMEOUT_MS,
+						onTimeout: () => new Error("Abort timed out"),
+					}),
+					Effect.either,
 					Effect.map((result) => {
-						if (result._tag === "Right") return true;
+						if (result._tag === "Right") return "aborted" as const;
 						console.error(
 							"[developer-upload-cleanup] Failed to abort upload",
 							key,
 							result.left,
 						);
-						return false;
+						return "failed" as const;
 					}),
-				),
+				);
+			},
 			{ concurrency: ABORT_CONCURRENCY },
 		);
-		aborted += outcomes.filter(Boolean).length;
-		failed += outcomes.length - outcomes.filter(Boolean).length;
+		aborted += outcomes.filter((outcome) => outcome === "aborted").length;
+		failed += outcomes.filter((outcome) => outcome === "failed").length;
+		const skipped = outcomes.includes("skipped");
 
 		const nextKeyMarker = page.NextKeyMarker;
 		const nextUploadIdMarker = page.NextUploadIdMarker;
@@ -92,7 +105,7 @@ const abortStaleUploads = Effect.gen(function* () {
 			!page.IsTruncated ||
 			!nextKeyMarker ||
 			(nextKeyMarker === keyMarker && nextUploadIdMarker === uploadIdMarker);
-		if (batch.length < stale.length) {
+		if (skipped || batch.length < stale.length) {
 			moreToAbort = true;
 			break;
 		}

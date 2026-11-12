@@ -285,8 +285,8 @@ describe("developer upload cleanup cron", () => {
 		expect(mocks.listUploads).toHaveBeenCalledTimes(5);
 	});
 
-	it("stops listing once its time is up and says there is more", async () => {
-		mocks.pages = [stalePage(10, 0, true), stalePage(10, 10, true)];
+	it("lets the aborts in flight finish once its time is up, starts no more and says there is more", async () => {
+		mocks.pages = [stalePage(100, 0, true), stalePage(10, 100, true)];
 		mocks.abort.mockImplementation(() =>
 			Effect.sync(() => {
 				vi.setSystemTime(new Date(Date.now() + 15_000));
@@ -296,11 +296,31 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
+		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
-			aborted: 10,
+			aborted: 16,
+			failed: 0,
 			moreToAbort: true,
 		});
+		expect(mocks.abort).toHaveBeenCalledTimes(16);
 		expect(mocks.listUploads).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives up on an abort that hangs and counts it as failed", async () => {
+		vi.useRealTimers();
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+		mocks.pages = [stalePage(2, 0, false)];
+		mocks.abort.mockImplementation((_key: string, uploadId: string) =>
+			uploadId === "upload-0" ? Effect.never : Effect.succeed({}),
+		);
+
+		const pending = runCron();
+		await vi.advanceTimersByTimeAsync(11_000);
+		const response = await pending;
+
+		expect(response.status).toBe(500);
+		expect(mocks.abort).toHaveBeenCalledTimes(2);
 	});
 
 	it("allows itself five minutes", async () => {

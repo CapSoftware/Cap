@@ -218,7 +218,7 @@ describe("developer SDK multipart upload", () => {
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 
-	it("keeps the newest open upload and aborts the others", async () => {
+	it("hands back the newest of several open uploads and aborts none", async () => {
 		openUploads(
 			{ id: "older", hoursAgo: 3 },
 			{ id: "newest", hoursAgo: 1 },
@@ -229,22 +229,87 @@ describe("developer SDK multipart upload", () => {
 
 		await expect(response.json()).resolves.toEqual({ uploadId: "newest" });
 		expect(mocks.create).not.toHaveBeenCalled();
-		expect(mocks.abort.mock.calls.map(([, id]) => id).sort()).toEqual([
-			"older",
-			"oldest",
-		]);
+		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 
-	it("replaces an open upload that the cleanup is about to remove", async () => {
+	it("opens a new upload when the open one is close to being cleaned up, and leaves it alone", async () => {
 		openUploads({ id: "nearly-expired", hoursAgo: 7 });
 
 		const response = await post("/initiate", {});
 
 		await expect(response.json()).resolves.toEqual({ uploadId: "upload-1" });
 		expect(mocks.create).toHaveBeenCalledTimes(1);
-		expect(mocks.abort.mock.calls.map(([, id]) => id)).toEqual([
-			"nearly-expired",
-		]);
+		expect(mocks.abort).not.toHaveBeenCalled();
+	});
+
+	it("finds the newest open upload on a later page of the listing", async () => {
+		const key = "developer/app-1/video-1/video";
+		const at = (hours: number) => new Date(Date.now() - hours * 3_600_000);
+		mocks.listUploads.mockImplementation(
+			({ uploadIdMarker }: { uploadIdMarker?: string }) =>
+				uploadIdMarker === undefined
+					? {
+							Uploads: [{ Key: key, UploadId: "first-page", Initiated: at(4) }],
+							IsTruncated: true,
+							NextKeyMarker: key,
+							NextUploadIdMarker: "first-page",
+						}
+					: {
+							Uploads: [
+								{ Key: key, UploadId: "second-page", Initiated: at(1) },
+							],
+						},
+		);
+
+		const response = await post("/initiate", {});
+
+		await expect(response.json()).resolves.toEqual({ uploadId: "second-page" });
+		expect(mocks.listUploads).toHaveBeenCalledTimes(2);
+		expect(mocks.listUploads.mock.calls[1]?.[0]).toEqual({
+			prefix: key,
+			keyMarker: key,
+			uploadIdMarker: "first-page",
+		});
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+
+	it("takes the video's row lock before it looks for an open upload", async () => {
+		const order: string[] = [];
+		const answer = mocks.query.getMockImplementation();
+		mocks.query.mockImplementation(
+			async (query: string, ...rest: unknown[]) => {
+				if (/for update/i.test(query)) order.push("lock");
+				return answer?.(query, ...rest);
+			},
+		);
+		mocks.listUploads.mockImplementation(() => {
+			order.push("list");
+			return { Uploads: [] };
+		});
+		mocks.create.mockImplementation(() => {
+			order.push("create");
+			return { UploadId: "upload-1" };
+		});
+
+		await post("/initiate", {});
+
+		expect(order).toEqual(["lock", "list", "create"]);
+	});
+
+	it("does not open an upload for a video completed while the request waited", async () => {
+		const answer = mocks.query.getMockImplementation();
+		mocks.query.mockImplementation(
+			async (query: string, ...rest: unknown[]) => {
+				if (/for update/i.test(query)) mocks.video = uploaded;
+				return answer?.(query, ...rest);
+			},
+		);
+
+		const response = await post("/initiate", {});
+
+		expect(response.status).toBe(409);
+		expect(mocks.listUploads).not.toHaveBeenCalled();
+		expect(mocks.create).not.toHaveBeenCalled();
 	});
 
 	it("ignores another video's upload whose key starts the same way", async () => {

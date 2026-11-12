@@ -106,8 +106,72 @@ const partsMismatch = () =>
 
 const MIN_PART_BYTES = 5 * 1024 * 1024;
 // The cleanup aborts an upload a day after it was opened, so only a recent one
-// is handed back; an older one is replaced.
+// is handed back. An older one is left for the cleanup and a new one is opened.
 const OPEN_UPLOAD_REUSE_MS = 6 * 60 * 60 * 1000;
+const OPEN_UPLOAD_LIST_PAGES = 10;
+
+type UploadListing = {
+	Uploads?: { Key?: string; UploadId?: string; Initiated?: Date }[];
+	IsTruncated?: boolean;
+	NextKeyMarker?: string;
+	NextUploadIdMarker?: string;
+};
+
+// A video keeps one open upload: asking again returns the newest recent one,
+// so repeated calls cannot pile up uploads whose parts sit in storage unpaid
+// until the cleanup removes them. Nothing is aborted here, because another
+// client may still be sending parts to an upload or completing it. If the
+// listing fails, the caller opens an upload as before.
+function newestOpenUpload<E, R>(
+	bucket: {
+		multipart: {
+			listUploads: (config: {
+				prefix: string;
+				keyMarker?: string;
+				uploadIdMarker?: string;
+			}) => Effect.Effect<UploadListing, E, R>;
+		};
+	},
+	s3Key: string,
+) {
+	return Effect.gen(function* () {
+		const reusableSince = Date.now() - OPEN_UPLOAD_REUSE_MS;
+		let newest: { uploadId: string; initiatedAt: number } | null = null;
+		let keyMarker: string | undefined;
+		let uploadIdMarker: string | undefined;
+
+		for (let page = 0; page < OPEN_UPLOAD_LIST_PAGES; page++) {
+			const listed = yield* Effect.either(
+				bucket.multipart.listUploads({
+					prefix: s3Key,
+					keyMarker,
+					uploadIdMarker,
+				}),
+			);
+			if (listed._tag === "Left") break;
+
+			for (const upload of listed.right.Uploads ?? []) {
+				if (upload.Key !== s3Key || !upload.UploadId || !upload.Initiated) {
+					continue;
+				}
+				const initiatedAt = upload.Initiated.getTime();
+				if (
+					initiatedAt > reusableSince &&
+					initiatedAt > (newest?.initiatedAt ?? 0)
+				) {
+					newest = { uploadId: upload.UploadId, initiatedAt };
+				}
+			}
+
+			const next = listed.right.NextKeyMarker;
+			if (!listed.right.IsTruncated || !next || next !== s3Key) break;
+			keyMarker = next;
+			uploadIdMarker = listed.right.NextUploadIdMarker;
+		}
+
+		return newest?.uploadId ?? null;
+	});
+}
 
 // runPromise rejects with the failed Exit, and the storage service keeps the
 // S3 error under S3Error.cause. Its name is the S3 error code.
@@ -298,51 +362,39 @@ export async function initiateInfraUpload({
 			: "video/mp4";
 
 	try {
-		const uploadId = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		// One request at a time per video: the row lock makes a second caller wait
+		// and then find the upload the first one opened.
+		const uploadId = await db().transaction(async (tx) => {
+			const [current] = await tx
+				.select({
+					duration: developerVideos.duration,
+					deletedAt: developerVideos.deletedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.for("update");
+			if (!current || current.deletedAt || current.duration !== null) {
+				return null;
+			}
 
-			// A video keeps one open upload. Asking again returns it, so repeated
-			// calls cannot pile up uploads whose parts sit in storage unpaid until
-			// the cleanup removes them. If the lookup fails the upload still starts.
-			const listed = yield* Effect.either(
-				bucket.multipart.listUploads({ prefix: s3Key }),
-			);
-			const open =
-				listed._tag === "Right"
-					? (listed.right.Uploads ?? [])
-							.flatMap((upload) =>
-								upload.Key === s3Key && upload.UploadId && upload.Initiated
-									? [
-											{
-												uploadId: upload.UploadId,
-												initiatedAt: upload.Initiated.getTime(),
-											},
-										]
-									: [],
-							)
-							.sort((a, b) => b.initiatedAt - a.initiatedAt)
-					: [];
-			const [latest, ...older] = open;
-			const reusable =
-				latest && Date.now() - latest.initiatedAt < OPEN_UPLOAD_REUSE_MS
-					? latest
-					: null;
-			yield* Effect.forEach(
-				reusable ? older : open,
-				(upload) =>
-					Effect.either(bucket.multipart.abort(s3Key, upload.uploadId)),
-				{ concurrency: 8 },
-			);
-			if (reusable) return reusable.uploadId;
+			return Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				const open = yield* newestOpenUpload(bucket, s3Key);
+				if (open) return open;
 
-			const { UploadId } = yield* bucket.multipart.create(s3Key, {
-				ContentType: resolvedContentType,
-				CacheControl: "max-age=31536000",
-			});
-			if (!UploadId) throw new Error("No UploadId returned");
-			return UploadId;
-		}).pipe(provideOptionalAuth, runPromise);
+				const { UploadId } = yield* bucket.multipart.create(s3Key, {
+					ContentType: resolvedContentType,
+					CacheControl: "max-age=31536000",
+				});
+				if (!UploadId) throw new Error("No UploadId returned");
+				return UploadId;
+			}).pipe(provideOptionalAuth, runPromise);
+		});
 
+		if (uploadId === null) {
+			const changed = await openUpload(appId, videoId);
+			return changed.status === 200 ? videoNotUploadable() : changed;
+		}
 		return ok({ uploadId });
 	} catch (error) {
 		console.error("Error initiating multipart upload:", error);
