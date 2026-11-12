@@ -53,6 +53,7 @@ import {
 	type TranscriptErrorCode,
 	type TranscriptResultObject,
 	transcriptObjectKeys,
+	transcriptWordCount,
 } from "@/lib/developer-transcripts";
 import { urlIsSelfContainedMedia } from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
@@ -163,7 +164,6 @@ const FAILURE_MESSAGES = {
 	source_blocked: "The URL does not point to a public address",
 	no_audio_track: "The file has no audio track",
 	unsupported_format: "The file is not a supported audio or video format",
-	no_speech: "No speech was found in the audio",
 	duration_too_long: "The audio is longer than the 4 hour limit",
 	transcription_failed: "The transcript could not be created",
 } as const;
@@ -536,7 +536,7 @@ async function transcribeTranscriptAudio(
 			ok: true,
 			durationSeconds: stored.durationSeconds,
 			language: stored.language,
-			wordCount: stored.words.length,
+			wordCount: transcriptWordCount(stored),
 		};
 	}
 
@@ -563,24 +563,19 @@ async function transcribeTranscriptAudio(
 		audio,
 		parseTranscriptLanguage(transcript.requestedLanguage) ?? "auto",
 	);
-	if (speech.state === "no_speech") {
-		return failure("no_speech", FAILURE_MESSAGES.no_speech);
-	}
+	const spoken = speech.state === "ok" ? speech : null;
 
 	const durationSeconds = measuredTranscriptDuration({
 		extractedAudioSeconds: transcript.durationSeconds,
-		serviceDurationSeconds: speech.durationSeconds,
-		lastWordEndMs: speech.words.at(-1)?.end,
+		serviceDurationSeconds: spoken?.durationSeconds,
+		lastWordEndMs: spoken?.words.at(-1)?.end,
 	});
 	const result = buildTranscriptResult({
-		text: speech.text,
-		words: speech.words,
-		language: speech.language,
+		text: spoken?.text,
+		words: spoken?.words,
+		language: spoken?.language,
 		durationSeconds,
 	});
-	if (result.text.length === 0) {
-		return failure("no_speech", FAILURE_MESSAGES.no_speech);
-	}
 
 	await putDeveloperObject(
 		keys.result,
@@ -592,7 +587,7 @@ async function transcribeTranscriptAudio(
 		ok: true,
 		durationSeconds,
 		language: result.language,
-		wordCount: result.words.length,
+		wordCount: transcriptWordCount(result),
 	};
 }
 

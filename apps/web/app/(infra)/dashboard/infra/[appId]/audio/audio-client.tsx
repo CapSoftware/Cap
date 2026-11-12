@@ -509,16 +509,25 @@ export function AudioClient({
 					title={reader.name}
 					action={
 						<div className="flex items-center gap-2">
-							<CopyTextButton value={reader.text} label="Copy text" />
+							{reader.text && (
+								<CopyTextButton value={reader.text} label="Copy text" />
+							)}
 							<Button variant="quiet" size="sm" onClick={() => setReader(null)}>
 								Close
 							</Button>
 						</div>
 					}
 				>
-					<p className="m-0 max-h-[60vh] max-w-[720px] overflow-y-auto whitespace-pre-wrap py-6 text-[14.5px] leading-[1.7] text-[rgba(232,236,244,0.86)]">
-						{reader.text || "No speech was found."}
-					</p>
+					{reader.text ? (
+						<p className="m-0 max-h-[60vh] max-w-[720px] overflow-y-auto whitespace-pre-wrap py-6 text-[14.5px] leading-[1.7] text-[rgba(232,236,244,0.86)]">
+							{reader.text}
+						</p>
+					) : (
+						<Empty>
+							No speech was found in this file, so the transcript is empty. It
+							was billed for its audio length.
+						</Empty>
+					)}
 				</Block>
 			)}
 
@@ -571,9 +580,9 @@ export function AudioClient({
 										) : (
 											<span className="block truncate">{row.name}</span>
 										)}
-										{row.errorMessage && (
+										{(row.errorMessage || row.noSpeech) && (
 											<span className="block truncate text-[12.5px] text-[rgba(232,236,244,0.42)]">
-												{row.errorMessage}
+												{row.errorMessage ?? "No speech found"}
 											</span>
 										)}
 									</td>
