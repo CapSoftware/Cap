@@ -1,3 +1,6 @@
+export const CAP_INFRA_POINTER_PROMPT =
+	"Read https://cap.so/infra and set up Cap Infra for this project.";
+
 const api = "/api/developer/v1";
 const sdk = "/api/developer/sdk/v1/upload/multipart";
 
