@@ -26,7 +26,6 @@ export default async function InfraSettingsPage({
 			domains={
 				<DomainsSection
 					appId={app.id}
-					environment={app.environment}
 					domains={app.domains.map((d) => ({ id: d.id, domain: d.domain }))}
 				/>
 			}

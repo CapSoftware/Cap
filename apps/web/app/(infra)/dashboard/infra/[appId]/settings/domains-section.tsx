@@ -12,11 +12,9 @@ import { Button, Input, Split } from "../../_components/ui";
 
 export function DomainsSection({
 	appId,
-	environment,
 	domains,
 }: {
 	appId: string;
-	environment: "development" | "production";
 	domains: { id: string; domain: string }[];
 }) {
 	const router = useRouter();
@@ -40,11 +38,7 @@ export function DomainsSection({
 	return (
 		<Split
 			title="Allowed domains"
-			description={
-				environment === "development"
-					? "This is a development app, so it takes uploads from any website. The websites listed here apply once you switch it to production."
-					: "The websites that may upload to this app with its public key. Type a domain like myshop.com."
-			}
+			description="Your sites, for reference. Uploads are authorised by upload tokens from your server. To hold a token to one site, set corsOrigin when you create the upload."
 		>
 			<form
 				className="flex max-w-[520px] flex-wrap items-center gap-2"

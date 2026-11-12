@@ -28,8 +28,6 @@ export default async function InfraVideosPage({
 			: undefined;
 
 	const videos = await getDeveloperAppVideos(app.id, { userId });
-	const publicKey = app.apiKeys.find((k) => k.keyType === "public");
-	const publicKeyValue = publicKey?.fullKey ?? null;
 
 	if (videos.length === 0 && !userId) {
 		return (
@@ -44,10 +42,7 @@ export default async function InfraVideosPage({
 					balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
 					proCredit={await getInfraProCredit()}
 				/>
-				<ApiGuide
-					publicKey={publicKeyValue ?? "cpk_..."}
-					isProduction={app.environment === "production"}
-				/>
+				<ApiGuide />
 			</>
 		);
 	}
