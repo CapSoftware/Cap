@@ -105,6 +105,9 @@ const partsMismatch = () =>
 	);
 
 const MIN_PART_BYTES = 5 * 1024 * 1024;
+// The cleanup aborts an upload a day after it was opened, so only a recent one
+// is handed back; an older one is replaced.
+const OPEN_UPLOAD_REUSE_MS = 6 * 60 * 60 * 1000;
 
 // runPromise rejects with the failed Exit, and the storage service keeps the
 // S3 error under S3Error.cause. Its name is the S3 error code.
@@ -297,6 +300,41 @@ export async function initiateInfraUpload({
 	try {
 		const uploadId = await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+
+			// A video keeps one open upload. Asking again returns it, so repeated
+			// calls cannot pile up uploads whose parts sit in storage unpaid until
+			// the cleanup removes them. If the lookup fails the upload still starts.
+			const listed = yield* Effect.either(
+				bucket.multipart.listUploads({ prefix: s3Key }),
+			);
+			const open =
+				listed._tag === "Right"
+					? (listed.right.Uploads ?? [])
+							.flatMap((upload) =>
+								upload.Key === s3Key && upload.UploadId && upload.Initiated
+									? [
+											{
+												uploadId: upload.UploadId,
+												initiatedAt: upload.Initiated.getTime(),
+											},
+										]
+									: [],
+							)
+							.sort((a, b) => b.initiatedAt - a.initiatedAt)
+					: [];
+			const [latest, ...older] = open;
+			const reusable =
+				latest && Date.now() - latest.initiatedAt < OPEN_UPLOAD_REUSE_MS
+					? latest
+					: null;
+			yield* Effect.forEach(
+				reusable ? older : open,
+				(upload) =>
+					Effect.either(bucket.multipart.abort(s3Key, upload.uploadId)),
+				{ concurrency: 8 },
+			);
+			if (reusable) return reusable.uploadId;
+
 			const { UploadId } = yield* bucket.multipart.create(s3Key, {
 				ContentType: resolvedContentType,
 				CacheControl: "max-age=31536000",
