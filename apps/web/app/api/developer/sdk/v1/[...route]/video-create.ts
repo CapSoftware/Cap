@@ -1,13 +1,6 @@
-import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
-import { developerVideos } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
 import { Hono } from "hono";
 import { z } from "zod";
-import {
-	getInfraUploadAdmission,
-	uploadAdmissionError,
-} from "@/lib/infra-standing";
+import { createInfraVideo } from "@/lib/infra-video-upload";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
@@ -35,35 +28,10 @@ app.post(
 		}),
 	),
 	async (c) => {
-		const appId = c.get("developerAppId");
-		const body = c.req.valid("json");
-
-		const admission = await getInfraUploadAdmission(appId);
-		if (!admission.allowed) {
-			return c.json(uploadAdmissionError(admission), 402);
-		}
-
-		const videoId = nanoId();
-		const s3Key = `developer/${appId}/${videoId}/video`;
-
-		await db()
-			.insert(developerVideos)
-			.values({
-				id: videoId,
-				appId,
-				externalUserId: body.userId,
-				name: body.name ?? "Untitled",
-				s3Key,
-				metadata: body.metadata,
-			});
-
-		const webUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
-
-		return c.json({
-			videoId,
-			s3Key,
-			shareUrl: `${webUrl}/dev/${videoId}`,
-			embedUrl: `${webUrl}/embed/${videoId}?sdk=1`,
+		const result = await createInfraVideo({
+			appId: c.get("developerAppId"),
+			...c.req.valid("json"),
 		});
+		return c.json(result.body, result.status);
 	},
 );

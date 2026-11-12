@@ -217,12 +217,11 @@ describe("developer SDK multipart upload", () => {
 				),
 			),
 		).toBe(true);
-		expect(mocks.admission).toHaveBeenCalledWith("app-1", {
-			durationSeconds: 12,
-			width: 0,
-			height: 0,
-			tier: "1080p",
-		});
+		expect(mocks.admission).toHaveBeenCalledWith(
+			"app-1",
+			{ durationSeconds: 12, width: 0, height: 0, tier: "1080p" },
+			expect.anything(),
+		);
 	});
 
 	it("refuses with 402 when the balance cannot cover seven days of storage", async () => {

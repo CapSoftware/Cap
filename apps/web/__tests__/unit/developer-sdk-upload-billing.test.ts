@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	events: [] as string[],
 	complete: vi.fn(),
 	listParts: vi.fn(),
+	headObject: vi.fn(),
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
@@ -137,6 +138,7 @@ vi.mock("@cap/web-backend", async () => {
 			getBucketAccess: () =>
 				Effect.succeed([
 					{
+						headObject: mocks.headObject,
 						multipart: {
 							complete: mocks.complete,
 							listParts: mocks.listParts,
@@ -240,6 +242,10 @@ describe("developer SDK multipart completion", () => {
 				? Effect.fail(new Error("list failed"))
 				: Effect.succeed(mocks.storedParts),
 		);
+		mocks.headObject.mockReset();
+		mocks.headObject.mockImplementation(() =>
+			Effect.fail(new Error("not found")),
+		);
 	});
 
 	it("charges nothing when an upload completes", async () => {
@@ -252,7 +258,7 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.creditTransactions).toEqual([]);
 	});
 
-	it("checks admission and records the video under the account lock, before storage completes", async () => {
+	it("completes storage first, then checks admission and records the video under the account lock", async () => {
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
 		mocks.admission.mockImplementation(async () => {
 			mocks.events.push("admission");
@@ -262,21 +268,61 @@ describe("developer SDK multipart completion", () => {
 		const response = await complete({ durationInSecs: 60 });
 
 		expect(response.status).toBe(200);
-		expect(mocks.events).toEqual(["lock", "admission", "store", "complete"]);
+		expect(mocks.events).toEqual([
+			"admission",
+			"complete",
+			"lock",
+			"admission",
+			"store",
+		]);
+		expect(mocks.admission.mock.calls[0]).toHaveLength(2);
+		expect(mocks.admission.mock.calls[1]?.[2]).toBeDefined();
 	});
 
-	it("does not complete storage again when another request already recorded the video", async () => {
+	it("refuses when a parallel upload took the allowance, then records the assembled file on retry without completing storage again", async () => {
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
-		mocks.admission.mockImplementation(async () => {
-			mocks.storedDuration = 60;
-			return admitted;
-		});
+		mocks.admission
+			.mockResolvedValueOnce(admitted)
+			.mockResolvedValueOnce(refused);
 
-		const response = await complete({ durationInSecs: 60 });
+		const first = await complete({ durationInSecs: 60 });
+
+		expect(first.status).toBe(402);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.storedDuration).toBe(null);
+
+		mocks.listPartsFails = true;
+		mocks.headObject.mockImplementation(() =>
+			Effect.succeed({ ContentLength: 10_000_000 }),
+		);
+		mocks.admission.mockReset();
+		mocks.admission.mockResolvedValue(admitted);
+
+		const retry = await complete({ durationInSecs: 60 });
+
+		expect(retry.status).toBe(200);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.admission).toHaveBeenCalledTimes(1);
+		expect(mocks.admission.mock.calls[0]?.[2]).toBeDefined();
+		expect(mocks.videoUpdates).toEqual([
+			{ duration: 60, width: 1920, height: 1080 },
+		]);
+	});
+
+	it("measures an assembled file from its size in storage, not from the request", async () => {
+		mocks.listPartsFails = true;
+		mocks.headObject.mockImplementation(() =>
+			Effect.succeed({ ContentLength: 100_000_000 }),
+		);
+
+		const response = await complete({ durationInSecs: 0.5 });
 
 		expect(response.status).toBe(200);
-		expect(mocks.complete).not.toHaveBeenCalled();
-		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.headObject).toHaveBeenCalledWith(S3_KEY);
+		expect(mocks.videoUpdates).toEqual([
+			{ duration: 40, width: 1920, height: 1080 },
+		]);
 	});
 
 	it("measures the upload from the part sizes storage reports, not the sizes in the request", async () => {
@@ -347,13 +393,20 @@ describe("developer SDK multipart completion", () => {
 
 		await complete({ durationInSecs: 90, width: 3840, height: 2160 });
 
-		expect(mocks.admission).toHaveBeenCalledTimes(1);
-		expect(mocks.admission).toHaveBeenCalledWith("app-1", {
+		const video = {
 			durationSeconds: 90,
 			width: 3840,
 			height: 2160,
 			tier: "2160p",
-		});
+		};
+		expect(mocks.admission).toHaveBeenCalledTimes(2);
+		expect(mocks.admission).toHaveBeenNthCalledWith(1, "app-1", video);
+		expect(mocks.admission).toHaveBeenNthCalledWith(
+			2,
+			"app-1",
+			video,
+			expect.anything(),
+		);
 	});
 
 	it("refuses with 402 and the amount needed, and leaves the upload open for a retry", async () => {
@@ -432,13 +485,14 @@ describe("developer SDK multipart completion", () => {
 		expect(response.status).toBe(200);
 	});
 
-	it("does not ask admission when the uploaded parts cannot be listed", async () => {
+	it("fails without asking admission when the parts cannot be listed and no file was assembled", async () => {
 		mocks.listPartsFails = true;
 		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		const response = await complete({ durationInSecs: 60 });
 
 		expect(response.status).toBe(500);
+		expect(mocks.headObject).toHaveBeenCalledWith(S3_KEY);
 		expect(mocks.admission).not.toHaveBeenCalled();
 		expect(mocks.complete).not.toHaveBeenCalled();
 		errors.mockRestore();
@@ -455,7 +509,7 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
-	it("releases the video when storage fails, so the upload can be retried", async () => {
+	it("records nothing when storage fails, so the upload can be retried", async () => {
 		mocks.completeFailures = 1;
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
 		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -467,8 +521,6 @@ describe("developer SDK multipart completion", () => {
 		expect(retry.status).toBe(200);
 		expect(mocks.creditTransactions).toEqual([]);
 		expect(mocks.videoUpdates).toEqual([
-			{ duration: 60, width: 1920, height: 1080 },
-			{ duration: null },
 			{ duration: 60, width: 1920, height: 1080 },
 		]);
 		expect(mocks.storedDuration).toBe(60);
