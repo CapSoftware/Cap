@@ -68,9 +68,21 @@ final class RecordingCoordinator {
 
     func collectFinishedScreenRecording(showHome: Bool) {
         guard let session, let entry = RecordingHandoff.take(), CapID(entry.capId) != nil else { return }
+        switch entry.outcome {
+        case .uploaded: Self.trackCompleted(.screen, seconds: entry.durationSeconds)
+        case .failed: Usage.track("recording_failed", ["mode": "screen"])
+        // Counted when its upload ends here.
+        case .handedOver, nil: break
+        }
         refreshLibrary(session)
         RecentRecordings.shared.finishedElsewhere(capId: entry.capId, shareUrl: entry.shareUrl)
         if showHome { self.showHome() }
+    }
+
+    private static func trackCompleted(_ kind: RecentRecordings.Kind, seconds: Double?) {
+        var properties: [String: AnalyticsValue] = ["mode": kind == .camera ? "camera" : "screen"]
+        if let seconds, seconds.isFinite { properties["duration_seconds"] = .int(Int(seconds.rounded())) }
+        Usage.track("recording_completed", properties)
     }
 
     func cameraRecordingStopped() {
@@ -100,6 +112,7 @@ final class RecordingCoordinator {
             recent.progress(jobId: jobId, fraction: fraction)
             UploadActivities.shared.update(id: jobId, phase: .uploading, fraction: fraction)
         case let .completed(job):
+            Self.trackCompleted(kind, seconds: job.durationSeconds)
             recent.completed(jobId: job.id)
             let inApp = UIApplication.shared.applicationState == .active
             Task { await UploadActivities.shared.finish(id: job.id, phase: .done, dismissImmediately: inApp) }
@@ -107,6 +120,7 @@ final class RecordingCoordinator {
             PushNotifications.shared.askAfterFirstUpload()
         case let .failed(job, message):
             Self.log.error("Recording upload failed for \(job.id, privacy: .public)")
+            Usage.track("recording_failed", ["mode": kind == .camera ? "camera" : "screen"])
             recent.failed(jobId: job.id, message: message)
             activeModel?.uploadFailed(jobId: job.id)
             if !recent.isRecorderVisible {

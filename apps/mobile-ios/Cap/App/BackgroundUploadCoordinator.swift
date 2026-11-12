@@ -84,6 +84,7 @@ final class BackgroundUploadCoordinator {
             reporters[record.capId] = nil
             releaseBackgroundTime(record.capId)
             Self.log.error("Upload failed for \(record.capId, privacy: .public)")
+            Usage.track("upload_failed", ["stage": "transfer"])
             services.backgroundUploads.remove(capId: record.capId)
             let message = error.errorDescription ?? "The upload failed. Try again."
             center?.failed(capId: record.capId, message: message)
@@ -139,6 +140,7 @@ final class BackgroundUploadCoordinator {
         defer { assertion.end() }
         do {
             try await services.api.completeUpload(capId, rawFileKey: record.rawFileKey, contentLength: record.contentLength)
+            Usage.track("upload_completed", ["kind": record.isImage ? "image" : "video"])
             services.backgroundUploads.remove(capId: record.capId)
             center?.done(capId: record.capId, shareURL: record.shareUrl)
             await UploadActivities.shared.finish(capId: record.capId, phase: .done)
@@ -146,6 +148,7 @@ final class BackgroundUploadCoordinator {
             // Keep the record; the next launch, unlock or foreground tries again.
             Self.log.notice("Upload completion deferred for \(record.capId, privacy: .public)")
         } catch {
+            Usage.track("upload_failed", ["stage": "complete"])
             services.backgroundUploads.remove(capId: record.capId)
             let message = error.errorDescription ?? "The upload failed. Try again."
             center?.failed(capId: record.capId, message: message)

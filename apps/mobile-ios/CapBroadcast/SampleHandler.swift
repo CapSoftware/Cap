@@ -265,13 +265,20 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 for _ in 0..<20 where uploads.job(jobId)?.phase == .completing {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
+                var outcome = RecordingHandoff.Outcome.uploaded
                 if uploads.job(jobId) != nil {
-                    await uploads.handOff(jobId, durationSeconds: duration)
+                    // The upload can still finish between that check and this call, which then has nothing to take.
+                    // What was taken says how it ended here: Cap never hears about a failure it only adopts.
+                    switch await uploads.handOff(jobId, durationSeconds: duration) {
+                    case nil: outcome = .uploaded
+                    case .failed: outcome = .failed
+                    default: outcome = .handedOver
+                    }
                     ScreenRecordingStore.postHandOff()
                 }
                 if let entry = entry ?? self.created.withLock({ $0 }) {
                     // Cap shows it next time it's in front.
-                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl), accessGroup: Self.keychainGroup)
+                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl, outcome: outcome, durationSeconds: duration), accessGroup: Self.keychainGroup)
                 }
                 done()
             }
