@@ -665,6 +665,7 @@ export async function listConsoleTranscripts(appId: string, limit: number) {
 			status: developerTranscripts.status,
 			durationSeconds: developerTranscripts.durationSeconds,
 			billedMicroCredits: developerTranscripts.billedMicroCredits,
+			wordCount: developerTranscripts.wordCount,
 			errorMessage: developerTranscripts.errorMessage,
 			createdAt: developerTranscripts.createdAt,
 		})
