@@ -5,7 +5,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Caps, type VideoData } from "@/app/(org)/dashboard/caps/Caps";
 
-const mocks = vi.hoisted(() => ({ mutate: vi.fn(), pending: false }));
+const mocks = vi.hoisted(() => ({
+	mutate: vi.fn(),
+	pending: false,
+	mutations: [] as Array<Record<string, unknown>>,
+	toast: {
+		loading: vi.fn(() => "bulk-delete-toast"),
+		success: vi.fn(),
+		error: vi.fn(),
+	},
+}));
 
 vi.mock("@cap/ui", () => ({ Button: () => null }));
 vi.mock("@fortawesome/free-solid-svg-icons", () => ({
@@ -19,10 +28,13 @@ vi.mock("next/navigation", () => ({
 	useRouter: () => ({ refresh: vi.fn() }),
 	useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("sonner", () => ({ toast: {} }));
+vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("@/lib/EffectRuntime", () => ({
 	useRpcClient: () => ({}),
-	useEffectMutation: () => ({ mutate: mocks.mutate, isPending: mocks.pending }),
+	useEffectMutation: (options: Record<string, unknown>) => {
+		mocks.mutations.push(options);
+		return { mutate: mocks.mutate, isPending: mocks.pending };
+	},
 }));
 vi.mock("@/lib/Queries/Analytics", () => ({
 	useVideosAnalyticsQuery: () => ({ data: {}, isLoading: false }),
@@ -103,6 +115,7 @@ let selection: HTMLButtonElement;
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	mocks.mutate.mockClear();
+	mocks.mutations.length = 0;
 	mocks.pending = false;
 	container = document.createElement("div");
 	document.body.append(container);
@@ -228,4 +241,49 @@ describe("Cap selection keyboard shortcuts", () => {
 			expect(event.defaultPrevented).toBe(key === "Backspace");
 		},
 	);
+});
+
+describe("bulk delete toast", () => {
+	type Callback = (...args: unknown[]) => unknown;
+	const bulkDelete = () => {
+		const options = mocks.mutations.findLast(
+			(mutation) => typeof mutation.onMutate === "function",
+		);
+		if (!options) throw new Error("Bulk delete mutation missing");
+		return options as Record<"onMutate" | "onSuccess" | "onError", Callback>;
+	};
+	const ids = ["cap-1", "cap-2"];
+
+	beforeEach(() => {
+		for (const fn of Object.values(mocks.toast)) fn.mockClear();
+	});
+
+	it("replaces the loading toast with the result", async () => {
+		const { onMutate, onSuccess } = bulkDelete();
+		const toastId = onMutate(ids);
+		expect(mocks.toast.loading).toHaveBeenCalledWith("Deleting 2 caps...");
+		await act(async () => onSuccess({ success: 2 }, ids, toastId));
+		expect(mocks.toast.success).toHaveBeenCalledWith(
+			"Successfully deleted 2 caps",
+			{ id: "bulk-delete-toast" },
+		);
+	});
+
+	it("replaces the loading toast on a partial failure", async () => {
+		const { onMutate, onSuccess } = bulkDelete();
+		const toastId = onMutate(ids);
+		await act(async () => onSuccess({ success: 1, error: 1 }, ids, toastId));
+		expect(mocks.toast.success).toHaveBeenCalledWith(
+			"Successfully deleted 1 cap, but failed to delete 1 cap",
+			{ id: "bulk-delete-toast" },
+		);
+	});
+
+	it("replaces the loading toast with the error", () => {
+		const { onMutate, onError } = bulkDelete();
+		onError(new Error("Failed to delete 2 caps"), ids, onMutate(ids));
+		expect(mocks.toast.error).toHaveBeenCalledWith("Failed to delete 2 caps", {
+			id: "bulk-delete-toast",
+		});
+	});
 });
