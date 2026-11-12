@@ -282,12 +282,14 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	);
 	const sharedSpacesMap =
 		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
+	const resolveImageUrl = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* Effect.cachedFunction(imageUploads.resolveImageUrl);
+	}).pipe(runPromise);
 
 	const processedVideoData = await Effect.all(
 		videoData.map(
 			Effect.fn(function* (video) {
-				const imageUploads = yield* ImageUploads;
-
 				const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
 					video;
 				const sharedSpaces = sharedSpacesMap[video.id] ?? [];
@@ -313,7 +315,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 									return {
 										...org,
 										iconUrl: org.iconUrl
-											? yield* imageUploads.resolveImageUrl(org.iconUrl)
+											? yield* resolveImageUrl(org.iconUrl)
 											: null,
 									};
 								}),
@@ -325,7 +327,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 								return {
 									...space,
 									iconUrl: space.iconUrl
-										? yield* imageUploads.resolveImageUrl(space.iconUrl)
+										? yield* resolveImageUrl(space.iconUrl)
 										: null,
 								};
 							}),
