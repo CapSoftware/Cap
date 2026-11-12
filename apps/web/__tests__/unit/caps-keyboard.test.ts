@@ -7,6 +7,7 @@ import { Caps, type VideoData } from "@/app/(org)/dashboard/caps/Caps";
 
 const mocks = vi.hoisted(() => ({
 	mutate: vi.fn(),
+	pending: false,
 	mutations: [] as Array<Record<string, unknown>>,
 	toast: {
 		loading: vi.fn(() => "bulk-delete-toast"),
@@ -32,7 +33,7 @@ vi.mock("@/lib/EffectRuntime", () => ({
 	useRpcClient: () => ({}),
 	useEffectMutation: (options: Record<string, unknown>) => {
 		mocks.mutations.push(options);
-		return { mutate: mocks.mutate, isPending: false };
+		return { mutate: mocks.mutate, isPending: mocks.pending };
 	},
 }));
 vi.mock("@/lib/Queries/Analytics", () => ({
@@ -99,6 +100,15 @@ const data: VideoData = [
 ];
 
 let root: Root;
+const render = () =>
+	root.render(
+		createElement(Caps, {
+			data,
+			count: 1,
+			folders: [],
+			analyticsEnabled: false,
+		}),
+	);
 let container: HTMLDivElement;
 let selection: HTMLButtonElement;
 
@@ -106,19 +116,11 @@ beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	mocks.mutate.mockClear();
 	mocks.mutations.length = 0;
+	mocks.pending = false;
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
-	await act(async () => {
-		root.render(
-			createElement(Caps, {
-				data,
-				count: 1,
-				folders: [],
-				analyticsEnabled: false,
-			}),
-		);
-	});
+	await act(async () => render());
 	const button = container.querySelector<HTMLButtonElement>("button");
 	if (!button) throw new Error("Selection button missing");
 	selection = button;
@@ -149,6 +151,81 @@ describe("Cap selection keyboard shortcuts", () => {
 			expect(mocks.mutate).not.toHaveBeenCalled();
 		},
 	);
+
+	it.each(["dialog", "alertdialog"])(
+		"ignores Delete and Backspace on a button inside a %s",
+		(role) => {
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", role);
+			const button = document.createElement("button");
+			dialog.append(button);
+			container.append(dialog);
+			button.focus();
+			for (const key of ["Backspace", "Delete"]) {
+				const event = new KeyboardEvent("keydown", {
+					key,
+					bubbles: true,
+					cancelable: true,
+				});
+				button.dispatchEvent(event);
+				expect(event.defaultPrevented).toBe(false);
+			}
+			expect(mocks.mutate).not.toHaveBeenCalled();
+		},
+	);
+
+	it("ignores Backspace in a contenteditable element", () => {
+		const editor = document.createElement("div");
+		editor.contentEditable = "true";
+		Object.defineProperty(editor, "isContentEditable", { value: true });
+		editor.tabIndex = 0;
+		container.append(editor);
+		editor.focus();
+		editor.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "Backspace",
+				bubbles: true,
+				cancelable: true,
+			}),
+		);
+		expect(mocks.mutate).not.toHaveBeenCalled();
+	});
+
+	it("deletes once when Delete is held down", () => {
+		selection.focus();
+		for (const repeat of [false, true, true]) {
+			selection.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "Delete",
+					repeat,
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		}
+		expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith([data[0]?.id]);
+	});
+
+	it("waits for a running delete before deleting again", async () => {
+		const press = () =>
+			selection.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "Delete",
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		mocks.pending = true;
+		await act(async () => render());
+		selection.focus();
+		press();
+		expect(mocks.mutate).not.toHaveBeenCalled();
+
+		mocks.pending = false;
+		await act(async () => render());
+		press();
+		expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith([data[0]?.id]);
+	});
 
 	it.each(["Backspace", "Delete"])(
 		"still deletes the selected Cap with %s outside editing controls",

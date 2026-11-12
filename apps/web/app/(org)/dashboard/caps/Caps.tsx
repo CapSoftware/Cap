@@ -210,10 +210,16 @@ export const Caps = ({
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedCaps.length > 0
 			) {
+				const active = document.activeElement;
+				// Deleting is immediate and permanent, so the key only counts on the
+				// page itself: not inside an open dialog (Move, Share), not while a
+				// held key repeats, and not while the previous delete is running.
 				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
+					!e.repeat &&
+					!isDeletingCaps &&
+					!["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") &&
+					!(active instanceof HTMLElement && active.isContentEditable) &&
+					!active?.closest('[role="dialog"], [role="alertdialog"]')
 				) {
 					if (e.key === "Backspace") {
 						e.preventDefault();
@@ -240,7 +246,7 @@ export const Caps = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [selectedCaps, data, deleteCaps]);
+	}, [selectedCaps, data, deleteCaps, isDeletingCaps]);
 
 	useEffect(() => {
 		const handleDragStart = () => setIsDraggingCap(true);

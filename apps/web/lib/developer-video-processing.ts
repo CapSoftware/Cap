@@ -8,6 +8,10 @@ import type {
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
+import { billableVideo } from "@/lib/developer-pricing";
+import { lockInfraAccount } from "@/lib/infra-balance";
+import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
+import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
@@ -65,7 +69,7 @@ export interface DeveloperVideoClaim {
 	encodeId: string;
 }
 
-export type DeveloperVideoPreparation = "ready" | "retry" | "stale";
+export type DeveloperVideoPreparation = "ready" | "retry" | "stale" | "probing";
 
 export type DeveloperVideoDispatch =
 	| "dispatched"
@@ -83,8 +87,9 @@ export type DeveloperVideoPartSnapshot = Record<
 async function mutateDeveloperVideo(
 	videoId: string,
 	mutate: (video: DeveloperVideoRow) => DeveloperVideoUpdate | null,
+	executor?: InfraDbExecutor,
 ): Promise<DeveloperVideoRow | null> {
-	return db().transaction(async (tx) => {
+	const run = async (tx: InfraDbExecutor) => {
 		const [video] = await tx
 			.select()
 			.from(developerVideos)
@@ -98,7 +103,8 @@ async function mutateDeveloperVideo(
 			.set(updates)
 			.where(eq(developerVideos.id, videoId));
 		return { ...video, ...updates } as DeveloperVideoRow;
-	});
+	};
+	return executor ? run(executor) : db().transaction(run);
 }
 
 async function mutateEncode(
@@ -108,12 +114,29 @@ async function mutateEncode(
 		processing: DeveloperVideoProcessingState,
 		video: DeveloperVideoRow,
 	) => DeveloperVideoUpdate | null,
+	executor?: InfraDbExecutor,
 ): Promise<DeveloperVideoRow | null> {
-	return mutateDeveloperVideo(videoId, (video) =>
-		video.deletedAt || video.processing?.encodeId !== encodeId
-			? null
-			: mutate(video.processing, video),
+	return mutateDeveloperVideo(
+		videoId,
+		(video) =>
+			video.deletedAt || video.processing?.encodeId !== encodeId
+				? null
+				: mutate(video.processing, video),
+		executor,
 	);
+}
+
+// The measured check and the write it guards run in one transaction under the
+// app's account lock, the same lock an upload completion takes, so two videos
+// measured at once cannot each pass against the other's declared size.
+function underAccountLock<T>(
+	appId: string,
+	run: (tx: InfraDbExecutor) => Promise<T>,
+): Promise<T> {
+	return db().transaction(async (tx) => {
+		await lockInfraAccount(tx, appId);
+		return run(tx);
+	});
 }
 
 function probedColumns(
@@ -235,12 +258,18 @@ export class DeveloperVideoChargeRefused extends Error {
 	override name = "DeveloperVideoChargeRefused";
 }
 
-// The upload is billed on the length the client reported. Once the server has
-// measured the real length, anything beyond that is charged before encoding,
-// and a video the app can't pay for is not encoded.
+// An upload is admitted on the length and size the client reported. Once the
+// server has measured the real ones, a longer or higher-tier video is admitted
+// again on those before encoding, and one the app's balance cannot cover is
+// not encoded. Nothing is charged here: storage is billed daily once ready.
 export async function chargeForProbedDuration(
-	video: Pick<DeveloperVideoRow, "id" | "appId" | "duration">,
+	video: Pick<
+		DeveloperVideoRow,
+		"id" | "appId" | "duration" | "width" | "height" | "maxResolutionTier"
+	>,
 	probedDuration: number | null,
+	probedSize?: { width: number; height: number },
+	executor?: InfraDbExecutor,
 ): Promise<void> {
 	if (probedDuration === null) return;
 	if (probedDuration > DEVELOPER_VIDEO_MAX_DURATION_SECONDS) {
@@ -249,22 +278,81 @@ export async function chargeForProbedDuration(
 		);
 	}
 	const billed = video.duration ?? 0;
-	if (probedDuration <= billed + PROBED_DURATION_TOLERANCE_SECONDS) return;
+	const size = probedSize ?? {
+		width: video.width ?? 0,
+		height: video.height ?? 0,
+	};
+	const tierOf = (width: number, height: number) =>
+		INFRA_RESOLUTION_TIERS.indexOf(
+			billableVideo({
+				duration: 1,
+				width,
+				height,
+				maxResolutionTier: video.maxResolutionTier,
+			})?.tier ?? "1080p",
+		);
+	if (
+		probedDuration <= billed + PROBED_DURATION_TOLERANCE_SECONDS &&
+		tierOf(size.width, size.height) <=
+			tierOf(video.width ?? 0, video.height ?? 0)
+	) {
+		return;
+	}
 	const charged = await chargeDeveloperVideoUpload({
 		appId: video.appId,
 		videoId: video.id,
 		durationSeconds: probedDuration,
+		width: size.width,
+		height: size.height,
+		maxResolutionTier: video.maxResolutionTier,
 		metadata: {
 			durationSeconds: probedDuration,
 			reportedDurationSeconds: billed,
 			source: "probe",
 		},
+		executor,
 	});
 	if (charged !== "charged") {
 		throw new DeveloperVideoChargeRefused(
-			"Not enough credit for the video's full length",
+			typeof charged === "object"
+				? charged.refused
+				: "Not enough credit for the video's full length",
 		);
 	}
+}
+
+const PROBE_CLAIM_MS = 60_000;
+
+// The request that completes an upload and the workflow both prepare a video.
+// Whoever takes this claim probes the file; the other waits for the result
+// and never asks the media server for the same probe. A claim left behind by
+// a caller that stopped can be taken over after a minute.
+async function claimProbe(
+	videoId: string,
+	encodeId: string,
+	token: string,
+): Promise<DeveloperVideoRow | null> {
+	return mutateEncode(videoId, encodeId, (processing) => {
+		if (processing.probe) return null;
+		const held = processing.probing;
+		const now = Date.now();
+		if (held && now - held.startedAt < PROBE_CLAIM_MS) return null;
+		return {
+			processing: { ...processing, probing: { token, startedAt: now } },
+		};
+	});
+}
+
+async function releaseProbe(
+	videoId: string,
+	encodeId: string,
+	token: string,
+): Promise<void> {
+	await mutateEncode(videoId, encodeId, (processing) => {
+		if (processing.probing?.token !== token) return null;
+		const { probing: _probing, ...rest } = processing;
+		return { processing: rest };
+	});
 }
 
 export async function prepareDeveloperVideoProcessing(
@@ -274,45 +362,71 @@ export async function prepareDeveloperVideoProcessing(
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode) return "stale";
 	if (encode.processing.probe) return "ready";
-	const { video } = encode;
-	if (!video.s3Key) throw new Error("Video has no uploaded file");
 
-	const source = await headDeveloperVideoObject(video.s3Key);
-	if (!source) throw new Error("Uploaded video was not found in storage");
-	const probed = await tryProbeVideoViaMediaServer(
-		await internalDeveloperVideoUrl(
-			video.s3Key,
-			MEDIA_SERVER_URL_EXPIRES_SECONDS,
-		),
-	);
-	if (probed.status === "unreachable") return "retry";
-	if (probed.status === "rejected") throw new Error(probed.message);
-	const { metadata } = probed;
-	if (!(metadata.width > 0) || !(metadata.height > 0)) {
-		throw new Error("Uploaded file has no video track");
+	const token = newAttemptToken();
+	const video = await claimProbe(videoId, encodeId, token);
+	if (!video) {
+		const latest = await findEncode(videoId, encodeId);
+		if (!latest) return "stale";
+		return latest.processing.probe ? "ready" : "probing";
 	}
-	const probedDuration =
-		Number.isFinite(metadata.duration) && metadata.duration > 0
-			? metadata.duration
-			: null;
-	await chargeForProbedDuration(video, probedDuration);
 
-	const updated = await mutateEncode(videoId, encodeId, (processing, current) =>
-		processingUpdate(current, {
-			...processing,
-			probe: {
-				duration: probedDuration,
-				width: metadata.width,
-				height: metadata.height,
-				fps:
-					Number.isFinite(metadata.fps) && metadata.fps > 0
-						? Math.round(metadata.fps)
-						: null,
-			},
-			bytes: { ...processing.bytes, source: source.bytes },
-		}),
-	);
-	return updated ? "ready" : "stale";
+	try {
+		if (!video.s3Key) throw new Error("Video has no uploaded file");
+
+		const source = await headDeveloperVideoObject(video.s3Key);
+		if (!source) throw new Error("Uploaded video was not found in storage");
+		const probed = await tryProbeVideoViaMediaServer(
+			await internalDeveloperVideoUrl(
+				video.s3Key,
+				MEDIA_SERVER_URL_EXPIRES_SECONDS,
+			),
+		);
+		if (probed.status === "unreachable") {
+			await releaseProbe(videoId, encodeId, token);
+			return "retry";
+		}
+		if (probed.status === "rejected") throw new Error(probed.message);
+		const { metadata } = probed;
+		if (!(metadata.width > 0) || !(metadata.height > 0)) {
+			throw new Error("Uploaded file has no video track");
+		}
+		const probedDuration =
+			Number.isFinite(metadata.duration) && metadata.duration > 0
+				? metadata.duration
+				: null;
+		const updated = await underAccountLock(video.appId, async (tx) => {
+			await chargeForProbedDuration(
+				video,
+				probedDuration,
+				{ width: metadata.width, height: metadata.height },
+				tx,
+			);
+			return mutateEncode(
+				videoId,
+				encodeId,
+				({ probing: _probing, ...processing }, current) =>
+					processingUpdate(current, {
+						...processing,
+						probe: {
+							duration: probedDuration,
+							width: metadata.width,
+							height: metadata.height,
+							fps:
+								Number.isFinite(metadata.fps) && metadata.fps > 0
+									? Math.round(metadata.fps)
+									: null,
+						},
+						bytes: { ...processing.bytes, source: source.bytes },
+					}),
+				tx,
+			);
+		});
+		return updated ? "ready" : "stale";
+	} catch (error) {
+		await releaseProbe(videoId, encodeId, token).catch(() => {});
+		throw error;
+	}
 }
 
 export async function readDeveloperVideoParts(
@@ -416,15 +530,21 @@ async function settleDeveloperVideoPart(
 	token: string,
 	outcome: DeveloperVideoPartOutcome,
 	renditions?: DeveloperVideoRendition[],
+	executor?: InfraDbExecutor,
 ): Promise<boolean> {
-	const updated = await mutateEncode(videoId, encodeId, (processing, video) => {
-		const settled = settlePart(processing, part, token, outcome);
-		if (!settled) return null;
-		return {
-			...processingUpdate(video, settled),
-			...(renditions ? { renditions } : {}),
-		};
-	});
+	const updated = await mutateEncode(
+		videoId,
+		encodeId,
+		(processing, video) => {
+			const settled = settlePart(processing, part, token, outcome);
+			if (!settled) return null;
+			return {
+				...processingUpdate(video, settled),
+				...(renditions ? { renditions } : {}),
+			};
+		},
+		executor,
+	);
 	return updated !== null;
 }
 
@@ -650,27 +770,35 @@ export async function applyDeveloperVideoProgress(
 		token,
 		payload,
 	);
+	const settle = (executor?: InfraDbExecutor) =>
+		settleDeveloperVideoPart(
+			video.id,
+			encodeId,
+			part,
+			token,
+			outcome,
+			renditions,
+			executor,
+		);
 	if (
 		outcome.type === "complete" &&
 		outcome.duration &&
 		processing.probe?.duration == null
 	) {
+		const measuredDuration = outcome.duration;
 		try {
-			await chargeForProbedDuration(video, outcome.duration);
+			const applied = await underAccountLock(video.appId, async (tx) => {
+				await chargeForProbedDuration(video, measuredDuration, undefined, tx);
+				return settle(tx);
+			});
+			return { success: true, applied };
 		} catch (error) {
 			if (!(error instanceof DeveloperVideoChargeRefused)) throw error;
 			await failDeveloperVideoProcessing(video.id, encodeId, error.message);
 			return { success: true, applied: true };
 		}
 	}
-	const applied = await settleDeveloperVideoPart(
-		video.id,
-		encodeId,
-		part,
-		token,
-		outcome,
-		renditions,
-	);
+	const applied = await settle();
 	return { success: true, applied };
 }
 
