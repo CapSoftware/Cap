@@ -145,7 +145,6 @@ curl https://cap.so/api/developer/v1/videos?limit=10 \
       "width": 1920,
       "height": 1080,
       "fps": 30,
-      "s3Key": "developer/app_789/abc123def456/result.mp4",
       "transcriptionStatus": "COMPLETE",
       "metadata": null,
       "deletedAt": null,
@@ -190,7 +189,6 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "s3Key": "developer/app_789/abc123def456/result.mp4",
     "transcriptionStatus": "COMPLETE",
     "metadata": null,
     "status": "ready",
@@ -579,7 +577,6 @@ curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
 {
   "videoId": "abc123def456",
   "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-  "s3Key": "developer/app_789/abc123def456/result.mp4",
   "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
   "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
 }
@@ -766,7 +763,6 @@ The full video object returned by list and get endpoints:
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
-| `s3Key` | string \| null | Storage key for the video file |
 | `transcriptionStatus` | string \| null | One of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, `NO_AUDIO` |
 | `metadata` | object \| null | Custom metadata provided during creation |
 | `status` | string | One of: `uploading`, `processing`, `ready`, `errored` |
