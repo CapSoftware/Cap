@@ -26,8 +26,8 @@ The app records what people do as named events with a few plain values (`recordi
 
 - `Usage.track` (in `Cap/App/Usage.swift`) is the only call sites need. It stamps the event and returns: about 3.5 microseconds in a debug build.
 - `Analytics` (CapKit) sends one request per batch: 30 seconds after the first unsent event, as soon as 20 are waiting, and when the app leaves the screen. Nothing runs while there is nothing to send.
-- Events that could not be sent are kept in a file, retried with a growing delay, and dropped after a week or once 500 are waiting. A user's unsent events are dropped when they sign out, and are never sent under another session.
-- Events from before sign-in are sent without a session. The server attaches the user from the session, never from what the app claims.
+- Events that could not be sent are kept in a file, retried with a growing delay, and dropped after a week or once 500 are waiting. A user's unsent events are dropped when they sign out, and are never sent under another user's session.
+- The server only accepts events from a signed-in session and attaches the user from that session, never from what the app claims. A signed-out app sends nothing: events from before sign-in wait on the device and go out with the session of whoever signs in next.
 - Debug builds record nothing unless they point at a local server, so development does not show up as usage.
 
 ## Develop
