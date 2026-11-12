@@ -10,6 +10,7 @@ import {
 	remainingTimeoutMs,
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
+import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
 import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import {
 	type HdrTransfer,
@@ -70,6 +71,9 @@ import {
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const SHORT_CLIP_START_ALLOWANCE_MS = 10 * 60 * 1000;
+const SHORT_CLIP_FRAMES_PER_SECOND = 60;
+const SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME = 500;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a
@@ -1433,9 +1437,33 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	return Boolean(metadata.audioCodec && metadata.audioCodec !== "aac");
 }
 
+// With the frame size known, a short clip gets a deadline sized to its work
+// instead of the full base: ten minutes to start, then half a second for every
+// megapixel of every frame, counted at 60 frames a second because the probed
+// rate of a variable frame rate source can be far too low.
+function shortClipTimeoutMs(
+	durationSeconds: number,
+	frame: { width: number; height: number },
+): number {
+	const megapixels = (frame.width * frame.height) / 1_000_000;
+	if (!Number.isFinite(megapixels) || megapixels <= 0) {
+		return Number.POSITIVE_INFINITY;
+	}
+	return (
+		SHORT_CLIP_START_ALLOWANCE_MS +
+		Math.ceil(
+			durationSeconds *
+				SHORT_CLIP_FRAMES_PER_SECOND *
+				megapixels *
+				SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME,
+		)
+	);
+}
+
 export function getProcessTimeoutMs(
 	durationSeconds: number,
 	baseTimeoutMs: number,
+	frame?: { width: number; height: number },
 ): number {
 	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
 		return baseTimeoutMs;
@@ -1444,7 +1472,9 @@ export function getProcessTimeoutMs(
 	return Math.min(
 		MAX_PROCESS_TIMEOUT_MS,
 		Math.max(
-			baseTimeoutMs,
+			frame
+				? Math.min(baseTimeoutMs, shortClipTimeoutMs(durationSeconds, frame))
+				: baseTimeoutMs,
 			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
 		),
 	);
@@ -1742,6 +1772,7 @@ export async function processVideo(
 	const processTimeoutMs = getProcessTimeoutMs(
 		metadata.duration,
 		opts.timeoutMs,
+		metadata,
 	);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
@@ -1998,6 +2029,7 @@ export async function runTranscodeCommand(
 	processTimeoutMs: number,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
+	stallWindows?: EncodeStallWindows,
 ): Promise<void> {
 	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
@@ -2018,6 +2050,12 @@ export async function runTranscodeCommand(
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
 	const errorLines: string[] = [];
+	const progressWatch = watchEncodeProgress(outputPath, stallWindows);
+	let stallError: unknown;
+	progressWatch.stalled.catch((error: unknown) => {
+		stallError = error;
+		void terminateProcess(proc);
+	});
 
 	try {
 		await withTimeout(
@@ -2045,6 +2083,7 @@ export async function runTranscodeCommand(
 								stderrLines.shift();
 							}
 							collectFfmpegErrorLine(errorLines, line);
+							progressWatch.observe(line);
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -2071,7 +2110,10 @@ export async function runTranscodeCommand(
 			processTimeoutMs,
 			() => terminateProcess(proc),
 		);
+	} catch (error) {
+		throw stallError ?? error;
 	} finally {
+		progressWatch.stop();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
