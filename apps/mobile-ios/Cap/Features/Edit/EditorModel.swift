@@ -119,6 +119,7 @@ final class EditorModel {
             try rebuild(seekTo: 0)
             observePlayback()
             phase = .ready
+            Usage.screen("editor")
             loadThumbnails(asset: asset)
         } catch {
             phase = .failed((error as? CapAPIError)?.errorDescription ?? "Cap couldn't open this video for editing. Try again.")
@@ -604,6 +605,7 @@ final class EditorModel {
         defer { isSaving = false }
         do {
             try await session.api.saveEdit(capId, timeline: timeline)
+            Usage.track("editor_saved", ["clips": .int(timeline.clips.count)])
             return true
         } catch {
             errorMessage = error == .conflict
@@ -618,6 +620,7 @@ final class EditorModel {
         defer { isSaving = false }
         do {
             try await session.api.restoreOriginal(capId)
+            Usage.track("editor_restored")
             return true
         } catch {
             errorMessage = error == .conflict

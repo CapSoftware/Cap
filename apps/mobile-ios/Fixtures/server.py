@@ -243,7 +243,14 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/mobile/session/email/verify":
             b = self.body()
             return self.send(200, {"type": "api_key", "apiKey": KEY, "userId": "user_richie"}) if b.get("code") == "123456" else self.send(403, {})
+        if path == "/fixture/events":
+            if self.command == "DELETE": EVENTS.clear()
+            return self.send(200, {"batches": EVENTS})
         if not self.authed(): return self.send(401, {})
+        if path == "/api/mobile/events" and self.command == "POST":
+            b = self.body()
+            EVENTS.append({"app": b.get("app"), "events": b.get("events", [])})
+            return self.send(200, {"success": True})
         if self.empty() and path == "/api/mobile/caps": return self.send(200, {"folders": [], "caps": [], "page": 1, "limit": 30, "total": 0, "collectionTotal": 0, "hasMore": False})
         if self.empty() and path == "/api/mobile/bootstrap": return self.send(200, {"user": {**user, "id": "user_empty", "name": "Alexandria-Rose", "lastName": "Montgomery-Featherstonehaugh", "email": "alexandria.rose.montgomery@an-unusually-long-company-domain.example.com"}, "organizations": [{"id": "org_x", "name": "A Very Long Organization Name That Goes On And On Ltd.", "iconUrl": None, "role": "member"}], "activeOrganizationId": "org_x", "rootFolders": [], "spaces": []})
         if self.empty() and path == "/api/mobile/analytics": return self.send(200, {"available": False, "data": None})
@@ -355,6 +362,7 @@ class H(BaseHTTPRequestHandler):
 
 UPLOADS = {}
 PUSH_TOKENS = {}
+EVENTS = []
 NOTIFICATIONS = {"comments": True, "replies": True, "views": True, "anonymousViews": True, "reactions": True}
 EDITS = {}
 ensure_media()
