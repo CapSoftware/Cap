@@ -110,10 +110,13 @@ export async function urlIsSelfContainedMedia(url: string) {
 	return (await sniffMediaUrl(url)) === "media";
 }
 
-export async function sniffMediaUrl(url: string): Promise<MediaSniff> {
+export async function sniffMediaUrl(
+	url: string,
+	timeoutMs: number = SNIFF_TIMEOUT_MS,
+): Promise<MediaSniff> {
 	const response = await fetch(url, {
 		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
-		signal: AbortSignal.timeout(SNIFF_TIMEOUT_MS),
+		signal: AbortSignal.timeout(timeoutMs),
 	});
 	if (!response.ok || !response.body) {
 		throw new Error(`Could not read the stored file (${response.status})`);
