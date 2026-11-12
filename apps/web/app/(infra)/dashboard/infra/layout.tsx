@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { infraMono, infraSans } from "./_components/fonts";
+import { getInfraAccess } from "./infra-data";
 
 const INFRA_GLOBAL_CSS = [
 	"html,body{background:#050506}",
@@ -8,9 +9,9 @@ const INFRA_GLOBAL_CSS = [
 	"[data-sonner-toaster] [data-sonner-toast][data-type=error] [data-icon]{color:#F2A199!important}",
 ].join("");
 
-export const metadata: Metadata = {
-	title: "Cap Infra",
-};
+export async function generateMetadata(): Promise<Metadata> {
+	return (await getInfraAccess()) === "allowed" ? { title: "Cap Infra" } : {};
+}
 
 export default function InfraLayout({
 	children,

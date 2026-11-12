@@ -10,6 +10,7 @@ import {
 	developerCreditAccounts,
 } from "@cap/database/schema";
 import { hashKey } from "@/lib/developer-key-hash";
+import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
 
 export async function createDeveloperApp(data: {
@@ -17,7 +18,7 @@ export async function createDeveloperApp(data: {
 	environment: "development" | "production";
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	if (!data.name.trim()) return actionFailure("Give the app a name.");
 

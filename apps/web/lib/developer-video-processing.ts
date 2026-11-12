@@ -39,8 +39,12 @@ import {
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
+	lostJobConfirmed,
+	markPartChecked,
 	markPartDispatched,
+	markPartNotFound,
 	releasePart,
+	requeueLostPart,
 	resolveDeveloperVideoStatus,
 	retryUnavailableHls,
 	settlePart,
@@ -54,6 +58,8 @@ import {
 	readDeveloperVideoText,
 } from "./developer-video-storage";
 import {
+	MEDIA_SERVER_SHUTDOWN_MESSAGE,
+	readMediaServerVideoJob,
 	startMediaServerVideoJob,
 	tryProbeVideoViaMediaServer,
 } from "./media-client";
@@ -85,6 +91,14 @@ export type DeveloperVideoDispatch =
 	| "unavailable"
 	| "failed"
 	| "skipped";
+
+export type DeveloperVideoJobCheck =
+	| "skipped"
+	| "unreachable"
+	| "waiting"
+	| "unconfirmed"
+	| "requeued"
+	| "settled";
 
 export type DeveloperVideoPartSnapshot = Record<
 	DeveloperVideoPart,
@@ -738,6 +752,75 @@ export async function dispatchDeveloperVideoPart(
 	return "failed";
 }
 
+async function requeueLostDeveloperVideoPart(
+	videoId: string,
+	encodeId: string,
+	part: DeveloperVideoPart,
+	token: string,
+): Promise<boolean> {
+	const requeued = await mutateEncode(videoId, encodeId, (processing) => {
+		const next = requeueLostPart(processing, part, token);
+		return next ? { processing: next } : null;
+	});
+	return requeued !== null;
+}
+
+// Asks the media server about a job that has gone quiet. A finished job is
+// settled by applyDeveloperVideoProgress with the job's own report, which is
+// the same body its webhook carries, so both routes store the same result.
+export async function checkDeveloperVideoPart(
+	videoId: string,
+	encodeId: string,
+	part: DeveloperVideoPart,
+): Promise<DeveloperVideoJobCheck> {
+	const encode = await findEncode(videoId, encodeId);
+	const current = encode?.processing[part];
+	if (
+		current?.state !== "running" ||
+		current.jobId === null ||
+		developerVideoPartAction(current, Date.now()) !== "check"
+	) {
+		return "skipped";
+	}
+	const { token } = current;
+
+	const job = await readMediaServerVideoJob(current.jobId, videoId);
+	if (job.status === "unreachable") return "unreachable";
+	if (job.status === "finished") {
+		const { applied } = await applyDeveloperVideoProgress(
+			job.progress,
+			part,
+			token,
+		);
+		return applied ? "settled" : "skipped";
+	}
+	const now = Date.now();
+	let result = "skipped" as DeveloperVideoJobCheck;
+	await mutateEncode(videoId, encodeId, (processing) => {
+		const latest = processing[part];
+		if (latest.state !== "running" || latest.token !== token) return null;
+		if (job.status === "missing" && !lostJobConfirmed(latest, now)) {
+			result = "unconfirmed";
+			const marked = markPartNotFound(processing, part, { token, now });
+			return marked ? { processing: marked } : null;
+		}
+		const requeued =
+			job.status === "missing"
+				? requeueLostPart(processing, part, token)
+				: null;
+		result = requeued ? "requeued" : "waiting";
+		const next = requeued ?? markPartChecked(processing, part, { token, now });
+		return next ? { processing: next } : null;
+	});
+	if (result === "requeued") {
+		console.warn("[developer-video] Encode job was lost, sending it again", {
+			videoId,
+			part,
+		});
+	}
+	return result;
+}
+
 export async function failDeveloperVideoProcessing(
 	videoId: string,
 	encodeId: string,
@@ -885,6 +968,14 @@ export async function applyDeveloperVideoProgress(
 			});
 		}
 		return ignored;
+	}
+
+	if (
+		payload.phase === "cancelled" &&
+		payload.message === MEDIA_SERVER_SHUTDOWN_MESSAGE &&
+		(await requeueLostDeveloperVideoPart(video.id, encodeId, part, token))
+	) {
+		return { success: true, applied: true };
 	}
 
 	if (payload.phase !== "complete") {

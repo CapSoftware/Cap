@@ -1,6 +1,7 @@
 import type { DeveloperVideoPart } from "@cap/database/types";
 import { FatalError, sleep } from "workflow";
 import {
+	checkDeveloperVideoPart,
 	type DeveloperVideoDispatch,
 	type DeveloperVideoPartSnapshot,
 	type DeveloperVideoPreparation,
@@ -83,18 +84,24 @@ export async function processDeveloperVideoWorkflow(
 			const pending = DEVELOPER_VIDEO_PARTS.filter(
 				(part) => parts[part] === "dispatch",
 			);
+			const silent = DEVELOPER_VIDEO_PARTS.filter(
+				(part) => parts[part] === "check",
+			);
 			const waiting = DEVELOPER_VIDEO_PARTS.some(
 				(part) => parts[part] === "wait",
 			);
-			if (pending.length === 0 && !waiting) break;
+			if (pending.length === 0 && silent.length === 0 && !waiting) break;
 			if (Date.now() >= deadline) {
 				await failVideo(videoId, encodeId, TIMED_OUT);
 				break;
 			}
 
-			const dispatched = await Promise.all(
-				pending.map((part) => dispatchPart(videoId, encodeId, part)),
-			);
+			const [dispatched] = await Promise.all([
+				Promise.all(
+					pending.map((part) => dispatchPart(videoId, encodeId, part)),
+				),
+				Promise.all(silent.map((part) => checkPart(videoId, encodeId, part))),
+			]);
 			const busy = dispatched.includes("busy");
 			await sleep(
 				`${busy ? RETRY_SECONDS : Math.min(MAX_POLL_SECONDS, 2 + poll * 2)}s`,
@@ -144,6 +151,26 @@ async function dispatchPart(
 	"use step";
 
 	return dispatchDeveloperVideoPart(videoId, encodeId, part);
+}
+
+async function checkPart(
+	videoId: string,
+	encodeId: string,
+	part: DeveloperVideoPart,
+): Promise<void> {
+	"use step";
+
+	// A check that throws is asked again on the next pass. Thrown out of the
+	// step it would be retried and then fail a video that may be encoding fine.
+	try {
+		await checkDeveloperVideoPart(videoId, encodeId, part);
+	} catch (error) {
+		console.error("[developer-video] Failed to check a quiet encode job", {
+			videoId,
+			part,
+			error,
+		});
+	}
 }
 
 async function failVideo(

@@ -3,6 +3,7 @@ import {
 	getInfraPageTitle,
 	INFRA_SECTIONS,
 	infraAppPath,
+	infraLoginReturnPath,
 	isInfraPathname,
 	parseInfraPathname,
 	resolveLegacyDeveloperPath,
@@ -114,5 +115,51 @@ describe("infra paths", () => {
 		expect(getInfraPageTitle("/dashboard/infra/a1")).toBe("Overview");
 		expect(getInfraPageTitle("/dashboard/infra/a1/keys")).toBe("API keys");
 		expect(getInfraPageTitle("/dashboard/caps")).toBeNull();
+	});
+});
+
+describe("infraLoginReturnPath", () => {
+	const fallback = "/dashboard/infra/a1";
+
+	it.each([
+		"/dashboard/infra/a1/billing",
+		"/dashboard/infra/a1/videos/v1",
+		"/dashboard/infra/a1/videos?userId=u_42&show=100",
+		"/dashboard/infra",
+	])("keeps the console page %s", (path) => {
+		expect(infraLoginReturnPath(path, fallback)).toBe(path);
+	});
+
+	it("drops the router's own query parameter", () => {
+		expect(
+			infraLoginReturnPath("/dashboard/infra/a1/billing?_rsc=abc12", fallback),
+		).toBe("/dashboard/infra/a1/billing");
+		expect(
+			infraLoginReturnPath(
+				"/dashboard/infra/a1/videos?userId=u_42&_rsc=abc12",
+				fallback,
+			),
+		).toBe("/dashboard/infra/a1/videos?userId=u_42");
+	});
+
+	it.each([
+		null,
+		undefined,
+		"",
+		"https://evil.example/dashboard/infra/a1",
+		"//evil.example/dashboard/infra/a1",
+		"/\\evil.example/dashboard/infra/a1",
+		"/dashboard/infra/../../login",
+		"/dashboard/infra/a1/%2e%2e/%2e%2e/%2e%2e/admin",
+		"/dashboard/caps",
+		"/dashboard/infrastructure",
+		"dashboard/infra/a1",
+		"javascript:alert(1)",
+	])("falls back for %j", (requested) => {
+		expect(infraLoginReturnPath(requested, fallback)).toBe(fallback);
+	});
+
+	it("falls back to the console root by default", () => {
+		expect(infraLoginReturnPath(null)).toBe("/dashboard/infra");
 	});
 });

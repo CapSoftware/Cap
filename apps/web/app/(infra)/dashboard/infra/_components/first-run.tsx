@@ -161,10 +161,11 @@ export function FirstRun({
 						<div className="mt-10">
 							<Disclosure
 								summary="Using the API"
-								note="Your keys and an agent prompt. The secret key is shown here once."
+								note="Your secret key and an agent prompt. The key is shown here once."
+								open
 							>
 								<div className="flex flex-col gap-8">
-									<KeysReveal app={created} />
+									<KeysReveal secretKey={created.secretKey} />
 									<AgentSetup compact />
 								</div>
 							</Disclosure>

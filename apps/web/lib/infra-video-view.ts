@@ -7,6 +7,59 @@ export const INFRA_VIDEO_STATE_LABELS: Record<InfraVideoState, string> = {
 	failed: "Failed",
 };
 
+export type InfraLocalUpload = "sending" | "sent" | null;
+
+export type InfraVideoDisplayState = InfraVideoState | "unfinished";
+
+export const INFRA_VIDEO_DISPLAY_LABELS: Record<
+	InfraVideoDisplayState,
+	string
+> = {
+	...INFRA_VIDEO_STATE_LABELS,
+	unfinished: "Upload not finished",
+};
+
+// The list a tab holds is older than what the server has just confirmed, so a
+// row can still read "uploading" for a moment after its file was accepted.
+// Only an upload this tab neither runs nor finished is called unfinished.
+export function infraVideoDisplayState(
+	state: InfraVideoState,
+	local: InfraLocalUpload,
+): InfraVideoDisplayState {
+	if (state !== "uploading") return state;
+	if (local === "sending") return "uploading";
+	return local === "sent" ? "processing" : "unfinished";
+}
+
+export const INFRA_VIDEO_PAGE_STEP = 50;
+export const INFRA_VIDEO_PAGE_MAX = 1000;
+
+export function infraVideoListLimit(
+	show: string | string[] | null | undefined,
+): number {
+	const requested = Number(Array.isArray(show) ? show[0] : show);
+	if (!Number.isFinite(requested) || requested <= INFRA_VIDEO_PAGE_STEP) {
+		return INFRA_VIDEO_PAGE_STEP;
+	}
+	const steps = Math.ceil(requested / INFRA_VIDEO_PAGE_STEP);
+	return Math.min(INFRA_VIDEO_PAGE_MAX, steps * INFRA_VIDEO_PAGE_STEP);
+}
+
+export function infraVideoListPage<T>(
+	rows: readonly T[],
+	limit: number,
+): { rows: T[]; hasMore: boolean; nextLimit: number | null } {
+	const hasMore = rows.length > limit;
+	return {
+		rows: rows.slice(0, limit),
+		hasMore,
+		nextLimit:
+			hasMore && limit < INFRA_VIDEO_PAGE_MAX
+				? Math.min(INFRA_VIDEO_PAGE_MAX, limit + INFRA_VIDEO_PAGE_STEP)
+				: null,
+	};
+}
+
 export type InfraVideoListItem = {
 	id: string;
 	name: string;

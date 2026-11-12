@@ -13,12 +13,17 @@ import {
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
 import {
+	INFRA_VIDEO_DISPLAY_LABELS,
 	INFRA_VIDEO_FAILURE_FALLBACK,
+	INFRA_VIDEO_PAGE_MAX,
 	INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK,
 	infraRefreshDelayMs,
+	infraVideoDisplayState,
 	infraVideoEmbedCode,
 	infraVideoFailure,
 	infraVideoIsChanging,
+	infraVideoListLimit,
+	infraVideoListPage,
 	infraVideoState,
 	toInfraVideoDetail,
 	toInfraVideoListItem,
@@ -383,5 +388,76 @@ describe("list refresh", () => {
 		expect(infraRefreshDelayMs(119_000)).toBe(3_000);
 		expect(infraRefreshDelayMs(120_000)).toBe(10_000);
 		expect(infraRefreshDelayMs(30 * 60_000)).toBeNull();
+	});
+});
+
+describe("what a video row says while this tab knows more than the list", () => {
+	it("shows the server's state once the video has left uploading", () => {
+		for (const state of ["processing", "ready", "failed"] as const) {
+			for (const local of ["sending", "sent", null] as const) {
+				expect(infraVideoDisplayState(state, local)).toBe(state);
+			}
+		}
+	});
+
+	it("says uploading while this tab is sending the file", () => {
+		expect(infraVideoDisplayState("uploading", "sending")).toBe("uploading");
+	});
+
+	it("says processing once the server accepted the file, before the list catches up", () => {
+		expect(infraVideoDisplayState("uploading", "sent")).toBe("processing");
+		expect(INFRA_VIDEO_DISPLAY_LABELS.processing).toBe("Processing");
+	});
+
+	it("only calls an upload unfinished when this tab has nothing to do with it", () => {
+		expect(infraVideoDisplayState("uploading", null)).toBe("unfinished");
+		expect(INFRA_VIDEO_DISPLAY_LABELS.unfinished).toBe("Upload not finished");
+	});
+});
+
+describe("how many videos the list shows", () => {
+	it("starts at fifty", () => {
+		for (const show of [undefined, null, "", "abc", "0", "-5", "50", "12"]) {
+			expect(infraVideoListLimit(show)).toBe(50);
+		}
+	});
+
+	it("grows in steps of fifty and stops at the cap", () => {
+		expect(infraVideoListLimit("100")).toBe(100);
+		expect(infraVideoListLimit("101")).toBe(150);
+		expect(infraVideoListLimit(["150", "900"])).toBe(150);
+		expect(infraVideoListLimit("1000000")).toBe(INFRA_VIDEO_PAGE_MAX);
+		expect(infraVideoListLimit("Infinity")).toBe(50);
+	});
+
+	it("knows there are more from one extra row", () => {
+		const rows = Array.from({ length: 51 }, (_, index) => index);
+		expect(infraVideoListPage(rows, 50)).toEqual({
+			rows: rows.slice(0, 50),
+			hasMore: true,
+			nextLimit: 100,
+		});
+		expect(infraVideoListPage(rows.slice(0, 50), 50)).toEqual({
+			rows: rows.slice(0, 50),
+			hasMore: false,
+			nextLimit: null,
+		});
+		expect(infraVideoListPage([], 50)).toEqual({
+			rows: [],
+			hasMore: false,
+			nextLimit: null,
+		});
+	});
+
+	it("offers no further step at the cap", () => {
+		const rows = Array.from(
+			{ length: INFRA_VIDEO_PAGE_MAX + 1 },
+			(_, index) => index,
+		);
+		const page = infraVideoListPage(rows, INFRA_VIDEO_PAGE_MAX);
+		expect(page.hasMore).toBe(true);
+		expect(page.nextLimit).toBeNull();
+		expect(page.rows).toHaveLength(INFRA_VIDEO_PAGE_MAX);
+		expect(infraVideoListPage(rows, 950).nextLimit).toBe(INFRA_VIDEO_PAGE_MAX);
 	});
 });
