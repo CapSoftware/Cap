@@ -59,15 +59,14 @@ async function extractViaMediaServer(
 	sourceUrl: string,
 	limitSeconds: number,
 ): Promise<ExtractedTranscriptAudio> {
-	const probedSeconds = await probeVideoViaMediaServer(sourceUrl, {
+	const probe = await probeVideoViaMediaServer(sourceUrl, {
 		maxRetries: 0,
-	}).then(
-		(probe) =>
-			Number.isFinite(probe.duration) && probe.duration > 0
-				? probe.duration
-				: null,
-		() => null,
-	);
+	}).catch(() => null);
+	if (probe && probe.audioCodec === null) return { state: "no_audio" };
+	const probedSeconds =
+		probe && Number.isFinite(probe.duration) && probe.duration > 0
+			? probe.duration
+			: null;
 	if (isTooLong(probedSeconds)) return { state: "too_long" };
 	if (probedSeconds !== null && probedSeconds > limitSeconds) {
 		return pastLimit(limitSeconds, probedSeconds);
