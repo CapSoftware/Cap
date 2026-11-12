@@ -237,9 +237,10 @@ export class DeveloperVideoChargeRefused extends Error {
 	override name = "DeveloperVideoChargeRefused";
 }
 
-// The upload is billed on the length the client reported. Once the server has
-// measured the real length, anything beyond that is charged before encoding,
-// and a video the app can't pay for is not encoded.
+// An upload is admitted on the length and size the client reported. Once the
+// server has measured the real ones, a longer or higher-tier video is admitted
+// again on those before encoding, and one the app's balance cannot cover is
+// not encoded. Nothing is charged here: storage is billed daily once ready.
 export async function chargeForProbedDuration(
 	video: Pick<
 		DeveloperVideoRow,

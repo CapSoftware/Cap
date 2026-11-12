@@ -61,6 +61,16 @@ vi.mock("@cap/database", async () => {
 		if (keys === "appId,id,s3Key") {
 			return mocks.unrecorded;
 		}
+		if (keys === "deletedAt,duration,status,updatedAt") {
+			return [
+				{
+					status: "processing",
+					duration: mocks.storedDuration,
+					updatedAt: new Date(),
+					deletedAt: mocks.deletedAt,
+				},
+			];
+		}
 		if (keys === "deletedAt,duration") {
 			return [
 				{
@@ -330,7 +340,7 @@ describe("developer SDK multipart completion", () => {
 			"store",
 			"hook",
 		]);
-		expect(mocks.admission.mock.calls[0]).toHaveLength(2);
+		expect(mocks.admission.mock.calls[0]?.[2]).toBeUndefined();
 		expect(mocks.admission.mock.calls[1]?.[2]).toBeDefined();
 	});
 
@@ -508,6 +518,13 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.videoUpdates[0]?.duration).toBe(30);
 	});
 
+	it("accepts the longest duration the uploaded bytes could hold", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 60_000 }];
+
+		expect((await complete({ durationInSecs: 60 })).status).toBe(200);
+		expect(mocks.videoUpdates[0]?.duration).toBe(60);
+	});
+
 	it("asks admission with the stored duration, size and tier of the new video", async () => {
 		mocks.storedParts = [
 			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
@@ -522,12 +539,20 @@ describe("developer SDK multipart completion", () => {
 			tier: "2160p",
 		};
 		expect(mocks.admission).toHaveBeenCalledTimes(2);
-		expect(mocks.admission).toHaveBeenNthCalledWith(1, "app-1", video);
+		const own = { excludeVideoId: "video-1" };
+		expect(mocks.admission).toHaveBeenNthCalledWith(
+			1,
+			"app-1",
+			video,
+			undefined,
+			own,
+		);
 		expect(mocks.admission).toHaveBeenNthCalledWith(
 			2,
 			"app-1",
 			video,
 			expect.anything(),
+			own,
 		);
 	});
 

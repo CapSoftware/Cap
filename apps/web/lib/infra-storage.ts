@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
-import { and, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
@@ -21,9 +21,15 @@ type StoredVideoGroup = {
 
 const APP_ID_CHUNK = 500;
 
+export type StorageUsageOptions = {
+	includeProcessing?: boolean;
+	excludeVideoId?: string;
+};
+
 async function storedVideoGroups(
 	appIds: readonly string[],
 	executor: InfraDbExecutor,
+	excludeVideoId?: string,
 ) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
@@ -48,6 +54,7 @@ async function storedVideoGroups(
 					),
 					isNull(developerVideos.deletedAt),
 					isNotNull(developerVideos.duration),
+					excludeVideoId ? ne(developerVideos.id, excludeVideoId) : undefined,
 				),
 			)
 			.groupBy(
@@ -66,7 +73,7 @@ export async function getStorageUsageByApp(
 	appIds: readonly string[],
 	extra?: { appId: string; video: BillableVideo | null },
 	executor: InfraDbExecutor = db(),
-	options: { includeProcessing?: boolean } = {},
+	options: StorageUsageOptions = {},
 ) {
 	const entriesByApp = new Map<
 		string,
@@ -74,7 +81,11 @@ export async function getStorageUsageByApp(
 	>();
 	for (const appId of appIds) entriesByApp.set(appId, []);
 	if (appIds.length > 0) {
-		for (const group of await storedVideoGroups(appIds, executor)) {
+		for (const group of await storedVideoGroups(
+			appIds,
+			executor,
+			options.excludeVideoId,
+		)) {
 			entriesByApp.get(group.appId)?.push({
 				video: billableVideo({
 					duration: Number(group.seconds),
@@ -102,7 +113,7 @@ export async function getAppStorageUsage(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	executor: InfraDbExecutor = db(),
-	options: { includeProcessing?: boolean } = {},
+	options: StorageUsageOptions = {},
 ): Promise<StorageUsage> {
 	const usageByApp = await getStorageUsageByApp(
 		[appId],

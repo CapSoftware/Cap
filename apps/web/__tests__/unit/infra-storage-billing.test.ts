@@ -315,6 +315,76 @@ describe("standing through the ledger", () => {
 	});
 });
 
+describe("which videos are billed after the pipeline measures them", () => {
+	const group = (
+		status: string,
+		width: number,
+		height: number,
+		seconds: number,
+		extra: { videoId?: string; maxResolutionTier?: string | null } = {},
+	) => ({ appId: "app-1", width, height, seconds, count: 1, status, ...extra });
+
+	beforeEach(() => {
+		ledger.videos = [
+			group("ready", 1280, 720, 60),
+			group("ready", 3840, 2160, 600, { maxResolutionTier: "1080p" }),
+			group("processing", 3840, 2160, 600, { videoId: "video-1" }),
+			group("uploading", 1920, 1080, 6000),
+			group("errored", 1920, 1080, 6000),
+		];
+	});
+
+	it("charges storage for ready videos only, at the lower of the measured tier and the max tier", async () => {
+		ledger.account.balanceMicroCredits = 1_000_000;
+
+		const usage = await getAppStorageUsage("app-1");
+		const result = await charge();
+
+		expect(usage.minutesByTier).toEqual({
+			"1080p": 11,
+			"1440p": 0,
+			"2160p": 0,
+		});
+		expect(usage.videoCount).toBe(2);
+		expect(result).toMatchObject({ state: "billed", chargedMicroCredits: 31 });
+	});
+
+	it("counts a still-processing video toward upload admission but not the storage charge", async () => {
+		ledger.account.balanceMicroCredits = 1_000_000;
+
+		const { usage } = await billing();
+
+		expect(usage.minutesByTier).toEqual({
+			"1080p": 11,
+			"1440p": 0,
+			"2160p": 10,
+		});
+		expect((await getAppStorageUsage("app-1")).minutesByTier["2160p"]).toBe(0);
+	});
+
+	it("leaves a video out of its own check when its measured length is admitted", async () => {
+		ledger.account.balanceMicroCredits = 1_000_000;
+		const measured = {
+			durationSeconds: 660,
+			width: 3840,
+			height: 2160,
+			tier: "2160p" as const,
+		};
+
+		const own = await getInfraUploadAdmission("app-1", measured, undefined, {
+			excludeVideoId: "video-1",
+		});
+		const doubled = await getInfraUploadAdmission("app-1", measured);
+
+		expect(own.requiredMicroCredits).toBe(
+			Math.ceil(((11 * 85 + 11 * 280) * 7) / 30),
+		);
+		expect(doubled.requiredMicroCredits).toBe(
+			Math.ceil(((11 * 85 + 21 * 280) * 7) / 30),
+		);
+	});
+});
+
 describe("available balance", () => {
 	it("is the account balance today, and nothing for an app with no account", async () => {
 		ledger.account.balanceMicroCredits = 1234;

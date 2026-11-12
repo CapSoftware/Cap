@@ -261,19 +261,17 @@ export async function getInfraBilling(
 	newVideo?: BillableVideo | null,
 	now: Date = new Date(),
 	executor?: InfraDbExecutor,
+	options: { excludeVideoId?: string } = {},
 ) {
+	const counted = { ...options, includeProcessing: true };
 	const [{ account, lastCharge, standing }, usage] = executor
 		? [
 				await appStanding(appId, now, executor),
-				await getAppStorageUsage(appId, newVideo, executor, {
-					includeProcessing: true,
-				}),
+				await getAppStorageUsage(appId, newVideo, executor, counted),
 			]
 		: await Promise.all([
 				appStanding(appId, now),
-				getAppStorageUsage(appId, newVideo, undefined, {
-					includeProcessing: true,
-				}),
+				getAppStorageUsage(appId, newVideo, undefined, counted),
 			]);
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,
@@ -299,8 +297,9 @@ export async function getInfraUploadAdmission(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	executor?: InfraDbExecutor,
+	options: { excludeVideoId?: string } = {},
 ): Promise<InfraUploadAdmission> {
-	return (await getInfraBilling(appId, newVideo, new Date(), executor))
+	return (await getInfraBilling(appId, newVideo, new Date(), executor, options))
 		.admission;
 }
 

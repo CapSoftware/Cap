@@ -29,9 +29,9 @@ export function admitDeveloperVideoUpload(
 		height: input.height,
 		maxResolutionTier: input.maxResolutionTier,
 	});
-	return input.executor
-		? getInfraUploadAdmission(input.appId, video, input.executor)
-		: getInfraUploadAdmission(input.appId, video);
+	return getInfraUploadAdmission(input.appId, video, input.executor, {
+		excludeVideoId: input.videoId,
+	});
 }
 
 export async function chargeDeveloperVideoUpload(

@@ -237,6 +237,7 @@ describe("developer SDK multipart upload", () => {
 			"app-1",
 			{ durationSeconds: 12, width: 0, height: 0, tier: "1080p" },
 			expect.anything(),
+			{ excludeVideoId: "video-1" },
 		);
 	});
 

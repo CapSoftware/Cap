@@ -29,11 +29,14 @@ export type SnapshotRow = {
 };
 
 export type VideoGroup = {
+	videoId?: string;
 	appId: string;
 	width: number | null;
 	height: number | null;
 	seconds: number;
 	count: number;
+	status?: string;
+	maxResolutionTier?: string | null;
 };
 
 const freshAccount = () => ({
@@ -155,7 +158,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		}
 	}
 
-	if (query.table === developerVideos) return ledger.videos;
+	if (query.table === developerVideos) {
+		return rendered.sql.includes("<> ?")
+			? ledger.videos.filter(
+					(video) => !video.videoId || !rendered.params.includes(video.videoId),
+				)
+			: ledger.videos;
+	}
 
 	throw new Error(`Unexpected select: ${keys}`);
 }
