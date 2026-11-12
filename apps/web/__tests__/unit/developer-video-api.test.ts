@@ -43,6 +43,7 @@ const { app } = await import("@/app/api/developer/v1/[...route]/videos");
 
 const BASE =
 	"https://web.example/api/developer/playback/playback-id-0123456789ab";
+const PAGE = "https://web.example/dev/playback-id-0123456789ab";
 const ready = () =>
 	developerVideo({
 		status: "ready",
@@ -116,6 +117,8 @@ describe("developer video API", () => {
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			shareUrl: PAGE,
+			embedUrl: `${PAGE}/embed`,
 		});
 	});
 
@@ -126,8 +129,41 @@ describe("developer video API", () => {
 		expect(body.data[0]).toMatchObject({
 			status: "ready",
 			hlsUrl: `${BASE}/master.m3u8`,
+			shareUrl: PAGE,
+			embedUrl: `${PAGE}/embed`,
 		});
 		expect(body.data[0]).not.toHaveProperty("processing");
+	});
+
+	it("links the player page by playback ID, never by video ID", async () => {
+		const { body } = await get("/video-1");
+
+		expect(body.data.shareUrl).not.toContain(body.data.id);
+		expect(body.data.embedUrl).not.toContain(body.data.id);
+	});
+
+	it("links the player page before the video is ready", async () => {
+		mocks.store.video = developerVideo({ status: "processing" });
+
+		const { body } = await get("/video-1");
+
+		expect(body.data).toMatchObject({
+			hlsUrl: null,
+			shareUrl: PAGE,
+			embedUrl: `${PAGE}/embed`,
+		});
+	});
+
+	it("has no player page for a video without a playback ID", async () => {
+		mocks.store.video = developerVideo({
+			status: "uploading",
+			playbackId: null,
+			processing: null,
+		});
+
+		const { body } = await get("/video-1");
+
+		expect(body.data).toMatchObject({ shareUrl: null, embedUrl: null });
 	});
 
 	it("keeps the status endpoint's fields and adds playback", async () => {
