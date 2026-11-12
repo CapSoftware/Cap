@@ -78,4 +78,11 @@ describe("self-hosted proxy routes", () => {
 
 	it("does not treat a share link as an asset", () =>
 		expectServed("/s/video123"));
+
+	it.each([
+		"/dev/playback-id-0123456789ab",
+		"/dev/playback-id-0123456789ab/embed",
+	])("serves the developer video page %s without a sign-in", (path) =>
+		expectServed(path),
+	);
 });

@@ -65,6 +65,8 @@ describe("proxy frame headers", () => {
 		"/",
 		"/s/video-id",
 		"/embed/video-id",
+		"/dev/playback-id-0123456789ab",
+		"/dev/playback-id-0123456789ab/embed",
 		"/c/collection-id",
 		"/pricing",
 		"/blog/some-post",
