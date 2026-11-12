@@ -202,23 +202,6 @@ export async function getDeveloperTransactions(accountId: string, limit = 50) {
 		.limit(limit);
 }
 
-export async function getDeveloperUsageSummary(appId: string) {
-	const [videoStats] = await db()
-		.select({
-			totalVideos: count(),
-			totalDurationMinutes: sql<number>`COALESCE(SUM(${developerVideos.duration}) / 60, 0)`,
-		})
-		.from(developerVideos)
-		.where(
-			and(eq(developerVideos.appId, appId), isNull(developerVideos.deletedAt)),
-		);
-
-	return {
-		totalVideos: Number(videoStats?.totalVideos ?? 0),
-		totalDurationMinutes: Number(videoStats?.totalDurationMinutes ?? 0) || 0,
-	};
-}
-
 const getInfraAppsForUser = cache((userId: (typeof userSelectProps)["id"]) =>
 	getDeveloperApps({ id: userId }),
 );

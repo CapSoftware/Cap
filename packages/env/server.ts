@@ -38,6 +38,9 @@ function createServerEnv() {
 			// Cap uses Resend for email sending, including sending login code emails
 			RESEND_API_KEY: z.string().optional(),
 			RESEND_FROM_DOMAIN: z.string().optional(),
+			CAP_INFRA_BILLING_EMAILS: boolString(false).describe(
+				"Sends the Cap Infra out of credit and failed auto top-up emails when set to 'true'",
+			),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
@@ -252,6 +255,12 @@ function createServerEnv() {
 				.optional()
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
+				),
+			INFRA_PLAYBACK_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for developer video playback links. Defaults to WEB_URL/api/developer/playback; set it to a hostname that forwards to that path",
 				),
 			LOOM_IMPORTER_URL: z
 				.string()

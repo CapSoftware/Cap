@@ -2,6 +2,8 @@ import clsx from "clsx";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { infraAppPath } from "@/lib/infra-routes";
+import { getInfraBilling } from "@/lib/infra-standing";
+import { getAppStorageUsage } from "@/lib/infra-storage";
 import {
 	formatCharge,
 	formatCredits,
@@ -12,6 +14,7 @@ import {
 import { AgentSetup } from "../_components/agent-setup";
 import { KeyRow } from "../_components/copy";
 import { GetStarted } from "../_components/get-started";
+import { StandingNotice } from "../_components/standing-notice";
 import {
 	Block,
 	ButtonLink,
@@ -23,7 +26,6 @@ import {
 } from "../_components/ui";
 import {
 	getDeveloperAppVideos,
-	getDeveloperUsageSummary,
 	getInfraProCredit,
 	getInfraStorageChargesSince,
 	requireInfraApp,
@@ -53,14 +55,15 @@ export default async function InfraOverviewPage({
 	const { app } = await requireInfraApp(appId);
 	const monthStart = utcMonthStart(new Date());
 
-	const [usage, monthStorageCharges, recentVideos, proCredit] =
+	const [usage, monthStorageCharges, recentVideos, proCredit, billing] =
 		await Promise.all([
-			getDeveloperUsageSummary(app.id),
+			getAppStorageUsage(app.id),
 			app.creditAccount
 				? getInfraStorageChargesSince(app.creditAccount.id, monthStart)
 				: Promise.resolve(0),
 			getDeveloperAppVideos(app.id, { limit: 6 }),
 			getInfraProCredit(),
+			getInfraBilling(app.id),
 		]);
 
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
@@ -80,22 +83,29 @@ export default async function InfraOverviewPage({
 					</h1>
 					<EnvTag environment={app.environment} className="mt-3" />
 				</div>
-				{!empty && (
+				{!empty && billing.standing.state === "active" && (
 					<ButtonLink variant="ghost" href={infraAppPath(app.id, "billing")}>
 						Add credits
 					</ButtonLink>
 				)}
 			</header>
 
+			<StandingNotice
+				appId={app.id}
+				standing={billing.standing}
+				shortfallMicroCredits={billing.admission.shortfallMicroCredits}
+				action
+			/>
+
 			<Figures>
 				<Figure label="Credit balance" value={formatCredits(balance)} lead />
 				<Figure
 					label="Minutes stored"
-					value={formatMinutes(usage.totalDurationMinutes)}
+					value={formatMinutes(usage.totalMinutes)}
 				/>
 				<Figure
 					label="Videos"
-					value={usage.totalVideos.toLocaleString("en-US")}
+					value={usage.videoCount.toLocaleString("en-US")}
 				/>
 				<Figure
 					label={`Storage in ${monthFormat.format(monthStart)}`}

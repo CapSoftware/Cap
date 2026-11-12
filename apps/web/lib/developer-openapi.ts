@@ -74,6 +74,58 @@ const errorSchema = {
 	},
 };
 
+const playbackProperties = {
+	status: {
+		type: "string",
+		enum: ["uploading", "processing", "ready", "errored"],
+		description:
+			"uploading until the upload completes, processing while it encodes, then ready or errored.",
+	},
+	errorReason: {
+		type: ["string", "null"],
+		description: "Why processing failed, when status is errored.",
+	},
+	playbackId: {
+		type: ["string", "null"],
+		description: "Unguessable ID that the playback URLs are built from.",
+	},
+	renditions: {
+		type: "array",
+		description: "Encoded HLS renditions, largest first. Empty until ready.",
+		items: {
+			type: "object",
+			required: ["name", "width", "height", "bitrate", "bytes"],
+			properties: {
+				name: { type: "string", description: "Tier name, such as 1080p." },
+				width: { type: "integer" },
+				height: { type: "integer" },
+				bitrate: {
+					type: "integer",
+					description: "Average bits per second.",
+				},
+				bytes: { type: "integer", description: "Stored bytes." },
+				codecs: { type: ["string", "null"] },
+			},
+		},
+	},
+	hlsUrl: {
+		type: ["string", "null"],
+		format: "uri",
+		description:
+			"Adaptive HLS master playlist. Null until ready, or when only the MP4 is available.",
+	},
+	mp4Url: {
+		type: ["string", "null"],
+		format: "uri",
+		description: "Progressive MP4. Null until ready.",
+	},
+	posterUrl: {
+		type: ["string", "null"],
+		format: "uri",
+		description: "Poster image. Null until ready.",
+	},
+};
+
 const developerVideoSchema = {
 	type: "object",
 	required: ["id", "appId", "name", "createdAt", "updatedAt"],
@@ -87,11 +139,21 @@ const developerVideoSchema = {
 		name: { type: "string", description: "Video name." },
 		duration: {
 			type: ["number", "null"],
-			description: "Duration in seconds, set when the upload completes.",
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing.",
 		},
-		width: { type: ["integer", "null"], description: "Width in pixels." },
-		height: { type: ["integer", "null"], description: "Height in pixels." },
-		fps: { type: ["integer", "null"], description: "Frames per second." },
+		width: {
+			type: ["integer", "null"],
+			description: "Measured source width in pixels.",
+		},
+		height: {
+			type: ["integer", "null"],
+			description: "Measured source height in pixels.",
+		},
+		fps: {
+			type: ["integer", "null"],
+			description: "Measured frames per second.",
+		},
 		s3Key: {
 			type: ["string", "null"],
 			description: "Storage key of the uploaded file.",
@@ -105,6 +167,16 @@ const developerVideoSchema = {
 			type: ["object", "null"],
 			additionalProperties: true,
 			description: "Metadata passed to createSdkVideo.",
+		},
+		...playbackProperties,
+		maxResolutionTier: {
+			type: "string",
+			enum: ["1080p", "1440p", "2160p"],
+			description: "Highest resolution this video is encoded at.",
+		},
+		storedBytes: {
+			type: ["integer", "null"],
+			description: "Bytes stored for the source and every encoded output.",
 		},
 		deletedAt: {
 			type: ["string", "null"],
@@ -232,7 +304,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
 				description:
-					"Returns whether the video is ready to play, with its dimensions, duration and transcription state. Poll this after completeSdkUpload.",
+					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [videoIdParam],
@@ -248,7 +320,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperUsage",
 				summary: "Get usage",
 				description:
-					"Returns the app's remaining credit balance and the count and total minutes of its videos.",
+					"Returns the app's remaining credit balance, the count and total minutes of its videos, its standing, what it needs to take an upload and what storage costs it per day.",
 				tags: ["Usage"],
 				security: secretAuth,
 				responses: {
@@ -262,7 +334,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createSdkVideo",
 				summary: "Create a video",
 				description:
-					"Creates a video record and returns its ID with share and embed URLs. Requires a credit balance of at least 5,000 micro-credits. Upload the file next with initiateSdkUpload.",
+					"Creates a video record and returns its ID with share and embed URLs. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Upload the file next with initiateSdkUpload.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CreateVideoRequest"),
@@ -310,13 +382,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload, records duration and dimensions, and debits 5,000 micro-credits per minute of video (at most 4 hours). Repeating the call after the upload completed returns success without charging again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload completed."),
 					"402": response("PaymentRequired"),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -331,6 +404,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("AbortUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload was aborted."),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -385,8 +459,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						developerVideoSchema.properties.transcriptionStatus,
 					ready: {
 						type: "boolean",
-						description: "True once duration and width are known.",
+						description: "True once status is ready.",
 					},
+					...playbackProperties,
 				},
 			},
 			Usage: {
@@ -396,6 +471,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"balanceDollars",
 					"totalVideos",
 					"totalDurationMinutes",
+					"standing",
+					"upload",
+					"storage",
 				],
 				properties: {
 					balanceMicroCredits: {
@@ -408,6 +486,90 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 					totalVideos: { type: "integer" },
 					totalDurationMinutes: { type: "number" },
+					standing: {
+						type: "object",
+						required: ["state", "pausesAt"],
+						properties: {
+							state: {
+								type: "string",
+								enum: ["active", "grace", "paused"],
+								description:
+									"active: in good standing. grace: a daily storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+							},
+							pausesAt: {
+								type: ["string", "null"],
+								format: "date-time",
+								description:
+									"When playback pauses, 7 days after the app first fell short. Null while active.",
+							},
+						},
+					},
+					upload: {
+						type: "object",
+						required: [
+							"allowed",
+							"reason",
+							"requiredMicroCredits",
+							"shortfallMicroCredits",
+							"message",
+						],
+						properties: {
+							allowed: {
+								type: "boolean",
+								description: "Whether the app can create a video right now.",
+							},
+							reason: {
+								type: ["string", "null"],
+								enum: [
+									"no_account",
+									"out_of_credit",
+									"insufficient_credits",
+									null,
+								],
+							},
+							requiredMicroCredits: {
+								type: "integer",
+								description:
+									"Balance needed to upload: 7 days of storage for everything stored.",
+							},
+							shortfallMicroCredits: {
+								type: "integer",
+								description:
+									"How much to add before uploading. 0 when allowed.",
+							},
+							message: { type: ["string", "null"] },
+						},
+					},
+					storage: {
+						type: "object",
+						required: [
+							"minutesByTier",
+							"dailyMicroCredits",
+							"monthlyMicroCredits",
+						],
+						properties: {
+							minutesByTier: {
+								type: "object",
+								description:
+									"Minutes stored in each resolution tier, by pixel count: up to 2,073,600 pixels, up to 4,194,304 pixels, and above.",
+								required: ["1080p", "1440p", "2160p"],
+								properties: {
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							dailyMicroCredits: {
+								type: "integer",
+								description:
+									"What one day of storage costs at what is stored now.",
+							},
+							monthlyMicroCredits: {
+								type: "integer",
+								description: "The same over a 30 day month.",
+							},
+						},
+					},
 				},
 			},
 			CreateVideoRequest: {
@@ -418,6 +580,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						type: "string",
 						maxLength: 255,
 						description: "Your own user ID, for filtering listDeveloperVideos.",
+					},
+					maxResolutionTier: {
+						type: "string",
+						enum: ["1080p", "1440p", "2160p"],
+						default: "1080p",
+						description: "Highest resolution to encode this video at.",
 					},
 					metadata: {
 						type: "object",
@@ -431,6 +599,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: ["videoId", "s3Key", "shareUrl", "embedUrl"],
 				properties: {
 					videoId: { type: "string" },
+					playbackId: { type: "string" },
 					s3Key: { type: "string" },
 					shareUrl: { type: "string", format: "uri" },
 					embedUrl: { type: "string", format: "uri" },
@@ -526,13 +695,17 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			PaymentRequired: json(
 				ref("Error"),
-				"The app does not have enough credits.",
+				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits.",
 			),
 			Forbidden: json(
 				ref("Error"),
 				"A production app was called without an allowed Origin.",
 			),
 			NotFound: json(ref("Error"), "The video or route does not exist."),
+			CompletionInProgress: json(
+				ref("Error"),
+				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new video and upload again.",
+			),
 			UploadCompleted: json(
 				ref("Error"),
 				"The video's upload already completed. Create a new video to upload again.",

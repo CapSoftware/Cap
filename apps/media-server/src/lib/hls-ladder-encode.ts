@@ -87,8 +87,8 @@ export async function encodeHlsLadder(
 		{ maxTier: options.maxTier },
 	);
 	const sourceHasAudio = Boolean(metadata.audioCodec);
-	const wantsAudio = sourceHasAudio && options.includeAudio !== false;
 	const range = options.range ?? null;
+	const wantsAudio = sourceHasAudio && (options.includeAudio ?? !range);
 	const muxAudioWithVideo = wantsAudio && !range;
 
 	await ensureTempDir();

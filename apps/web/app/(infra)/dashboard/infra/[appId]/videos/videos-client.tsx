@@ -42,12 +42,10 @@ export function VideosClient({
 	appId,
 	videos,
 	userId,
-	publicKey,
 }: {
 	appId: string;
 	videos: Video[];
 	userId: string;
-	publicKey: string | null;
 }) {
 	const router = useRouter();
 	const filterId = useId();
@@ -117,7 +115,7 @@ export function VideosClient({
 				}
 			/>
 
-			{publicKey && <UploadDrop appId={appId} publicKey={publicKey} />}
+			<UploadDrop appId={appId} />
 
 			{videos.length === 0 ? (
 				<div className="border-t border-[rgba(222,230,246,0.08)]">
