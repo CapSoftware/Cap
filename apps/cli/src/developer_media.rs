@@ -287,57 +287,98 @@ fn wait_delay(attempt: u32) -> Duration {
     Duration::from_millis(delay.min(5_000))
 }
 
+enum WaitProgress {
+    Done,
+    Pending(String),
+}
+
+struct Wait<'a> {
+    path: String,
+    resource: &'a str,
+    id_field: &'a str,
+    id: &'a str,
+    timeout_seconds: u64,
+    resume: String,
+}
+
+impl Wait<'_> {
+    fn timed_out(&self, status: Option<&str>, request_id: Option<String>) -> AgentApiError {
+        let error = AgentApiError {
+            code: "NOT_READY".to_string(),
+            message: format!(
+                "Timed out after {} seconds waiting for the {}",
+                self.timeout_seconds, self.resource
+            ),
+            retryable: true,
+            retry_after_ms: Some(2_000),
+            request_id,
+            ..Default::default()
+        }
+        .with_detail(self.id_field, self.id)
+        .with_hint(format!("Keep waiting with `{}`.", self.resume));
+        match status {
+            Some(status) => error.with_detail("status", status),
+            None => error,
+        }
+    }
+
+    async fn run(
+        &self,
+        client: &AgentClient,
+        progress: impl Fn(&Value) -> Result<WaitProgress, AgentApiError>,
+    ) -> Result<Value, AgentApiError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(self.timeout_seconds);
+        let mut status: Option<String> = None;
+        let mut last_request_id = None;
+        let mut attempt = 0_u32;
+        loop {
+            let fetched = tokio::time::timeout_at(deadline, client.get_json(&self.path)).await;
+            let Ok(fetched) = fetched else {
+                return Err(self.timed_out(status.as_deref(), last_request_id));
+            };
+            let value = fetched.map_err(|error| error.with_detail(self.id_field, self.id))?;
+            match progress(&value).map_err(|error| error.with_detail(self.id_field, self.id))? {
+                WaitProgress::Done => return Ok(value),
+                WaitProgress::Pending(current) => status = Some(current),
+            }
+            last_request_id = request_id(&value);
+            let wake = tokio::time::Instant::now() + wait_delay(attempt);
+            if wake >= deadline {
+                tokio::time::sleep_until(deadline).await;
+                return Err(self.timed_out(status.as_deref(), last_request_id));
+            }
+            tokio::time::sleep_until(wake).await;
+            attempt = attempt.saturating_add(1);
+        }
+    }
+}
+
 pub async fn wait_for_transcript(
     client: &AgentClient,
     app_id: &str,
     transcript_id: &str,
     timeout_seconds: u64,
 ) -> Result<Value, AgentApiError> {
-    let path = transcript_path(app_id, transcript_id, false)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
-    let mut attempt = 0_u32;
-    loop {
-        let value = client
-            .get_json(&path)
-            .await
-            .map_err(|error| error.with_detail("transcriptId", transcript_id))?;
-        let status = match transcript_status(&value) {
-            Some("complete") => return Ok(value),
-            Some("error") => return Err(transcript_failure(&value, transcript_id)),
-            Some("uploading") => {
-                return Err(AgentApiError::local(
-                    "NOT_READY",
-                    "The transcript is still waiting for its file",
-                )
-                .with_detail("transcriptId", transcript_id)
-                .with_detail("status", "uploading"));
-            }
-            Some(status @ ("queued" | "processing")) => status.to_string(),
-            _ => {
-                return Err(invalid("Cap returned an invalid transcript status")
-                    .with_detail("transcriptId", transcript_id));
-            }
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AgentApiError {
-                code: "NOT_READY".to_string(),
-                message: format!(
-                    "Timed out after {timeout_seconds} seconds waiting for the transcript"
-                ),
-                retryable: true,
-                retry_after_ms: Some(2_000),
-                request_id: request_id(&value),
-                ..Default::default()
-            }
-            .with_detail("transcriptId", transcript_id)
-            .with_detail("status", status)
-            .with_hint(format!(
-                "The transcript is still running. Keep waiting with `cap developers transcripts wait {app_id} {transcript_id}`."
-            )));
-        }
-        tokio::time::sleep(wait_delay(attempt)).await;
-        attempt = attempt.saturating_add(1);
-    }
+    let wait = Wait {
+        path: transcript_path(app_id, transcript_id, false)?,
+        resource: "transcript",
+        id_field: "transcriptId",
+        id: transcript_id,
+        timeout_seconds,
+        resume: format!("cap developers transcripts wait {app_id} {transcript_id}"),
+    };
+    wait.run(client, |value| match transcript_status(value) {
+        Some("complete") => Ok(WaitProgress::Done),
+        Some("error") => Err(transcript_failure(value, transcript_id)),
+        Some("uploading") => Err(AgentApiError::local(
+            "NOT_READY",
+            "The transcript is still waiting for its file",
+        )
+        .with_detail("status", "uploading")),
+        Some(status @ ("queued" | "processing")) => Ok(WaitProgress::Pending(status.to_string())),
+        _ => Err(invalid("Cap returned an invalid transcript status")),
+    })
+    .await
 }
 
 pub fn video_path(app_id: &str, video_id: &str) -> Result<String, AgentApiError> {
@@ -380,50 +421,27 @@ pub async fn wait_for_video(
     video_id: &str,
     timeout_seconds: u64,
 ) -> Result<Value, AgentApiError> {
-    let path = video_path(app_id, video_id)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
-    let mut attempt = 0_u32;
-    loop {
-        let value = client
-            .get_json(&path)
-            .await
-            .map_err(|error| error.with_detail("videoId", video_id))?;
-        let status = match video_status(&value) {
-            Some("ready") => return Ok(value),
-            Some("errored") => return Err(video_failure(&value, video_id)),
-            Some("uploading") => {
-                return Err(AgentApiError::local(
-                    "NOT_READY",
-                    "The video is still waiting for its file",
-                )
-                .with_detail("videoId", video_id)
-                .with_detail("status", "uploading")
-                .with_hint("Upload the file with `cap developers videos upload`."));
-            }
-            Some("processing") => "processing",
-            _ => {
-                return Err(invalid("Cap returned an invalid video status")
-                    .with_detail("videoId", video_id));
-            }
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return Err(AgentApiError {
-                code: "NOT_READY".to_string(),
-                message: format!("Timed out after {timeout_seconds} seconds waiting for the video"),
-                retryable: true,
-                retry_after_ms: Some(2_000),
-                request_id: request_id(&value),
-                ..Default::default()
-            }
-            .with_detail("videoId", video_id)
-            .with_detail("status", status)
-            .with_hint(format!(
-                "The video is still processing. Keep waiting with `cap developers videos wait {app_id} {video_id}`."
-            )));
-        }
-        tokio::time::sleep(wait_delay(attempt)).await;
-        attempt = attempt.saturating_add(1);
-    }
+    let wait = Wait {
+        path: video_path(app_id, video_id)?,
+        resource: "video",
+        id_field: "videoId",
+        id: video_id,
+        timeout_seconds,
+        resume: format!("cap developers videos wait {app_id} {video_id}"),
+    };
+    wait.run(client, |value| match video_status(value) {
+        Some("ready") => Ok(WaitProgress::Done),
+        Some("errored") => Err(video_failure(value, video_id)),
+        Some("uploading") => Err(AgentApiError::local(
+            "NOT_READY",
+            "The video is still waiting for its file",
+        )
+        .with_detail("status", "uploading")
+        .with_hint("Upload the file with `cap developers videos upload`.")),
+        Some("processing") => Ok(WaitProgress::Pending("processing".to_string())),
+        _ => Err(invalid("Cap returned an invalid video status")),
+    })
+    .await
 }
 
 pub fn created_id(value: &Value, object: &str) -> Result<String, AgentApiError> {
