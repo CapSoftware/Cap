@@ -301,7 +301,7 @@ export const Caps = ({
 				canMove
 				moveRootLabel="My Caps"
 			/>
-			{visibleVideos.length > 0 && (
+			{(visibleVideos.length > 0 || isUploading) && (
 				<>
 					<div className="flex justify-between items-center mb-6 w-full">
 						<h1 className="text-2xl font-medium text-gray-12">
