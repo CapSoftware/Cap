@@ -14,6 +14,24 @@ export class MediaInputPolicyError extends Error {
 	}
 }
 
+// Decode memory grows with the pixel count, so that is what is capped: 8K in
+// either orientation, up to the DCI width. No H.264 level describes a side
+// longer than 16384.
+export const MAX_SOURCE_FRAME_PIXELS = 8192 * 4320;
+export const MAX_SOURCE_FRAME_SIDE = 16384;
+// A container can declare a smaller frame than its video stream carries, so
+// FFmpeg is held to the limit too. Decoders pad a frame to whole blocks and
+// aligned rows, which is the room above the probe's cap.
+export const MAX_DECODE_PIXELS = 40_000_000;
+
+export function exceedsSourceFrameLimit(width: number, height: number) {
+	return (
+		width > MAX_SOURCE_FRAME_SIDE ||
+		height > MAX_SOURCE_FRAME_SIDE ||
+		width * height > MAX_SOURCE_FRAME_PIXELS
+	);
+}
+
 // Demuxers that open further files or network resources named inside the input.
 export const NESTED_RESOURCE_DEMUXERS = [
 	"hls",

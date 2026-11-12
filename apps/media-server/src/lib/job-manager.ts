@@ -177,6 +177,9 @@ const WEBHOOK_TIMEOUT_MS = 5000;
 const RECORDING_HEARTBEAT_MS = 60_000;
 const MAX_RECORDING_WORKER_LEASE_MS = 5 * 60_000;
 const UNACKNOWLEDGED_TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
+// Finished jobs stay answerable until the sweeper removes them, so the count
+// is capped. A retained job is a few kilobytes; the oldest go first.
+export const MAX_RETAINED_TERMINAL_JOBS = 5_000;
 
 const configuredMaxProcesses =
 	Number.parseInt(
@@ -362,6 +365,19 @@ export function canAcceptNewVideoProcess(
 	);
 }
 
+function evictExcessTerminalJobs(): void {
+	let excess = -MAX_RETAINED_TERMINAL_JOBS;
+	for (const job of jobs.values()) {
+		if (!isActivePhase(job.phase)) excess++;
+	}
+	for (const [jobId, job] of jobs) {
+		if (excess <= 0) return;
+		if (isActivePhase(job.phase)) continue;
+		deleteJob(jobId);
+		excess--;
+	}
+}
+
 export function generateJobId(): string {
 	return `job_${Date.now()}_${randomUUID()}`;
 }
@@ -387,6 +403,7 @@ export function createJob(
 	};
 	jobs.set(jobId, job);
 	jobTotals.created++;
+	evictExcessTerminalJobs();
 	return job;
 }
 
