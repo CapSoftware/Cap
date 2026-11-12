@@ -108,6 +108,9 @@ beforeEach(() => {
 			if (/^select `duration` from/i.test(query)) {
 				return { rows: video ? [[video.duration]] : [] };
 			}
+			if (/^select `duration`, `deletedAt` from/i.test(query)) {
+				return { rows: video ? [[video.duration, video.deletedAt]] : [] };
+			}
 			return {
 				rows: video
 					? [[video.appId, s3Key, video.duration, video.deletedAt]]

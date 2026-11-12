@@ -349,7 +349,16 @@ export async function completeInfraUpload({
 				.limit(1)
 				.for("update");
 
-			if (await videoIsRecorded(tx, videoId)) return ALREADY_RECORDED;
+			const [current] = await tx
+				.select({
+					duration: developerVideos.duration,
+					deletedAt: developerVideos.deletedAt,
+				})
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId))
+				.limit(1);
+			if (!current || current.deletedAt) return REMOVED;
+			if (current.duration !== null) return ALREADY_RECORDED;
 
 			const admission = await getInfraUploadAdmission(appId, newVideo, tx);
 			if (!admission.allowed) return admission;
@@ -365,6 +374,14 @@ export async function completeInfraUpload({
 				);
 			return admission;
 		});
+
+		if ("removed" in admission) {
+			return fail(
+				409,
+				"This upload was removed before it was recorded. Create a new video and upload the file again.",
+				{ code: "upload_removed" },
+			);
+		}
 
 		if (!admission.allowed) {
 			await removeStoredFile(s3Key);
@@ -403,9 +420,47 @@ const UNRECORDED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const UNRECORDED_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const UNRECORDED_BATCH = 500;
 
+async function retireUnrecordedVideo(
+	appId: string,
+	videoId: string,
+	now: Date,
+) {
+	return db().transaction(async (tx) => {
+		await tx
+			.select({ id: developerCreditAccounts.id })
+			.from(developerCreditAccounts)
+			.where(eq(developerCreditAccounts.appId, appId))
+			.limit(1)
+			.for("update");
+
+		const [current] = await tx
+			.select({
+				duration: developerVideos.duration,
+				deletedAt: developerVideos.deletedAt,
+			})
+			.from(developerVideos)
+			.where(eq(developerVideos.id, videoId))
+			.limit(1);
+		if (!current || current.duration !== null) return false;
+		if (current.deletedAt) return true;
+
+		await tx
+			.update(developerVideos)
+			.set({ deletedAt: now })
+			.where(
+				and(eq(developerVideos.id, videoId), isNull(developerVideos.duration)),
+			);
+		return true;
+	});
+}
+
 export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
 	const rows = await db()
-		.select({ s3Key: developerVideos.s3Key })
+		.select({
+			id: developerVideos.id,
+			appId: developerVideos.appId,
+			s3Key: developerVideos.s3Key,
+		})
 		.from(developerVideos)
 		.where(
 			and(
@@ -435,12 +490,20 @@ export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
 		})
 			.pipe(provideOptionalAuth, runPromise)
 			.catch(() => false);
-		if (stale && (await removeStoredFile(s3Key))) removed++;
+		if (!stale) continue;
+		const retired = await retireUnrecordedVideo(row.appId, row.id, now).catch(
+			(error) => {
+				console.error("Error retiring an unrecorded upload:", row.id, error);
+				return false;
+			},
+		);
+		if (retired && (await removeStoredFile(s3Key))) removed++;
 	}
 	return removed;
 }
 
 const ALREADY_RECORDED = { allowed: true } as const;
+const REMOVED = { allowed: false, removed: true } as const;
 
 async function videoIsRecorded(
 	executor: Pick<ReturnType<typeof db>, "select">,

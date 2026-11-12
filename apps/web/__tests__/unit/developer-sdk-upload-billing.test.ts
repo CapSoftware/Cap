@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
 	listParts: vi.fn(),
 	headObject: vi.fn(),
 	deleteObject: vi.fn(),
-	unrecorded: [] as { s3Key: string | null }[],
+	unrecorded: [] as { id: string; appId: string; s3Key: string | null }[],
+	deletedAt: null as Date | null,
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
@@ -41,15 +42,25 @@ vi.mock("@cap/database", async () => {
 					appId: "app-1",
 					s3Key: S3_KEY,
 					duration: mocks.storedDuration,
-					deletedAt: null,
+					deletedAt: mocks.deletedAt,
 				},
 			];
 		}
 		if (keys === "id") {
 			return [{ id: "video-1" }];
 		}
-		if (keys === "s3Key") {
+		if (keys === "appId,id,s3Key") {
 			return mocks.unrecorded;
+		}
+		if (keys === "deletedAt,duration") {
+			return [
+				{
+					duration: mocks.recordedReads.length
+						? (mocks.recordedReads.shift() ?? null)
+						: mocks.storedDuration,
+					deletedAt: mocks.deletedAt,
+				},
+			];
 		}
 		if (keys === "duration") {
 			return [{ duration: mocks.recordedReads.shift() ?? null }];
@@ -96,6 +107,9 @@ vi.mock("@cap/database", async () => {
 		if ("duration" in values) {
 			mocks.storedDuration = values.duration as number | null;
 		}
+		if ("deletedAt" in values) {
+			mocks.deletedAt = values.deletedAt as Date | null;
+		}
 	};
 
 	const tx = {
@@ -107,7 +121,7 @@ vi.mock("@cap/database", async () => {
 						return [{ affectedRows: 0 }];
 					}
 					writeVideo(values);
-					mocks.events.push("store");
+					mocks.events.push("deletedAt" in values ? "retire" : "store");
 					return [{ affectedRows: 1 }];
 				},
 			}),
@@ -235,6 +249,7 @@ describe("developer SDK multipart completion", () => {
 		mocks.events = [];
 		mocks.creditTransactions = [];
 		mocks.videoUpdates = [];
+		mocks.deletedAt = null;
 		mocks.admission.mockReset();
 		mocks.admission.mockResolvedValue(admitted);
 		mocks.complete.mockReset();
@@ -593,30 +608,97 @@ describe("removing files that were assembled but never recorded", () => {
 	const now = new Date("2026-11-12T12:00:00Z");
 	const hoursAgo = (hours: number) =>
 		new Date(now.getTime() - hours * 60 * 60 * 1000);
+	const row = (name: string) => ({
+		id: "video-1",
+		appId: "app-1",
+		s3Key: `developer/app-1/${name}/video` as string | null,
+	});
+	const old = () => Effect.succeed({ LastModified: hoursAgo(25) });
 
 	beforeEach(() => {
+		mocks.storedDuration = null;
+		mocks.deletedAt = null;
+		mocks.events = [];
+		mocks.videoUpdates = [];
 		mocks.deleteObject.mockReset();
-		mocks.deleteObject.mockImplementation(() => Effect.succeed({}));
+		mocks.deleteObject.mockImplementation(() => {
+			mocks.events.push("delete");
+			return Effect.succeed({});
+		});
 		mocks.headObject.mockReset();
+		mocks.admission.mockReset();
+		mocks.admission.mockResolvedValue(admitted);
+		mocks.listParts.mockReset();
+		mocks.listParts.mockImplementation(() =>
+			Effect.fail(new Error("no such upload")),
+		);
+		mocks.complete.mockReset();
 	});
 
-	it("deletes an assembled file that has gone a day without a record", async () => {
-		mocks.unrecorded = [{ s3Key: "developer/app-1/old/video" }];
-		mocks.headObject.mockImplementation(() =>
-			Effect.succeed({ LastModified: hoursAgo(25) }),
-		);
+	it("retires the video under the account lock, then deletes the file", async () => {
+		mocks.unrecorded = [row("old")];
+		mocks.headObject.mockImplementation(old);
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
+		expect(mocks.events).toEqual(["lock", "retire", "delete"]);
+		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
 		expect(mocks.deleteObject).toHaveBeenCalledWith(
 			"developer/app-1/old/video",
 		);
 	});
 
+	it("keeps the file when a completion records the video between the sweep's read and its delete", async () => {
+		mocks.unrecorded = [row("old")];
+		mocks.headObject.mockImplementation(() => {
+			mocks.storedDuration = 60;
+			return old();
+		});
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
+		expect(mocks.deletedAt).toBe(null);
+		expect(mocks.videoUpdates).toEqual([]);
+	});
+
+	it("refuses a completion that reaches the lock after the sweep retired the video", async () => {
+		mocks.unrecorded = [row("old")];
+		mocks.headObject.mockImplementation(old);
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		mocks.listParts.mockImplementation(() => Effect.succeed(mocks.storedParts));
+		mocks.complete.mockImplementation(() => Effect.succeed({}));
+		mocks.admission.mockImplementationOnce(async () => {
+			await removeUnrecordedInfraFiles(now);
+			return admitted;
+		});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "upload_removed",
+			error: expect.stringContaining("upload the file again"),
+		});
+		expect(mocks.storedDuration).toBe(null);
+		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
+		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);
+	});
+
+	it("answers not found for a completion that starts after the video was retired", async () => {
+		mocks.unrecorded = [row("old")];
+		mocks.headObject.mockImplementation(old);
+		await removeUnrecordedInfraFiles(now);
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(404);
+		expect(mocks.storedDuration).toBe(null);
+	});
+
 	it("leaves a file assembled within the last day, and a video with no file", async () => {
 		mocks.unrecorded = [
-			{ s3Key: "developer/app-1/fresh/video" },
-			{ s3Key: "developer/app-1/none/video" },
-			{ s3Key: null },
+			row("fresh"),
+			row("none"),
+			{ ...row("x"), s3Key: null },
 		];
 		mocks.headObject.mockImplementation((key: string) =>
 			key.includes("fresh")
@@ -626,16 +708,12 @@ describe("removing files that were assembled but never recorded", () => {
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
 	});
 
 	it("counts only the files it removed", async () => {
-		mocks.unrecorded = [
-			{ s3Key: "developer/app-1/a/video" },
-			{ s3Key: "developer/app-1/b/video" },
-		];
-		mocks.headObject.mockImplementation(() =>
-			Effect.succeed({ LastModified: hoursAgo(48) }),
-		);
+		mocks.unrecorded = [row("a"), row("b")];
+		mocks.headObject.mockImplementation(old);
 		mocks.deleteObject.mockImplementation((key: string) =>
 			key.includes("/b/")
 				? Effect.fail(new Error("storage down"))
