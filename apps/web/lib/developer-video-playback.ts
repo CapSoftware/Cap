@@ -14,7 +14,7 @@ import {
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
 
-const PLAYBACK_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+export const PLAYBACK_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const HLS_FILE_PATTERN = /^[A-Za-z0-9_-]+\.(m3u8|m4s)$/;
 const MEDIA_FILE_PATTERN = /^[A-Za-z0-9_-]+\.m4s$/;
 
@@ -84,7 +84,7 @@ export async function signMediaPlaylist(
 	return lines.join("\n");
 }
 
-async function findPlayableVideo(playbackId: string) {
+export async function findPlayableVideo(playbackId: string) {
 	const [row] = await db()
 		.select({ video: developerVideos })
 		.from(developerVideos)
