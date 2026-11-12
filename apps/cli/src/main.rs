@@ -32,6 +32,7 @@ mod upload;
 use std::{
     io::{IsTerminal, Write, stderr, stdout},
     path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -41,6 +42,7 @@ use serde::Serialize;
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+static JSON_WRITTEN: AtomicBool = AtomicBool::new(false);
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_BOLD: &str = "\x1b[1m";
 const ANSI_BLUE: &str = "\x1b[38;2;71;133;255m";
@@ -121,9 +123,10 @@ const AGENT_HELP: &str = "\
 OUTPUT
   Pass --json (global) for machine-readable JSON on stdout; stderr stays human-readable.
   stdout is the authoritative result. On failure the process exits non-zero and, in --json
-  mode, prints a final object/event containing an \"error\" field. Streaming commands (record,
-  export) emit newline-delimited JSON (NDJSON) events. Run `cap guide --json` for the full
-  machine-readable capability + schema manifest.
+  mode, prints a final object/event containing an \"error\" field. Account and developer
+  commands add \"code\", \"message\", and when known \"hint\" and \"requestId\". Streaming
+  commands (record, export) emit newline-delimited JSON (NDJSON) events. Run `cap guide --json`
+  for the full machine-readable capability + schema manifest.
 
 AUTH
   `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
@@ -203,7 +206,8 @@ enum Commands {
     Screenshot(screenshot::Screenshot),
     /// List recordings discovered in the desktop library (or a custom directory)
     Recordings(RecordingsArgs),
-    /// Upload a recording or video file and get a shareable link
+    /// Upload a recording or video file to your personal Cap library and get a shareable link.
+    /// To upload to a Cap Infra developer app, use `cap developers videos upload`
     Upload(upload::UploadArgs),
     /// Update Cap Desktop and the bundled CLI
     Update(FormatArgs),
@@ -221,7 +225,7 @@ enum Commands {
     Notifications(notifications::NotificationsArgs),
     /// Read organization, space, or Cap analytics
     Analytics(analytics::AnalyticsArgs),
-    /// Inspect developer apps, domains, usage, and credits
+    /// Manage Cap Infra developer apps: videos, transcripts, domains, keys, usage and credits
     Developers(developers::DevelopersArgs),
     /// Inspect or wait for asynchronous Cap operations
     Jobs(jobs::JobsArgs),
@@ -464,7 +468,16 @@ fn main() {
         let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
     }
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.use_stderr() && args_request_json(std::env::args().skip(1)) {
+                let _ = write_json(&usage_error_json(&error.render().to_string()));
+            }
+            error.exit();
+        }
+    };
+    let json_mode = cli.json;
     let level_filter = cli.log_level.level_filter();
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
@@ -581,6 +594,9 @@ fn main() {
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(message)) => {
+            if json_mode && !JSON_WRITTEN.load(Ordering::SeqCst) {
+                let _ = write_json(&failure_json(&message));
+            }
             eprintln!("error: {message}");
             std::process::exit(1);
         }
@@ -859,7 +875,78 @@ impl CompletionsArgs {
     }
 }
 
+pub fn mark_json_written() {
+    JSON_WRITTEN.store(true, Ordering::SeqCst);
+}
+
+fn args_request_json(args: impl Iterator<Item = String>) -> bool {
+    let mut format_value_next = false;
+    for arg in args {
+        if arg == "--" {
+            return false;
+        }
+        if arg == "--json" || arg == "--format=json" || (format_value_next && arg == "json") {
+            return true;
+        }
+        format_value_next = arg == "--format";
+    }
+    false
+}
+
+fn usage_error_json(rendered: &str) -> serde_json::Value {
+    let mut lines = rendered.lines();
+    let mut message = lines
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches("error: ")
+        .to_string();
+    if message.ends_with(':') {
+        let listed = lines
+            .by_ref()
+            .take_while(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
+        message = format!("{message} {listed}");
+    }
+    let rest = rendered.lines().map(str::trim);
+    let hint = rest
+        .clone()
+        .find_map(|line| line.strip_prefix("tip: "))
+        .or_else(|| rest.clone().find(|line| line.starts_with("Usage: ")))
+        .unwrap_or("Run the command with --help to see its arguments.");
+    serde_json::json!({
+        "error": message,
+        "code": "USAGE",
+        "message": message,
+        "hint": hint,
+        "retryable": false,
+    })
+}
+
+fn failure_json(message: &str) -> serde_json::Value {
+    let first_line = message.lines().next().unwrap_or_default();
+    let (code, text) = match first_line.split_once(": ") {
+        Some((code, text))
+            if !code.is_empty()
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_') =>
+        {
+            (code, text)
+        }
+        _ => ("COMMAND_FAILED", first_line),
+    };
+    serde_json::json!({
+        "error": text,
+        "code": code,
+        "message": text,
+        "retryable": false,
+    })
+}
+
 pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
+    mark_json_written();
     let mut stdout = stdout();
     serde_json::to_writer_pretty(&mut stdout, value).map_err(|e| e.to_string())?;
     writeln!(&mut stdout).map_err(|e| e.to_string())?;
@@ -867,6 +954,7 @@ pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
 }
 
 pub fn write_json_line<T: Serialize>(value: &T) -> Result<(), String> {
+    mark_json_written();
     let mut stdout = stdout();
     serde_json::to_writer(&mut stdout, value).map_err(|e| e.to_string())?;
     writeln!(&mut stdout).map_err(|e| e.to_string())?;

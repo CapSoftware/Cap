@@ -28,6 +28,7 @@ fn invalid(message: impl Into<String>) -> AgentApiError {
         retryable: false,
         retry_after_ms: None,
         request_id: None,
+        ..Default::default()
     }
 }
 
@@ -136,6 +137,7 @@ async fn put_file(target: &Value, path: &Path, content_length: u64) -> Result<()
         retryable: true,
         retry_after_ms: Some(1_000),
         request_id: None,
+        ..Default::default()
     })?;
     if response.status().is_success() {
         Ok(())
@@ -146,6 +148,7 @@ async fn put_file(target: &Value, path: &Path, content_length: u64) -> Result<()
             retryable: false,
             retry_after_ms: None,
             request_id: None,
+            ..Default::default()
         })
     }
 }
@@ -176,18 +179,23 @@ pub async fn create_transcript_from_file(
         )
         .await?;
     let id = transcript_id(&created)?;
-    let target = created
-        .get("upload")
-        .filter(|target| !target.is_null())
-        .ok_or_else(|| invalid("Cap did not return an upload target"))?;
-    put_file(target, path, content_length).await?;
-    client
-        .mutate_json_confirmed(
-            Method::POST,
-            &format!("/developer/apps/{app_id}/transcripts/{id}/start"),
-            &json!({}),
-        )
+    let started = async {
+        let target = created
+            .get("upload")
+            .filter(|target| !target.is_null())
+            .ok_or_else(|| invalid("Cap did not return an upload target"))?;
+        put_file(target, path, content_length).await?;
+        client
+            .mutate_json_confirmed(
+                Method::POST,
+                &format!("/developer/apps/{app_id}/transcripts/{id}/start"),
+                &json!({}),
+            )
+            .await
+    };
+    started
         .await
+        .map_err(|error| error.with_detail("transcriptId", id.as_str()))
 }
 
 pub async fn create_transcript_from_url(
@@ -231,27 +239,39 @@ pub fn transcript_status(value: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-pub fn transcript_failure(value: &Value) -> AgentApiError {
-    let transcript = value.get("transcript");
-    let field = |name: &str| {
-        transcript
-            .and_then(|transcript| transcript.get(name))
-            .and_then(Value::as_str)
-    };
+fn value_text<'a>(value: &'a Value, object: &str, field: &str) -> Option<&'a str> {
+    value
+        .get(object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_str)
+}
+
+fn request_id(value: &Value) -> Option<String> {
+    value
+        .get("requestId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+pub fn transcript_failure(value: &Value, transcript_id: &str) -> AgentApiError {
     AgentApiError {
         code: "TRANSCRIPT_FAILED".to_string(),
         message: format!(
             "{} ({})",
-            field("errorMessage").unwrap_or("The transcript could not be created"),
-            field("errorCode").unwrap_or("transcription_failed")
+            value_text(value, "transcript", "errorMessage")
+                .unwrap_or("The transcript could not be created"),
+            value_text(value, "transcript", "errorCode").unwrap_or("transcription_failed")
         ),
         retryable: false,
         retry_after_ms: None,
-        request_id: value
-            .get("requestId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        request_id: request_id(value),
+        ..Default::default()
     }
+    .with_detail("transcriptId", transcript_id)
+    .with_detail("status", "error")
+    .with_hint(
+        "A failed transcript is not charged. Remove it with `cap developers transcripts delete`.",
+    )
 }
 
 pub fn validate_wait_seconds(timeout_seconds: Option<u64>) -> Result<u64, AgentApiError> {
@@ -260,6 +280,11 @@ pub fn validate_wait_seconds(timeout_seconds: Option<u64>) -> Result<u64, AgentA
         return Err(invalid("timeoutSeconds must be between 1 and 86400"));
     }
     Ok(timeout)
+}
+
+fn wait_delay(attempt: u32) -> Duration {
+    let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
+    Duration::from_millis(delay.min(5_000))
 }
 
 pub async fn wait_for_transcript(
@@ -272,35 +297,305 @@ pub async fn wait_for_transcript(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
     let mut attempt = 0_u32;
     loop {
-        let value = client.get_json(&path).await?;
-        match transcript_status(&value) {
+        let value = client
+            .get_json(&path)
+            .await
+            .map_err(|error| error.with_detail("transcriptId", transcript_id))?;
+        let status = match transcript_status(&value) {
             Some("complete") => return Ok(value),
-            Some("error") => return Err(transcript_failure(&value)),
+            Some("error") => return Err(transcript_failure(&value, transcript_id)),
             Some("uploading") => {
-                return Err(AgentApiError {
-                    code: "NOT_READY".to_string(),
-                    message: "The transcript is still waiting for its file".to_string(),
-                    retryable: false,
-                    retry_after_ms: None,
-                    request_id: None,
-                });
+                return Err(AgentApiError::local(
+                    "NOT_READY",
+                    "The transcript is still waiting for its file",
+                )
+                .with_detail("transcriptId", transcript_id)
+                .with_detail("status", "uploading"));
             }
-            Some("queued" | "processing") => {}
-            _ => return Err(invalid("Cap returned an invalid transcript status")),
-        }
+            Some(status @ ("queued" | "processing")) => status.to_string(),
+            _ => {
+                return Err(invalid("Cap returned an invalid transcript status")
+                    .with_detail("transcriptId", transcript_id));
+            }
+        };
         if tokio::time::Instant::now() >= deadline {
             return Err(AgentApiError {
                 code: "NOT_READY".to_string(),
-                message: "Timed out waiting for the transcript".to_string(),
+                message: format!(
+                    "Timed out after {timeout_seconds} seconds waiting for the transcript"
+                ),
                 retryable: true,
                 retry_after_ms: Some(2_000),
-                request_id: None,
-            });
+                request_id: request_id(&value),
+                ..Default::default()
+            }
+            .with_detail("transcriptId", transcript_id)
+            .with_detail("status", status)
+            .with_hint(format!(
+                "The transcript is still running. Keep waiting with `cap developers transcripts wait {app_id} {transcript_id}`."
+            )));
         }
-        let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
-        tokio::time::sleep(Duration::from_millis(delay.min(5_000))).await;
+        tokio::time::sleep(wait_delay(attempt)).await;
         attempt = attempt.saturating_add(1);
     }
+}
+
+pub fn video_path(app_id: &str, video_id: &str) -> Result<String, AgentApiError> {
+    let app_id = opaque_id(app_id, "Developer app ID")?;
+    let video_id = opaque_id(video_id, "Developer video ID")?;
+    Ok(format!("/developer/apps/{app_id}/videos/{video_id}"))
+}
+
+pub fn video_status(value: &Value) -> Option<&str> {
+    value_text(value, "video", "status")
+}
+
+pub fn video_failure(value: &Value, video_id: &str) -> AgentApiError {
+    AgentApiError {
+        code: "VIDEO_FAILED".to_string(),
+        message: value_text(value, "video", "errorReason")
+            .unwrap_or("The video could not be processed")
+            .to_string(),
+        retryable: false,
+        retry_after_ms: None,
+        request_id: request_id(value),
+        ..Default::default()
+    }
+    .with_detail("videoId", video_id)
+    .with_detail("status", "errored")
+    .with_hint("Remove it with `cap developers videos delete`, then upload the file again.")
+}
+
+pub async fn get_video(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+) -> Result<Value, AgentApiError> {
+    client.get_json(&video_path(app_id, video_id)?).await
+}
+
+pub async fn wait_for_video(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+    timeout_seconds: u64,
+) -> Result<Value, AgentApiError> {
+    let path = video_path(app_id, video_id)?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+    let mut attempt = 0_u32;
+    loop {
+        let value = client
+            .get_json(&path)
+            .await
+            .map_err(|error| error.with_detail("videoId", video_id))?;
+        let status = match video_status(&value) {
+            Some("ready") => return Ok(value),
+            Some("errored") => return Err(video_failure(&value, video_id)),
+            Some("uploading") => {
+                return Err(AgentApiError::local(
+                    "NOT_READY",
+                    "The video is still waiting for its file",
+                )
+                .with_detail("videoId", video_id)
+                .with_detail("status", "uploading")
+                .with_hint("Upload the file with `cap developers videos upload`."));
+            }
+            Some("processing") => "processing",
+            _ => {
+                return Err(invalid("Cap returned an invalid video status")
+                    .with_detail("videoId", video_id));
+            }
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AgentApiError {
+                code: "NOT_READY".to_string(),
+                message: format!("Timed out after {timeout_seconds} seconds waiting for the video"),
+                retryable: true,
+                retry_after_ms: Some(2_000),
+                request_id: request_id(&value),
+                ..Default::default()
+            }
+            .with_detail("videoId", video_id)
+            .with_detail("status", status)
+            .with_hint(format!(
+                "The video is still processing. Keep waiting with `cap developers videos wait {app_id} {video_id}`."
+            )));
+        }
+        tokio::time::sleep(wait_delay(attempt)).await;
+        attempt = attempt.saturating_add(1);
+    }
+}
+
+pub fn created_id(value: &Value, object: &str) -> Result<String, AgentApiError> {
+    value_text(value, object, "id")
+        .map(str::to_string)
+        .ok_or_else(|| invalid(format!("Cap returned a {object} without an ID")))
+}
+
+async fn app_context(client: &AgentClient, app_id: &str) -> Result<Value, AgentApiError> {
+    let app_id = opaque_id(app_id, "Developer app ID")?;
+    client
+        .get_json(&format!("/developer/apps/{app_id}/context"))
+        .await
+}
+
+fn preview(action: &str, effect: &str, target: Value) -> Value {
+    json!({
+        "dryRun": true,
+        "action": action,
+        "effect": effect,
+        "target": target,
+    })
+}
+
+fn active_keys(context: &Value) -> Vec<Value> {
+    context
+        .get("keys")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter(|key| key.get("revokedAt").is_none_or(Value::is_null))
+                .map(|key| {
+                    json!({
+                        "keyType": key.get("keyType"),
+                        "keyPrefix": key.get("keyPrefix"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn app_target(context: &Value) -> Value {
+    json!({
+        "appId": context.pointer("/app/id"),
+        "name": context.pointer("/app/name"),
+        "environment": context.pointer("/app/environment"),
+        "videoCount": context.pointer("/usage/videoCount"),
+        "storageMinutes": context.pointer("/usage/storageMinutes"),
+        "domainCount": context.get("domains").and_then(Value::as_array).map(Vec::len),
+        "activeKeys": active_keys(context),
+    })
+}
+
+pub async fn preview_app_delete(
+    client: &AgentClient,
+    app_id: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    Ok(preview(
+        "delete_developer_app",
+        "Deletes the app, revokes its keys and stops playback of its videos. Unused credit is lost.",
+        app_target(&context),
+    ))
+}
+
+pub async fn preview_key_rotation(
+    client: &AgentClient,
+    app_id: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    Ok(preview(
+        "rotate_developer_keys",
+        "Revokes the active keys at once and prints a new public and secret key one time.",
+        app_target(&context),
+    ))
+}
+
+pub fn domain_entry<'a>(context: &'a Value, domain: &str) -> Option<&'a Value> {
+    let wanted = domain.trim_end_matches('/');
+    context
+        .get("domains")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|entry| {
+            ["id", "domain"].iter().any(|field| {
+                entry
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
+            })
+        })
+}
+
+pub async fn resolve_domain(
+    client: &AgentClient,
+    app_id: &str,
+    domain: &str,
+) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    domain_entry(&context, domain).cloned().ok_or_else(|| {
+        AgentApiError::local("NOT_FOUND", "Domain not found in this developer app").with_hint(
+            format!("Run `cap developers get {app_id}` to list the app's domains and their ids."),
+        )
+    })
+}
+
+pub fn domain_removal_preview(app_id: &str, domain: &Value) -> Value {
+    preview(
+        "remove_developer_domain",
+        "Requests from this origin are refused once it is removed.",
+        json!({
+            "appId": app_id,
+            "domainId": domain.get("id"),
+            "domain": domain.get("domain"),
+        }),
+    )
+}
+
+pub async fn preview_video_delete(
+    client: &AgentClient,
+    app_id: &str,
+    video_id: &str,
+) -> Result<Value, AgentApiError> {
+    let value = get_video(client, app_id, video_id).await?;
+    Ok(preview(
+        "delete_developer_video",
+        "Deletes the video and stops its playback, share and embed links.",
+        json!({
+            "appId": app_id,
+            "videoId": value.pointer("/video/id"),
+            "name": value.pointer("/video/name"),
+            "status": value.pointer("/video/status"),
+            "durationSeconds": value.pointer("/video/durationSeconds"),
+            "shareUrl": value.pointer("/video/shareUrl"),
+        }),
+    ))
+}
+
+pub async fn preview_transcript_delete(
+    client: &AgentClient,
+    app_id: &str,
+    transcript_id: &str,
+) -> Result<Value, AgentApiError> {
+    let value = client
+        .get_json(&transcript_path(app_id, transcript_id, false)?)
+        .await?;
+    Ok(preview(
+        "delete_developer_transcript",
+        "Deletes the transcript and its stored text. The charge is not refunded.",
+        json!({
+            "appId": app_id,
+            "transcriptId": value.pointer("/transcript/id"),
+            "name": value.pointer("/transcript/name"),
+            "status": value.pointer("/transcript/status"),
+            "durationSeconds": value.pointer("/transcript/durationSeconds"),
+        }),
+    ))
+}
+
+pub async fn usage(client: &AgentClient, app_id: &str) -> Result<Value, AgentApiError> {
+    let context = app_context(client, app_id).await?;
+    let field = |name: &str| context.get(name).cloned().unwrap_or(Value::Null);
+    Ok(json!({
+        "appId": context.pointer("/app/id"),
+        "name": context.pointer("/app/name"),
+        "usage": field("usage"),
+        "credits": field("credits"),
+        "billing": field("billing"),
+        "billingHint": field("billingHint"),
+        "requestId": field("requestId"),
+    }))
 }
 
 pub fn video_create_body(
@@ -350,22 +645,27 @@ pub async fn upload_video(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("Cap returned a video without an ID"))?
         .to_string();
-    let target = created
-        .get("upload")
-        .ok_or_else(|| invalid("Cap did not return an upload target"))?;
-    put_file(target, path, content_length).await?;
-    client
-        .mutate_json_confirmed(
-            Method::POST,
-            &format!("/developer/apps/{app_id}/videos/{video_id}/complete"),
-            &json!({
-                "durationSeconds": meta.duration_in_secs,
-                "width": meta.width,
-                "height": meta.height,
-                "fps": meta.fps,
-            }),
-        )
+    let completed = async {
+        let target = created
+            .get("upload")
+            .ok_or_else(|| invalid("Cap did not return an upload target"))?;
+        put_file(target, path, content_length).await?;
+        client
+            .mutate_json_confirmed(
+                Method::POST,
+                &format!("/developer/apps/{app_id}/videos/{video_id}/complete"),
+                &json!({
+                    "durationSeconds": meta.duration_in_secs,
+                    "width": meta.width,
+                    "height": meta.height,
+                    "fps": meta.fps,
+                }),
+            )
+            .await
+    };
+    completed
         .await
+        .map_err(|error| error.with_detail("videoId", video_id.as_str()))
 }
 
 #[cfg(test)]
@@ -432,7 +732,7 @@ mod tests {
             "requestId": "r1",
         });
         assert_eq!(transcript_status(&value), Some("error"));
-        let error = transcript_failure(&value);
+        let error = transcript_failure(&value, "tr-1");
         assert_eq!(error.code, "TRANSCRIPT_FAILED");
         assert!(error.message.contains("insufficient_credits"));
         assert_eq!(error.request_id.as_deref(), Some("r1"));

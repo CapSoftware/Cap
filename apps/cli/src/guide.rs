@@ -224,7 +224,7 @@ fn build() -> Guide {
             ),
             cmd(
                 "upload",
-                "Upload a .cap project or video file; returns a shareable link. Authenticates via Cap Desktop's login or CAP_API_KEY.",
+                "Upload a .cap project or video file to your personal Cap library; returns a shareable link. Authenticates via Cap Desktop's login or CAP_API_KEY. To upload to a Cap Infra developer app use `developers videos upload`.",
                 OutputMode::SingleJson,
                 &[],
             ),
@@ -343,8 +343,8 @@ fn build() -> Guide {
                 &[],
             ),
             cmd(
-                "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transcripts|transactions",
-                "Manage developer apps, SDK videos, transcripts, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file>` uploads a local video. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. New credentials are returned only by confirmed CLI commands.",
+                "developers list|get|create|update|delete|usage|domains|keys|auto-top-up|credits|videos|transcripts|transactions",
+                "Manage Cap Infra developer apps: videos, transcripts, usage, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file> --wait` uploads a local video and returns it once it is ready, with its status, playback id and playback, share and embed links. `developers videos get|wait|list` read the same fields later. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. `developers usage <app>` shows stored minutes, the credit balance and whether uploads are allowed. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. Delete and rotate commands take --dry-run. In JSON mode a failure prints one object with error, code, message, and when known hint, requestId and the id being waited on. New credentials are returned only by confirmed CLI commands.",
                 OutputMode::SingleJson,
                 &[],
             ),

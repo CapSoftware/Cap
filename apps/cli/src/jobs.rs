@@ -45,6 +45,7 @@ fn local_error(code: &str, message: impl Into<String>) -> AgentApiError {
         retryable: false,
         retry_after_ms: None,
         request_id: None,
+        ..Default::default()
     }
 }
 
@@ -108,6 +109,7 @@ pub async fn wait_operation(
                 retryable: true,
                 retry_after_ms: Some(2_000),
                 request_id,
+                ..Default::default()
             })
         })
 }

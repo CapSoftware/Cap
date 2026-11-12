@@ -67,14 +67,24 @@ and `cap jobs` for account, organization, sharing, storage, billing, analytics, 
 operation workflows. Inspect each command's current arguments with `--help`; do not reconstruct them from this
 skill.
 
-For a developer app, `cap developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or
-video into text and `cap developers videos upload <app> <file>` uploads a video. Over MCP these are
-`developer_transcript_create` (with `file_path` or `url`), `developer_transcript_wait`,
-`developer_transcript_get`, and `developer_video_upload`. A transcript spends the app's prepaid credits and
-an uploaded video is billed daily for storage, so name the app, the file, and the price and get confirmation
-first. An uploaded video comes back as `processing` until its playback files are ready. A `queued` or `processing` transcript is not done:
-wait for `complete`. `INSUFFICIENT_CREDITS` means the app needs a top-up through
-`cap developers credits purchase`.
+Cap Infra is Cap's video and speech API, and its apps are the `cap developers` commands and `developer_*` MCP
+tools. `cap upload` goes to the personal library, never to an app. For a developer app,
+`cap developers videos upload <app> <file> --wait` uploads a video and returns it once it is ready, and
+`cap developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text. Over
+MCP these are `developer_video_upload` (with `wait`), `developer_video_wait`, `developer_video_get`,
+`developer_transcript_create` (with `file_path` or `url`), `developer_transcript_wait`, and
+`developer_transcript_get`. A transcript spends the app's prepaid credits and an uploaded video is billed daily
+for storage, so name the app, the file, and the price and get confirmation first.
+
+An uploaded video is `processing` until its playback files are ready. Do not report it as playable before its
+status is `ready`; then read `shareUrl`, `embedUrl`, `hlsUrl` and `mp4Url` from the video. A `queued` or
+`processing` transcript is not done: wait for `complete`. A failed or timed out wait still reports the video
+or transcript id. `INSUFFICIENT_CREDITS` means the app needs a top-up through `cap developers credits purchase`.
+`cap developers usage <app>` shows the balance and whether uploads are allowed. Before a delete or a key
+rotation, run the command with `--dry-run` (MCP `dry_run=true`) and show the user the result.
+
+If `cap developers videos --help` does not list `upload`, the installed CLI predates these commands. Run
+`cap update`, and if they are still missing use the REST API until the next Cap release.
 
 Organization invites deliver email by default. Use `cap organizations invite add ... --no-email` only when the
 user explicitly wants a link-only invite, and report the returned `emailDelivery` state.

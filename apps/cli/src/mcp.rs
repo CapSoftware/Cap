@@ -58,6 +58,7 @@ fn list_caps_path(input: ListCapsInput) -> Result<String, AgentApiError> {
             retryable: false,
             retry_after_ms: None,
             request_id: None,
+            ..Default::default()
         });
     }
     let limit = input.limit.unwrap_or(50);
@@ -68,6 +69,7 @@ fn list_caps_path(input: ListCapsInput) -> Result<String, AgentApiError> {
             retryable: false,
             retry_after_ms: None,
             request_id: None,
+            ..Default::default()
         });
     }
     let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -348,152 +350,254 @@ struct SpaceInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperAppInput {
+    /// App id from developer_apps_list
     app_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperVideoListInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Only videos uploaded with this end user id. It is returned as externalUserId
     #[serde(default)]
     user_id: Option<String>,
+    /// nextCursor from the previous page
     #[serde(default)]
     cursor: Option<String>,
+    /// Page size from 1 to 100. Defaults to 50
     #[serde(default)]
     limit: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct DeveloperVideoDeleteInput {
+struct DeveloperVideoInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Video id from developer_video_upload or developer_videos_list
     video_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperVideoWaitInput {
+    /// App id from developer_apps_list
+    app_id: String,
+    /// Video id from developer_video_upload or developer_videos_list
+    video_id: String,
+    /// Give up after this many seconds, from 1 to 86400. Defaults to 900
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperVideoDeleteInput {
+    /// App id from developer_apps_list
+    app_id: String,
+    /// Video id from developer_video_upload or developer_videos_list
+    video_id: String,
+    /// true returns what would be deleted and changes nothing. It needs no confirmation
+    #[serde(default)]
+    dry_run: bool,
+    /// true only after the user confirmed this exact deletion
+    #[serde(default)]
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperVideoUploadInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Path of a local video file, up to 5 GB
     file_path: String,
+    /// Display name. Defaults to the file name
     #[serde(default)]
     name: Option<String>,
+    /// Your own id for the end user this video belongs to. It is returned as externalUserId
     #[serde(default)]
     user_id: Option<String>,
+    /// true blocks until the video is ready or has failed and returns its links
+    #[serde(default)]
+    wait: bool,
+    /// With wait, give up after this many seconds, from 1 to 86400. Defaults to 900
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+    /// true only after the user confirmed the upload
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTranscriptCreateInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Path of a local audio or video file, up to 2 GB. Send this or url, not both
     #[serde(default)]
     file_path: Option<String>,
+    /// Public http or https URL of an audio or video file. Send this or file_path, not both
     #[serde(default)]
     url: Option<String>,
+    /// Display name. Defaults to the file name
     #[serde(default)]
     name: Option<String>,
+    /// Two-letter language code, or auto to detect it
     #[serde(default)]
     language: Option<String>,
+    /// Your own id for the end user this transcript belongs to. It is returned as externalUserId
     #[serde(default)]
     user_id: Option<String>,
+    /// true blocks until the text is ready and returns it
     #[serde(default)]
     wait: bool,
+    /// With wait, give up after this many seconds, from 1 to 86400. Defaults to 900
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// true only after the user confirmed the transcript and its cost
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTranscriptInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Transcript id from developer_transcript_create or developer_transcripts_list
     transcript_id: String,
+    /// true adds timed segments, with start and end in seconds
     #[serde(default)]
     include_segments: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTranscriptWaitInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Transcript id from developer_transcript_create or developer_transcripts_list
     transcript_id: String,
+    /// Give up after this many seconds, from 1 to 86400. Defaults to 900
     #[serde(default)]
     timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTranscriptListInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// One of uploading, queued, processing, complete, error
     #[serde(default)]
     status: Option<String>,
+    /// Only transcripts created with this end user id
     #[serde(default)]
     user_id: Option<String>,
+    /// nextCursor from the previous page
     #[serde(default)]
     cursor: Option<String>,
+    /// Page size from 1 to 100. Defaults to 50
     #[serde(default)]
     limit: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTranscriptDeleteInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Transcript id from developer_transcript_create or developer_transcripts_list
     transcript_id: String,
+    /// true returns what would be deleted and changes nothing. It needs no confirmation
+    #[serde(default)]
+    dry_run: bool,
+    /// true only after the user confirmed this exact deletion
+    #[serde(default)]
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperTransactionListInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// nextCursor from the previous page
     #[serde(default)]
     cursor: Option<String>,
+    /// Page size from 1 to 100. Defaults to 50
     #[serde(default)]
     limit: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperAppUpdateInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// New display name
     #[serde(default)]
     name: Option<String>,
+    /// development or production
     #[serde(default)]
     environment: Option<String>,
+    /// Public http or https URL of the app logo
     #[serde(default)]
     logo_url: Option<String>,
+    /// true removes the logo. Do not combine with logo_url
     #[serde(default)]
     clear_logo: bool,
+    /// true only after the user confirmed the change
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperAppDeleteInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// true returns the app, its video count and the keys that would be revoked, and changes nothing. It needs no confirmation
+    #[serde(default)]
+    dry_run: bool,
+    /// true only after the user confirmed deleting this exact app
+    #[serde(default)]
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperDomainAddInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Origin to allow, for example https://app.example.com
     domain: String,
+    /// true only after the user confirmed the change
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperDomainRemoveInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Domain id from developer_app_context, or the origin itself
     domain_id: String,
+    /// true returns the domain that would be removed and changes nothing. It needs no confirmation
+    #[serde(default)]
+    dry_run: bool,
+    /// true only after the user confirmed removing this exact domain
+    #[serde(default)]
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperAutoTopUpInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// true switches automatic purchases on. It needs a saved card, which a paid checkout saves
     enabled: bool,
+    /// Buy credits when the balance falls below this many micro-credits. 100,000 micro-credits are $1
     #[serde(default)]
     threshold_micro_credits: Option<u64>,
+    /// Amount of each automatic purchase in cents, from 500 ($5) to 100000 ($1,000)
     #[serde(default)]
     amount_cents: Option<u32>,
+    /// true only after the user confirmed the change
     confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct DeveloperCreditsCheckoutInput {
+    /// App id from developer_apps_list
     app_id: String,
+    /// Amount in cents, from 500 ($5) to 100000 ($1,000)
     amount_cents: u32,
+    /// true only after the user confirmed the amount
     confirmed: bool,
 }
 
@@ -732,9 +836,13 @@ impl CapMcpServer {
         }
     }
 
+    fn success(value: &Value) -> CallToolResult {
+        CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+    }
+
     fn result(result: Result<Value, AgentApiError>) -> CallToolResult {
         match result {
-            Ok(value) => CallToolResult::structured(value),
+            Ok(value) => Self::success(&value),
             Err(mut error) => {
                 if error.code == "PASSWORD_REQUIRED" {
                     error.message = format!(
@@ -742,13 +850,14 @@ impl CapMcpServer {
                         error.message
                     );
                 }
-                CallToolResult::structured_error(serde_json::to_value(error).unwrap_or_else(|_| {
+                let value = serde_json::to_value(error).unwrap_or_else(|_| {
                     json!({
                         "code": "TEMPORARY_UNAVAILABLE",
                         "message": "The Cap response could not be represented",
                         "retryable": true,
                     })
-                }))
+                });
+                CallToolResult::error(vec![ContentBlock::text(value.to_string())])
             }
         }
     }
@@ -763,6 +872,7 @@ impl CapMcpServer {
                 retryable: false,
                 retry_after_ms: None,
                 request_id: None,
+                ..Default::default()
             }))
         })
     }
@@ -774,6 +884,7 @@ impl CapMcpServer {
             retryable: false,
             retry_after_ms: None,
             request_id: None,
+            ..Default::default()
         }
     }
 
@@ -791,6 +902,7 @@ impl CapMcpServer {
                 retryable: false,
                 retry_after_ms: None,
                 request_id: None,
+                ..Default::default()
             });
         }
         let wait_for = input.wait_for.as_deref().unwrap_or("all");
@@ -801,6 +913,7 @@ impl CapMcpServer {
                 retryable: false,
                 retry_after_ms: None,
                 request_id: None,
+                ..Default::default()
             });
         }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
@@ -814,6 +927,7 @@ impl CapMcpServer {
                     retryable: false,
                     retry_after_ms: None,
                     request_id: None,
+                    ..Default::default()
                 }),
                 result = self.client.get_json(&status_path) => result?,
             };
@@ -841,6 +955,7 @@ impl CapMcpServer {
                     retryable: false,
                     retry_after_ms: None,
                     request_id: None,
+                    ..Default::default()
                 });
             }
             let complete = match wait_for {
@@ -858,6 +973,7 @@ impl CapMcpServer {
                     retryable: true,
                     retry_after_ms: Some(2_000),
                     request_id: None,
+                    ..Default::default()
                 });
             }
             let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
@@ -868,6 +984,7 @@ impl CapMcpServer {
                     retryable: false,
                     retry_after_ms: None,
                     request_id: None,
+                    ..Default::default()
                 }),
                 () = tokio::time::sleep(Duration::from_millis(delay.min(10_000))) => {}
             }
@@ -910,6 +1027,7 @@ impl CapMcpServer {
                             .get("requestId")
                             .and_then(Value::as_str)
                             .map(str::to_string),
+                        ..Default::default()
                     });
                 }
                 Some("queued" | "running") => {}
@@ -922,6 +1040,7 @@ impl CapMcpServer {
                     retryable: true,
                     retry_after_ms: Some(2_000),
                     request_id: None,
+                    ..Default::default()
                 });
             }
             let delay = 500_u64.saturating_mul(1_u64 << attempt.min(4));
@@ -993,7 +1112,7 @@ impl CapMcpServer {
         };
         let serialized_size = serde_json::to_vec(&context).map_or(0, |value| value.len());
         if serialized_size <= 64 * 1024 {
-            return CallToolResult::structured(context);
+            return Self::success(&context);
         }
         let mut links = Vec::new();
         if let Some(object) = context.as_object_mut() {
@@ -1008,7 +1127,7 @@ impl CapMcpServer {
                 }
             }
         }
-        let mut result = CallToolResult::structured(context);
+        let mut result = Self::success(&context);
         result.content.extend(links);
         result
     }
@@ -2241,6 +2360,7 @@ impl CapMcpServer {
                 retryable: false,
                 retry_after_ms: None,
                 request_id: None,
+                ..Default::default()
             }));
         }
         let path = {
@@ -2290,6 +2410,7 @@ impl CapMcpServer {
                 retryable: false,
                 retry_after_ms: None,
                 request_id: None,
+                ..Default::default()
             }));
         }
         let path = {
@@ -2309,7 +2430,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_apps_list",
-        description = "List developer apps without returning API key material",
+        description = "List Cap Infra developer apps. Cap Infra is Cap's video and speech API; an app holds videos, transcripts, domains, keys and credits. Never returns API key material. Create an app with `cap developers create` in a terminal",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2323,7 +2444,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_app_context",
-        description = "Get developer app domains, key metadata, usage, storage, and credits without exposing secrets",
+        description = "Get one Cap Infra developer app: domains, key prefixes, video count, stored minutes, credit balance in micro-credits (100,000 are $1), billing standing and whether uploads are allowed. Never returns secrets",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2348,7 +2469,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_videos_list",
-        description = "List SDK videos for a developer app with cursor pagination and an optional external user ID filter",
+        description = "List a developer app's videos, newest first, with status (uploading, processing, ready, errored), playback id, duration in seconds and playback, share and embed links. Cursor pagination and an optional end user id filter",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2425,7 +2546,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_video_delete",
-        description = "Delete an SDK video from a developer app after explicit user confirmation",
+        description = "Delete a video from a developer app after explicit user confirmation. Call with dry_run=true first to show the user what would be deleted",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2437,33 +2558,75 @@ impl CapMcpServer {
         &self,
         Parameters(input): Parameters<DeveloperVideoDeleteInput>,
     ) -> CallToolResult {
+        if input.dry_run {
+            return Self::result(
+                developer_media::preview_video_delete(&self.client, &input.app_id, &input.video_id)
+                    .await,
+            );
+        }
         if let Some(result) =
-            Self::require_confirmation(input.confirmed, "delete the developer SDK video")
+            Self::require_confirmation(input.confirmed, "delete the developer video")
         {
             return result;
         }
-        let id = match opaque_id(&input.app_id, "Developer app ID") {
-            Ok(id) => id,
-            Err(error) => return Self::result(Err(error)),
-        };
-        let video_id = match opaque_id(&input.video_id, "Developer video ID") {
-            Ok(id) => id,
+        let path = match developer_media::video_path(&input.app_id, &input.video_id) {
+            Ok(path) => path,
             Err(error) => return Self::result(Err(error)),
         };
         Self::result(
             self.client
-                .mutate_json_confirmed(
-                    Method::DELETE,
-                    &format!("/developer/apps/{id}/videos/{video_id}"),
-                    &json!({}),
-                )
+                .mutate_json_confirmed(Method::DELETE, &path, &json!({}))
                 .await,
         )
     }
 
     #[tool(
+        name = "developer_video_get",
+        description = "Get one developer app video: status (uploading, processing, ready, errored), error reason, duration in seconds, dimensions, playback id, and its HLS, MP4, poster, share and embed links. Links to files are null until the video is ready",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_video_get(
+        &self,
+        Parameters(input): Parameters<DeveloperVideoInput>,
+    ) -> CallToolResult {
+        Self::result(developer_media::get_video(&self.client, &input.app_id, &input.video_id).await)
+    }
+
+    #[tool(
+        name = "developer_video_wait",
+        description = "Wait until a developer app video is ready to play and return it with its links. A failed video returns VIDEO_FAILED with the reason, and a timeout returns NOT_READY; both include videoId. Never uploads or charges",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_video_wait(
+        &self,
+        Parameters(input): Parameters<DeveloperVideoWaitInput>,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let timeout = match developer_media::validate_wait_seconds(input.timeout_seconds) {
+            Ok(timeout) => timeout,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let wait =
+            developer_media::wait_for_video(&self.client, &input.app_id, &input.video_id, timeout);
+        Self::result(tokio::select! {
+            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
+            result = wait => result,
+        })
+    }
+
+    #[tool(
         name = "developer_video_upload",
-        description = "Upload a local video file to a developer app after explicit user confirmation. Only files that contain a video stream are accepted. Uploading is free and the stored video is billed daily from the app's credits. Returns the video, which is processing until its playback files are ready",
+        description = "Upload a local video file to a developer app after explicit user confirmation. Only files that contain a video stream are accepted. Uploading is free and the stored video is billed daily from the app's credits. Returns the video with its id, playback id and share and embed links; its status is processing until the playback files are ready. Set wait=true to block until it is ready, or call developer_video_wait",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2482,13 +2645,25 @@ impl CapMcpServer {
         ) {
             return result;
         }
-        let upload = developer_media::upload_video(
-            &self.client,
-            &input.app_id,
-            std::path::Path::new(&input.file_path),
-            input.name.as_deref(),
-            input.user_id.as_deref(),
-        );
+        let timeout = match developer_media::validate_wait_seconds(input.timeout_seconds) {
+            Ok(timeout) => timeout,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let upload = async {
+            let uploaded = developer_media::upload_video(
+                &self.client,
+                &input.app_id,
+                std::path::Path::new(&input.file_path),
+                input.name.as_deref(),
+                input.user_id.as_deref(),
+            )
+            .await?;
+            if !input.wait {
+                return Ok(uploaded);
+            }
+            let id = developer_media::created_id(&uploaded, "video")?;
+            developer_media::wait_for_video(&self.client, &input.app_id, &id, timeout).await
+        };
         Self::result(tokio::select! {
             _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
             result = upload => result,
@@ -2550,12 +2725,8 @@ impl CapMcpServer {
             if !input.wait {
                 return Ok(created);
             }
-            let id = created
-                .get("transcript")
-                .and_then(|transcript| transcript.get("id"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| Self::invalid("Cap returned a transcript without an ID"))?;
-            developer_media::wait_for_transcript(&self.client, &input.app_id, id, timeout).await
+            let id = developer_media::created_id(&created, "transcript")?;
+            developer_media::wait_for_transcript(&self.client, &input.app_id, &id, timeout).await
         };
         Self::result(tokio::select! {
             _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
@@ -2664,7 +2835,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_transcript_delete",
-        description = "Delete a developer transcript and its stored result after explicit user confirmation",
+        description = "Delete a developer transcript and its stored result after explicit user confirmation. Call with dry_run=true first to show the user what would be deleted",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2676,6 +2847,16 @@ impl CapMcpServer {
         &self,
         Parameters(input): Parameters<DeveloperTranscriptDeleteInput>,
     ) -> CallToolResult {
+        if input.dry_run {
+            return Self::result(
+                developer_media::preview_transcript_delete(
+                    &self.client,
+                    &input.app_id,
+                    &input.transcript_id,
+                )
+                .await,
+            );
+        }
         if let Some(result) = Self::require_confirmation(input.confirmed, "delete the transcript") {
             return result;
         }
@@ -2754,7 +2935,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_app_delete",
-        description = "Delete a developer app and revoke its keys after explicit user confirmation",
+        description = "Delete a developer app and revoke its keys after explicit user confirmation. Call with dry_run=true first to show the user the app, its videos and the keys that would be revoked",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2766,6 +2947,11 @@ impl CapMcpServer {
         &self,
         Parameters(input): Parameters<DeveloperAppDeleteInput>,
     ) -> CallToolResult {
+        if input.dry_run {
+            return Self::result(
+                developer_media::preview_app_delete(&self.client, &input.app_id).await,
+            );
+        }
         if let Some(result) = Self::require_confirmation(
             input.confirmed,
             "delete the developer app and revoke its keys",
@@ -2819,7 +3005,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_domain_remove",
-        description = "Remove an allowed origin from a developer app after explicit user confirmation",
+        description = "Remove an allowed origin from a developer app after explicit user confirmation. Call with dry_run=true first to show the user which origin would be removed",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2831,16 +3017,35 @@ impl CapMcpServer {
         &self,
         Parameters(input): Parameters<DeveloperDomainRemoveInput>,
     ) -> CallToolResult {
-        if let Some(result) =
-            Self::require_confirmation(input.confirmed, "remove the developer app domain")
-        {
-            return result;
-        }
         let id = match opaque_id(&input.app_id, "Developer app ID") {
             Ok(id) => id,
             Err(error) => return Self::result(Err(error)),
         };
-        let domain_id = match opaque_id(&input.domain_id, "Developer domain ID") {
+        let named = input.domain_id.contains(['.', ':', '/']);
+        if !input.dry_run
+            && let Some(result) =
+                Self::require_confirmation(input.confirmed, "remove the developer app domain")
+        {
+            return result;
+        }
+        let domain_id = if input.dry_run || named {
+            let entry =
+                match developer_media::resolve_domain(&self.client, &id, &input.domain_id).await {
+                    Ok(entry) => entry,
+                    Err(error) => return Self::result(Err(error)),
+                };
+            if input.dry_run {
+                return Self::result(Ok(developer_media::domain_removal_preview(&id, &entry)));
+            }
+            entry
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            input.domain_id
+        };
+        let domain_id = match opaque_id(&domain_id, "Developer domain ID") {
             Ok(id) => id,
             Err(error) => return Self::result(Err(error)),
         };
@@ -2857,7 +3062,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_auto_top_up_update",
-        description = "Configure future automatic developer credit purchases after explicit user confirmation",
+        description = "Configure future automatic developer credit purchases after explicit user confirmation. The threshold is in micro-credits (100,000 are $1) and the amount is in cents",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2899,7 +3104,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_credits_checkout",
-        description = "Create a developer-credit purchase URL after explicit user confirmation; the user completes payment in a browser",
+        description = "Create a developer-credit purchase URL after explicit user confirmation; the user completes payment in a browser and nothing is charged before that. The amount is in cents, from 500 ($5) to 100000 ($1,000)",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -3777,7 +3982,7 @@ impl ServerHandler for CapMcpServer {
         )
         .with_server_info(Implementation::new("cap", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Use Cap resources for large transcript and activity data. Passwords, S3 credentials, image files, and newly issued developer credentials are never accepted or returned by MCP; use the corresponding `cap caps`, `cap organizations`, `cap account`, or `cap developers` command in a secure terminal. Developer video uploads and transcripts take a local file path or a public URL, spend the app's credits, and never return signed upload URLs.",
+            "Use Cap resources for large transcript and activity data. Passwords, S3 credentials, image files, and newly issued developer credentials are never accepted or returned by MCP; use the corresponding `cap caps`, `cap organizations`, `cap account`, or `cap developers` command in a secure terminal. Cap Infra is Cap's video and speech API; its apps are the developer_* tools. Developer video uploads and transcripts take a local file path or a public URL, spend the app's credits, and never return signed upload URLs. After developer_video_upload, call developer_video_wait until the status is ready, then read the links from the video.",
         )
     }
 
