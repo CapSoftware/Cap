@@ -43,6 +43,7 @@ const mainOrigins = [
 ].filter(Boolean) as string[];
 
 const FRAME_PROTECTED_PATHS = [
+	"/login",
 	"/dashboard",
 	"/onboarding",
 	"/invite",
@@ -140,10 +141,6 @@ export async function proxy(request: NextRequest) {
 	const path = new URL(request.url).pathname;
 
 	if (path.startsWith(DUB_PROXY_PREFIX)) return proxyDub(request);
-
-	if (path.startsWith("/login")) {
-		return rememberReferralClick(request, setFrameHeaders(NextResponse.next()));
-	}
 
 	const response = await route(request);
 	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
