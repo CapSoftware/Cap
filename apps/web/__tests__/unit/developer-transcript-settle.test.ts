@@ -591,6 +591,43 @@ describe("the hold taken before any work", () => {
 		);
 	});
 
+	it("gives its own hold back while it waits for a raise, so two raises cannot block each other", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 2_500;
+		addTranscript("tr-2");
+		const raise = (transcriptId: string) =>
+			holdTranscriptCredits({
+				transcriptId,
+				microCredits: 2_006,
+				releaseWhileWaiting: true,
+			});
+		await hold("tr-1", 1_000);
+		await hold("tr-2", 1_000);
+
+		expect((await raise("tr-1")).state).toBe("contended");
+		expect(transcript()?.reservedMicroCredits).toBe(0);
+		expect(await raise("tr-2")).toEqual({
+			state: "held",
+			reservedMicroCredits: 2_006,
+		});
+		expect(await raise("tr-1")).toEqual({
+			state: "contended",
+			neededMicroCredits: 2_006,
+			availableMicroCredits: 494,
+		});
+	});
+
+	it("keeps its hold while waiting when it has not asked to give it back", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 2_500;
+		addTranscript("tr-2");
+		await hold("tr-1", 1_000);
+		await hold("tr-2", 1_000);
+
+		expect((await hold("tr-1", 2_006)).state).toBe("contended");
+		expect(transcript()?.reservedMicroCredits).toBe(1_000);
+	});
+
 	it("reports contention when other transcripts hold the credit it needs", async () => {
 		addTranscript("tr-2");
 		await hold("tr-1", 40_000);

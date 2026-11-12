@@ -389,6 +389,28 @@ describe.skipIf(!databaseUrl)("transcript holds on a real database", () => {
 		}
 	});
 
+	it("lets one go first when every running transcript needs a bigger hold at once", async () => {
+		const each = transcriptionMicroCredits(720);
+		const appId = await makeApp(2 * each + 500);
+		const ids = await Promise.all(
+			Array.from({ length: 4 }, () => queueUpload(appId, 150_000, 720)),
+		);
+
+		const { peak } = await watchingHolds(appId, () =>
+			Promise.all(ids.map((transcriptId) => run(transcriptId))),
+		);
+
+		const rows = await rowsOf(ids);
+		expect(peak()).toBeLessThanOrEqual(2 * each + 500);
+		expect(rows.filter((row) => row.status === "complete")).toHaveLength(2);
+		expect(
+			rows.filter((row) => row.errorCode === "insufficient_credits"),
+		).toHaveLength(2);
+		expect(fixture.sleepSeconds).toBeLessThan(15 * 60);
+		expect(await balanceOf(appId)).toBe(500);
+		expect(await heldBy(appId)).toBe(0);
+	});
+
 	it("raises a hold for audio longer than the file size suggests only while the balance covers it", async () => {
 		const appId = await makeApp(FULL_HOLD + 1_000);
 		const sparse = await queueUpload(appId, 100_000, 3 * 3600);

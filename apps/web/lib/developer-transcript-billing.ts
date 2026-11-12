@@ -119,6 +119,7 @@ async function findTranscriptApp(transcriptId: string) {
 export async function holdTranscriptCredits(input: {
 	transcriptId: string;
 	microCredits: number;
+	releaseWhileWaiting?: boolean;
 }): Promise<TranscriptHold> {
 	const appId = await findTranscriptApp(input.transcriptId);
 	if (!appId) return { state: "skipped" };
@@ -164,8 +165,15 @@ export async function holdTranscriptCredits(input: {
 		);
 		const available = (account?.balanceMicroCredits ?? 0) - heldByOthers;
 		if (!account || available < needed) {
+			const contended = Boolean(account) && heldByOthers > 0;
+			if (contended && input.releaseWhileWaiting && current > 0) {
+				await tx
+					.update(developerTranscripts)
+					.set({ reservedMicroCredits: 0 })
+					.where(eq(developerTranscripts.id, input.transcriptId));
+			}
 			return {
-				state: account && heldByOthers > 0 ? "contended" : "insufficient",
+				state: contended ? "contended" : "insufficient",
 				neededMicroCredits: needed,
 				availableMicroCredits: Math.max(0, available),
 			};

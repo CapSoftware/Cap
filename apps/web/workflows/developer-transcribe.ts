@@ -438,6 +438,7 @@ async function raiseTranscriptHold(
 	const hold = await holdTranscriptCredits({
 		transcriptId,
 		microCredits: transcriptHoldForAudioSeconds(reportedSeconds),
+		releaseWhileWaiting: true,
 	});
 	return hold.state === "held" ? { ok: true } : notHeld(hold, null);
 }
