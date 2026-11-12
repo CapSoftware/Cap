@@ -1672,6 +1672,9 @@ const INFRA_VIDEO: &str = "vid000000000001";
 const INFRA_DASH_VIDEO: &str = "-Vid0000000dash";
 const INFRA_FAILED_VIDEO: &str = "vidfailed000001";
 const INFRA_SLOW_VIDEO: &str = "vidslow00000001";
+const INFRA_STALLED_VIDEO: &str = "vidstall0000001";
+const INFRA_STALLED_TRANSCRIPT: &str = "trstall00000001";
+const INFRA_STALL: Duration = Duration::from_secs(4);
 const INFRA_TRANSCRIPT: &str = "tr0000000000001";
 const INFRA_DASH_TRANSCRIPT: &str = "-EDG5hrbuAwXDNY";
 const INFRA_FAILED_TRANSCRIPT: &str = "trfailed0000001";
@@ -2000,7 +2003,7 @@ fn infra_respond(
                         "ready"
                     }
                 }
-                INFRA_DASH_VIDEO => "ready",
+                INFRA_DASH_VIDEO | INFRA_STALLED_VIDEO => "ready",
                 _ => {
                     return infra_error(404, "NOT_FOUND", "Video not found in this developer app");
                 }
@@ -2052,7 +2055,7 @@ fn infra_respond(
                         "complete"
                     }
                 }
-                INFRA_DASH_TRANSCRIPT => "complete",
+                INFRA_DASH_TRANSCRIPT | INFRA_STALLED_TRANSCRIPT => "complete",
                 _ => {
                     return infra_error(
                         404,
@@ -2137,6 +2140,9 @@ fn start_infra_stub() -> InfraStub {
                 let mut body = vec![0; length];
                 if reader.read_exact(&mut body).is_err() {
                     return;
+                }
+                if target.contains("stall") {
+                    thread::sleep(INFRA_STALL);
                 }
                 let (status, value) = {
                     let mut state = state.lock().unwrap();
@@ -2790,7 +2796,7 @@ impl McpSession {
         session
     }
 
-    fn request(&mut self, method: &str, params: Value) -> (Value, usize) {
+    fn send(&mut self, method: &str, params: Value) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         writeln!(
@@ -2800,6 +2806,39 @@ impl McpSession {
         )
         .unwrap();
         self.stdin.flush().unwrap();
+        id
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        writeln!(
+            self.stdin,
+            "{}",
+            serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params })
+        )
+        .unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> (Value, usize) {
+        let id = self.send(method, params);
+        self.receive(id)
+    }
+
+    fn notification(&mut self, method: &str) -> Value {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(20))
+                .expect("MCP server sent no notification")
+                .unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["method"] == method {
+                return value;
+            }
+        }
+    }
+
+    fn receive(&mut self, id: u64) -> (Value, usize) {
         loop {
             let line = self
                 .lines
@@ -2957,4 +2996,170 @@ fn mcp_developer_tools_finish_the_job_and_return_each_result_once() {
     );
     assert_eq!(mcp_payload(&refused)["code"], "APPROVAL_REQUIRED");
     assert_eq!(stub.writes().len(), writes_before);
+}
+
+#[test]
+fn developer_waits_stop_at_their_deadline() {
+    let stub = start_infra_stub();
+    let timed = |args: &[&str]| {
+        let started = std::time::Instant::now();
+        let output = infra_cap(&stub, args);
+        (output, started.elapsed())
+    };
+
+    for (kind, id, id_key) in [
+        ("videos", INFRA_STALLED_VIDEO, "videoId"),
+        ("transcripts", INFRA_STALLED_TRANSCRIPT, "transcriptId"),
+    ] {
+        let (output, elapsed) = timed(&[
+            "developers",
+            kind,
+            "wait",
+            INFRA_APP,
+            id,
+            "--timeout-seconds",
+            "1",
+            "--json",
+        ]);
+        assert!(
+            elapsed < INFRA_STALL - Duration::from_secs(1),
+            "{kind} wait took {elapsed:?} with a 1 second limit"
+        );
+        assert_eq!(output.status.code(), Some(1), "{kind}");
+        let error = single_json_error(&output);
+        assert_eq!(error["code"], "NOT_READY", "{kind}");
+        assert_eq!(error["retryable"], true, "{kind}");
+        assert_eq!(error[id_key], id, "{kind}");
+        assert!(error.get("status").is_none(), "{kind}");
+    }
+
+    let (output, elapsed) = timed(&[
+        "developers",
+        "videos",
+        "wait",
+        INFRA_APP,
+        INFRA_SLOW_VIDEO,
+        "--timeout-seconds",
+        "2",
+        "--json",
+    ]);
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the last sleep ran past the limit: {elapsed:?}"
+    );
+    let error = single_json_error(&output);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["videoId"], INFRA_SLOW_VIDEO);
+    assert_eq!(error["status"], "processing");
+    assert!(error["hint"].as_str().unwrap().contains(&format!(
+        "cap developers videos wait {INFRA_APP} {INFRA_SLOW_VIDEO}"
+    )));
+
+    let mut session = McpSession::start(&stub.url);
+    let started = std::time::Instant::now();
+    let (result, _) = session.call(
+        "developer_video_wait",
+        serde_json::json!({
+            "app_id": INFRA_APP,
+            "video_id": INFRA_STALLED_VIDEO,
+            "timeout_seconds": 1,
+        }),
+    );
+    assert!(started.elapsed() < INFRA_STALL - Duration::from_secs(1));
+    assert_eq!(result["isError"], true);
+    let error = mcp_payload(&result);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["videoId"], INFRA_STALLED_VIDEO);
+}
+
+#[test]
+fn account_command_failures_keep_their_typed_fields_in_json() {
+    let unreachable = |args: &[&str]| {
+        cap()
+            .args(args)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["account", "get", "--json"],
+        vec!["organizations", "list", "--json"],
+        vec!["library", "folders", "list", "org_test", "--json"],
+        vec!["notifications", "list", "--json"],
+        vec!["jobs", "get", "op_test", "--json"],
+    ] {
+        let output = unreachable(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let error = single_json_error(&output);
+        assert_eq!(error["code"], "TEMPORARY_UNAVAILABLE", "{args:?}");
+        assert_eq!(error["retryable"], true, "{args:?}");
+        assert_eq!(error["retryAfterMs"], 500, "{args:?}");
+        assert!(error["hint"].is_string(), "{args:?}");
+    }
+
+    let stub = start_infra_stub();
+    let missing = infra_cap(&stub, &["organizations", "get", "org_missing", "--json"]);
+    let error = single_json_error(&missing);
+    assert_eq!(error["code"], "NOT_FOUND");
+    assert_eq!(error["retryable"], false);
+    assert_eq!(error["requestId"], "req_stub");
+
+    let local = unreachable(&["organizations", "update", "org_test", "--yes", "--json"]);
+    let error = single_json_error(&local);
+    assert_eq!(error["retryable"], false);
+    assert!(!error["message"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn mcp_upload_announces_the_video_id_before_a_cancelled_wait() {
+    let stub = start_infra_stub();
+    let directory = tempfile::tempdir().unwrap();
+    let media = directory.path().join("demo.mp4");
+    write_test_media(&media);
+    let mut session = McpSession::start(&stub.url);
+
+    let id = session.send(
+        "tools/call",
+        serde_json::json!({
+            "name": "developer_video_upload",
+            "arguments": {
+                "app_id": INFRA_APP,
+                "file_path": media.to_str().unwrap(),
+                "name": "slow",
+                "wait": true,
+                "confirmed": true,
+            },
+            "_meta": { "progressToken": "upload-1" },
+        }),
+    );
+    let progress = session.notification("notifications/progress");
+    assert_eq!(progress["params"]["progressToken"], "upload-1");
+    let message = progress["params"]["message"].as_str().unwrap();
+    assert!(message.contains(INFRA_SLOW_VIDEO), "{message}");
+    assert!(message.contains("developer_video_wait"), "{message}");
+
+    session.notify(
+        "notifications/cancelled",
+        serde_json::json!({ "requestId": id, "reason": "test" }),
+    );
+    let (tools, _) = session.request("tools/list", serde_json::json!({}));
+    assert!(tools["result"]["tools"].is_array());
+    thread::sleep(Duration::from_millis(1_500));
+    let polls = |stub: &InfraStub| {
+        stub.requests()
+            .iter()
+            .filter(|request| request.ends_with(INFRA_SLOW_VIDEO))
+            .count()
+    };
+    let after_cancel = polls(&stub);
+    thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(polls(&stub), after_cancel, "the wait kept polling");
+
+    let (resumed, _) = session.call(
+        "developer_video_get",
+        serde_json::json!({ "app_id": INFRA_APP, "video_id": INFRA_SLOW_VIDEO }),
+    );
+    assert_eq!(mcp_payload(&resumed)["video"]["status"], "processing");
 }
