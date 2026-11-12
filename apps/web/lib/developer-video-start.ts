@@ -48,7 +48,7 @@ export async function kickStartDeveloperVideo(
 		if (prepared !== "ready") return;
 		const parts = await readDeveloperVideoParts(videoId, encodeId);
 		if (!parts) return;
-		await Promise.all(
+		await Promise.allSettled(
 			DEVELOPER_VIDEO_PARTS.filter((part) => parts[part] === "dispatch").map(
 				(part) => dispatchDeveloperVideoPart(videoId, encodeId, part),
 			),

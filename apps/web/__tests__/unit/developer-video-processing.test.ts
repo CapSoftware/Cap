@@ -788,7 +788,89 @@ describe("developer video dispatch", () => {
 			"retry",
 		);
 		expect(video().status).toBe("processing");
-		expect(mocks.store.updates).toHaveLength(0);
+		expect(video().processing?.probe).toBeNull();
+		expect(video().processing?.probing).toBeUndefined();
+	});
+
+	it("probes a file once when two callers prepare it at the same time", async () => {
+		let finish: (value: unknown) => void = () => undefined;
+		mocks.probe.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		const first = prepareDeveloperVideoProcessing("video-1", "encode-1");
+		await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(1));
+
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"probing",
+		);
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
+
+		finish({
+			status: "ok",
+			metadata: { duration: 12, width: 1920, height: 1080, fps: 30 },
+		});
+
+		expect(await first).toBe("ready");
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"ready",
+		);
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
+		expect(video().processing?.probing).toBeUndefined();
+		expect(video().processing?.probe?.width).toBe(1920);
+	});
+
+	it("lets the next caller probe after a failed probe gives its claim back", async () => {
+		mocks.probe.mockRejectedValueOnce(new Error("connection reset"));
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).rejects.toThrow("connection reset");
+		expect(video().processing?.probing).toBeUndefined();
+
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 12, width: 1920, height: 1080, fps: 30 },
+		});
+
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"ready",
+		);
+		expect(mocks.probe).toHaveBeenCalledTimes(2);
+	});
+
+	it("takes over a probe claim left by a caller that stopped", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 12, width: 1920, height: 1080, fps: 30 },
+		});
+		const abandoned = (secondsAgo: number) =>
+			developerVideo({
+				processing: {
+					...processingState({ probe: null }),
+					probing: { token: "gone", startedAt: Date.now() - secondsAgo * 1000 },
+				},
+			});
+
+		mocks.store.video = abandoned(10);
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"probing",
+		);
+		expect(mocks.probe).not.toHaveBeenCalled();
+
+		mocks.store.video = abandoned(90);
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"ready",
+		);
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
 	});
 
 	it("fails preparation when the media server rejects the file", async () => {

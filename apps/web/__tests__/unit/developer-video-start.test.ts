@@ -90,7 +90,34 @@ describe("developer video start", () => {
 		expect(mocks.dispatch.mock.calls).toEqual([["video-1", "encode-1", "hls"]]);
 	});
 
-	it.each(["retry", "stale"])(
+	it("waits for both outputs to be sent even when one of them fails", async () => {
+		let release: () => void = () => undefined;
+		const slow = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		mocks.dispatch.mockImplementation(async (_video, _encode, part) => {
+			if (part === "mp4") throw new Error("storage unavailable");
+			await slow;
+			mocks.order.push("dispatch:hls");
+			return "dispatched";
+		});
+
+		let settled = false;
+		const kick = kickStartDeveloperVideo("video-1", "encode-1").then(() => {
+			settled = true;
+		});
+		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(2));
+		await Promise.resolve();
+
+		expect(settled).toBe(false);
+
+		release();
+		await kick;
+
+		expect(mocks.order).toContain("dispatch:hls");
+	});
+
+	it.each(["retry", "stale", "probing"])(
 		"leaves a video whose probe came back %s to the workflow",
 		async (prepared) => {
 			mocks.prepare.mockResolvedValue(prepared);
