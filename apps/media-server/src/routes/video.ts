@@ -1754,8 +1754,6 @@ async function editVideoAsync(
 		if (completedJob) {
 			await sendWebhook(completedJob);
 		}
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		if (!signal.aborted) {
 			console.error(`[video/edit] Error editing job ${jobId}:`, err);
@@ -1767,12 +1765,8 @@ async function editVideoAsync(
 			message: "Edit failed",
 		});
 
-		try {
-			if (updatedJob) {
-				await sendWebhook(updatedJob);
-			}
-		} finally {
-			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
 		}
 	} finally {
 		await cleanupTempFiles([inputTempFile, outputTempFile]);
@@ -2127,8 +2121,6 @@ async function processVideoAsync(
 				webhookUrl: options.webhookUrl,
 				webhookSecret: options.webhookSecret,
 			});
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		await abortPendingUploads();
 		if (!signal.aborted) {
