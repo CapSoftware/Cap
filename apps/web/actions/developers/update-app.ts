@@ -45,6 +45,6 @@ export async function updateDeveloperApp(data: {
 			.where(eq(developerApps.id, data.appId));
 	}
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };
 }

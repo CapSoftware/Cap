@@ -115,6 +115,9 @@ struct RecordView: View {
                 if case let .recording(startedAt) = model.phase {
                     RecordingTimer(startedAt: startedAt, limit: model.limit)
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else if !screen.isCapturing, model.phase != .finishing {
+                    CaptureModeSwitch()
+                        .transition(.opacity)
                 }
 
                 Spacer()
@@ -231,6 +234,67 @@ struct RecordView: View {
 
     private func openSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+    }
+}
+
+private struct CaptureModeSwitch: View {
+    @State private var comingSoon: CaptureMode?
+    @State private var taps = 0
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(CaptureMode.allCases) { option in
+                if option.isAvailable {
+                    Label(option.title, systemImage: option.systemImage)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(Capsule().fill(.white.opacity(0.22)))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(.isSelected)
+                } else {
+                    Button {
+                        comingSoon = option
+                        taps += 1
+                        AccessibilityNotification.Announcement(option.comingSoonMessage).post()
+                    } label: {
+                        Image(systemName: option.systemImage)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 40, height: 36)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .accessibilityLabel(option.title)
+                    .accessibilityValue("Coming soon")
+                }
+            }
+        }
+        .opacity(comingSoon == nil ? 1 : 0)
+        .allowsHitTesting(comingSoon == nil)
+        .accessibilityHidden(comingSoon != nil)
+        .overlay {
+            if let comingSoon {
+                Text(comingSoon.comingSoonMessage)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .padding(.horizontal, 8)
+                    .transition(.opacity)
+            }
+        }
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
+        .dynamicTypeSize(...DynamicTypeSize.large)
+        .animation(.easeOut(duration: 0.2), value: comingSoon)
+        .sensoryFeedback(.selection, trigger: taps)
+        .task(id: taps) {
+            guard comingSoon != nil else { return }
+            try? await Task.sleep(for: .seconds(2.4))
+            guard !Task.isCancelled else { return }
+            comingSoon = nil
+        }
     }
 }
 

@@ -1051,7 +1051,7 @@ impl MainWindow {
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]
-            cx.defer(crate::menus::quit);
+            cx.defer(|cx| crate::menus::quit(crate::menus::QuitSource::MainWindowClose, cx));
             #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false
@@ -5277,7 +5277,8 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = app_windows::screenshot_editor_key(&bundle);
+        cx.spawn_in(window, async move |_this, cx| {
             if !crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -5298,10 +5299,7 @@ impl MainWindow {
                 tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| {
-                this.refresh_library(LibraryKind::Screenshots, window, cx);
-            })
-            .ok();
+            app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }

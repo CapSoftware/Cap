@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             resolution_base,
             compression_bpp,
             cursor_only: settings.cursor_only(),
+            gif_quality: None,
         },
     )
     .await?;

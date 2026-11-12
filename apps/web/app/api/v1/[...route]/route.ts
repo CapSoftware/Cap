@@ -12,13 +12,8 @@ import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
-import { buildEnv, serverEnv } from "@cap/env";
-import {
-	STRIPE_DEVELOPER_CREDITS_PRODUCT_ID,
-	STRIPE_PLAN_IDS,
-	stripe,
-	userIsPro,
-} from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import {
 	AgentManagement,
 	collectPasswordHashes,
@@ -86,6 +81,7 @@ import {
 	renderAgentVtt,
 	transcriptTextFromCues,
 } from "@/lib/agent-api";
+import { developerAppBillingSection } from "@/lib/agent-developer-billing";
 import {
 	agentAction,
 	agentViewerSettings,
@@ -129,8 +125,11 @@ import {
 	logCustomStorageAttempt,
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
+import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { canUseInfra } from "@/lib/infra-access";
+import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
@@ -3636,6 +3635,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							principal.id,
 							path.appId,
 						);
+						const billing = yield* Effect.tryPromise(() =>
+							developerAppBillingSection({
+								scopes: principal.scopes,
+								appId: path.appId,
+								credits: context.credits,
+							}),
+						);
 						return {
 							app: {
 								...context.app,
@@ -3657,7 +3663,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								videoCount: context.videoCount,
 								storageMinutes: context.storageMinutes,
 							},
-							credits: context.credits,
+							...billing,
 							requestId,
 						};
 					}),
@@ -4204,20 +4210,50 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "billing:write", requestId);
-						if (
-							(payload.thresholdMicroCredits !== undefined &&
-								(!Number.isSafeInteger(payload.thresholdMicroCredits) ||
-									payload.thresholdMicroCredits < 0)) ||
-							(payload.amountCents !== undefined &&
-								(!Number.isSafeInteger(payload.amountCents) ||
-									payload.amountCents <= 0 ||
-									payload.amountCents > 100_000))
-						) {
-							return yield* badRequest(
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
 								requestId,
-								"Auto top-up values are invalid",
+								"Cap Infra credits are not available yet",
 							);
 						}
+						const database = yield* Database;
+						const [account] = yield* database.use((db) =>
+							db
+								.select({
+									stripePaymentMethodId:
+										Db.developerCreditAccounts.stripePaymentMethodId,
+									autoTopUpThresholdMicroCredits:
+										Db.developerCreditAccounts.autoTopUpThresholdMicroCredits,
+									autoTopUpAmountCents:
+										Db.developerCreditAccounts.autoTopUpAmountCents,
+								})
+								.from(Db.developerApps)
+								.innerJoin(
+									Db.developerCreditAccounts,
+									eq(Db.developerCreditAccounts.appId, Db.developerApps.id),
+								)
+								.where(
+									and(
+										eq(Db.developerApps.id, path.appId),
+										eq(Db.developerApps.ownerId, principal.id),
+										isNull(Db.developerApps.deletedAt),
+									),
+								)
+								.limit(1),
+						);
+						if (!account) return yield* notFound(requestId);
+						const thresholdMicroCredits =
+							payload.thresholdMicroCredits ??
+							account.autoTopUpThresholdMicroCredits;
+						const amountCents =
+							payload.amountCents ?? account.autoTopUpAmountCents;
+						const invalid = autoTopUpSettingsError({
+							enabled: payload.enabled,
+							thresholdMicroCredits,
+							amountCents,
+							hasCard: !!account.stripePaymentMethodId,
+						});
+						if (invalid) return yield* badRequest(requestId, invalid);
 						return yield* runAgentMutation({
 							principal,
 							operation: "update_developer_auto_top_up",
@@ -4241,13 +4277,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								const now = new Date();
 								const result = await tx
 									.update(Db.developerCreditAccounts)
-									.set({
-										autoTopUpEnabled: payload.enabled,
-										autoTopUpThresholdMicroCredits:
-											payload.thresholdMicroCredits,
-										autoTopUpAmountCents: payload.amountCents,
-										updatedAt: now,
-									})
+									.set(
+										payload.enabled
+											? {
+													autoTopUpEnabled: true,
+													autoTopUpThresholdMicroCredits: thresholdMicroCredits,
+													autoTopUpAmountCents: amountCents,
+													updatedAt: now,
+												}
+											: { autoTopUpEnabled: false, updatedAt: now },
+									)
 									.where(eq(Db.developerCreditAccounts.appId, path.appId));
 								if (affectedRows(result) === 0) return { state: "not_found" };
 								return {
@@ -4275,6 +4314,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "billing:write", requestId);
+						if (!canUseInfra(principal.email)) {
+							return yield* forbidden(
+								requestId,
+								"Cap Infra credits are not available yet",
+							);
+						}
 						if (
 							!Number.isSafeInteger(payload.amountCents) ||
 							payload.amountCents < 500 ||
@@ -4337,12 +4382,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 													{
 														price_data: {
 															currency: "usd",
-															product:
-																STRIPE_DEVELOPER_CREDITS_PRODUCT_ID[
-																	buildEnv.NEXT_PUBLIC_IS_CAP
-																		? "production"
-																		: "development"
-																],
+															product: developerCreditsProductId(),
 															unit_amount: payload.amountCents,
 														},
 														quantity: 1,
