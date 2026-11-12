@@ -7,6 +7,7 @@ import {
 	updateJob,
 	type VideoMetadata,
 } from "../lib/job-manager";
+import { MediaDownloads } from "../lib/media-downloads";
 import { trustLocalPlaylist } from "../lib/media-input-policy";
 import {
 	abortStorageUploadTarget,
@@ -180,6 +181,21 @@ interface PreparedSource {
 	skippedSeconds: number;
 }
 
+class LoomManifestDownloads extends MediaDownloads {
+	constructor(
+		signal: AbortSignal,
+		private readonly allowedHosts: string[],
+	) {
+		super(signal, createAllowedFetch(allowedHosts));
+	}
+
+	// The prefetch pass applies Loom's missing-segment tolerance and byte budget.
+	override async download(url: string): Promise<string> {
+		this.countResource();
+		return assertAllowedSourceUrl(url, this.allowedHosts).toString();
+	}
+}
+
 async function prepareSource(
 	job: Job,
 	request: ImportRequest,
@@ -211,11 +227,17 @@ async function prepareSource(
 	const segmentDir = join(workDir, "segments");
 	await mkdir(manifestDir);
 	await mkdir(segmentDir);
-	const master = await materializeStreamingInput(
-		request.videoUrl,
-		manifestDir,
+	const master = await new LoomManifestDownloads(
 		signal,
 		settings.allowedHosts,
+	).run((downloads) =>
+		materializeStreamingInput(
+			request.videoUrl,
+			manifestDir,
+			downloads.signal,
+			settings.allowedHosts,
+			downloads,
+		),
 	);
 	if (!master.endsWith(".m3u8"))
 		throw new UnsupportedStreamError("This Loom DASH layout is not supported");

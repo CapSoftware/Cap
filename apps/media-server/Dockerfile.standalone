@@ -11,7 +11,7 @@ RUN bun install --frozen-lockfile --production
 
 COPY bunfig.toml ./bunfig.toml
 COPY src ./src
-COPY capcodec.md ./capcodec.md
+COPY capcodec.md bunfig.toml ./
 
 ENV PORT=3456
 # Self-hosted storage usually sits on a private network next to this container.

@@ -11,7 +11,7 @@ RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
-COPY apps/media-server/capcodec.md ./capcodec.md
+COPY apps/media-server/capcodec.md apps/media-server/bunfig.toml ./
 
 RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
 	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \

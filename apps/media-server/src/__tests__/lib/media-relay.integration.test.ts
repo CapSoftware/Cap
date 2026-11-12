@@ -129,6 +129,34 @@ describe("relayRemoteInputs", () => {
 		relayed.release();
 		expect((await fetch(url)).status).toBe(404);
 	});
+
+	test("reports a redirect outside the URL allowlist as a refusal", async () => {
+		const savedPrivate = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+		const savedAllowed = process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		process.env.MEDIA_SERVER_ALLOWED_HOSTS = "allowed.example";
+		const origin = serve(
+			() =>
+				new Response(null, {
+					status: 302,
+					headers: { Location: "https://unlisted.example/video.mp4" },
+				}),
+		);
+		const relayed = relayRemoteInputs(["ffprobe", `${origin.url}/video.mp4`]);
+		try {
+			const response = await fetch(relayed.cmd[1] as string);
+			expect(response.status).toBe(403);
+			expect(origin.hits).toEqual(["/video.mp4"]);
+		} finally {
+			relayed.release();
+			if (savedPrivate === undefined)
+				delete process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
+			else process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = savedPrivate;
+			if (savedAllowed === undefined)
+				delete process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+			else process.env.MEDIA_SERVER_ALLOWED_HOSTS = savedAllowed;
+		}
+	});
 });
 
 describe("remote inputs of FFmpeg and ffprobe", () => {

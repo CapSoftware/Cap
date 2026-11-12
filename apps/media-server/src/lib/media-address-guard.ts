@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { MediaInputPolicyError } from "./media-input-policy";
+import { assertUrlAllowed, getUrlPolicy, isUrlTrusted } from "./url-policy";
 
 const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
@@ -249,11 +250,21 @@ async function checkMediaUrl(
 		}
 	}
 	const privateHosts = privateMediaHosts(policy);
+	const urlPolicy = getUrlPolicy();
+	const namedPrivate = privateHosts.has("*") || privateHosts.has(host);
 	if (
 		addressClass === "public" ||
 		(addressClass === "private" &&
-			(privateHosts.has("*") || privateHosts.has(host)))
+			(namedPrivate ||
+				(policy.privateHosts === undefined && isUrlTrusted(url, urlPolicy))))
 	) {
+		await assertUrlAllowed(
+			url.href,
+			addressClass === "private" && namedPrivate
+				? { ...urlPolicy, allowedHosts: [...urlPolicy.allowedHosts, host] }
+				: urlPolicy,
+			async () => addresses ?? [host],
+		);
 		return { url, addresses };
 	}
 	throw new MediaAddressError(
@@ -290,6 +301,7 @@ async function fetchChecked(
 	const pinnedInit = {
 		...init,
 		headers,
+		proxy: false,
 		...(url.protocol === "https:" && {
 			tls: { serverName: normalizeHost(url.hostname) },
 		}),
@@ -303,7 +315,12 @@ async function fetchChecked(
 		const target = new URL(url);
 		target.hostname = address.includes(":") ? `[${address}]` : address;
 		try {
-			return await fetchImpl(target, pinnedInit);
+			const response = await fetchImpl(target, pinnedInit);
+			Object.defineProperty(response, "url", {
+				value: url.href,
+				configurable: true,
+			});
+			return response;
 		} catch (error) {
 			if (init?.signal?.aborted) throw error;
 			lastError = error;

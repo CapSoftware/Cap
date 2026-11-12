@@ -4,6 +4,7 @@ import {
 	MediaAddressError,
 } from "./media-address-guard";
 import { MediaInputPolicyError } from "./media-input-policy";
+import { BlockedUrlError } from "./url-policy";
 
 // FFmpeg and ffprobe make their own HTTP requests, resolve names themselves
 // and follow redirects on their own, so nothing this server checks would hold
@@ -65,7 +66,8 @@ async function relay(request: Request): Promise<Response> {
 		if (request.signal.aborted) return new Response(null, { status: 499 });
 		const refused =
 			error instanceof MediaAddressError ||
-			error instanceof MediaInputPolicyError;
+			error instanceof MediaInputPolicyError ||
+			error instanceof BlockedUrlError;
 		console.warn(
 			"[media-relay] Upstream request failed:",
 			error instanceof Error ? error.message : String(error),

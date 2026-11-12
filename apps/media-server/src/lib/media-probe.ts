@@ -32,6 +32,7 @@ import {
 	withMediaOperation,
 } from "./media-operations";
 import { materializeMedia } from "./media-transfer";
+import { BlockedUrlError } from "./url-policy";
 
 const PROBE_TIMEOUT_MS = 30_000;
 
@@ -87,11 +88,16 @@ export function isUnreadableMediaInput(error: unknown): boolean {
 
 // The first bytes of a remote input, an empty array for an empty file, or
 // null when it cannot be fetched.
-async function readHttpHead(path: string): Promise<Uint8Array | null> {
+async function readHttpHead(
+	path: string,
+	abortSignal?: AbortSignal,
+): Promise<Uint8Array | null> {
 	try {
 		const response = await createGuardedMediaFetch(path)(path, {
 			headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
-			signal: AbortSignal.timeout(10_000),
+			signal: abortSignal
+				? AbortSignal.any([abortSignal, AbortSignal.timeout(10_000)])
+				: AbortSignal.timeout(10_000),
 		});
 		if (response.status === 416) {
 			await response.body?.cancel();
@@ -117,6 +123,7 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 	} catch (error) {
 		if (
 			error instanceof MediaInputPolicyError ||
+			error instanceof BlockedUrlError ||
 			error instanceof MediaAddressError
 		)
 			throw error;
@@ -167,10 +174,14 @@ export function playlistReferences(playlist: string): string[] {
 export async function assertRemotePlaylistStaysOnHost(
 	rootUrl: string,
 	timeoutMs = PLAYLIST_WALK_TIMEOUT_MS,
+	abortSignal?: AbortSignal,
 ): Promise<void> {
 	// One budget for the whole walk, shorter than the probe's own timeout, so
 	// no request from it is still running once the probe has given up.
-	const signal = AbortSignal.timeout(timeoutMs);
+	const timeout = AbortSignal.timeout(timeoutMs);
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, timeout])
+		: timeout;
 	const root = new URL(rootUrl);
 	const fetchPlaylist = createGuardedMediaFetch(rootUrl);
 	const queue = [rootUrl];
@@ -213,9 +224,12 @@ export async function assertRemotePlaylistStaysOnHost(
 	}
 }
 
-async function probeMedia(path: string): Promise<VideoMetadata> {
+async function probeMedia(
+	path: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoMetadata> {
 	if (isHttpUrl(path)) {
-		const head = await readHttpHead(path);
+		const head = await readHttpHead(path, abortSignal);
 		if (!head) throw new Error("Media input is not accessible");
 		if (head.length === 0) {
 			throw new UnreadableMediaInputError("Media input is empty");
@@ -227,7 +241,12 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 				"the file is a playlist or resource list, not a media file",
 			);
 		}
-		if (isHlsPath(path)) await assertRemotePlaylistStaysOnHost(path);
+		if (isHlsPath(path))
+			await assertRemotePlaylistStaysOnHost(
+				path,
+				PLAYLIST_WALK_TIMEOUT_MS,
+				abortSignal,
+			);
 	}
 
 	const input = createMediaInput(path);
@@ -328,9 +347,14 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 		throw new Error("Server is busy, please try again later");
 	}
 
-	return await withMediaOperation("probe", () =>
-		withTimeout(probeMedia(videoUrl), PROBE_TIMEOUT_MS),
-	);
+	return await withMediaOperation("probe", () => {
+		const controller = new AbortController();
+		return withTimeout(
+			probeMedia(videoUrl, controller.signal),
+			PROBE_TIMEOUT_MS,
+			() => controller.abort(),
+		);
+	});
 }
 
 export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {

@@ -12,6 +12,7 @@ import {
 } from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
+import { fetchAllowed } from "./url-policy";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
 
 export type JobPhase =
@@ -822,7 +823,8 @@ async function deliverWebhook(
 		const startedAt = Date.now();
 		job.webhookLastAttemptAt = startedAt;
 		try {
-			const resp = await fetch(job.webhookUrl, {
+			const resp = await fetchAllowed(job.webhookUrl, {
+				redirect: "error",
 				method: "POST",
 				headers,
 				body,
