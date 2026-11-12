@@ -16,11 +16,14 @@ import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import {
 	COMPLETION_IN_PROGRESS,
 	completeRetryPlan,
+	EMPTY_FILE_MESSAGE,
 	isDefinitiveRejection,
 	partBytesFor,
 	presignBatch,
 	retryAfterMs,
+	startsLikeAnImageOrDocument,
 } from "@/lib/infra-upload";
+import type { InfraLocalUpload } from "@/lib/infra-video-view";
 
 const PART_ATTEMPTS = 3;
 const COMPLETE_ATTEMPTS = 3;
@@ -39,6 +42,7 @@ class UploadError extends Error {
 }
 
 const CANCELLED = "Upload cancelled";
+const NOT_A_VIDEO = "That is not a video. MP4, MOV and WebM work best.";
 
 export type ActiveUpload = {
 	name: string;
@@ -64,8 +68,17 @@ type Uploads = {
 	cancel: () => void;
 };
 
+type LocalUploads = { sending: string | null; sent: ReadonlySet<string> };
+type PageWork = {
+	message: string | null;
+	set: (message: string | null) => void;
+};
+
+const NO_LOCAL_UPLOADS: LocalUploads = { sending: null, sent: new Set() };
+
 const UploadsContext = createContext<Uploads | null>(null);
-const UploadingVideoContext = createContext<string | null>(null);
+const LocalUploadsContext = createContext<LocalUploads>(NO_LOCAL_UPLOADS);
+const PageWorkContext = createContext<PageWork | null>(null);
 
 export function useUploads() {
 	const uploads = useContext(UploadsContext);
@@ -74,20 +87,58 @@ export function useUploads() {
 }
 
 export function useUploadingVideoId() {
-	return useContext(UploadingVideoContext);
+	return useContext(LocalUploadsContext).sending;
+}
+
+export function useLocalUpload() {
+	const { sending, sent } = useContext(LocalUploadsContext);
+	return useCallback(
+		(videoId: string): InfraLocalUpload =>
+			sent.has(videoId) ? "sent" : videoId === sending ? "sending" : null,
+		[sending, sent],
+	);
 }
 
 export const LEAVE_DURING_UPLOAD =
 	"A video is still uploading. Leaving now cancels it.";
 
+function useWarnBeforeUnload(message: string | null) {
+	useEffect(() => {
+		if (!message) return;
+		const warn = (event: BeforeUnloadEvent) => {
+			event.preventDefault();
+			event.returnValue = message;
+		};
+		window.addEventListener("beforeunload", warn);
+		return () => window.removeEventListener("beforeunload", warn);
+	}, [message]);
+}
+
+// Work that lives in one page, such as an Audio upload, stops when that page
+// is left. The page names it here so the browser and the console's own links
+// ask first.
+export function usePageWork(message: string | null) {
+	const set = useContext(PageWorkContext)?.set;
+	useWarnBeforeUnload(message);
+	useEffect(() => {
+		if (!set || !message) return;
+		set(message);
+		return () => set(null);
+	}, [set, message]);
+}
+
+export function useMayLeavePage() {
+	const message = useContext(PageWorkContext)?.message ?? null;
+	return useCallback(() => !message || window.confirm(message), [message]);
+}
+
 // Uploads keep running between pages of one app. Leaving the app, or the
 // console, unmounts them, so those links ask first.
 export function useMayLeave() {
 	const uploading = useContext(UploadsContext)?.active != null;
-	return useCallback(
-		() => !uploading || window.confirm(LEAVE_DURING_UPLOAD),
-		[uploading],
-	);
+	const pageWork = useContext(PageWorkContext)?.message ?? null;
+	const message = pageWork ?? (uploading ? LEAVE_DURING_UPLOAD : null);
+	return useCallback(() => !message || window.confirm(message), [message]);
 }
 
 function pause(ms: number, signal: AbortSignal) {
@@ -149,9 +200,7 @@ function readVideo(file: File) {
 				!file.type.startsWith("video/") &&
 				!VIDEO_FILE.test(file.name)
 			) {
-				reject(
-					new UploadError("That is not a video. MP4, MOV and WebM work best."),
-				);
+				reject(new UploadError(NOT_A_VIDEO));
 				return;
 			}
 			const url = URL.createObjectURL(file);
@@ -184,11 +233,20 @@ function readVideo(file: File) {
 			};
 			video.onerror = () => {
 				done();
-				reject(
-					new UploadError(
-						"This browser cannot open that file. MP4, MOV and WebM work best, or upload it through the API.",
-					),
-				);
+				void file
+					.slice(0, 8)
+					.arrayBuffer()
+					.then((head) => startsLikeAnImageOrDocument(new Uint8Array(head)))
+					.catch(() => false)
+					.then((notVideo) =>
+						reject(
+							new UploadError(
+								notVideo
+									? NOT_A_VIDEO
+									: "This browser cannot open that file. MP4, MOV and WebM work best, or upload it through the API.",
+							),
+						),
+					);
 			};
 			video.src = url;
 		},
@@ -231,7 +289,7 @@ function putPart(
 }
 
 type UploadOutcome =
-	| { result: "done" }
+	| { result: "done"; videoId: string }
 	| { result: "cancelled" }
 	| { result: "unconfirmed" }
 	| { result: "failed"; message: string; needsCredits: boolean };
@@ -253,6 +311,7 @@ async function uploadFile(
 	};
 
 	try {
+		if (file.size === 0) throw new UploadError(EMPTY_FILE_MESSAGE);
 		show(0, "Reading the file");
 		const meta = await readVideo(file);
 		stopIfCancelled();
@@ -353,7 +412,7 @@ async function uploadFile(
 				await new Promise((resolve) => setTimeout(resolve, plan.waitMs));
 			}
 		}
-		return { result: "done" };
+		return { result: "done", videoId };
 	} catch (error) {
 		if (outcome === "unconfirmed") return { result: "unconfirmed" };
 		let completingElsewhere = false;
@@ -393,6 +452,10 @@ export function UploadsProvider({
 	const balance = useRef(balanceMicroCredits);
 	const [active, setActive] = useState<ActiveUpload | null>(null);
 	const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+	const [sentVideoIds, setSentVideoIds] = useState<ReadonlySet<string>>(
+		NO_LOCAL_UPLOADS.sent,
+	);
+	const [pageWork, setPageWork] = useState<string | null>(null);
 	const [waiting, setWaiting] = useState(0);
 	const [failures, setFailures] = useState<
 		(UploadFailure & { balance: number })[]
@@ -407,15 +470,7 @@ export function UploadsProvider({
 		[],
 	);
 
-	useEffect(() => {
-		if (!active) return;
-		const warn = (event: BeforeUnloadEvent) => {
-			event.preventDefault();
-			event.returnValue = LEAVE_DURING_UPLOAD;
-		};
-		window.addEventListener("beforeunload", warn);
-		return () => window.removeEventListener("beforeunload", warn);
-	}, [active]);
+	useWarnBeforeUnload(active ? LEAVE_DURING_UPLOAD : null);
 
 	const pump = useCallback(async () => {
 		if (running.current) return;
@@ -461,6 +516,8 @@ export function UploadsProvider({
 						},
 					]);
 				if (outcome.result === "done") {
+					const { videoId } = outcome;
+					setSentVideoIds((sent) => new Set(sent).add(videoId));
 					toast.success(`Uploaded ${file.name}`);
 					router.refresh();
 				} else if (outcome.result === "unconfirmed") {
@@ -518,11 +575,22 @@ export function UploadsProvider({
 		[appId, active, waiting, failures, balanceMicroCredits, add, cancel],
 	);
 
+	const local = useMemo<LocalUploads>(
+		() => ({ sending: activeVideoId, sent: sentVideoIds }),
+		[activeVideoId, sentVideoIds],
+	);
+	const work = useMemo<PageWork>(
+		() => ({ message: pageWork, set: setPageWork }),
+		[pageWork],
+	);
+
 	return (
 		<UploadsContext.Provider value={uploads}>
-			<UploadingVideoContext.Provider value={activeVideoId}>
-				{children}
-			</UploadingVideoContext.Provider>
+			<LocalUploadsContext.Provider value={local}>
+				<PageWorkContext.Provider value={work}>
+					{children}
+				</PageWorkContext.Provider>
+			</LocalUploadsContext.Provider>
 		</UploadsContext.Provider>
 	);
 }

@@ -47,6 +47,18 @@ app.post(
 			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
 		}
 
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+				key: `checkout:${user.id}`,
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json(
+				{ error: "Too many checkout attempts. Try again in a few minutes" },
+				429,
+			);
+		}
+
 		const [app] = await db()
 			.select()
 			.from(developerApps)

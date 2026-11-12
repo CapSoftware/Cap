@@ -11,7 +11,7 @@ import {
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { and, eq, isNull } from "drizzle-orm";
-import type { Context } from "hono";
+import type { Context, Next } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
@@ -23,6 +23,11 @@ import {
 } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
+	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
+	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+} from "@/lib/developer-rate-limits";
+import {
 	CREATE_UPLOAD_PATH,
 	isDeveloperPublicKey,
 	missingUploadTokenRefusal,
@@ -31,21 +36,41 @@ import {
 	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
 } from "@/lib/developer-upload-token";
+import { RATE_LIMIT_IDS, sharedRateLimitDecision } from "@/lib/rate-limit";
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 60;
+const RATE_LIMIT_WINDOW_MS = DEVELOPER_RATE_LIMIT_WINDOW_SECONDS * 1000;
 const RATE_LIMIT_MAX_ENTRIES = 10_000;
 
-const requestCounts = new Map<string, { count: number; resetAt: number }>();
+type DeveloperRateLimit = { ruleId: string; limit: number; subject: string };
+
+const requestCounts = new Map<
+	string,
+	{ count: number; resetAt: number; limit: number }
+>();
 let rateLimitRequestCounter = 0;
 
-// The counter lives in this process, so each server instance keeps its own
-// window. The headers and Retry-After describe the instance that answered.
-export const developerRateLimiter = createMiddleware(async (c, next) => {
-	const key =
+async function credentialDigest(credential: string) {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(credential),
+	);
+	return Buffer.from(digest).toString("hex");
+}
+
+// The firewall rule counts a credential across every server instance and its
+// answer is final. The window kept here fills the headers, and decides only
+// when the firewall cannot answer. A 429 from the rule waits a whole window,
+// because this instance cannot see when the shared one began.
+async function limitDeveloperRequest(
+	c: Context,
+	next: Next,
+	{ ruleId, limit, subject }: DeveloperRateLimit,
+) {
+	const credential =
 		c.req.header("authorization")?.trim().split(/\s+/)[1] ??
 		c.req.header("x-forwarded-for") ??
 		"unknown";
+	const key = `${ruleId}|${credential}`;
 	const now = Date.now();
 
 	rateLimitRequestCounter++;
@@ -56,7 +81,7 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 		if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
 			for (const [k, v] of requestCounts) {
 				if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
-				if (v.count < RATE_LIMIT_MAX_REQUESTS) requestCounts.delete(k);
+				if (v.count < v.limit) requestCounts.delete(k);
 			}
 			if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
 				const byExpiry = [...requestCounts.entries()].sort(
@@ -73,35 +98,59 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 	let entry = requestCounts.get(key);
 
 	if (!entry || now > entry.resetAt) {
-		entry = { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS };
+		entry = { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS, limit };
 		requestCounts.set(key, entry);
 	} else {
 		entry.count++;
 	}
+	const { count, resetAt } = entry;
+
+	const shared = await sharedRateLimitDecision(ruleId, {
+		key: await credentialDigest(credential),
+		headers: c.req.raw.headers,
+	});
+	const limited = shared ?? count > limit;
 
 	const resetSeconds = String(
-		Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+		shared
+			? DEVELOPER_RATE_LIMIT_WINDOW_SECONDS
+			: Math.max(1, Math.ceil((resetAt - now) / 1000)),
 	);
-	c.header("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
+	c.header("X-RateLimit-Limit", String(limit));
 	c.header(
 		"X-RateLimit-Remaining",
-		String(Math.max(0, RATE_LIMIT_MAX_REQUESTS - entry.count)),
+		String(limited ? 0 : Math.max(0, limit - count)),
 	);
 	c.header("X-RateLimit-Reset", resetSeconds);
 
-	if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+	if (limited) {
 		c.header("Retry-After", resetSeconds);
 		return c.json(
 			apiErrorBody(
 				"rate_limited",
 				"Rate limit exceeded",
-				`Wait for the Retry-After seconds, then retry. Each key allows ${RATE_LIMIT_MAX_REQUESTS} requests per minute.`,
+				`Wait for the Retry-After seconds, then retry. Each ${subject} allows ${limit} requests per minute.`,
 			),
 			429,
 		);
 	}
 
 	await next();
+}
+
+const developerRateLimit = (rule: DeveloperRateLimit) =>
+	createMiddleware((c, next) => limitDeveloperRequest(c, next, rule));
+
+export const developerRateLimiter = developerRateLimit({
+	ruleId: RATE_LIMIT_IDS.DEVELOPER_API_KEY,
+	limit: DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	subject: "key",
+});
+
+export const developerUploadRateLimiter = developerRateLimit({
+	ruleId: RATE_LIMIT_IDS.DEVELOPER_UPLOAD_TOKEN,
+	limit: DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+	subject: "upload token",
 });
 
 const LAST_USED_DEBOUNCE_MS = 5 * 60 * 1000;

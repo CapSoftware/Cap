@@ -49,7 +49,7 @@ Authorization: Bearer cut_your_upload_token_here
 
 An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload: the SDK API answers `403` with code `public_key_not_allowed`.
 
-Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly.
+Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly. The REST API sends no CORS headers, so a page cannot call it. Call it from your server, and give the page an upload token for the SDK API.
 
 ## OpenAPI
 
@@ -128,19 +128,21 @@ A `4xx` response will not succeed if the same request is sent again, with two ex
 
 ## Rate Limits
 
-Each key and each upload token allows 60 requests per minute, counted across every endpoint. Playback URLs need no key and are not counted.
+A secret key allows 60 requests per minute, counted across every REST endpoint. An upload token allows 1,200 requests per minute, counted across the SDK endpoints. Playback URLs need no key and are not counted.
 
 Every response carries three headers:
 
 | Header | Meaning |
 |--------|---------|
-| `X-RateLimit-Limit` | Requests the key may make per minute |
-| `X-RateLimit-Remaining` | Requests left in the current window |
-| `X-RateLimit-Reset` | Seconds until the window resets |
+| `X-RateLimit-Limit` | Requests the key or upload token may make per minute |
+| `X-RateLimit-Remaining` | Requests left this minute, as counted by the server that answered. `0` on a `429` |
+| `X-RateLimit-Reset` | Seconds until that count starts again. On a `429`, the same value as `Retry-After` |
 
-Past the limit the API answers `429` with the code `rate_limited` and a `Retry-After` header in seconds. The count is kept by the server that answers, so `X-RateLimit-Remaining` can differ from one response to the next. Treat it as a guide, and treat a `429` with its `Retry-After` as the instruction.
+Past the limit the API answers `429` with the code `rate_limited` and a `Retry-After` header in seconds, never more than 60. A `429` is authoritative: wait for `Retry-After` seconds, then send the request again.
 
-Each upload token has its own count, separate from your secret key's and from every other upload. Each uploaded part spends one presign request from it.
+`X-RateLimit-Remaining` and `X-RateLimit-Reset` are a guide. Requests can be answered by more than one server and each reports what it has counted itself, so `X-RateLimit-Remaining` can read higher than what is left and can differ from one response to the next. Use it to slow down early, not to decide that the next request will succeed.
+
+Each upload token has its own count, separate from your secret key's and from every other upload. Each uploaded part spends one presign request from it, so one upload can sign twenty parts a second.
 
 ## Pagination
 
@@ -340,6 +342,8 @@ GET /api/developer/v1/videos
 
 Any other query parameter returns `400`. See [Pagination](/docs/api/rest-api#pagination).
 
+The `userId` filter matches the exact value: `alice`, `Alice` and `àlice` are three different users. Spaces count too, so send the value as the video returns it in `externalUserId`. A filter that is sent always filters: a `userId` or `externalUserId` that is present but empty, or only spaces, returns `400` with the code `invalid_user_id` and never the whole list, and a parameter sent more than once returns `400` with the code `repeated_parameter`. Leave the parameter out to list every user's videos.
+
 **Example request:**
 
 ```bash
@@ -428,6 +432,15 @@ GET /api/developer/v1/videos/:id
 |-----------|------|-------------|
 | `id` | string | The video ID |
 
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `userId` | string | No | Return the video only when it was created with this `userId`. Any other video answers `404` with the code `video_not_found`, so your server can pass its signed-in user straight through |
+| `externalUserId` | string | No | Another name for `userId` |
+
+The match follows the same rules as [List Videos](/docs/api/rest-api#list-videos): it is exact, and an empty value, a repeated parameter or any other query parameter returns `400`.
+
 **Example request:**
 
 ```bash
@@ -486,6 +499,15 @@ GET /api/developer/v1/videos/:id/status
 |-----------|------|-------------|
 | `id` | string | The video ID |
 
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `userId` | string | No | Return the status only when the video was created with this `userId`. Any other video answers `404` with the code `video_not_found` |
+| `externalUserId` | string | No | Another name for `userId` |
+
+The match follows the same rules as [List Videos](/docs/api/rest-api#list-videos): it is exact, and an empty value, a repeated parameter or any other query parameter returns `400`.
+
 **Example request:**
 
 ```bash
@@ -499,6 +521,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 {
   "data": {
     "id": "abc123def456",
+    "externalUserId": "user_42",
     "duration": 124.5,
     "width": 1920,
     "height": 1080,
@@ -527,7 +550,9 @@ Poll this endpoint every few seconds after completing an upload, and stop when `
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
-On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present.
+On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
+
+`externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
 
 `transcriptionStatus` is `null`. Uploaded videos are not transcribed automatically. To get text, send the file to [Transcripts](/docs/api/rest-api#transcripts).
 
@@ -546,6 +571,15 @@ DELETE /api/developer/v1/videos/:id
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | string | The video ID |
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `userId` | string | No | Delete the video only when it was created with this `userId`. Any other video answers `404` with the code `video_not_found` and is left alone |
+| `externalUserId` | string | No | Another name for `userId` |
+
+The match follows the same rules as [List Videos](/docs/api/rest-api#list-videos): it is exact, and an empty value, a repeated parameter or any other query parameter returns `400`.
 
 **Example request:**
 
@@ -1325,10 +1359,11 @@ The full video object returned by list and get endpoints:
 ## Best Practices
 
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Create each upload on your server and send only its `cut_` upload token to the browser.
-- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every few seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. See [Play a Video](/docs/api/rest-api#play-a-video).
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every few seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. Keep polling until `hlsUrl` is set if the player should use HLS. See [Play a Video](/docs/api/rest-api#play-a-video).
 - **Switch on `code`.** Every error carries a stable `code`. The `error` text can change.
-- **Watch the rate limit headers.** Each key and each upload token allows 60 requests per minute. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
+- **Watch the rate limit headers.** A secret key allows 60 requests per minute and an upload token 1,200. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
 - **Store your keys securely.** Use environment variables or a secrets manager.
 - **Check who is uploading before you create an upload.** Your server decides who gets a token, so authenticate the user first and set `userId` to tie the video to them.
+- **Scope every read to the signed-in user.** Pass your session's user as `userId` when you list, get, check or delete a video on a user's behalf. Refuse the request on your side when there is no signed-in user, rather than sending an empty `userId`.
 - **Monitor your credit balance.** Use the usage endpoint to track the balance, `standing` and `upload.allowed`, and top up from your app's Billing page in Cap Infra. Auto top-up on that page adds credits from a saved card when the balance runs low.
 - **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.

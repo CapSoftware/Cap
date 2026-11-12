@@ -3,6 +3,11 @@ import {
 	MICRO_CREDITS_PER_DOLLAR,
 	UPLOAD_ADMISSION_DAYS,
 } from "@/lib/developer-pricing";
+import {
+	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
+	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+} from "@/lib/developer-rate-limits";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -40,6 +45,27 @@ const videoIdParam = {
 	description: "Developer video ID returned by createUpload.",
 	schema: { type: "string" },
 };
+
+const USER_SCOPE_RULES =
+	"The match is exact: case, accents and spaces all count, so send the value as the video returns it in externalUserId. A value that is empty or only spaces returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
+
+const videoUserScopeParams = [
+	{
+		name: "userId",
+		in: "query",
+		required: false,
+		description: `Answer 404 video_not_found unless the video was created with this userId, so a server can pass its signed-in user straight through. ${USER_SCOPE_RULES} Any other query parameter returns 400 unknown_parameter.`,
+		schema: { type: "string", minLength: 1, maxLength: 255 },
+	},
+	{
+		name: "externalUserId",
+		in: "query",
+		required: false,
+		description:
+			"Another name for userId. Sending both with different values returns 400 conflicting_parameters.",
+		schema: { type: "string", minLength: 1, maxLength: 255 },
+	},
+];
 
 const transcriptIdParam = {
 	name: "id",
@@ -348,7 +374,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"",
 			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with three exceptions that say to wait and repeat it: 408, 429 and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
 			"",
-			"Each key and each upload token is limited to 60 requests per minute across every operation. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset (seconds until the window resets), and a 429 also carries Retry-After. The counts are kept by the server that answers, so Remaining can differ between responses: treat it as a guide and a 429 with its Retry-After as the instruction.",
+			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
+			"",
+			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },
@@ -383,7 +411,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listDeveloperVideos",
 				summary: "List videos",
 				description:
-					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown query parameter or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
+					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown or repeated query parameter, an empty userId or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [
@@ -391,16 +419,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						name: "userId",
 						in: "query",
 						required: false,
-						description:
-							"Only return videos created with this userId. Videos return it as externalUserId.",
-						schema: { type: "string", maxLength: 255 },
+						description: `Only return videos created with this userId. Videos return it as externalUserId. ${USER_SCOPE_RULES}`,
+						schema: { type: "string", minLength: 1, maxLength: 255 },
 					},
 					{
 						name: "externalUserId",
 						in: "query",
 						required: false,
-						description: "Another name for the userId filter.",
-						schema: { type: "string", maxLength: 255 },
+						description:
+							"Another name for the userId filter. Sending both with different values returns 400 conflicting_parameters.",
+						schema: { type: "string", minLength: 1, maxLength: 255 },
 					},
 					{
 						name: "limit",
@@ -437,12 +465,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getDeveloperVideo",
 				summary: "Get a video",
-				description: "Returns one video owned by the app.",
+				description:
+					"Returns one video owned by the app. Send userId to return it only when it was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(dataEnvelope(ref("DeveloperVideo")), "The video."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -451,12 +481,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "deleteDeveloperVideo",
 				summary: "Delete a video",
 				description:
-					"Deletes a video owned by the app. It stops appearing in list and get results. Deleting a video this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404.",
+					"Deletes a video owned by the app. It stops appearing in list and get results. Deleting a video this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404. Send userId to delete it only when it was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(ref("Success"), "The video was deleted."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -467,12 +498,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
 				description:
-					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload.",
+					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(dataEnvelope(ref("VideoStatus")), "The video status."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -1008,6 +1040,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: ["id", "ready"],
 				properties: {
 					id: { type: "string" },
+					externalUserId: developerVideoSchema.properties.externalUserId,
 					duration: { type: ["number", "null"] },
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
@@ -1604,13 +1637,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			RateLimited: {
 				...json(
 					ref("Error"),
-					"More than 60 requests in a minute for this key (code rate_limited).",
+					`More requests in a minute than the credential allows: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token (code rate_limited).`,
 				),
 				headers: {
 					...rateLimitHeaders,
 					"Retry-After": {
-						description:
-							"Seconds until the server that answered accepts this key again. Another server can still be counting an earlier window, so wait again if the retry is also limited.",
+						description: `Seconds to wait before retrying, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}.`,
 						schema: { type: "integer" },
 					},
 				},
@@ -1622,16 +1654,17 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 		},
 		headers: {
 			RateLimitLimit: {
-				description: "Requests this key may make per minute.",
+				description: `Requests the credential may make per minute: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token.`,
 				schema: { type: "integer" },
 			},
 			RateLimitRemaining: {
 				description:
-					"Requests left in the current window on the server that answered.",
+					"Requests left this minute as counted by the server that answered. A guide: it can read higher than what is left. 0 on a 429.",
 				schema: { type: "integer" },
 			},
 			RateLimitReset: {
-				description: "Seconds until the current window resets.",
+				description:
+					"Seconds until the count on the server that answered starts again. On a 429, the same value as Retry-After.",
 				schema: { type: "integer" },
 			},
 		},

@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	getMaxConcurrentProbeOperations,
+	registerMediaOperation,
+	unregisterMediaOperation,
+} from "../../lib/media-operations";
 import {
 	assertRemotePlaylistStaysOnHost,
 	checkVideoAccessible,
+	fastestFrameRate,
 	isUnreadableMediaInput,
 	playlistReferences,
+	probeFastestFrameRate,
 	probeVideo,
 } from "../../lib/media-probe";
 
@@ -485,5 +494,125 @@ describe("mediaProbe metadata accuracy", () => {
 
 		expect(metadata.duration).toBeGreaterThan(0);
 		expect(metadata.duration).toBeLessThan(3600);
+	});
+});
+
+describe("fastest frame rate", () => {
+	const steady = (fps: number, frames: number, start = 0) =>
+		Array.from({ length: frames }, (_, index) => start + index / fps);
+
+	test("is the rate of a constant frame rate source", () => {
+		expect(fastestFrameRate(steady(30, 300))).toBe(30);
+		expect(fastestFrameRate(steady(30000 / 1001, 300))).toBe(29.97);
+		expect(fastestFrameRate(steady(60, 300))).toBe(60);
+		expect(fastestFrameRate(steady(24, 5))).toBe(24);
+	});
+
+	test("is the rate of the fast part of a source that starts slowly", () => {
+		expect(fastestFrameRate([...steady(2, 40), ...steady(30, 900, 20)])).toBe(
+			30,
+		);
+		expect(fastestFrameRate([...steady(30, 900), ...steady(2, 40, 30)])).toBe(
+			30,
+		);
+	});
+
+	test("sees a burst a quarter of a second long", () => {
+		expect(
+			fastestFrameRate([
+				...steady(5, 50),
+				...steady(60, 15, 10),
+				...steady(5, 50, 11),
+			]),
+		).toBe(60);
+	});
+
+	test("is not moved by two frames that land close together", () => {
+		const paired = steady(30, 300).map(
+			(time, index) => time + (index % 2 === 0 ? 0 : -0.012),
+		);
+		expect(fastestFrameRate(paired)).toBeLessThan(31.5);
+	});
+
+	test("reads frames in presentation order", () => {
+		const reordered = steady(30, 90);
+		for (let index = 1; index + 1 < reordered.length; index += 3) {
+			const next = reordered[index + 1] ?? 0;
+			reordered[index + 1] = reordered[index] ?? 0;
+			reordered[index] = next;
+		}
+		expect(fastestFrameRate(reordered)).toBe(30);
+	});
+
+	test("has no answer for fewer than two frames or repeated timestamps", () => {
+		expect(fastestFrameRate([])).toBeNull();
+		expect(fastestFrameRate([1])).toBeNull();
+		expect(fastestFrameRate([2, 2, 2])).toBeNull();
+	});
+
+	test("times every frame of a file, not only its opening", async () => {
+		expect(await probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH)).toBe(
+			(await probeVideo(TEST_VIDEO_WITH_AUDIO)).fps,
+		);
+
+		const directory = mkdtempSync(join(tmpdir(), "cap-frame-timing-"));
+		try {
+			const variable = join(directory, "variable.mp4");
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc2=size=160x90:rate=30:duration=20",
+				"-vf",
+				"select='if(lt(t,12),not(mod(n,15)),1)'",
+				"-fps_mode",
+				"vfr",
+				"-c:v",
+				"libx264",
+				"-preset",
+				"ultrafast",
+				"-pix_fmt",
+				"yuv420p",
+				"-y",
+				variable,
+			]);
+			expect((await probeVideo(`file://${variable}`)).fps).toBeLessThan(10);
+			expect(await probeFastestFrameRate(variable)).toBe(30);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}, 60_000);
+
+	test("leaves a transport stream to the probed rate", async () => {
+		expect(
+			await probeFastestFrameRate(join(FIXTURES_DIR, "test-offset-start.m2ts")),
+		).toBeNull();
+	});
+
+	test("does not start when the probe pool is full", async () => {
+		const running = Array.from(
+			{ length: getMaxConcurrentProbeOperations() },
+			() => registerMediaOperation("probe", () => {}),
+		);
+		try {
+			await expect(
+				probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH),
+			).rejects.toThrow("Server is busy");
+		} finally {
+			for (const operation of running) unregisterMediaOperation(operation);
+		}
+		expect(
+			await probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH),
+		).not.toBeNull();
+	});
+
+	test("stops when the job is cancelled", async () => {
+		const cancelled = new AbortController();
+		cancelled.abort();
+		await expectRejected(
+			probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH, cancelled.signal),
+		);
 	});
 });
