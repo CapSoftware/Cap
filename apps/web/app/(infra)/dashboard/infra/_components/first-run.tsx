@@ -13,7 +13,7 @@ import {
 	KeysReveal,
 	useCreateApp,
 } from "./create-app";
-import { ProCredit } from "./pro-credit";
+import { FirstCredit } from "./get-started";
 import { Brand } from "./shell";
 import { Step, StepNote, Steps } from "./steps";
 import { Button, ButtonLink, Disclosure, EnvTag, FOCUS } from "./ui";
@@ -125,23 +125,11 @@ export function FirstRun({
 										? "."
 										: ", and your Cap Pro plan covers the first $5 each month."}
 								</StepNote>
-							) : proCredit.status === "not_pro" ? (
-								<div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-									<ButtonLink
-										variant="ghost"
-										href={infraAppPath(created.appId, "billing")}
-									>
-										Add credits
-									</ButtonLink>
-									<StepNote>
-										Uploading needs a balance. Credits start at $5, and Cap Pro
-										includes $5 every month.
-									</StepNote>
-								</div>
 							) : (
-								<ProCredit
+								<FirstCredit
 									appId={created.appId}
-									credit={proCredit}
+									balanceMicroCredits={0}
+									proCredit={proCredit}
 									refresh={false}
 								/>
 							)}

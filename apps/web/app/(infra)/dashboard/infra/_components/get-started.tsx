@@ -18,14 +18,16 @@ export function FirstCredit({
 	appId,
 	balanceMicroCredits,
 	proCredit,
+	refresh = true,
 }: {
 	appId: string;
 	balanceMicroCredits: number;
 	proCredit: InfraProCredit;
+	refresh?: boolean;
 }) {
 	if (balanceMicroCredits > 0) return null;
 	if (proCredit.status === "available") {
-		return <ProCredit appId={appId} credit={proCredit} />;
+		return <ProCredit appId={appId} credit={proCredit} refresh={refresh} />;
 	}
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-3">
