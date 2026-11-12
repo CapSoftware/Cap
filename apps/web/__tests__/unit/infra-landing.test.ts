@@ -187,6 +187,7 @@ describe("the agent section", () => {
 
 		expect(CLI.test("Your agent installs the Cap CLI")).toBe(true);
 		expect(CLI.test("run cap developers list --json")).toBe(true);
+		expect(CLI.test(CAP_INFRA_AGENT_PROMPT)).toBe(false);
 		if (!CLI.test(CAP_INFRA_AGENT_PROMPT)) {
 			for (const text of copy) expect(text).not.toMatch(CLI);
 		}
@@ -205,9 +206,14 @@ describe("the agent section", () => {
 		expect(content.AGENT_SUMMARY).toContain("uploads and playback");
 		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/upload/i);
 		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/embed/i);
-		expect(content.AGENT_SUMMARY).toContain("secret key on the server");
-		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/secret key/i);
-		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/on the server|from the server/i);
+		expect(content.AGENT_SUMMARY).toContain(
+			"Add your app's secret key to your project",
+		);
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			"put its secret key (csk_) in this project's local environment file",
+		);
+		expect(content.AGENT_SUMMARY).toContain("keeps the key on the server");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain("Keep the key on the server");
 	});
 });
 
