@@ -29,11 +29,9 @@ vi.mock("@cap/web-backend/src/S3Buckets/index", async () => {
 	};
 });
 
-const {
-	developerVideoUrlAnswersAnyOrigin,
-	requestAsSeenByViewer,
-	signedDeveloperVideoUrl,
-} = await import("@/lib/developer-video-storage");
+const { requestAsSeenByViewer, signedDeveloperVideoUrl } = await import(
+	"@/lib/developer-video-storage"
+);
 
 const playback = (headers: Record<string, string>) =>
 	new Request("http://localhost:3000/api/developer/playback/id/video.mp4", {
@@ -71,18 +69,5 @@ describe("developer video storage signing", () => {
 		expect(requestAsSeenByViewer(playback({ host: "bad host" })).url).toBe(
 			bare.url,
 		);
-	});
-
-	it("lets a player reach media through a redirect only when the CDN serves it", () => {
-		expect(
-			developerVideoUrlAnswersAnyOrigin(
-				"https://cdn.example/developer/app/video/file.m4s?Policy=p&Key-Pair-Id=K1&Signature=s",
-			),
-		).toBe(true);
-		expect(
-			developerVideoUrlAnswersAnyOrigin(
-				"http://localhost:9000/capso/developer/app/video/file.m4s?X-Amz-Signature=s",
-			),
-		).toBe(false);
 	});
 });

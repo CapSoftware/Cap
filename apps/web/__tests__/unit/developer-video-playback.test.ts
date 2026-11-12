@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	readText: vi.fn(),
 	sign: vi.fn(),
-	answersAnyOrigin: vi.fn(),
 	standing: vi.fn(),
 }));
 
@@ -33,7 +32,6 @@ vi.mock("@/lib/infra-standing", () => ({
 	getInfraAppStanding: mocks.standing,
 }));
 vi.mock("@/lib/developer-video-storage", () => ({
-	developerVideoUrlAnswersAnyOrigin: mocks.answersAnyOrigin,
 	readDeveloperVideoText: mocks.readText,
 	signedDeveloperVideoUrl: mocks.sign,
 }));
@@ -67,24 +65,6 @@ const rendition = [
 	"1080p.m4s",
 	"#EXT-X-ENDLIST",
 ].join("\n");
-
-const storedRendition = (segments: number) =>
-	[
-		"#EXTM3U",
-		"#EXT-X-VERSION:7",
-		"#EXT-X-TARGETDURATION:4",
-		"#EXT-X-MEDIA-SEQUENCE:0",
-		"#EXT-X-PLAYLIST-TYPE:VOD",
-		"#EXT-X-INDEPENDENT-SEGMENTS",
-		'#EXT-X-MAP:URI="1080p.m4s",BYTERANGE="862@0"',
-		...Array.from({ length: segments }, (_, index) => [
-			"#EXTINF:4.004000,",
-			`#EXT-X-BYTERANGE:350000@${862 + index * 350_000}`,
-			"1080p.m4s",
-		]).flat(),
-		"#EXT-X-ENDLIST",
-		"",
-	].join("\n");
 
 const ready = (overrides = {}) =>
 	developerVideo({
@@ -139,7 +119,6 @@ beforeEach(() => {
 	mocks.store.video = ready();
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
-	mocks.answersAnyOrigin.mockReturnValue(true);
 	mocks.sign.mockImplementation(
 		async (key: string, validity: { signingDate: Date; expiresIn: number }) =>
 			`https://cdn.example/${key}?expires=${cloudFrontExpiresAt(validity, Date.now())}&sig=a,b`,
@@ -373,109 +352,6 @@ describe("developer video playback route", () => {
 			{ signingDate: new Date(WINDOW_START), expiresIn: 18 * 60 * 60 },
 			request,
 		);
-	});
-
-	it("keeps every segment signed in a playlist of up to 15 segments", async () => {
-		mocks.readText.mockResolvedValue(storedRendition(15));
-		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=${EXPIRES}&sig=a,b`;
-
-		const lines = (await (await play("1080p.m3u8")).text()).split("\n");
-
-		expect(lines.filter((line) => line === signed)).toHaveLength(15);
-		expect(lines).not.toContain("1080p.m4s");
-	});
-
-	it("signs the init section and first segment of a longer playlist and lists the rest by file name", async () => {
-		mocks.readText.mockResolvedValue(storedRendition(16));
-		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=${EXPIRES}&sig=a,b`;
-
-		const response = await play("1080p.m3u8");
-
-		expect(response.status).toBe(200);
-		expect(await response.text()).toBe(
-			[
-				"#EXTM3U",
-				"#EXT-X-VERSION:7",
-				"#EXT-X-TARGETDURATION:4",
-				"#EXT-X-MEDIA-SEQUENCE:0",
-				"#EXT-X-PLAYLIST-TYPE:VOD",
-				"#EXT-X-INDEPENDENT-SEGMENTS",
-				`#EXT-X-MAP:URI="${signed}",BYTERANGE="862@0"`,
-				"#EXTINF:4.004000,",
-				"#EXT-X-BYTERANGE:350000@862",
-				signed,
-				...Array.from({ length: 15 }, (_, index) => [
-					"#EXTINF:4.004000,",
-					`#EXT-X-BYTERANGE:350000@${862 + (index + 1) * 350_000}`,
-					"1080p.m4s",
-				]).flat(),
-				"#EXT-X-ENDLIST",
-				"",
-			].join("\n"),
-		);
-		expect(mocks.sign).toHaveBeenCalledTimes(1);
-	});
-
-	it("keeps every segment of a long playlist signed where media cannot be reached through a redirect", async () => {
-		mocks.readText.mockResolvedValue(storedRendition(40));
-		mocks.answersAnyOrigin.mockReturnValue(false);
-		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=${EXPIRES}&sig=a,b`;
-
-		const lines = (await (await play("1080p.m3u8")).text()).split("\n");
-
-		expect(lines.filter((line) => line === signed)).toHaveLength(40);
-		expect(lines).not.toContain("1080p.m4s");
-		expect(mocks.answersAnyOrigin).toHaveBeenCalledWith(signed);
-	});
-
-	it("serves a 21 minute playlist in about 21 KB instead of 250 KB", async () => {
-		const signature = "s".repeat(344);
-		const policy = "p".repeat(280);
-		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?Policy=${policy}&Key-Pair-Id=K2JCJMDEHXQW5F&Signature=${signature}`;
-		mocks.sign.mockResolvedValue(signed);
-		const stored = storedRendition(317);
-		mocks.readText.mockResolvedValue(stored);
-
-		const body = await (await play("1080p.m3u8")).text();
-
-		expect(stored.replaceAll("1080p.m4s", signed).length).toBeGreaterThan(
-			250_000,
-		);
-		expect(body.length).toBe(stored.length + 2 * (signed.length - 9));
-		expect(body.length).toBeLessThan(22_000);
-		expect(body.split(signed)).toHaveLength(3);
-		expect(
-			body.split("\n").filter((line) => line === "1080p.m4s"),
-		).toHaveLength(316);
-	});
-
-	it.each([
-		{ name: "another folder", line: "../../other/video.m4s" },
-		{ name: "another host", line: "https://elsewhere.example/1080p.m4s" },
-		{ name: "another playlist", line: "720p.m3u8" },
-	])(
-		"refuses a long stored playlist whose last segment points at $name",
-		async ({ line }) => {
-			const stored = storedRendition(40).split("\n");
-			stored[stored.lastIndexOf("1080p.m4s")] = line;
-			mocks.readText.mockResolvedValue(stored.join("\n"));
-
-			const response = await play("1080p.m3u8");
-
-			expect(response.status).toBe(502);
-			expect(response.headers.get("cache-control")).toBe("no-store");
-		},
-	);
-
-	it("redirects a segment listed by file name to the URL the playlist signs", async () => {
-		mocks.readText.mockResolvedValue(storedRendition(16));
-
-		const playlist = (await (await play("1080p.m3u8")).text()).split("\n");
-		const listed = playlist[playlist.lastIndexOf("1080p.m4s")] ?? "";
-		const redirect = await play(listed);
-
-		expect(redirect.status).toBe(302);
-		expect(playlist).toContain(redirect.headers.get("location"));
 	});
 
 	it.each([

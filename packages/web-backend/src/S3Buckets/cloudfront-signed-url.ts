@@ -35,15 +35,6 @@ const encodeKeySegment = (segment: string) =>
 export const getCloudFrontObjectUrl = (bucketUrl: string, key: string) =>
 	`${bucketUrl}/${key.split("/").map(encodeKeySegment).join("/")}`;
 
-export const isCloudFrontSignedUrl = (url: string) => {
-	try {
-		const query = new URL(url).searchParams;
-		return query.has("Key-Pair-Id") && query.has("Signature");
-	} catch {
-		return false;
-	}
-};
-
 export const createCloudFrontSignedUrl = ({
 	bucketUrl,
 	key,
