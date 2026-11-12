@@ -52,6 +52,11 @@ const pastLimit = (
 const LOCAL_NO_AUDIO_PATTERN =
 	/does not contain any stream|matches no streams/i;
 
+export const probeShowsNoAudio = (probe: {
+	audioCodec?: string | null;
+	audioChannels?: number | null;
+}) => !probe.audioCodec && probe.audioChannels === null;
+
 const isTooLong = (seconds: number | null) =>
 	seconds !== null && seconds > TRANSCRIPT_AUDIO_MAX_SECONDS;
 
@@ -62,7 +67,7 @@ async function extractViaMediaServer(
 	const probe = await probeVideoViaMediaServer(sourceUrl, {
 		maxRetries: 0,
 	}).catch(() => null);
-	if (probe && probe.audioCodec === null) return { state: "no_audio" };
+	if (probe && probeShowsNoAudio(probe)) return { state: "no_audio" };
 	const probedSeconds =
 		probe && Number.isFinite(probe.duration) && probe.duration > 0
 			? probe.duration

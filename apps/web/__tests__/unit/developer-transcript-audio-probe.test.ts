@@ -9,7 +9,10 @@ vi.mock("@cap/env", () => ({
 	NODE_ENV: "test",
 }));
 
-import { extractTranscriptAudioBytes } from "@/lib/developer-transcript-audio";
+import {
+	extractTranscriptAudioBytes,
+	probeShowsNoAudio,
+} from "@/lib/developer-transcript-audio";
 
 const calls = { probe: 0, convert: 0, check: 0 };
 let probe: () => Response;
@@ -46,7 +49,14 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("a file with no audio track", () => {
 	it("is reported from the probe, without trying to convert it", async () => {
-		probe = probed({ duration: 8, width: 1280, height: 720, audioCodec: null });
+		probe = probed({
+			duration: 8,
+			width: 1280,
+			height: 720,
+			audioCodec: null,
+			audioChannels: null,
+			sampleRate: null,
+		});
 		convert = () => new Response(null, { status: 503 });
 		const started = Date.now();
 
@@ -69,6 +79,45 @@ describe("a file with no audio track", () => {
 
 		expect(result.state).toBe("ok");
 		expect(calls).toEqual({ probe: 1, convert: 1, check: 0 });
+	});
+
+	it("converts audio whose codec the probe cannot name but whose channels it sees", async () => {
+		probe = probed({
+			duration: 8,
+			width: 1280,
+			height: 720,
+			audioCodec: null,
+			audioChannels: 2,
+			sampleRate: 44_100,
+		});
+
+		const result = await extractTranscriptAudioBytes("http://storage.test/a");
+
+		expect(result.state).toBe("ok");
+		expect(calls).toEqual({ probe: 1, convert: 1, check: 0 });
+	});
+
+	it("follows the media server's own rule for whether a source has audio", () => {
+		expect(probeShowsNoAudio({ audioCodec: null, audioChannels: null })).toBe(
+			true,
+		);
+		expect(probeShowsNoAudio({ audioCodec: "", audioChannels: null })).toBe(
+			true,
+		);
+		expect(probeShowsNoAudio({ audioCodec: null, audioChannels: 2 })).toBe(
+			false,
+		);
+		expect(probeShowsNoAudio({ audioCodec: null, audioChannels: 6 })).toBe(
+			false,
+		);
+		expect(probeShowsNoAudio({ audioCodec: "opus", audioChannels: null })).toBe(
+			false,
+		);
+		expect(probeShowsNoAudio({ audioCodec: "aac", audioChannels: 2 })).toBe(
+			false,
+		);
+		expect(probeShowsNoAudio({ audioCodec: null })).toBe(false);
+		expect(probeShowsNoAudio({})).toBe(false);
 	});
 
 	it("converts an audio-only file the probe cannot read, with no extra call", async () => {
