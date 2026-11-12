@@ -81,6 +81,7 @@ import {
 	renderAgentVtt,
 	transcriptTextFromCues,
 } from "@/lib/agent-api";
+import { developerAppBillingSection } from "@/lib/agent-developer-billing";
 import {
 	agentAction,
 	agentViewerSettings,
@@ -129,7 +130,6 @@ import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
-import { getInfraBilling, infraBillingJson } from "@/lib/infra-standing";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
@@ -3636,7 +3636,11 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							path.appId,
 						);
 						const billing = yield* Effect.tryPromise(() =>
-							getInfraBilling(path.appId),
+							developerAppBillingSection({
+								scopes: principal.scopes,
+								appId: path.appId,
+								credits: context.credits,
+							}),
 						);
 						return {
 							app: {
@@ -3659,8 +3663,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								videoCount: context.videoCount,
 								storageMinutes: context.storageMinutes,
 							},
-							credits: context.credits,
-							billing: infraBillingJson(billing),
+							...billing,
 							requestId,
 						};
 					}),

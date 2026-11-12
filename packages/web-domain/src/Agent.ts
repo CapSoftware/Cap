@@ -1028,30 +1028,33 @@ export const AgentDeveloperAppContextResponse = Schema.Struct({
 			cardSaved: Schema.Boolean,
 		}),
 	),
-	billing: Schema.Struct({
-		standing: Schema.Struct({
-			state: Schema.Literal("active", "grace", "paused"),
-			pausesAt: Schema.NullOr(Schema.String),
-		}),
-		upload: Schema.Struct({
-			allowed: Schema.Boolean,
-			reason: Schema.NullOr(
-				Schema.Literal("no_account", "out_of_credit", "insufficient_credits"),
-			),
-			requiredMicroCredits: Schema.Number,
-			shortfallMicroCredits: Schema.Number,
-			message: Schema.NullOr(Schema.String),
-		}),
-		storage: Schema.Struct({
-			minutesByTier: Schema.Struct({
-				"1080p": Schema.Number,
-				"1440p": Schema.Number,
-				"2160p": Schema.Number,
+	billingHint: Schema.NullOr(Schema.String),
+	billing: Schema.NullOr(
+		Schema.Struct({
+			standing: Schema.Struct({
+				state: Schema.Literal("active", "grace", "paused"),
+				pausesAt: Schema.NullOr(Schema.String),
 			}),
-			dailyMicroCredits: Schema.Number,
-			monthlyMicroCredits: Schema.Number,
+			upload: Schema.Struct({
+				allowed: Schema.Boolean,
+				reason: Schema.NullOr(
+					Schema.Literal("no_account", "out_of_credit", "insufficient_credits"),
+				),
+				requiredMicroCredits: Schema.Number,
+				shortfallMicroCredits: Schema.Number,
+				message: Schema.NullOr(Schema.String),
+			}),
+			storage: Schema.Struct({
+				minutesByTier: Schema.Struct({
+					"1080p": Schema.Number,
+					"1440p": Schema.Number,
+					"2160p": Schema.Number,
+				}),
+				dailyMicroCredits: Schema.Number,
+				monthlyMicroCredits: Schema.Number,
+			}),
 		}),
-	}),
+	),
 	requestId: Schema.String,
 });
 
