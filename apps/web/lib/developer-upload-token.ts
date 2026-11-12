@@ -8,6 +8,7 @@ export const UPLOAD_TOKEN_DEFAULT_SECONDS = 60 * 60;
 export const UPLOAD_TOKEN_MIN_SECONDS = 60;
 export const UPLOAD_TOKEN_MAX_SECONDS = 24 * 60 * 60;
 export const CREATE_UPLOAD_PATH = "/api/developer/v1/uploads";
+export const RENEW_UPLOAD_TOKEN_PATH = `${CREATE_UPLOAD_PATH}/{videoId}/token`;
 
 const KEY_CONTEXT = "cap-infra-upload-token:v1";
 const MAX_TOKEN_LENGTH = 2048;
@@ -20,6 +21,7 @@ const payloadSchema = z
 		video: z.string().min(1).max(255),
 		exp: z.number().int().positive().safe(),
 		origin: z.string().min(1).max(253).nullable(),
+		max: z.number().int().positive().safe().optional(),
 	})
 	.strict();
 
@@ -28,6 +30,7 @@ export type DeveloperUploadToken = {
 	videoId: string;
 	expiresAt: number;
 	corsOrigin: string | null;
+	maxBytes?: number;
 };
 
 export type DeveloperUploadTokenCheck =
@@ -50,6 +53,7 @@ export function createDeveloperUploadToken(token: DeveloperUploadToken) {
 				video: token.videoId,
 				exp: token.expiresAt,
 				origin: token.corsOrigin,
+				max: token.maxBytes,
 			}),
 		),
 	).toString("base64url");
@@ -98,6 +102,7 @@ export function verifyDeveloperUploadToken(
 			videoId: parsed.data.video,
 			expiresAt: parsed.data.exp,
 			corsOrigin: parsed.data.origin,
+			...(parsed.data.max === undefined ? {} : { maxBytes: parsed.data.max }),
 		},
 	};
 }
@@ -128,7 +133,7 @@ export const uploadTokenRefusal = (reason: "invalid" | "expired") =>
 		? apiErrorBody(
 				"upload_token_expired",
 				"Upload token has expired",
-				`Create a new upload with POST ${CREATE_UPLOAD_PATH}. Set timeoutSeconds, up to ${UPLOAD_TOKEN_MAX_SECONDS}, when an upload needs longer.`,
+				`Get a new token for the same video from your server with POST ${RENEW_UPLOAD_TOKEN_PATH}, then continue the upload with it. Set timeoutSeconds, up to ${UPLOAD_TOKEN_MAX_SECONDS}, when an upload needs longer.`,
 			)
 		: apiErrorBody(
 				"invalid_upload_token",

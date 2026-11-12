@@ -107,7 +107,11 @@ test.each(["recording", "paused"] as const)(
 				if (input.endsWith("/initiate"))
 					return Response.json({ uploadId: "test-upload" });
 				if (input.endsWith("/presign-part"))
-					return Response.json({ presignedUrl: "https://upload.invalid/part" });
+					return Response.json({
+						parts: [
+							{ partNumber: 1, presignedUrl: "https://upload.invalid/part" },
+						],
+					});
 				if (input === "https://upload.invalid/part")
 					return new Response(null, { headers: { ETag: "test-etag" } });
 				if (input.endsWith("/complete")) {
@@ -204,7 +208,9 @@ test.each([
 		if (input.endsWith("/initiate"))
 			return Response.json({ uploadId: "test-upload" });
 		if (input.endsWith("/presign-part"))
-			return Response.json({ presignedUrl: "https://upload.invalid/part" });
+			return Response.json({
+				parts: [{ partNumber: 1, presignedUrl: "https://upload.invalid/part" }],
+			});
 		if (input === "https://upload.invalid/part")
 			return new Response(null, { headers: { ETag: "test-etag" } });
 		if (input.endsWith("/complete")) return Response.json({ success: true });
@@ -260,7 +266,11 @@ test.each([
 			if (input.endsWith("/initiate"))
 				return Response.json({ uploadId: "test-upload" });
 			if (input.endsWith("/presign-part"))
-				return Response.json({ presignedUrl: "https://upload.invalid/part" });
+				return Response.json({
+					parts: [
+						{ partNumber: 1, presignedUrl: "https://upload.invalid/part" },
+					],
+				});
 			if (input === "https://upload.invalid/part") {
 				uploaded = await new Response(init?.body).text();
 				return new Response(null, { headers: { ETag: "test-etag" } });
