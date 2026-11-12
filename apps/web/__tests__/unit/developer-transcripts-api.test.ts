@@ -181,8 +181,8 @@ describe("developer transcripts API", () => {
 			});
 		});
 
-		it("caps the limit and passes filters through", async () => {
-			await app.request("/?limit=500&offset=20&userId=user-9&status=complete", {
+		it("passes the page and filters through", async () => {
+			await app.request("/?limit=100&offset=20&userId=user-9&status=complete", {
 				headers: SECRET,
 			});
 			expect(mocks.store.listTranscripts).toHaveBeenCalledWith("app-1", {
@@ -193,12 +193,22 @@ describe("developer transcripts API", () => {
 			});
 		});
 
-		it("falls back to defaults for unusable numbers", async () => {
-			await app.request("/?limit=-3&offset=abc", { headers: SECRET });
-			expect(mocks.store.listTranscripts).toHaveBeenCalledWith(
-				"app-1",
-				expect.objectContaining({ limit: 50, offset: 0 }),
-			);
+		it.each([
+			["limit=0", "invalid_limit"],
+			["limit=500", "invalid_limit"],
+			["limit=abc", "invalid_limit"],
+			["offset=-3", "invalid_offset"],
+			["offset=abc", "invalid_offset"],
+			["userid=user-9", "unknown_parameter"],
+			["externalUserId=user-9", "unknown_parameter"],
+		])("refuses ?%s instead of listing with defaults", async (query, code) => {
+			const response = await app.request(`/?${query}`, { headers: SECRET });
+			expect(response.status).toBe(400);
+			const body = await response.json();
+			expect(body).toMatchObject({ code });
+			expect(typeof body.error).toBe("string");
+			expect(typeof body.hint).toBe("string");
+			expect(mocks.store.listTranscripts).not.toHaveBeenCalled();
 		});
 
 		it("rejects an unknown status filter", async () => {

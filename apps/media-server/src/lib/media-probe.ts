@@ -227,6 +227,19 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 	}
 }
 
+// The last timestamp is the length only for a file that starts at zero. A
+// transport stream usually does not, so the length is counted from its first
+// timestamp.
+async function measureLength(
+	input: ReturnType<typeof createMediaInput>,
+): Promise<number> {
+	const [start, end] = await Promise.all([
+		input.getFirstTimestamp(),
+		input.computeDuration(undefined, { skipLiveWait: true }),
+	]);
+	return Number.isFinite(start) && start > 0 ? Math.max(0, end - start) : end;
+}
+
 async function readMediaMetadata(
 	input: ReturnType<typeof createMediaInput>,
 	path: string,
@@ -245,10 +258,7 @@ async function readMediaMetadata(
 	const duration =
 		(await input.getDurationFromMetadata(undefined, {
 			skipLiveWait: true,
-		})) ??
-		(await input.computeDuration(undefined, {
-			skipLiveWait: true,
-		}));
+		})) ?? (await measureLength(input));
 	const packetStats = await videoTrack
 		.computePacketStats(120, { skipLiveWait: true })
 		.catch(() => null);

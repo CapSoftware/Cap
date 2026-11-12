@@ -19,10 +19,24 @@ import { and, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
+import { developerVideoPlaybackUrls } from "@/lib/developer-video-api";
+import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
+import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
-import { INFRA_APP_COOKIE, selectInfraApp } from "@/lib/infra-routes";
+import {
+	INFRA_APP_COOKIE,
+	INFRA_BASE_PATH,
+	infraAppPath,
+	selectInfraApp,
+} from "@/lib/infra-routes";
 import type { InfraStorageSnapshot } from "@/lib/infra-usage";
+import {
+	type InfraVideoDetail,
+	type InfraVideoListItem,
+	toInfraVideoDetail,
+	toInfraVideoListItem,
+} from "@/lib/infra-video-view";
 
 export type DeveloperApiKey = Pick<
 	typeof developerApiKeys.$inferSelect,
@@ -152,21 +166,10 @@ export async function getDeveloperApps(
 	}));
 }
 
-export type InfraVideoRow = Pick<
-	typeof developerVideos.$inferSelect,
-	| "id"
-	| "name"
-	| "externalUserId"
-	| "duration"
-	| "width"
-	| "height"
-	| "createdAt"
->;
-
 export async function getDeveloperAppVideos(
 	appId: string,
 	options?: { userId?: string; limit?: number; offset?: number },
-): Promise<InfraVideoRow[]> {
+): Promise<InfraVideoListItem[]> {
 	const conditions = [
 		eq(developerVideos.appId, appId),
 		isNull(developerVideos.deletedAt),
@@ -176,7 +179,32 @@ export async function getDeveloperAppVideos(
 		conditions.push(eq(developerVideos.externalUserId, options.userId));
 	}
 
-	return db()
+	const rows = await db()
+		.select({
+			id: developerVideos.id,
+			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
+			duration: developerVideos.duration,
+			width: developerVideos.width,
+			createdAt: developerVideos.createdAt,
+			status: developerVideos.status,
+			legacy: sql<
+				number | string
+			>`(${developerVideos.playbackId} IS NULL AND ${developerVideos.processing} IS NULL)`,
+		})
+		.from(developerVideos)
+		.where(and(...conditions))
+		.orderBy(desc(developerVideos.createdAt))
+		.limit(options?.limit ?? 50)
+		.offset(options?.offset ?? 0);
+
+	return rows.map((row) =>
+		toInfraVideoListItem({ ...row, legacy: Number(row.legacy) === 1 }),
+	);
+}
+
+async function findDeveloperAppVideo(appId: string, videoId: string) {
+	const [row] = await db()
 		.select({
 			id: developerVideos.id,
 			name: developerVideos.name,
@@ -185,12 +213,45 @@ export async function getDeveloperAppVideos(
 			width: developerVideos.width,
 			height: developerVideos.height,
 			createdAt: developerVideos.createdAt,
+			updatedAt: developerVideos.updatedAt,
+			status: developerVideos.status,
+			errorReason: developerVideos.errorReason,
+			storedBytes: developerVideos.storedBytes,
+			renditions: developerVideos.renditions,
+			playbackId: developerVideos.playbackId,
+			processing: developerVideos.processing,
 		})
 		.from(developerVideos)
-		.where(and(...conditions))
-		.orderBy(desc(developerVideos.createdAt))
-		.limit(options?.limit ?? 50)
-		.offset(options?.offset ?? 0);
+		.where(
+			and(
+				eq(developerVideos.id, videoId),
+				eq(developerVideos.appId, appId),
+				isNull(developerVideos.deletedAt),
+			),
+		)
+		.limit(1);
+	return row ?? null;
+}
+
+// Reading a video through the API restarts encoding that stalled or is due a
+// retry. A customer who only uses the console has no other read, so opening
+// the video's page does the same.
+export async function getDeveloperAppVideo(
+	appId: string,
+	videoId: string,
+): Promise<InfraVideoDetail | null> {
+	let row = await findDeveloperAppVideo(appId, videoId);
+	if (!row) return null;
+	if (
+		developerVideoRedrive({ ...row, deletedAt: null }, Date.now()) &&
+		(await redriveDeveloperVideoProcessing(videoId))
+	) {
+		row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
+	}
+	return toInfraVideoDetail(
+		{ ...row, legacy: row.playbackId === null && row.processing === null },
+		developerVideoPlaybackUrls(row),
+	);
 }
 
 export async function getDeveloperTransactions(accountId: string, limit = 50) {
@@ -206,9 +267,9 @@ const getInfraAppsForUser = cache((userId: (typeof userSelectProps)["id"]) =>
 	getDeveloperApps({ id: userId }),
 );
 
-async function requireInfraUser() {
+async function requireInfraUser(returnTo: string = INFRA_BASE_PATH) {
 	const user = await getCurrentUser();
-	if (!user) redirect("/login");
+	if (!user) redirect(`/login?next=${encodeURIComponent(returnTo)}`);
 	if (!canUseInfra(user.email)) notFound();
 	return user;
 }
@@ -246,8 +307,8 @@ export async function getInfraProCredit(): Promise<InfraProCredit> {
 	return { status: claimed ? "claimed" : "available", nextDate };
 }
 
-export async function getInfraApps() {
-	const user = await requireInfraUser();
+export async function getInfraApps(returnTo?: string) {
+	const user = await requireInfraUser(returnTo);
 	return getInfraAppsForUser(user.id);
 }
 
@@ -257,7 +318,7 @@ export async function getSelectedInfraApp() {
 }
 
 export async function requireInfraApp(appId: string) {
-	const apps = await getInfraApps();
+	const apps = await getInfraApps(infraAppPath(appId));
 	const app = apps.find((a) => a.id === appId);
 	if (!app) notFound();
 	return { app, apps };

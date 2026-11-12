@@ -196,6 +196,8 @@ export const RATE_LIMIT_IDS = {
 	VIEWER_DOWNLOAD: "rl_viewer_download",
 	/** Usage event batches from the iOS app (OpenPanel ingest). Suggested: 30 / 1m per key (user). */
 	MOBILE_EVENTS: "rl_mobile_events",
+	/** Code attempts on Cap Infra credit checkout (guessing guard). Suggested: 10 / 10m per key (user). */
+	INFRA_CREDIT_CODE: "rl_infra_credit_code",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -245,6 +247,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.INFRA_CREDIT_CODE]: { limit: 10, windowMs: 10 * MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

@@ -2,7 +2,7 @@ import { DEVELOPER_VIDEO_RESOLUTION_TIERS } from "@cap/database/types";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createInfraVideo } from "@/lib/infra-video-upload";
-import { zValidator } from "@/utils/zod-validator";
+import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
 export const app = new Hono<{
@@ -14,7 +14,7 @@ export const app = new Hono<{
 
 app.post(
 	"/create",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			name: z.string().max(255).optional(),

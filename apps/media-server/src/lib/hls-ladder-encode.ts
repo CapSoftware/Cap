@@ -21,7 +21,7 @@ import {
 } from "./media-common";
 import {
 	getProcessTimeoutMs,
-	probeVideoRotation,
+	probeVideoSourceTraits,
 	runTranscodeCommand,
 } from "./media-video";
 import {
@@ -80,7 +80,10 @@ export async function encodeHlsLadder(
 	abortSignal?: AbortSignal,
 ): Promise<EncodedHlsLadder> {
 	abortSignal?.throwIfAborted();
-	const rotation = await probeVideoRotation(inputPath, abortSignal);
+	const { rotation, hdr } = await probeVideoSourceTraits(
+		inputPath,
+		abortSignal,
+	);
 	abortSignal?.throwIfAborted();
 	const rungs = planHlsLadder(
 		{ width: metadata.width, height: metadata.height },
@@ -119,16 +122,15 @@ export async function encodeHlsLadder(
 		sourceFps: metadata.fps,
 		rungs,
 		range,
+		hdr,
 	};
 
 	const encodeVideo = async (): Promise<"nvenc" | "libx264"> => {
 		const nvenc = nvencOptionsFromEnv();
 		if (nvenc) {
-			const gpuDecode = canDecodeOnGpu(
-				metadata.videoCodec,
-				rotation,
-				nvenc.gpuDecodeCodecs,
-			);
+			const gpuDecode =
+				hdr === null &&
+				canDecodeOnGpu(metadata.videoCodec, rotation, nvenc.gpuDecodeCodecs);
 			try {
 				await runTranscodeCommand(
 					buildHlsLadderArgs({

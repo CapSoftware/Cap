@@ -49,7 +49,6 @@ export class MultipartClient {
 		metadata?: Record<string, unknown>;
 	}): Promise<{
 		videoId: string;
-		s3Key: string;
 		shareUrl: string;
 		embedUrl: string;
 	}> {

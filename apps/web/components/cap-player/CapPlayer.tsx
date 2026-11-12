@@ -31,12 +31,13 @@ const clock = (seconds: number) => {
 	return `${minutes}:${String(whole % 60).padStart(2, "0")}`;
 };
 
-const resolutionLabel = (width: number) => {
-	if (width >= 3840) return "4K";
-	if (width >= 2560) return "1440p";
-	if (width >= 1920) return "1080p";
-	if (width >= 1280) return "720p";
-	return width > 0 ? "360p" : "";
+export const resolutionLabel = (width: number, height: number) => {
+	const long = Math.max(width, height);
+	if (long >= 3840) return "4K";
+	if (long >= 2560) return "1440p";
+	if (long >= 1920) return "1080p";
+	if (long >= 1280) return "720p";
+	return long > 0 ? "360p" : "";
 };
 
 type FullscreenVideo = HTMLVideoElement & {
@@ -268,7 +269,10 @@ export const CapPlayer = ({
 		const onVolume = () => setMuted(video.muted || video.volume === 0);
 		const onResize = () => {
 			if (qualityRef.current) {
-				qualityRef.current.textContent = resolutionLabel(video.videoWidth);
+				qualityRef.current.textContent = resolutionLabel(
+					video.videoWidth,
+					video.videoHeight,
+				);
 			}
 		};
 		const onWaiting = () => setWaiting(true);
