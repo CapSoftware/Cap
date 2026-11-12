@@ -11,6 +11,10 @@ const startsWith = (bytes: Uint8Array, signature: readonly number[]) =>
 	signature.every((value, index) => bytes[index] === value);
 
 const ISO_BOX_TYPES = ["ftyp", "moov", "mdat", "wide", "free", "skip"];
+const WAVE64_RIFF_GUID = [
+	0x72, 0x69, 0x66, 0x66, 0x2e, 0x91, 0xcf, 0x11, 0xa5, 0xd6, 0x28, 0xdb, 0x04,
+	0xc1, 0x00, 0x00,
+];
 const TS_PACKET_BYTES = 188;
 const M2TS_PACKET_BYTES = 192;
 const M2TS_SYNC_OFFSET = 4;
@@ -52,5 +56,6 @@ export function isSelfContainedMedia(bytes: Uint8Array) {
 		return true;
 	}
 	if (startsWith(bytes, [0x00, 0x00, 0x01, 0xba])) return true;
+	if (startsWith(bytes, WAVE64_RIFF_GUID)) return true;
 	return false;
 }

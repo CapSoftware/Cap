@@ -44,6 +44,36 @@ describe("self-contained media check", () => {
 			isSelfContainedMedia(bytes(0x00, 0x00, 0x01, 0xba, 0x44, 0x00)),
 			"mpeg program stream",
 		).toBe(true);
+		expect(
+			isSelfContainedMedia(
+				bytes(
+					0x72,
+					0x69,
+					0x66,
+					0x66,
+					0x2e,
+					0x91,
+					0xcf,
+					0x11,
+					0xa5,
+					0xd6,
+					0x28,
+					0xdb,
+					0x04,
+					0xc1,
+					0x00,
+					0x00,
+					0x10,
+				),
+			),
+			"wave64",
+		).toBe(true);
+		expect(
+			isSelfContainedMedia(
+				bytes(0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00),
+			),
+			"asf or wma",
+		).toBe(true);
 	});
 
 	it("refuses playlists and other files that can point somewhere else", () => {
@@ -68,6 +98,7 @@ describe("self-contained media check", () => {
 				Uint8Array.from([...text("RIFF"), 1, 2, 3, 4, ...text("WEBP")]),
 			],
 			["one stray sync byte", bytes(0x47, 0, 0, 0, 0)],
+			["lowercase riff that is not wave64", text("riff is a word, not a file")],
 			["one stray m2ts sync byte", bytes(0, 0, 0, 0, 0x47, 0, 0, 0)],
 			["mpeg start code that is not a pack", bytes(0x00, 0x00, 0x01, 0x00)],
 			["too short", bytes(0x1a, 0x45)],
