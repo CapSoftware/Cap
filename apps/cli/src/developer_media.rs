@@ -15,6 +15,30 @@ pub const DEFAULT_WAIT_SECONDS: u64 = 900;
 pub const MAX_WAIT_SECONDS: u64 = 86_400;
 
 #[derive(Default)]
+pub struct Created(std::sync::Mutex<Option<(String, String)>>);
+
+impl Created {
+    pub fn record(&self, id: &str, status: &str) {
+        if let Ok(mut created) = self.0.lock() {
+            *created = Some((id.to_string(), status.to_string()));
+        }
+    }
+
+    pub fn get(&self) -> Option<(String, String)> {
+        self.0.lock().ok().and_then(|created| created.clone())
+    }
+
+    fn record_from(&self, value: &Value, object: &str) {
+        if let (Some(id), Some(status)) = (
+            value_text(value, object, "id"),
+            value_text(value, object, "status"),
+        ) {
+            self.record(id, status);
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct TranscriptOptions {
     pub name: Option<String>,
     pub language: Option<String>,
@@ -167,6 +191,7 @@ pub async fn create_transcript_from_file(
     app_id: &str,
     path: &Path,
     options: &TranscriptOptions,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let content_length = file_length(path, TRANSCRIPT_MAX_FILE_BYTES, "2 GB").await?;
@@ -179,6 +204,7 @@ pub async fn create_transcript_from_file(
         )
         .await?;
     let id = transcript_id(&created)?;
+    created_resource.record(&id, "uploading");
     let started = async {
         let target = created
             .get("upload")
@@ -193,9 +219,11 @@ pub async fn create_transcript_from_file(
             )
             .await
     };
-    started
+    let started = started
         .await
-        .map_err(|error| error.with_detail("transcriptId", id.as_str()))
+        .map_err(|error| error.with_detail("transcriptId", id.as_str()))?;
+    created_resource.record_from(&started, "transcript");
+    Ok(started)
 }
 
 pub async fn create_transcript_from_url(
@@ -203,20 +231,23 @@ pub async fn create_transcript_from_url(
     app_id: &str,
     url: &str,
     options: &TranscriptOptions,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let parsed = url::Url::parse(url).map_err(|_| invalid("The URL is not valid"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(invalid("The URL must start with http:// or https://"));
     }
-    client
+    let created = client
         .mutate_json_confirmed(
             Method::POST,
             &format!("/developer/apps/{app_id}/transcripts"),
             &transcript_url_body(url, options),
         )
         .await
-        .map(without_upload_target)
+        .map(without_upload_target)?;
+    created_resource.record_from(&created, "transcript");
+    Ok(created)
 }
 
 pub fn transcript_path(
@@ -658,6 +689,7 @@ pub async fn upload_video(
     path: &Path,
     name: Option<&str>,
     user_id: Option<&str>,
+    created_resource: &Created,
 ) -> Result<Value, AgentApiError> {
     let app_id = opaque_id(app_id, "Developer app ID")?;
     let content_length = file_length(path, VIDEO_MAX_FILE_BYTES, "5 GB").await?;
@@ -681,6 +713,7 @@ pub async fn upload_video(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("Cap returned a video without an ID"))?
         .to_string();
+    created_resource.record(&video_id, "uploading");
     let completed = async {
         let target = created
             .get("upload")
@@ -699,9 +732,11 @@ pub async fn upload_video(
             )
             .await
     };
-    completed
+    let completed = completed
         .await
-        .map_err(|error| error.with_detail("videoId", video_id.as_str()))
+        .map_err(|error| error.with_detail("videoId", video_id.as_str()))?;
+    created_resource.record_from(&completed, "video");
+    Ok(completed)
 }
 
 #[cfg(test)]

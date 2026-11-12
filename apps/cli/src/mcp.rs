@@ -7,8 +7,9 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, Resource,
-        ResourceContents, ResourceTemplate, ServerCapabilities, ServerInfo,
+        PaginatedRequestParams, ProgressNotificationParam, ReadResourceRequestParams,
+        ReadResourceResult, Resource, ResourceContents, ResourceTemplate, ServerCapabilities,
+        ServerInfo,
     },
     schemars, tool, tool_handler, tool_router,
 };
@@ -875,6 +876,39 @@ impl CapMcpServer {
                 ..Default::default()
             }))
         })
+    }
+
+    fn cancelled(
+        id_field: &str,
+        created: &developer_media::Created,
+        resume: &str,
+    ) -> AgentApiError {
+        let error = Self::invalid("The MCP request was cancelled");
+        match created.get() {
+            Some((id, status)) => error
+                .with_detail(id_field, id)
+                .with_detail("status", status)
+                .with_hint(resume),
+            None => error,
+        }
+    }
+
+    async fn until_cancelled<T>(
+        cancellation: &tokio_util::sync::CancellationToken,
+        work: impl Future<Output = Result<T, AgentApiError>>,
+        on_cancel: impl FnOnce() -> AgentApiError,
+    ) -> Result<T, AgentApiError> {
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(on_cancel()),
+            result = work => result,
+        }
+    }
+
+    async fn announce(context: &rmcp::service::RequestContext<RoleServer>, message: String) {
+        if let Some(token) = context.meta.get_progress_token() {
+            let progress = ProgressNotificationParam::new(token, 1.0).with_message(message);
+            let _ = context.peer.notify_progress(progress).await;
+        }
     }
 
     fn invalid(message: impl Into<String>) -> AgentApiError {
@@ -2649,6 +2683,7 @@ impl CapMcpServer {
             Ok(timeout) => timeout,
             Err(error) => return Self::result(Err(error)),
         };
+        let created = developer_media::Created::default();
         let upload = async {
             let uploaded = developer_media::upload_video(
                 &self.client,
@@ -2656,18 +2691,32 @@ impl CapMcpServer {
                 std::path::Path::new(&input.file_path),
                 input.name.as_deref(),
                 input.user_id.as_deref(),
+                &created,
             )
             .await?;
             if !input.wait {
                 return Ok(uploaded);
             }
             let id = developer_media::created_id(&uploaded, "video")?;
+            Self::announce(
+                &context,
+                format!(
+                    "Video {id} is uploaded and processing. developer_video_wait resumes this wait."
+                ),
+            )
+            .await;
             developer_media::wait_for_video(&self.client, &input.app_id, &id, timeout).await
         };
-        Self::result(tokio::select! {
-            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
-            result = upload => result,
-        })
+        Self::result(
+            Self::until_cancelled(&context.ct, upload, || {
+                Self::cancelled(
+                    "videoId",
+                    &created,
+                    "The video is stored. Continue with developer_video_wait, or remove it with developer_video_delete.",
+                )
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -2700,6 +2749,7 @@ impl CapMcpServer {
             language: input.language,
             user_id: input.user_id,
         };
+        let tracked = developer_media::Created::default();
         let work = async {
             let created = match (input.file_path.as_deref(), input.url.as_deref()) {
                 (Some(file_path), None) => {
@@ -2708,6 +2758,7 @@ impl CapMcpServer {
                         &input.app_id,
                         std::path::Path::new(file_path),
                         &options,
+                        &tracked,
                     )
                     .await?
                 }
@@ -2717,6 +2768,7 @@ impl CapMcpServer {
                         &input.app_id,
                         url,
                         &options,
+                        &tracked,
                     )
                     .await?
                 }
@@ -2726,12 +2778,23 @@ impl CapMcpServer {
                 return Ok(created);
             }
             let id = developer_media::created_id(&created, "transcript")?;
+            Self::announce(
+                &context,
+                format!("Transcript {id} is created. developer_transcript_wait resumes this wait."),
+            )
+            .await;
             developer_media::wait_for_transcript(&self.client, &input.app_id, &id, timeout).await
         };
-        Self::result(tokio::select! {
-            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
-            result = work => result,
-        })
+        Self::result(
+            Self::until_cancelled(&context.ct, work, || {
+                Self::cancelled(
+                    "transcriptId",
+                    &tracked,
+                    "The transcript exists. Continue with developer_transcript_wait, or remove it with developer_transcript_delete.",
+                )
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -4070,5 +4133,49 @@ impl McpArgs {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CapMcpServer;
+    use crate::{caps::AgentApiError, developer_media::Created};
+
+    #[tokio::test]
+    async fn cancelling_after_the_upload_keeps_the_video_id() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let created = Created::default();
+        let work = async {
+            created.record("vid000000000001", "processing");
+            cancellation.cancel();
+            std::future::pending::<Result<(), AgentApiError>>().await
+        };
+        let error = CapMcpServer::until_cancelled(&cancellation, work, || {
+            CapMcpServer::cancelled("videoId", &created, "Continue with developer_video_wait.")
+        })
+        .await
+        .unwrap_err();
+        let error = serde_json::to_value(&error).unwrap();
+        assert_eq!(error["message"], "The MCP request was cancelled");
+        assert_eq!(error["videoId"], "vid000000000001");
+        assert_eq!(error["status"], "processing");
+        assert_eq!(error["hint"], "Continue with developer_video_wait.");
+    }
+
+    #[tokio::test]
+    async fn cancelling_before_anything_is_created_reports_no_id() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+        let created = Created::default();
+        let error = CapMcpServer::until_cancelled(
+            &cancellation,
+            std::future::pending::<Result<(), AgentApiError>>(),
+            || CapMcpServer::cancelled("videoId", &created, "unused"),
+        )
+        .await
+        .unwrap_err();
+        let error = serde_json::to_value(&error).unwrap();
+        assert!(error.get("videoId").is_none());
+        assert!(error.get("hint").is_none());
     }
 }

@@ -877,6 +877,7 @@ impl DevelopersArgs {
                         &args.file,
                         args.name.as_deref(),
                         args.user_id.as_deref(),
+                        &developer_media::Created::default(),
                     )
                     .await?;
                     if !args.wait {
@@ -920,16 +921,17 @@ impl DevelopersArgs {
                         user_id: args.user_id,
                     };
                     let client = client()?;
+                    let tracked = developer_media::Created::default();
                     let created = match (args.file, args.url) {
                         (Some(file), None) => {
                             developer_media::create_transcript_from_file(
-                                &client, &args.app, &file, &options,
+                                &client, &args.app, &file, &options, &tracked,
                             )
                             .await
                         }
                         (None, Some(url)) => {
                             developer_media::create_transcript_from_url(
-                                &client, &args.app, &url, &options,
+                                &client, &args.app, &url, &options, &tracked,
                             )
                             .await
                         }
