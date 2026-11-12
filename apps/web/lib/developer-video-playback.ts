@@ -93,15 +93,28 @@ async function redirectTo(key: string, request: Request): Promise<Response> {
 	});
 }
 
+// A rendition is one file read by byte range, so a playlist that signs every
+// segment repeats one long signed URL per segment: about 250 KB for a 21 minute
+// video, fetched for video and for audio before playback starts. A playlist
+// longer than this signs only its init section and first segment, which is all
+// a player needs for the first frame. It lists the later segments by file
+// name, which a player resolves to this route and follows its redirect to the
+// same signed URL.
+const FULLY_SIGNED_SEGMENTS = 15;
+
 export async function signMediaPlaylist(
 	playlist: string,
 	sign: (name: string) => Promise<string>,
 ): Promise<string> {
 	const signed = new Map<string, string>();
-	const resolve = async (name: string) => {
+	const mediaFile = (name: string) => {
 		if (!MEDIA_FILE_PATTERN.test(name)) {
 			throw new Error("Playlist references an unexpected file");
 		}
+		return name;
+	};
+	const resolve = async (name: string) => {
+		mediaFile(name);
 		const existing = signed.get(name);
 		if (existing) return existing;
 		const url = await sign(name);
@@ -109,16 +122,24 @@ export async function signMediaPlaylist(
 		return url;
 	};
 
+	const source = playlist.split(/\r?\n/).map((line) => line.trim());
+	const segments = source.filter(
+		(line) => line.length > 0 && !line.startsWith("#"),
+	).length;
+	const signedSegments = segments > FULLY_SIGNED_SEGMENTS ? 1 : segments;
+	let segment = 0;
+
 	const lines: string[] = [];
-	for (const raw of playlist.split(/\r?\n/)) {
-		const line = raw.trim();
+	for (const line of source) {
 		if (line.startsWith("#EXT-X-MAP:")) {
 			const uri = line.match(/URI="([^"]*)"/);
 			if (!uri?.[1]) throw new Error("Playlist has no init segment");
 			const url = await resolve(uri[1]);
 			lines.push(line.replace(uri[0], () => `URI="${url}"`));
 		} else if (line.length > 0 && !line.startsWith("#")) {
-			lines.push(await resolve(line));
+			lines.push(
+				segment++ < signedSegments ? await resolve(line) : mediaFile(line),
+			);
 		} else {
 			lines.push(line);
 		}
@@ -262,14 +283,13 @@ export async function developerPlaybackResponse(
 
 	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
 	if (!playlist) return notFound();
-	const validity = signedUrlValidity();
 	return playlistResponse(
 		file === DEVELOPER_VIDEO_MASTER_PLAYLIST
 			? leadWithStartRendition(playlist)
 			: await signMediaPlaylist(playlist, (name) =>
 					signedDeveloperVideoUrl(
 						`${keys.hlsPrefix}${name}`,
-						validity,
+						signedUrlValidity(),
 						request,
 					),
 				),
