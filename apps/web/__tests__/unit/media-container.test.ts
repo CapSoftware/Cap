@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSelfContainedMedia } from "@/lib/media-container";
+import {
+	isSelfContainedMedia,
+	looksLikePlaylist,
+	sniffMedia,
+} from "@/lib/media-container";
 
 const text = (value: string) => new TextEncoder().encode(value);
 const bytes = (...values: number[]) => Uint8Array.from(values);
@@ -107,5 +111,58 @@ describe("self-contained media check", () => {
 		for (const [name, sample] of refused) {
 			expect(isSelfContainedMedia(sample), name).toBe(false);
 		}
+	});
+});
+
+describe("playlist check", () => {
+	it("names the text formats that list other files", () => {
+		const playlists: [string, Uint8Array][] = [
+			["hls", text("#EXTM3U\n#EXT-X-VERSION:3\nsegment0.ts\n")],
+			[
+				"hls after a byte order mark",
+				Uint8Array.from([0xef, 0xbb, 0xbf, ...text("#EXTM3U\n")]),
+			],
+			["hls after blank lines", text("\r\n\n  #extm3u\n")],
+			["hls without its header", text("#EXT-X-TARGETDURATION:6\n")],
+			["dash", text('<?xml version="1.0"?><MPD></MPD>')],
+			[
+				"dash without a prolog",
+				text('<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">'),
+			],
+			["smil", text("<smil><body></body></smil>")],
+			["asx", text('<ASX version="3.0">')],
+			["concat script", text("ffconcat version 1.0\nfile a.mp4\n")],
+			["pls", text("[playlist]\nFile1=http://example.com/a.mp3\n")],
+			["sdp", text("v=0\r\no=- 0 0 IN IP4 203.0.113.1\r\n")],
+			[
+				"url list",
+				text("https://example.com/a.ts\nhttps://example.com/b.ts\n"),
+			],
+		];
+		for (const [name, sample] of playlists) {
+			expect(looksLikePlaylist(sample), name).toBe(true);
+			expect(sniffMedia(sample), name).toBe("playlist");
+		}
+	});
+
+	it("does not call other files playlists", () => {
+		const others: [string, Uint8Array][] = [
+			["plain text", text("This is not a video. It is a note.")],
+			["png", bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)],
+			["gif", text("GIF89a")],
+			["json", text('{"url":"http://localhost"}')],
+			["a word that starts like sdp", text("v=0.5 is the version")],
+			["empty", new Uint8Array(0)],
+			["only blank lines", text("\n\n\n")],
+		];
+		for (const [name, sample] of others) {
+			expect(looksLikePlaylist(sample), name).toBe(false);
+			expect(sniffMedia(sample), name).toBe("unknown");
+		}
+	});
+
+	it("reads media as media even when it could pass for text", () => {
+		expect(sniffMedia(text("#!AMR\n"))).toBe("media");
+		expect(sniffMedia(withAscii([0, 0, 0, 0x20], "ftypisom"))).toBe("media");
 	});
 });
