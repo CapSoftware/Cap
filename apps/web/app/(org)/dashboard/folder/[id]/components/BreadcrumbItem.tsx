@@ -30,6 +30,9 @@ export function BreadcrumbItem({
 	const [isMoving, setIsMoving] = useState(false);
 	const router = useRouter();
 	const { activeSpace } = useDashboardContext();
+	// The route's space comes first: the context only knows spaces the viewer
+	// created, joined or can see publicly.
+	const linkSpaceId = spaceId ?? activeSpace?.id;
 
 	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -108,8 +111,8 @@ export function BreadcrumbItem({
 		>
 			<Link
 				href={
-					activeSpace
-						? `/dashboard/spaces/${activeSpace.id}/folder/${id}`
+					linkSpaceId
+						? `/dashboard/spaces/${linkSpaceId}/folder/${id}`
 						: `/dashboard/folder/${id}`
 				}
 				className="flex gap-1.5 items-center transition-colors duration-200 z-10 relative"
