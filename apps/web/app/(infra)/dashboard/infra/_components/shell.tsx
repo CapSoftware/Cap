@@ -14,11 +14,12 @@ import { formatCredits } from "@/lib/infra-usage";
 import type { InfraAppSummary } from "../infra-data";
 import { AppSwitcher } from "./app-switcher";
 import { FOCUS, LIT, MONO } from "./ui";
+import { useMayLeave } from "./uploads";
 
-export function Brand() {
+export function Brand({ href = INFRA_BASE_PATH }: { href?: string }) {
 	return (
 		<Link
-			href={INFRA_BASE_PATH}
+			href={href}
 			className={clsx("flex shrink-0 items-center rounded-[6px]", FOCUS)}
 		>
 			<Lockup height={22} />
@@ -41,6 +42,10 @@ export function Shell({
 	children: React.ReactNode;
 }) {
 	const pathname = usePathname();
+	const mayLeave = useMayLeave();
+	const askBeforeLeaving = (event: { preventDefault: () => void }) => {
+		if (!mayLeave()) event.preventDefault();
+	};
 	const { section } = parseInfraPathname(pathname);
 	const current = apps.find((app) => app.id === appId) ?? null;
 
@@ -48,7 +53,7 @@ export function Shell({
 		<>
 			<aside className="fixed inset-y-0 left-0 z-40 hidden w-[236px] flex-col border-r border-[rgba(222,230,246,0.08)] px-4 pb-5 pt-5 lg:flex">
 				<div className="px-2">
-					<Brand />
+					<Brand href={infraAppPath(appId)} />
 				</div>
 				<div className="mt-6">
 					<AppSwitcher apps={apps} appId={appId} />
@@ -106,10 +111,18 @@ export function Shell({
 						</div>
 					)}
 					<div className="flex items-center justify-between border-t border-[rgba(222,230,246,0.08)] pt-4">
-						<Link href="/docs/api/rest-api" className={QUIET_LINK}>
+						<Link
+							href="/docs/api/rest-api"
+							onNavigate={askBeforeLeaving}
+							className={QUIET_LINK}
+						>
 							Docs
 						</Link>
-						<Link href="/dashboard/caps" className={QUIET_LINK}>
+						<Link
+							href="/dashboard/caps"
+							onNavigate={askBeforeLeaving}
+							className={QUIET_LINK}
+						>
 							Back to Cap
 						</Link>
 					</div>
@@ -118,7 +131,7 @@ export function Shell({
 
 			<header className="sticky top-0 z-40 border-b border-[rgba(222,230,246,0.08)] bg-[rgba(5,5,6,0.82)] backdrop-blur-xl lg:hidden">
 				<div className="flex h-14 items-center justify-between gap-3 px-4">
-					<Brand />
+					<Brand href={infraAppPath(appId)} />
 					<AppSwitcher apps={apps} appId={appId} compact />
 				</div>
 				<nav

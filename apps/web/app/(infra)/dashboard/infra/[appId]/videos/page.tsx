@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { GetStarted } from "../../_components/get-started";
+import { ApiGuide, FirstCredit } from "../../_components/get-started";
 import { PageHeader } from "../../_components/ui";
 import { UploadDrop } from "../../_components/upload-drop";
 import {
@@ -36,19 +36,18 @@ export default async function InfraVideosPage({
 			<>
 				<PageHeader
 					title="Videos"
-					description="No videos yet. Drop one in, or create it through the API, and it shows up here."
+					description="Drop in your first video. Once it has processed you can watch it here and copy the links that play it on your site."
 				/>
-				<UploadDrop appId={app.id} />
-				<div className="max-w-[640px]">
-					<GetStarted
-						appId={app.id}
-						publicKey={publicKeyValue ?? "cpk_..."}
-						isProduction={app.environment === "production"}
-						balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
-						proCredit={await getInfraProCredit()}
-						uploadHere
-					/>
-				</div>
+				<UploadDrop />
+				<FirstCredit
+					appId={app.id}
+					balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
+					proCredit={await getInfraProCredit()}
+				/>
+				<ApiGuide
+					publicKey={publicKeyValue ?? "cpk_..."}
+					isProduction={app.environment === "production"}
+				/>
 			</>
 		);
 	}

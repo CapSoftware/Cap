@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
 
@@ -209,6 +210,42 @@ export function Split({
 			</div>
 			<div className="min-w-0">{children}</div>
 		</section>
+	);
+}
+
+export function Disclosure({
+	summary,
+	note,
+	children,
+}: {
+	summary: string;
+	note?: string;
+	children: ReactNode;
+}) {
+	return (
+		<details className="group min-w-0 border-t border-[rgba(222,230,246,0.08)] pt-5">
+			<summary
+				className={clsx(
+					"flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[6px] text-[14px] text-[#E8ECF4] [&::-webkit-details-marker]:hidden",
+					FOCUS,
+				)}
+			>
+				<span className="inline-flex items-center gap-1.5">
+					<ChevronRight
+						size={14}
+						aria-hidden="true"
+						className="shrink-0 self-center text-[rgba(232,236,244,0.5)] transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
+					/>
+					{summary}
+				</span>
+				{note && (
+					<span className="text-[13px] text-[rgba(232,236,244,0.46)]">
+						{note}
+					</span>
+				)}
+			</summary>
+			<div className="min-w-0 pt-6">{children}</div>
+		</details>
 	);
 }
 

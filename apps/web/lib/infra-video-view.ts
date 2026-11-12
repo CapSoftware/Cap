@@ -1,0 +1,160 @@
+export type InfraVideoState = "uploading" | "processing" | "ready" | "failed";
+
+export const INFRA_VIDEO_STATE_LABELS: Record<InfraVideoState, string> = {
+	uploading: "Uploading",
+	processing: "Processing",
+	ready: "Ready",
+	failed: "Failed",
+};
+
+export type InfraVideoListItem = {
+	id: string;
+	name: string;
+	externalUserId: string | null;
+	duration: number | null;
+	createdAt: Date;
+	state: InfraVideoState;
+};
+
+export type InfraVideoSize = {
+	name: string;
+	width: number;
+	height: number;
+	bytes: number;
+};
+
+export type InfraVideoDetail = InfraVideoListItem & {
+	width: number | null;
+	height: number | null;
+	storedBytes: number | null;
+	failure: string | null;
+	sizes: InfraVideoSize[];
+	hlsUrl: string | null;
+	mp4Url: string | null;
+	posterUrl: string | null;
+	stillEncoding: boolean;
+};
+
+type StateInput = {
+	status: string;
+	legacy: boolean;
+	duration: number | null;
+	width: number | null;
+};
+
+// Mirrors developerVideoIsReady: a video uploaded before encoding existed has
+// no playback id and no processing state, and is ready once it was measured.
+export function infraVideoState(video: StateInput): InfraVideoState {
+	if (video.status === "ready") return "ready";
+	if (video.legacy && video.duration !== null && video.width !== null) {
+		return "ready";
+	}
+	if (video.status === "errored") return "failed";
+	if (video.status === "processing") return "processing";
+	return "uploading";
+}
+
+const WRITTEN_FOR_CUSTOMERS =
+	/^(This (file|video) |The uploaded file |Not enough credit |Video is longer than )/;
+
+export const INFRA_VIDEO_FAILURE_FALLBACK =
+	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
+
+// Some stored reasons come from the encoder and are worded for operators, so
+// only the sentences written for customers are passed on.
+export function infraVideoFailure(reason: string | null | undefined): string {
+	const text = reason?.trim();
+	return text && WRITTEN_FOR_CUSTOMERS.test(text)
+		? text
+		: INFRA_VIDEO_FAILURE_FALLBACK;
+}
+
+type ListRow = StateInput & {
+	id: string;
+	name: string;
+	externalUserId: string | null;
+	createdAt: Date;
+};
+
+export function toInfraVideoListItem(row: ListRow): InfraVideoListItem {
+	return {
+		id: row.id,
+		name: row.name,
+		externalUserId: row.externalUserId,
+		duration: row.duration,
+		createdAt: row.createdAt,
+		state: infraVideoState(row),
+	};
+}
+
+type PartState = { state: string };
+
+type DetailRow = ListRow & {
+	height: number | null;
+	storedBytes: number | null;
+	errorReason: string | null;
+	renditions:
+		| readonly { name: string; width: number; height: number; bytes: number }[]
+		| null;
+	processing: { hls: PartState; mp4: PartState } | null;
+};
+
+const UNFINISHED_PARTS = new Set(["pending", "running", "unavailable"]);
+
+export function toInfraVideoDetail(
+	row: DetailRow,
+	urls: {
+		hlsUrl: string | null;
+		mp4Url: string | null;
+		posterUrl: string | null;
+	},
+): InfraVideoDetail {
+	const item = toInfraVideoListItem(row);
+	return {
+		...item,
+		width: row.width,
+		height: row.height,
+		storedBytes: row.storedBytes,
+		failure:
+			item.state === "failed" ? infraVideoFailure(row.errorReason) : null,
+		sizes: (row.renditions ?? []).map((size) => ({
+			name: size.name,
+			width: size.width,
+			height: size.height,
+			bytes: size.bytes,
+		})),
+		hlsUrl: urls.hlsUrl,
+		mp4Url: urls.mp4Url,
+		posterUrl: urls.posterUrl,
+		stillEncoding:
+			item.state === "ready" &&
+			row.processing !== null &&
+			[row.processing.hls, row.processing.mp4].some((part) =>
+				UNFINISHED_PARTS.has(part.state),
+			),
+	};
+}
+
+const REFRESH_FAST_MS = 3_000;
+const REFRESH_SLOW_MS = 10_000;
+const REFRESH_FAST_FOR_MS = 2 * 60 * 1000;
+const REFRESH_FOR_MS = 30 * 60 * 1000;
+const UPLOAD_WATCH_MS = 60 * 60 * 1000;
+
+// An upload that has sat for an hour is not going to finish while someone
+// watches, so it stops keeping the page awake. Encoding is always watched.
+export function infraVideoIsChanging(
+	video: Pick<InfraVideoListItem, "state" | "createdAt">,
+	now: number,
+): boolean {
+	if (video.state === "processing") return true;
+	return (
+		video.state === "uploading" &&
+		now - new Date(video.createdAt).getTime() < UPLOAD_WATCH_MS
+	);
+}
+
+export function infraRefreshDelayMs(watchedForMs: number): number | null {
+	if (watchedForMs >= REFRESH_FOR_MS) return null;
+	return watchedForMs < REFRESH_FAST_FOR_MS ? REFRESH_FAST_MS : REFRESH_SLOW_MS;
+}
