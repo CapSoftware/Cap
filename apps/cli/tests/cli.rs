@@ -9,7 +9,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::Value;
@@ -1659,4 +1659,129 @@ fn caps_json_errors_include_the_standard_error_field() {
         assert_eq!(error["code"], "INVALID_REQUEST");
         assert_eq!(error["retryable"], false);
     }
+}
+
+#[test]
+fn agent_api_request_failures_emit_json_errors() {
+    for args in [
+        vec!["account", "get"],
+        vec!["account", "update", "--name", "Synthetic", "--yes"],
+        vec!["account", "image", "remove", "--yes"],
+    ] {
+        for flags in [&["--json"][..], &["--format", "json"][..]] {
+            let output = run_with_agent_api_error(&args, flags);
+
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert_eq!(
+                parse_json(&output)["error"],
+                "INVALID_REQUEST: synthetic API failure",
+                "{args:?} {flags:?}"
+            );
+            assert!(stderr(&output).contains("INVALID_REQUEST: synthetic API failure"));
+
+            let output = cap()
+                .args(&args)
+                .args(flags)
+                .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+                .env("CAP_SERVER_URL", "http://example.com")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            assert!(
+                parse_json(&output)["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("require HTTPS")
+            );
+        }
+    }
+}
+
+#[test]
+fn agent_api_request_failures_emit_json_errors_server_stops_without_request() {
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        sender
+            .send(run_with_agent_api_error(&["account", "get", "--help"], &[]))
+            .unwrap();
+    });
+    let output = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("test server did not stop after the CLI exited without a request");
+    worker.join().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Usage:"));
+}
+
+fn run_with_agent_api_error(args: &[&str], flags: &[&str]) -> Output {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let server_url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let (stop, stopped) = mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let timeout = Duration::from_secs(10);
+        let started = Instant::now();
+        let (mut stream, _) = loop {
+            assert!(
+                started.elapsed() < timeout,
+                "test server timed out waiting for a request"
+            );
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    match stopped.recv_timeout(Duration::from_millis(10)) {
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
+                Err(error) => panic!("test server accept failed: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        stream.set_write_timeout(Some(timeout)).unwrap();
+        let mut reader = BufReader::new(&mut stream);
+        let mut line = String::new();
+        assert_ne!(
+            reader.read_line(&mut line).unwrap(),
+            0,
+            "CLI closed the request"
+        );
+        let mut length = 0;
+        loop {
+            line.clear();
+            assert_ne!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "CLI closed the request headers"
+            );
+            if line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                length = value.trim().parse::<usize>().unwrap();
+            }
+        }
+        reader.read_exact(&mut vec![0; length]).unwrap();
+        let body =
+            r#"{"code":"INVALID_REQUEST","message":"synthetic API failure","retryable":false}"#;
+        write!(
+            stream,
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        stream.flush().unwrap();
+    });
+    let output = cap()
+        .args(args)
+        .args(flags)
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", server_url)
+        .output();
+    drop(stop);
+    server.join().unwrap();
+    output.unwrap()
 }
