@@ -172,7 +172,7 @@ export function VideosClient({
 												{video.name}
 											</Link>
 											{stalled && (
-												<p className="m-0 truncate pb-3 text-[12.5px] leading-[1.4] text-[rgba(232,236,244,0.46)]">
+												<p className="m-0 whitespace-normal text-pretty pb-3 text-[12.5px] leading-[1.4] text-[rgba(232,236,244,0.46)]">
 													The file did not arrive. Remove this and upload it
 													again.
 												</p>
