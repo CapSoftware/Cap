@@ -20,6 +20,7 @@ import {
 holder.db = fakeDb;
 
 import { storageUsage } from "@/lib/developer-pricing";
+import { availableBalance } from "@/lib/infra-balance";
 import {
 	getInfraAppStanding,
 	getInfraBilling,
@@ -311,6 +312,16 @@ describe("standing through the ledger", () => {
 			allowed: false,
 			reason: "no_account",
 		});
+	});
+});
+
+describe("available balance", () => {
+	it("is the account balance today, and nothing for an app with no account", async () => {
+		ledger.account.balanceMicroCredits = 1234;
+		expect(await availableBalance("app-1")).toBe(1234);
+
+		ledger.account.exists = false;
+		expect(await availableBalance("app-1")).toBe(null);
 	});
 });
 

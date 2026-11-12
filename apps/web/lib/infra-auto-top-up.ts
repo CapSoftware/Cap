@@ -7,12 +7,13 @@ import {
 	users,
 } from "@cap/database/schema";
 import { stripe } from "@cap/utils";
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
+import { availableBalance } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
 import { utcDateKey } from "@/lib/infra-usage";
 
@@ -340,7 +341,8 @@ export async function runAutoTopUp(
 	) {
 		return { state: "skipped", reason: "invalid_settings" };
 	}
-	if (account.balanceMicroCredits >= account.autoTopUpThresholdMicroCredits) {
+	const available = (await availableBalance(account.appId)) ?? 0;
+	if (available >= account.autoTopUpThresholdMicroCredits) {
 		return { state: "skipped", reason: "above_threshold" };
 	}
 
@@ -437,7 +439,6 @@ export async function runDueAutoTopUps(now: Date = new Date()) {
 				eq(developerCreditAccounts.autoTopUpEnabled, true),
 				isNotNull(developerCreditAccounts.stripePaymentMethodId),
 				isNull(developerApps.deletedAt),
-				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits}`,
 			),
 		);
 

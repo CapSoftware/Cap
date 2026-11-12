@@ -332,6 +332,24 @@ describe("settling a storage day", () => {
 		});
 	});
 
+	it("never takes more than what is available when part of the balance is held", () => {
+		expect(
+			settleStorageDay({
+				balanceMicroCredits: 1000,
+				availableMicroCredits: 60,
+				owedMicroCredits: 144,
+				unresolvedShortSince: null,
+				now,
+			}),
+		).toEqual({
+			owedMicroCredits: 144,
+			chargedMicroCredits: 60,
+			balanceMicroCredits: 940,
+			shortSince: now,
+			fellShort: true,
+		});
+	});
+
 	it("keeps the first short date on later short days", () => {
 		const first = new Date("2026-11-08T06:41:00Z");
 		const settled = settleStorageDay({

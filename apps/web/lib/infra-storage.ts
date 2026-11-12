@@ -7,6 +7,7 @@ import {
 	type StorageUsage,
 	storageUsage,
 } from "@/lib/developer-pricing";
+import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 type StoredVideoGroup = {
 	appId: string;
@@ -18,10 +19,13 @@ type StoredVideoGroup = {
 
 const APP_ID_CHUNK = 500;
 
-async function storedVideoGroups(appIds: readonly string[]) {
+async function storedVideoGroups(
+	appIds: readonly string[],
+	executor: InfraDbExecutor,
+) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
-		const rows = await db()
+		const rows = await executor
 			.select({
 				appId: developerVideos.appId,
 				width: developerVideos.width,
@@ -55,6 +59,7 @@ async function storedVideoGroups(appIds: readonly string[]) {
 export async function getStorageUsageByApp(
 	appIds: readonly string[],
 	extra?: { appId: string; video: BillableVideo | null },
+	executor: InfraDbExecutor = db(),
 ) {
 	const entriesByApp = new Map<
 		string,
@@ -62,7 +67,7 @@ export async function getStorageUsageByApp(
 	>();
 	for (const appId of appIds) entriesByApp.set(appId, []);
 	if (appIds.length > 0) {
-		for (const group of await storedVideoGroups(appIds)) {
+		for (const group of await storedVideoGroups(appIds, executor)) {
 			entriesByApp.get(group.appId)?.push({
 				video: billableVideo({
 					duration: Number(group.seconds),
@@ -86,10 +91,12 @@ export async function getStorageUsageByApp(
 export async function getAppStorageUsage(
 	appId: string,
 	newVideo?: BillableVideo | null,
+	executor: InfraDbExecutor = db(),
 ): Promise<StorageUsage> {
 	const usageByApp = await getStorageUsageByApp(
 		[appId],
 		newVideo ? { appId, video: newVideo } : undefined,
+		executor,
 	);
 	return usageByApp.get(appId) ?? storageUsage([]);
 }

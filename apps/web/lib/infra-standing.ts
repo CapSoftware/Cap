@@ -11,6 +11,7 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
+import { availableBalance } from "@/lib/infra-balance";
 import { getAppStorageUsage } from "@/lib/infra-storage";
 
 export const INFRA_GRACE_DAYS = 7;
@@ -164,8 +165,12 @@ export async function accountStanding(
 	};
 }
 
-async function appStanding(appId: string, now: Date) {
-	const [account] = await db()
+async function appStanding(
+	appId: string,
+	now: Date,
+	executor: InfraDbExecutor = db(),
+) {
+	const [account] = await executor
 		.select({
 			id: developerCreditAccounts.id,
 			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
@@ -174,7 +179,14 @@ async function appStanding(appId: string, now: Date) {
 		.where(eq(developerCreditAccounts.appId, appId))
 		.limit(1);
 	if (!account) return { account: null, lastCharge: null, standing: ACTIVE };
-	return { account, ...(await accountStanding(db(), account, now)) };
+	const funded = {
+		id: account.id,
+		balanceMicroCredits: (await availableBalance(appId, executor)) ?? 0,
+	};
+	return {
+		account: funded,
+		...(await accountStanding(executor, funded, now)),
+	};
 }
 
 export const getInfraAppStanding = cache(
@@ -248,11 +260,17 @@ export async function getInfraBilling(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	now: Date = new Date(),
+	executor?: InfraDbExecutor,
 ) {
-	const [{ account, lastCharge, standing }, usage] = await Promise.all([
-		appStanding(appId, now),
-		getAppStorageUsage(appId, newVideo),
-	]);
+	const [{ account, lastCharge, standing }, usage] = executor
+		? [
+				await appStanding(appId, now, executor),
+				await getAppStorageUsage(appId, newVideo, executor),
+			]
+		: await Promise.all([
+				appStanding(appId, now),
+				getAppStorageUsage(appId, newVideo),
+			]);
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,
 		standing,
@@ -276,8 +294,10 @@ export async function getInfraBilling(
 export async function getInfraUploadAdmission(
 	appId: string,
 	newVideo?: BillableVideo | null,
+	executor?: InfraDbExecutor,
 ): Promise<InfraUploadAdmission> {
-	return (await getInfraBilling(appId, newVideo)).admission;
+	return (await getInfraBilling(appId, newVideo, new Date(), executor))
+		.admission;
 }
 
 export function infraBillingJson({

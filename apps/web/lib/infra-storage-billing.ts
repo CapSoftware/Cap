@@ -7,6 +7,7 @@ import {
 } from "@cap/database/schema";
 import { and, eq, sql } from "drizzle-orm";
 import type { StorageUsage } from "@/lib/developer-pricing";
+import { availableBalance } from "@/lib/infra-balance";
 import {
 	latestStorageCharge,
 	restoredSinceCharge,
@@ -27,17 +28,20 @@ export type StorageDayResult =
 
 export function settleStorageDay({
 	balanceMicroCredits,
+	availableMicroCredits = balanceMicroCredits,
 	owedMicroCredits,
 	unresolvedShortSince,
 	now,
 }: {
 	balanceMicroCredits: number;
+	availableMicroCredits?: number;
 	owedMicroCredits: number;
 	unresolvedShortSince: Date | null;
 	now: Date;
 }) {
 	const owed = Math.max(0, Math.floor(owedMicroCredits));
-	const charged = Math.min(Math.max(0, balanceMicroCredits), owed);
+	const spendable = Math.min(balanceMicroCredits, availableMicroCredits);
+	const charged = Math.min(Math.max(0, spendable), owed);
 	const short = charged < owed;
 	return {
 		owedMicroCredits: owed,
@@ -122,17 +126,16 @@ export async function chargeStorageDay({
 						})
 				: Promise.resolve();
 
-		if (
-			unresolvedShortSince &&
-			usage.dailyMicroCredits > 0 &&
-			account.balanceMicroCredits <= 0
-		) {
+		const available = (await availableBalance(appId, tx)) ?? 0;
+
+		if (unresolvedShortSince && usage.dailyMicroCredits > 0 && available <= 0) {
 			await recordSnapshot(0);
 			return { state: "unpaid" as const, shortSince: unresolvedShortSince };
 		}
 
 		const settled = settleStorageDay({
 			balanceMicroCredits: account.balanceMicroCredits,
+			availableMicroCredits: available,
 			owedMicroCredits: usage.dailyMicroCredits,
 			unresolvedShortSince,
 			now,
