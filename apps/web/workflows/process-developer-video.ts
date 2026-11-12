@@ -19,6 +19,7 @@ interface ProcessDeveloperVideoPayload {
 
 const PROCESSING_DEADLINE_MS = 3 * 60 * 60 * 1000;
 const RETRY_SECONDS = 20;
+const PROBING_POLL_SECONDS = 2;
 const MAX_POLL_SECONDS = 20;
 const TIMED_OUT = "Video processing timed out";
 
@@ -40,7 +41,9 @@ export async function processDeveloperVideoWorkflow(
 				await failVideo(videoId, encodeId, TIMED_OUT);
 				return { success: false };
 			}
-			await sleep(`${RETRY_SECONDS}s`);
+			await sleep(
+				`${prepared === "probing" ? PROBING_POLL_SECONDS : RETRY_SECONDS}s`,
+			);
 		}
 
 		for (let poll = 0; ; poll++) {
@@ -59,12 +62,10 @@ export async function processDeveloperVideoWorkflow(
 				break;
 			}
 
-			let busy = false;
-			for (const part of pending) {
-				if ((await dispatchPart(videoId, encodeId, part)) === "busy") {
-					busy = true;
-				}
-			}
+			const dispatched = await Promise.all(
+				pending.map((part) => dispatchPart(videoId, encodeId, part)),
+			);
+			const busy = dispatched.includes("busy");
 			await sleep(
 				`${busy ? RETRY_SECONDS : Math.min(MAX_POLL_SECONDS, 2 + poll * 2)}s`,
 			);
