@@ -355,7 +355,10 @@ pub(crate) fn relaunch_executable(
     static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     let mut command = relaunch_command(exe, std::process::id());
-    spawn_relaunch(&mut command, &REQUESTED, || crate::menus::quit(cx)).map(drop)
+    spawn_relaunch(&mut command, &REQUESTED, || {
+        crate::menus::quit(crate::menus::QuitSource::Relaunch, cx)
+    })
+    .map(drop)
 }
 
 fn relaunch_command(exe: &std::path::Path, pid: u32) -> std::process::Command {
