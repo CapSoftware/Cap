@@ -61,6 +61,7 @@ export type UploadResult<T> =
 				string,
 				unknown
 			>;
+			headers?: Record<string, string>;
 	  };
 
 export type UploadPart = { partNumber: number; etag: string; size: number };
@@ -630,10 +631,13 @@ export async function completeInfraUpload({
 		claim = await claimInfraUploadCompletion(videoId);
 		if (!claim) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			return completionInProgress(
-				"Another request is completing this upload. Try again shortly.",
-				"Wait a few seconds, then send the same request again. Do not abort or delete.",
-			);
+			return {
+				...completionInProgress(
+					"Another request is completing this upload. Try again shortly.",
+					`Wait for the Retry-After seconds, then send the same request again. If an earlier request was cut off, this can last up to ${STALE_UPLOAD_CLAIM_MS / 60_000} minutes. Do not abort or delete.`,
+				),
+				headers: { "Retry-After": String(COMPLETION_RETRY_AFTER_SECONDS) },
+			};
 		}
 
 		if (tooLarge) {
@@ -853,6 +857,7 @@ export async function removeUnrecordedInfraFiles(
 }
 
 const STALE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
+export const COMPLETION_RETRY_AFTER_SECONDS = 5;
 
 async function releaseStaleUploadClaim(videoId: string, now: number) {
 	return db().transaction(async (tx) => {

@@ -93,11 +93,14 @@ app.get("/", async (c) => {
 				ownedBy(scope.userId),
 			),
 		)
-		.orderBy(desc(developerVideos.createdAt))
-		.limit(limit)
+		.orderBy(desc(developerVideos.createdAt), desc(developerVideos.id))
+		.limit(limit + 1)
 		.offset(offset);
 
-	return c.json({ data: videos.map(serializeDeveloperVideo) });
+	return c.json({
+		data: videos.slice(0, limit).map(serializeDeveloperVideo),
+		pagination: { limit, offset, hasMore: videos.length > limit },
+	});
 });
 
 app.get("/:id", async (c) => {
