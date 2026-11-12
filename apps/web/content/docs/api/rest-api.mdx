@@ -4,11 +4,13 @@ summary: "Programmatic access to Cap via the REST API"
 tags: "API, Integration"
 ---
 
-The Cap Developer API lets your product host video with Cap. You upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player.
+The Cap Developer API does two things for your product. It hosts video: you upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player. It turns speech into text: you send an audio or video file to [Transcripts](/docs/api/rest-api#transcripts) and get the text back, with timings.
+
+New to the API? [Get Started](/docs/api/get-started) goes from a new app to a video playing on your page, with examples for the browser, Node and Python. This page is the reference.
 
 There are two APIs:
 
-- **REST API** (`/api/developer/v1`) -- Server-side: create uploads and manage videos and usage, authenticated with secret keys (`csk_`).
+- **REST API** (`/api/developer/v1`) -- Server-side: create uploads, manage videos, transcribe audio and read usage, authenticated with secret keys (`csk_`).
 - **SDK API** (`/api/developer/sdk/v1`) -- Browser-side: upload a video's file, authenticated with an upload token (`cut_`) that your server creates for that one video.
 
 These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with `CAP_API_KEY` in headless environments, see [Set Up Your Agent](/docs/agents/setup#headless-environments-ci-containers-and-remote-sandboxes).
