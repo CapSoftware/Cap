@@ -437,6 +437,17 @@ describe("fetchCheckedMediaUrl", () => {
 		).rejects.toBeInstanceOf(MediaAddressError);
 		expect(origin.hits).toEqual(["/here", "/moved"]);
 	});
+
+	test("stops waiting on a slow lookup when the caller cancels", async () => {
+		const cancelled = new AbortController();
+		const pending = fetchCheckedMediaUrl(
+			"http://storage.internal/here",
+			{ signal: cancelled.signal },
+			{ privateHosts: ANY, resolveHost: () => new Promise(() => {}) },
+		);
+		cancelled.abort(new Error("deadline passed"));
+		await expect(pending).rejects.toThrow("deadline passed");
+	});
 });
 
 describe("getSourceSize", () => {

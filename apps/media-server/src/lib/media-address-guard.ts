@@ -319,7 +319,7 @@ export async function fetchCheckedMediaUrl(
 	policy: MediaAddressPolicy = {},
 ): Promise<Response> {
 	return fetchChecked(
-		await checkMediaUrl(value, policy),
+		await untilAborted(checkMediaUrl(value, policy), init?.signal),
 		init,
 		policy.fetchImpl ?? mediaFetch,
 	);
