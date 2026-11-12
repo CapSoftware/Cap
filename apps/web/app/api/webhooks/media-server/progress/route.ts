@@ -14,6 +14,7 @@ import {
 	recordingVerificationSchema,
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
+import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
 import { recordMediaInputPolicyStrike } from "@/lib/media-input-policy-strikes";
@@ -120,6 +121,16 @@ export async function POST(request: NextRequest) {
 			body.kind === "audio-levels"
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
+		const developerVideoPart =
+			request.nextUrl.searchParams.get("developerVideo");
+		if (developerVideoPart && body && typeof body === "object")
+			return NextResponse.json(
+				await applyDeveloperVideoProgress(
+					body,
+					developerVideoPart,
+					request.nextUrl.searchParams.get("token"),
+				),
+			);
 		const payload = body as ProgressWebhookPayload;
 		const isInputPolicyViolation =
 			payload.phase === "error" &&

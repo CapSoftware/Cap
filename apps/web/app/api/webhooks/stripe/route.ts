@@ -27,6 +27,10 @@ import {
 	isSignedBaaPrice,
 	isSignedBaaSubscription,
 } from "@/lib/baa/billing";
+import {
+	syncCustomerUsEin,
+	US_EIN_METADATA_KEY,
+} from "@/lib/checkout/customer-us-ein";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
@@ -679,6 +683,15 @@ export const POST = async (req: Request) => {
 					await stripe().customers.update(customer.id, {
 						metadata: { ...customer.metadata, userId: dbUser.id },
 					});
+				}
+
+				const usEin = session.metadata?.[US_EIN_METADATA_KEY];
+				if (usEin && session.customer_details?.address?.country === "US") {
+					try {
+						await syncCustomerUsEin(customer.id, usEin, null);
+					} catch (error) {
+						console.error("Failed to attach checkout EIN to customer:", error);
+					}
 				}
 
 				const inviteQuota = subscription.items.data.reduce(

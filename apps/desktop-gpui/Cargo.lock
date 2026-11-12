@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop-gpui"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "ashpd 0.11.1",
@@ -1729,6 +1729,7 @@ dependencies = [
  "gifski",
  "image 0.25.10",
  "imgref",
+ "libc",
  "mp4",
  "rgb",
  "serde",

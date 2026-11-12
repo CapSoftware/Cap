@@ -42,7 +42,15 @@ final class CapDetailModel {
         }
     }
 
+    enum Section: Hashable {
+        case comments, summary, transcript
+    }
+
     let id: CapID
+    /// Lives here rather than in the view so folding or unfolding the phone keeps the open tab.
+    var section: Section = .comments
+    /// How many Cap screens show this model. The layout swap shows the new one before the old one goes.
+    @ObservationIgnored var presentations = 0
     private(set) var content: Content = .loading {
         didSet { rebuildThreadsIfNeeded() }
     }
@@ -93,6 +101,7 @@ final class CapDetailModel {
     @ObservationIgnored private var lastBurstTime: Double = 0
     @ObservationIgnored private var trackedView = false
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var cues: [TranscriptCue] = []
     @ObservationIgnored private var endObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var hideTask: Task<Void, Never>?
@@ -156,7 +165,19 @@ final class CapDetailModel {
 
     // MARK: Loading
 
+    /// Runs in the model's own task: folding or unfolding the phone cancels the screen's task partway through,
+    /// and the screen that replaces it skips a model that already shows as loaded.
     func load(session: SessionModel) async {
+        if loading == nil {
+            loading = Task { [weak self] in
+                await self?.performLoad(session: session)
+                self?.loading = nil
+            }
+        }
+        await loading?.value
+    }
+
+    private func performLoad(session: SessionModel) async {
         self.session = session
         switch content {
         case .loaded: return
@@ -332,7 +353,9 @@ final class CapDetailModel {
             if seconds.isFinite, seconds > 0 { duration = seconds }
             if let start = pendingStartTime {
                 pendingStartTime = nil
-                seek(to: start)
+                // Loading outlives the screen, so a link left before its video was ready opens at the moment, paused.
+                let shown = presentations > 0 || isFullscreen || isPictureInPictureActive
+                seek(to: start, play: shown)
             }
             NowPlaying.shared.update(self)
         default:
@@ -428,6 +451,13 @@ final class CapDetailModel {
 
     func pause() {
         player?.pause()
+    }
+
+    /// The Cap's route left every tab, so nothing will show this model again.
+    func discard() {
+        loading?.cancel()
+        loading = nil
+        pauseForDisappear()
     }
 
     func pauseForDisappear() {

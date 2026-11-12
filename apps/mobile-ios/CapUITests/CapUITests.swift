@@ -244,6 +244,27 @@ final class CapUITests: XCTestCase {
         }
     }
 
+    func testCaptureModes() {
+        let app = launch()
+        let tab = app.tabBars.buttons["Record"]
+        waitFor(tab, 20)
+        let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
+        wait(for: [hittable], timeout: 10)
+        tab.tap()
+        waitFor(app.buttons["Close"], 10)
+        waitFor(app.staticTexts["Instant Mode"], 10)
+        shot("75-record-modes")
+        for mode in ["Studio Mode", "Screenshot Mode"] {
+            let button = app.buttons[mode]
+            waitFor(button, 10)
+            XCTAssertEqual(button.value as? String, "Coming soon")
+            button.tap()
+            waitFor(app.staticTexts["\(mode) is coming soon"], 5)
+            shot("75-record-\(mode.split(separator: " ")[0].lowercased())-soon")
+            waitFor(app.staticTexts["Instant Mode"], 10)
+        }
+    }
+
     func testLinkAccessSwitch() {
         let app = launch(route: "cap:cap_link")
         let more = app.buttons["More"].firstMatch
@@ -290,6 +311,12 @@ final class CapUITests: XCTestCase {
         shot("21-scope-space")
         app.buttons["Engineering"].tap()
         waitFor(app.navigationBars["Engineering"])
+        // In the iPhone Duo's narrow library column the chips scroll; bring My Caps back before tapping it.
+        let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<3 where myCaps.frame.minX < 0 {
+            let y = myCaps.frame.midY
+            origin.withOffset(CGVector(dx: 40, dy: y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 300, dy: y)))
+        }
         myCaps.tap()
         waitFor(app.navigationBars["My Caps"])
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Organization, '")).firstMatch.tap()
