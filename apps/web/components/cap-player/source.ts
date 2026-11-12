@@ -77,6 +77,7 @@ export const listLevels = (
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
+const HELD_SEEK_TOLERANCE = 0.5;
 
 type ConnectionHint = { downlink?: number };
 
@@ -190,6 +191,7 @@ export const attachSource = (
 			video.removeEventListener("error", onFatal);
 			release(video);
 		};
+		video.preload = eager || resumeAt > 0 ? "auto" : "metadata";
 		video.src = source.mp4;
 		if (resumeAt > 0) video.currentTime = resumeAt;
 		if (wasPlaying) void video.play().catch(() => undefined);
@@ -238,7 +240,9 @@ export const attachSource = (
 				startFragPrefetch: true,
 				backBufferLength: 30,
 			});
+			let separateAudio = false;
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+				separateAudio = data.altAudio;
 				onLevels?.(listLevels(data.levels));
 				hls.startLevel = pickStartingLevel(
 					data.levels,
@@ -259,24 +263,44 @@ export const attachSource = (
 				hls.destroy();
 				playFile(reached);
 			});
+			let heldAt = 0;
 			const resume = () => {
 				video.removeEventListener("play", resume);
-				video.removeEventListener("seeking", resume);
+				video.removeEventListener("seeking", resumeOnSeek);
 				hls.startLoad();
 			};
+			const resumeOnSeek = () => {
+				if (Math.abs(video.currentTime - heldAt) > HELD_SEEK_TOLERANCE)
+					resume();
+			};
+			const holdUntilPlay = () => {
+				if (!video.paused) return;
+				heldAt = video.currentTime;
+				hls.stopLoad();
+				video.addEventListener("play", resume);
+				video.addEventListener("seeking", resumeOnSeek);
+			};
 			if (!eager) {
-				hls.once(Hls.Events.FRAG_BUFFERED, () => {
-					if (!video.paused || video.seeking) return;
-					hls.stopLoad();
-					video.addEventListener("play", resume);
-					video.addEventListener("seeking", resume);
-				});
+				const arrived = new Set<string>();
+				const onBuffered = (
+					_event: unknown,
+					data: { frag: { type: string; sn: number | "initSegment" } },
+				) => {
+					if (data.frag.sn === "initSegment") return;
+					arrived.add(data.frag.type);
+					const audioReady = !separateAudio || arrived.has("audio");
+					if (!arrived.has("main") || !audioReady) return;
+					hls.off(Hls.Events.FRAG_BUFFERED, onBuffered);
+					holdUntilPlay();
+				};
+				hls.on(Hls.Events.FRAG_BUFFERED, onBuffered);
 			}
+			video.preload = "auto";
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);
 			detach = () => {
 				video.removeEventListener("play", resume);
-				video.removeEventListener("seeking", resume);
+				video.removeEventListener("seeking", resumeOnSeek);
 				hls.destroy();
 			};
 			setLevel = (index) => {
