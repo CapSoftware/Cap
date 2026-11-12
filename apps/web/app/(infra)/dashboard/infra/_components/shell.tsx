@@ -1,9 +1,9 @@
 "use client";
 
-import { Logo } from "@cap/ui/logo";
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Lockup } from "@/components/infra/Lockup";
 import {
 	INFRA_BASE_PATH,
 	INFRA_SECTIONS,
@@ -19,21 +19,9 @@ export function Brand() {
 	return (
 		<Link
 			href={INFRA_BASE_PATH}
-			aria-label="Cap Infra"
-			className={clsx("flex shrink-0 items-center gap-2 rounded-[6px]", FOCUS)}
+			className={clsx("flex shrink-0 items-center rounded-[6px]", FOCUS)}
 		>
-			<Logo
-				white
-				viewBoxDimensions="0 0 120 40"
-				style={{ width: 58, height: 26 }}
-			/>
-			<span
-				aria-hidden="true"
-				className="h-4 w-px bg-[rgba(222,230,246,0.2)]"
-			/>
-			<span className="text-[15px] font-medium tracking-[-0.02em] text-[#E8ECF4]">
-				Infra
-			</span>
+			<Lockup height={22} />
 		</Link>
 	);
 }
