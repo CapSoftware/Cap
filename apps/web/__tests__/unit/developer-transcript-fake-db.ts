@@ -132,9 +132,24 @@ const columnName = (value: unknown) =>
 		? String((value as { name: unknown }).name)
 		: null;
 
+const isAggregate = (value: unknown) =>
+	isSql(value) && /SUM\(|count\(\*\)/i.test(dialect.sqlToQuery(value).sql);
+
+function rowExpression(row: Row, field: SQL) {
+	const text = dialect.sqlToQuery(field).sql;
+	const filled = text.match(
+		/^\((?:`[^`]+`\.)?`([^`]+)` IS NOT NULL AND (?:`[^`]+`\.)?`\1` <> ''\)$/i,
+	);
+	if (!filled) throw new Error(`Unsupported expression ${text}`);
+	const value = row[filled[1] ?? ""];
+	return value !== null && value !== undefined && value !== "" ? 1 : 0;
+}
+
 function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 	if (!fields) return rows.map((row) => ({ ...row }));
-	const aggregates = Object.entries(fields).filter(([, field]) => isSql(field));
+	const aggregates = Object.entries(fields).filter(([, field]) =>
+		isAggregate(field),
+	);
 	if (aggregates.length > 0) {
 		const result: Row = {};
 		for (const [alias, field] of Object.entries(fields)) {
@@ -159,7 +174,9 @@ function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 		Object.fromEntries(
 			Object.entries(fields).map(([alias, field]) => [
 				alias,
-				row[columnName(field) ?? alias],
+				isSql(field)
+					? rowExpression(row, field)
+					: row[columnName(field) ?? alias],
 			]),
 		),
 	);

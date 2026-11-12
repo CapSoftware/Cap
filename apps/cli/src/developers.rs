@@ -326,6 +326,9 @@ fn print_transcript_text(value: &Value, format: OutputFormat) -> Result<(), Stri
     match format {
         OutputFormat::Json => agent_client::print_value(value, format),
         OutputFormat::Text => {
+            if developer_media::transcript_has_no_speech(value) {
+                eprintln!("{}", developer_media::NO_SPEECH_NOTE);
+            }
             println!(
                 "{}",
                 value

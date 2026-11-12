@@ -735,11 +735,18 @@ export async function dispatchDeveloperVideoPart(
 		});
 		return "unavailable";
 	}
+	if (started.status === "rejected") {
+		console.warn("[developer-video] Encode start rejected", {
+			videoId,
+			part,
+			detail: developerVideoFailureReason(started.message),
+		});
+	}
 	await settleDeveloperVideoPart(videoId, encodeId, part, token, {
 		type: "failed",
 		reason:
 			started.status === "rejected"
-				? started.message
+				? fileProblem(started.message, UNENCODABLE_FILE)
 				: "Video processing is not available on the media server",
 	});
 	return "failed";

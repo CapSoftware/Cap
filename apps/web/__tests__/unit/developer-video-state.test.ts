@@ -678,6 +678,39 @@ describe("developer video redrive", () => {
 		).toBeNull();
 	});
 
+	it("never restarts a failed video, whose files are removed a day later", () => {
+		const longAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+		const failed = developerVideo({
+			status: "errored",
+			errorReason: "This file has no video track.",
+			updatedAt: longAgo,
+			processing: processingState({
+				startedAt: longAgo.getTime(),
+				hls: { state: "failed", reason: "x" },
+				mp4: { state: "failed", reason: "x" },
+				attempts: { hls: 2, mp4: 2 },
+			}),
+		});
+
+		for (const video of [
+			failed,
+			{ ...failed, updatedAt: new Date(now) },
+			{
+				...failed,
+				processing: processingState({
+					startedAt: longAgo.getTime(),
+					hls: { state: "unavailable", reason: "x", retryAt: now - 1 },
+					mp4: { state: "failed", reason: "x" },
+				}),
+			},
+		]) {
+			expect(developerVideoRedrive(video, now)).toBeNull();
+			expect(
+				developerVideoRedrive(video, now, { uploadCompleted: true }),
+			).toBeNull();
+		}
+	});
+
 	it("leaves finished, errored and deleted videos alone", () => {
 		const done = processingState({
 			hls: { state: "complete", output: "hls-out" },
