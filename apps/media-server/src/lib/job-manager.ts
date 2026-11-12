@@ -5,6 +5,7 @@ import {
 	getContainerCpuUsageMicros,
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
+import type { HlsLadderResult } from "./hls-ladder-encode";
 import {
 	INPUT_POLICY_VIOLATION,
 	isInputPolicyViolationMessage,
@@ -84,6 +85,7 @@ export interface JobProgress {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -145,6 +147,7 @@ export interface Job {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -414,6 +417,7 @@ export function updateJob(
 			| "recordingVerification"
 			| "outputUrl"
 			| "deferredSourceKey"
+			| "ladder"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -714,6 +718,7 @@ export function getJobProgress(job: Job): JobProgress {
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
+		ladder: job.ladder,
 	};
 }
 

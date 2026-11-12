@@ -152,10 +152,21 @@ export async function getDeveloperApps(
 	}));
 }
 
+export type InfraVideoRow = Pick<
+	typeof developerVideos.$inferSelect,
+	| "id"
+	| "name"
+	| "externalUserId"
+	| "duration"
+	| "width"
+	| "height"
+	| "createdAt"
+>;
+
 export async function getDeveloperAppVideos(
 	appId: string,
 	options?: { userId?: string; limit?: number; offset?: number },
-) {
+): Promise<InfraVideoRow[]> {
 	const conditions = [
 		eq(developerVideos.appId, appId),
 		isNull(developerVideos.deletedAt),
@@ -166,7 +177,15 @@ export async function getDeveloperAppVideos(
 	}
 
 	return db()
-		.select()
+		.select({
+			id: developerVideos.id,
+			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
+			duration: developerVideos.duration,
+			width: developerVideos.width,
+			height: developerVideos.height,
+			createdAt: developerVideos.createdAt,
+		})
 		.from(developerVideos)
 		.where(and(...conditions))
 		.orderBy(desc(developerVideos.createdAt))

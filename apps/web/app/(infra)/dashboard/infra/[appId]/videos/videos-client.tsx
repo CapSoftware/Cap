@@ -1,6 +1,5 @@
 "use client";
 
-import type { developerVideos } from "@cap/database/schema";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Trash2 } from "lucide-react";
@@ -24,8 +23,9 @@ import {
 	TR,
 } from "../../_components/ui";
 import { UploadDrop } from "../../_components/upload-drop";
+import type { InfraVideoRow } from "../../infra-data";
 
-type Video = typeof developerVideos.$inferSelect;
+type Video = InfraVideoRow;
 
 const PAGE_LIMIT = 50;
 
