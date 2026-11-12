@@ -5,7 +5,7 @@ import NumberFlow from "@number-flow/react";
 import { Check, Loader2, Minus, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
 	type AddSeatsResult,
 	addSeats,
@@ -13,6 +13,12 @@ import {
 	previewAddSeats,
 	type SeatPreviewResult,
 } from "@/actions/billing/current-plan";
+import {
+	previewYearlySwitch,
+	switchToYearly,
+	type YearlySwitchPreview,
+	type YearlySwitchResult,
+} from "@/actions/billing/switch-to-yearly";
 import { trackEvent } from "@/app/utils/analytics";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
 import { formatAmount } from "@/utils/currency";
@@ -36,9 +42,11 @@ const STEP_BTN =
 export function ManagePlan({
 	plan,
 	requestedSeats,
+	requestedYearly = false,
 }: {
 	plan: CurrentPlan;
 	requestedSeats: number;
+	requestedYearly?: boolean;
 }) {
 	if (plan.type === "setup") {
 		return (
@@ -138,14 +146,100 @@ export function ManagePlan({
 		);
 	}
 
-	return <AddSeats details={plan.details} requestedSeats={requestedSeats} />;
+	return (
+		<ManagedPlan
+			key={requestedYearly ? "yearly" : "seats"}
+			details={plan.details}
+			requestedSeats={requestedSeats}
+			requestedYearly={requestedYearly}
+		/>
+	);
+}
+
+type ManagedDetails = Extract<CurrentPlan, { type: "managed" }>["details"];
+
+const canSwitchToYearly = (details: ManagedDetails) =>
+	details.billingInterval === "month" &&
+	details.status === "active" &&
+	!details.cancelAtPeriodEnd;
+
+function ManagedPlan({
+	details,
+	requestedSeats,
+	requestedYearly,
+}: {
+	details: ManagedDetails;
+	requestedSeats: number;
+	requestedYearly: boolean;
+}) {
+	// Decided once per visit: after a successful switch router.refresh()
+	// brings back a yearly plan, and re-deciding would unmount the
+	// confirmation the customer just paid for.
+	const [showYearlySwitch] = useState(
+		() => requestedYearly && canSwitchToYearly(details),
+	);
+
+	if (showYearlySwitch) {
+		return (
+			<SwitchToYearly
+				details={details}
+				summary={<PlanSummary details={details} />}
+			/>
+		);
+	}
+	return <AddSeats details={details} requestedSeats={requestedSeats} />;
+}
+
+function PlanSummary({ details }: { details: ManagedDetails }) {
+	const current = details.currentQuantity;
+	const yearly = details.billingInterval === "year";
+	const perSeatPerPeriod = yearly
+		? details.pricePerSeat * 12
+		: details.pricePerSeat;
+	const pastDue = details.status === "past_due";
+
+	return (
+		<>
+			<PlanHeading tag={pastDue ? "Payment due" : "Your plan"} />
+			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
+				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
+					{formatAmount(perSeatPerPeriod, details.currency)}
+				</span>
+				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
+					per user, per {yearly ? "year" : "month"}
+				</span>
+			</div>
+			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
+				<SummaryRow
+					label="Seats"
+					value={`${current} ${current === 1 ? "seat" : "seats"}`}
+				/>
+				<SummaryRow label="Billing" value={yearly ? "Yearly" : "Monthly"} />
+				<SummaryRow
+					label={details.cancelAtPeriodEnd ? "Ends on" : "Renews on"}
+					value={formatDate(details.currentPeriodEnd)}
+				/>
+				<SummaryRow
+					label={`Every ${yearly ? "year" : "month"}`}
+					value={formatAmount(perSeatPerPeriod * current, details.currency)}
+				/>
+			</dl>
+			<Link
+				href="/dashboard/settings/organization"
+				className="mt-5 inline-flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
+			>
+				Manage billing and invoices
+			</Link>
+			<PlanFeatures />
+		</>
+	);
 }
 
 function AddSeats({
 	details,
 	requestedSeats,
 }: {
-	details: Extract<CurrentPlan, { type: "managed" }>["details"];
+	details: ManagedDetails;
 	requestedSeats: number;
 }) {
 	const router = useRouter();
@@ -212,41 +306,7 @@ function AddSeats({
 		if (next.ok) router.refresh();
 	};
 
-	const summary = (
-		<>
-			<PlanHeading tag={pastDue ? "Payment due" : "Your plan"} />
-			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
-				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
-					{formatAmount(perSeatPerPeriod, details.currency)}
-				</span>
-				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
-					per user, per {yearly ? "year" : "month"}
-				</span>
-			</div>
-			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
-				<SummaryRow
-					label="Seats"
-					value={`${current} ${current === 1 ? "seat" : "seats"}`}
-				/>
-				<SummaryRow label="Billing" value={yearly ? "Yearly" : "Monthly"} />
-				<SummaryRow
-					label={details.cancelAtPeriodEnd ? "Ends on" : "Renews on"}
-					value={formatDate(details.currentPeriodEnd)}
-				/>
-				<SummaryRow
-					label={`Every ${yearly ? "year" : "month"}`}
-					value={formatAmount(perSeatPerPeriod * current, details.currency)}
-				/>
-			</dl>
-			<Link
-				href="/dashboard/settings/organization"
-				className="mt-5 inline-flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
-			>
-				Manage billing and invoices
-			</Link>
-			<PlanFeatures />
-		</>
-	);
+	const summary = <PlanSummary details={details} />;
 
 	if (result?.ok) {
 		return (
@@ -415,6 +475,190 @@ function AddSeats({
 						className="underline underline-offset-2"
 					>
 						Change them in settings
+					</Link>
+					.
+				</p>
+				{canSwitchToYearly(details) ? (
+					<Link
+						href="/checkout?plan=yearly"
+						className="mt-5 self-start text-[14px] font-medium text-[#3D77C2] underline decoration-[rgba(61,119,194,0.3)] underline-offset-[4px] transition-colors duration-200 hover:decoration-[#3D77C2]"
+					>
+						Switch to yearly billing and save
+					</Link>
+				) : null}
+			</div>
+		</CheckoutShell>
+	);
+}
+
+function SwitchToYearly({
+	details,
+	summary,
+}: {
+	details: ManagedDetails;
+	summary: ReactNode;
+}) {
+	const router = useRouter();
+	const [preview, setPreview] = useState<YearlySwitchPreview | null>(null);
+	const [submitting, setSubmitting] = useState(false);
+	const [result, setResult] = useState<YearlySwitchResult | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		previewYearlySwitch()
+			.then((next) => {
+				if (active) setPreview(next);
+			})
+			.catch(() => {
+				if (active) {
+					setPreview({ ok: false, message: "Couldn't price the yearly plan." });
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, []);
+
+	const seats = details.currentQuantity;
+	const monthlyYear = details.pricePerSeat * 12 * seats;
+	const yearlyTotal = preview?.ok ? preview.yearlyAmount / 100 : null;
+	const saving =
+		yearlyTotal !== null && monthlyYear - yearlyTotal >= 1
+			? formatAmount(monthlyYear - yearlyTotal, details.currency)
+			: null;
+	const dueToday = preview?.ok
+		? formatAmount(preview.dueToday / 100, preview.currency)
+		: null;
+
+	const submit = async () => {
+		if (submitting || !preview?.ok) return;
+		setSubmitting(true);
+		const next = await switchToYearly(preview.quantity).catch(
+			(): YearlySwitchResult => ({
+				ok: false,
+				message: "Couldn't switch your plan to yearly.",
+			}),
+		);
+		setResult(next);
+		setSubmitting(false);
+		if (next.ok) {
+			trackEvent("checkout_switched_to_yearly", { seats: preview.quantity });
+			router.refresh();
+		}
+	};
+
+	if (result?.ok && preview?.ok) {
+		return (
+			<CheckoutShell
+				title="You're on yearly billing"
+				subtitle="Thanks for sticking with Cap Pro."
+				summary={summary}
+			>
+				<div className={classNames(CARD, "flex flex-col gap-6")}>
+					<span className="grid size-11 place-items-center rounded-full bg-[#E1EFFE] text-[#3D77C2]">
+						<Check className="size-5" strokeWidth={2.25} />
+					</span>
+					<div>
+						<h2 className="text-[22px] font-normal leading-[1.1] tracking-[-0.02em]">
+							Your next renewal is {formatDate(preview.renewsOn)}
+						</h2>
+						<p className="mt-2.5 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.66)]">
+							Nothing else changes. Your seats and videos stay exactly as they
+							are, and Stripe emails the receipt for today's charge.
+						</p>
+					</div>
+					<Link
+						href="/dashboard/caps"
+						className={classNames(BTN_PRIMARY, "w-full")}
+					>
+						Back to your dashboard
+					</Link>
+				</div>
+			</CheckoutShell>
+		);
+	}
+
+	return (
+		<CheckoutShell
+			title="Switch to yearly billing"
+			subtitle="Pay once a year instead of every month. Your seats and everything in Cap Pro stay the same."
+			summary={summary}
+		>
+			<div className={classNames(CARD, "flex flex-col")}>
+				<h2 className="text-[22px] font-normal leading-[1.1] tracking-[-0.02em]">
+					{saving ? `Save ${saving} a year` : "Pay yearly"}
+				</h2>
+				<p className="mt-2 text-[14px] leading-[1.5] text-[rgba(17,17,17,0.6)]">
+					You're billed {formatAmount(monthlyYear / 12, details.currency)} a
+					month for {seats} {seats === 1 ? "seat" : "seats"} today.
+				</p>
+
+				<dl className="mt-6 flex flex-col gap-2.5 text-[14px]">
+					<SummaryRow
+						label="Yearly plan"
+						value={
+							yearlyTotal !== null
+								? `${formatAmount(yearlyTotal, details.currency)} per year`
+								: preview?.ok === false
+									? "Unavailable"
+									: "Calculating..."
+						}
+					/>
+					<SummaryRow
+						label="Due today"
+						value={
+							dueToday ??
+							(preview?.ok === false ? "Unavailable" : "Calculating...")
+						}
+						strong
+					/>
+					{preview?.ok ? (
+						<SummaryRow
+							label="Renews on"
+							value={formatDate(preview.renewsOn)}
+						/>
+					) : null}
+				</dl>
+
+				{preview?.ok === false || result?.ok === false ? (
+					<p
+						role="alert"
+						className="mt-5 rounded-[12px] border border-[rgba(180,50,46,0.2)] bg-[#FDF3F2] px-3.5 py-3 text-[14px] leading-[1.45] text-[#8F2724]"
+					>
+						{result?.ok === false
+							? result.message
+							: preview?.ok === false
+								? preview.message
+								: null}
+					</p>
+				) : null}
+
+				<button
+					type="button"
+					onClick={submit}
+					disabled={submitting || !preview?.ok}
+					className={classNames(
+						BTN_PRIMARY,
+						"mt-7 w-full gap-2 disabled:cursor-not-allowed disabled:opacity-60",
+					)}
+				>
+					{submitting ? (
+						<>
+							<Loader2 className="size-4 animate-spin" strokeWidth={2} />
+							Switching...
+						</>
+					) : dueToday ? (
+						`Switch to yearly for ${dueToday}`
+					) : (
+						"Switch to yearly"
+					)}
+				</button>
+
+				<p className="mt-4 text-[12.5px] leading-[1.55] text-[rgba(17,17,17,0.55)]">
+					We charge the card on file today, less credit for the unused part of
+					this month. Rather stay monthly?{" "}
+					<Link href="/checkout" className="underline underline-offset-2">
+						Keep my plan
 					</Link>
 					.
 				</p>

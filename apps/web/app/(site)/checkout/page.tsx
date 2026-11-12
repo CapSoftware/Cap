@@ -45,11 +45,18 @@ export default async function CheckoutPage(props: {
 	if (!publishableKey || !customCheckoutEnabled()) redirect("/pricing");
 	const seats = parseCheckoutSeats(first(searchParams.seats));
 
+	const requestedPlan = first(searchParams.plan);
+
 	if (user && userIsPro(user)) {
-		return <ManagePlan plan={await getCurrentPlan()} requestedSeats={seats} />;
+		return (
+			<ManagePlan
+				plan={await getCurrentPlan()}
+				requestedSeats={seats}
+				requestedYearly={requestedPlan === "yearly"}
+			/>
+		);
 	}
 
-	const requestedPlan = first(searchParams.plan);
 	const plan = isCheckoutPlan(requestedPlan) ? requestedPlan : "monthly";
 	const onboarding = first(searchParams.onboarding) === "1" && Boolean(user);
 	const environment: CheckoutEnvironment =
