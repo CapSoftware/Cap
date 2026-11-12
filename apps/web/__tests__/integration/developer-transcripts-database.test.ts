@@ -85,6 +85,8 @@ const { claimTranscriptRun, failTranscriptRun } = await import(
 );
 const { completeDeveloperVideoUpload, createDeveloperVideoUpload } =
 	await import("@/lib/developer-video-upload");
+const { getSpeechUsage } = await import("@/lib/developer-transcript-usage");
+const { transcriptUploadExpiry } = await import("@/lib/developer-transcripts");
 const { availableBalance } = await import("@/lib/infra-balance");
 const { getInfraAppStanding, getInfraUploadAdmission } = await import(
 	"@/lib/infra-standing"
@@ -947,5 +949,126 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			expect(await balanceOf(appId)).toBe(100_000);
 			expect(await ledgerOf(appId)).toHaveLength(0);
 		}
+	});
+
+	it("reports speech usage that matches the ledger, by UTC month, with holds and without failures", async () => {
+		const appId = await makeApp(100_000);
+		const now = new Date();
+		const monthStart = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+		);
+
+		const first = await makeTranscript(appId);
+		const second = await makeTranscript(appId);
+		await settle(first, 1800.07);
+		await settle(second, 300.096);
+		const deleted = await makeTranscript(appId);
+		await settle(deleted, 60);
+		await deleteTranscript(appId, deleted);
+
+		const failed = await makeTranscript(appId);
+		await failTranscriptRun(failed, "run-none", "no_audio_track", "x");
+		await database()
+			.update(developerTranscripts)
+			.set({ status: "error", durationSeconds: 7200 })
+			.where(eq(developerTranscripts.id, failed));
+
+		await makeTranscript(appId, {
+			status: "complete",
+			durationSeconds: 3600,
+			billedMicroCredits: 10_000,
+			completedAt: new Date(monthStart.getTime() - 1000),
+		});
+		await makeTranscript(appId, {
+			status: "complete",
+			durationSeconds: 36,
+			billedMicroCredits: 100,
+			completedAt: monthStart,
+		});
+
+		const running = await makeTranscript(appId);
+		await reserveTranscriptCredits({
+			transcriptId: running,
+			durationSeconds: 3600,
+		});
+
+		const usage = await getSpeechUsage(appId, now);
+		const ledger = await ledgerOf(appId);
+		const charged = ledger
+			.filter((row) => row.type === "transcription")
+			.reduce((total, row) => total - row.amount, 0);
+
+		expect(charged).toBe(5_000 + 833 + 166);
+		expect(usage.speech).toMatchObject({
+			periodStart: monthStart.toISOString(),
+			microCredits: charged + 100,
+			transcripts: 4,
+		});
+		expect(usage.speech.seconds).toBeCloseTo(1800.07 + 300.096 + 60 + 36, 2);
+		expect(usage.heldMicroCredits).toBe(10_000);
+		expect(usage.availableMicroCredits).toBe(100_000 - charged - 10_000);
+		expect(await balanceOf(appId)).toBe(100_000 - charged);
+
+		const lastMonth = await getSpeechUsage(
+			appId,
+			new Date(monthStart.getTime() - 1000),
+		);
+		expect(lastMonth.speech.transcripts).toBe(5);
+		expect(lastMonth.speech.seconds).toBeCloseTo(
+			3600 + 1800.07 + 300.096 + 60 + 36,
+			2,
+		);
+		expect(lastMonth.speech.microCredits).toBe(charged + 100 + 10_000);
+	});
+
+	it("refuses a replay with different fields and re-issues the upload URL with a later expiry", async () => {
+		const appId = await makeApp(100_000);
+		const request = {
+			fileName: "standup.mp3",
+			contentLength: 2048,
+			userId: "user-1",
+			metadata: { show: "daily", episode: 7 },
+			idempotencyKey: `key-${id()}`,
+		};
+		const created = await createTranscriptUpload(appId, request);
+		if (!created.ok || !created.upload) throw new Error("create failed");
+
+		expect(
+			await createTranscriptUpload(appId, { ...request, userId: "user-2" }),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "idempotency_conflict",
+			message: "Idempotency key was already used with a different userId",
+		});
+		expect(
+			await createTranscriptUpload(appId, {
+				...request,
+				metadata: { episode: 8, show: "daily" },
+			}),
+		).toMatchObject({ ok: false, status: 409 });
+
+		await database()
+			.update(developerTranscripts)
+			.set({ updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+			.where(eq(developerTranscripts.id, created.transcript.id));
+		const stale = await getTranscript(appId, created.transcript.id);
+		if (!stale) throw new Error("missing");
+		expect(transcriptUploadExpiry(stale).getTime()).toBeLessThan(Date.now());
+
+		const again = await createTranscriptUpload(appId, {
+			...request,
+			metadata: { episode: 7, show: "daily" },
+		});
+		if (!again.ok || !again.upload) throw new Error("replay failed");
+		expect(again.transcript.id).toBe(created.transcript.id);
+		const fresh = await getTranscript(appId, created.transcript.id);
+		if (!fresh) throw new Error("missing");
+		expect(transcriptUploadExpiry(fresh).toISOString()).toBe(
+			again.upload.expiresAt,
+		);
+		expect(new Date(again.upload.expiresAt).getTime()).toBeGreaterThan(
+			Date.now() + 59 * 60 * 1000,
+		);
 	});
 });
