@@ -16,6 +16,10 @@ export interface CapPlayerProps {
 	poster?: string;
 	aspectRatio?: string;
 	autoPlay?: boolean;
+	muted?: boolean;
+	loop?: boolean;
+	controls?: boolean;
+	startAt?: number;
 	focusOnMount?: boolean;
 	className?: string;
 	onFirstPlay?: () => void;
@@ -103,6 +107,10 @@ export const CapPlayer = ({
 	poster,
 	aspectRatio = "16 / 9",
 	autoPlay = false,
+	muted: startMuted = false,
+	loop = false,
+	controls = true,
+	startAt = 0,
 	focusOnMount = false,
 	className,
 	onFirstPlay,
@@ -119,11 +127,15 @@ export const CapPlayer = ({
 	callbacks.current = { onFirstPlay, onEnded };
 
 	const [playing, setPlaying] = useState(false);
-	const [muted, setMuted] = useState(false);
+	const [muted, setMuted] = useState(startMuted);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [failed, setFailed] = useState(false);
 
 	const { hls, mp4 } = source;
+
+	useLayoutEffect(() => {
+		if (videoRef.current) videoRef.current.muted = startMuted;
+	}, [startMuted]);
 
 	useLayoutEffect(() => {
 		const video = videoRef.current;
@@ -132,9 +144,9 @@ export const CapPlayer = ({
 		return attachSource(
 			video,
 			{ hls, mp4 },
-			{ autoPlay, onFatal: () => setFailed(true) },
+			{ autoPlay, startAt, onFatal: () => setFailed(true) },
 		);
-	}, [hls, mp4, autoPlay]);
+	}, [hls, mp4, autoPlay, startAt]);
 
 	useLayoutEffect(() => {
 		if (!focusOnMount) return;
@@ -331,6 +343,19 @@ export const CapPlayer = ({
 			wake();
 		};
 
+		// Safari plays HLS itself and cannot preload a single segment, so it
+		// holds only the playlists until the viewer shows intent: a mouse over
+		// the player or keyboard focus inside it. Never before the document has
+		// loaded, when a preloading video would hold the load event again.
+		const warm = () => {
+			if (video.paused && document.readyState === "complete") {
+				video.preload = "auto";
+			}
+		};
+		const onPointer = (event: PointerEvent) => {
+			if (event.pointerType === "mouse") warm();
+		};
+
 		const onAction = (event: Event) => {
 			const target = event.target;
 			if (!(target instanceof Element)) return;
@@ -366,6 +391,9 @@ export const CapPlayer = ({
 		track.addEventListener("pointerup", onTrackUp);
 		track.addEventListener("pointercancel", onTrackUp);
 		root.addEventListener("keydown", onKey);
+		root.addEventListener("pointermove", onPointer);
+		root.addEventListener("pointerdown", onPointer);
+		root.addEventListener("focusin", warm);
 		root.addEventListener("click", onAction);
 		root.addEventListener("pointermove", wake);
 		root.addEventListener("focusin", wake);
@@ -388,6 +416,9 @@ export const CapPlayer = ({
 			track.removeEventListener("pointerup", onTrackUp);
 			track.removeEventListener("pointercancel", onTrackUp);
 			root.removeEventListener("keydown", onKey);
+			root.removeEventListener("pointermove", onPointer);
+			root.removeEventListener("pointerdown", onPointer);
+			root.removeEventListener("focusin", warm);
 			root.removeEventListener("click", onAction);
 			root.removeEventListener("pointermove", wake);
 			root.removeEventListener("focusin", wake);
@@ -401,6 +432,7 @@ export const CapPlayer = ({
 			className={`${styles.player} ${className ?? ""}`}
 			style={{ "--cap-player-ratio": aspectRatio } as CSSProperties}
 			data-playing={playing}
+			data-controls={controls}
 			data-idle="false"
 			data-waiting="false"
 		>
@@ -408,7 +440,8 @@ export const CapPlayer = ({
 				ref={videoRef}
 				className={styles.video}
 				poster={poster}
-				preload="auto"
+				preload="none"
+				loop={loop}
 				playsInline
 				data-action="toggle"
 				aria-label={title}
@@ -421,6 +454,16 @@ export const CapPlayer = ({
 					This video could not be played.
 				</p>
 			) : null}
+			{controls ? null : (
+				<button
+					type="button"
+					className={styles.cover}
+					data-action="toggle"
+					aria-label={playing ? "Pause" : "Play"}
+				>
+					{playing ? <PauseIcon /> : <PlayIcon />}
+				</button>
+			)}
 			<div className={styles.bar}>
 				<button
 					type="button"
