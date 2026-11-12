@@ -134,6 +134,7 @@ jobs:
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/source-frame-limit.integration.test.ts \
             src/__tests__/lib/media-address-guard.test.ts \
+            src/__tests__/lib/media-relay.integration.test.ts \
             src/__tests__/lib/encode-stall.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/loom-importer/

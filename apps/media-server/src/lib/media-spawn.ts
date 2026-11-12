@@ -6,6 +6,7 @@ import {
 	isTrustedLocalPlaylist,
 	MAX_DECODE_PIXELS,
 } from "./media-input-policy";
+import { canRelayMediaInput, relayMediaInput } from "./media-relay";
 
 const SENSITIVE_ENV_KEY =
 	/SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|API_?KEY|ACCESS_?KEY|AUTH|DATABASE_URL|_DSN$|^AWS_/i;
@@ -116,8 +117,36 @@ export function limitDecodedFrameSize(cmd: readonly string[]): string[] {
 	return out;
 }
 
-function prepareMediaCommand(cmd: readonly string[]): string[] {
-	return limitDecodedFrameSize(hardenMediaCommand(cmd));
+// Points every remote input of an FFmpeg or ffprobe command at the relay.
+// The returned release must be called once the process has gone.
+export function relayRemoteInputs(cmd: readonly string[]): {
+	cmd: string[];
+	release: () => void;
+} {
+	const tool = basename(cmd[0] ?? "");
+	const releases: (() => void)[] = [];
+	const out = [...cmd];
+	if (tool === "ffmpeg" || tool === "ffprobe") {
+		for (let i = 1; i < out.length; i++) {
+			const isInput =
+				out[i - 1] === "-i" || (tool === "ffprobe" && i === out.length - 1);
+			if (!isInput || !canRelayMediaInput(out[i] as string)) continue;
+			const relayed = relayMediaInput(out[i] as string);
+			out[i] = relayed.url;
+			releases.push(relayed.release);
+		}
+	}
+	return {
+		cmd: out,
+		release: () => {
+			for (const release of releases.splice(0)) release();
+		},
+	};
+}
+
+function prepareMediaCommand(cmd: readonly string[]) {
+	const relayed = relayRemoteInputs(hardenMediaCommand(cmd));
+	return { cmd: limitDecodedFrameSize(relayed.cmd), release: relayed.release };
 }
 
 type BunSpawnOptions = {
@@ -131,19 +160,24 @@ const rawBunSpawn = bunSpawn as unknown as (
 ) => ReturnType<typeof bunSpawn>;
 
 export const spawn = ((first: unknown, second?: unknown) => {
-	if (Array.isArray(first)) {
-		const options = (second ?? {}) as BunSpawnOptions;
-		return rawBunSpawn(prepareMediaCommand(first), {
+	const options = (Array.isArray(first) ? (second ?? {}) : first) as
+		| BunSpawnOptions
+		| (BunSpawnOptions & { cmd: string[] });
+	const prepared = prepareMediaCommand(
+		Array.isArray(first) ? first : (options.cmd as string[]),
+	);
+	try {
+		const proc = rawBunSpawn({
 			...options,
+			cmd: prepared.cmd,
 			env: childProcessEnv(options.env),
 		});
+		void proc.exited.finally(prepared.release);
+		return proc;
+	} catch (error) {
+		prepared.release();
+		throw error;
 	}
-	const options = first as BunSpawnOptions & { cmd: string[] };
-	return rawBunSpawn({
-		...options,
-		cmd: prepareMediaCommand(options.cmd),
-		env: childProcessEnv(options.env),
-	});
 }) as unknown as typeof bunSpawn;
 
 type NodeSpawnOptions = { env?: Record<string, string | undefined> };
@@ -157,13 +191,14 @@ export const spawnNode = ((
 		const opts = (args ?? {}) as NodeSpawnOptions;
 		return nodeSpawn(command, { ...opts, env: childProcessEnv(opts.env) });
 	}
-	const [hardenedCommand, ...hardenedArgs] = prepareMediaCommand([
-		command,
-		...(args as string[]),
-	]);
+	const prepared = prepareMediaCommand([command, ...(args as string[])]);
+	const [hardenedCommand, ...hardenedArgs] = prepared.cmd;
 	const opts = (options ?? {}) as NodeSpawnOptions;
-	return nodeSpawn(hardenedCommand as string, hardenedArgs, {
+	const child = nodeSpawn(hardenedCommand as string, hardenedArgs, {
 		...opts,
 		env: childProcessEnv(opts.env),
 	});
+	child.once("close", prepared.release);
+	child.once("error", prepared.release);
+	return child;
 }) as unknown as typeof nodeSpawn;
