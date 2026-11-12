@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/infra-access", () => ({
+	canUseInfra: () => true,
+}));
+
 vi.mock("@cap/database", () => {
 	const mockDb = {
 		select: vi.fn(() => mockDb),

@@ -6,12 +6,13 @@ import { nanoId } from "@cap/database/helpers";
 import { developerAppDomains, developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 
 export async function addDeveloperDomain(appId: string, domain: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const allowed = normalizeAllowedOrigin(domain);
 	if (!allowed.ok) return actionFailure(allowed.message);

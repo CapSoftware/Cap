@@ -8,10 +8,11 @@ import { developerApiKeys, developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { hashKey } from "@/lib/developer-key-hash";
+import { canUseInfra } from "@/lib/infra-access";
 
 export async function regenerateDeveloperKeys(appId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const [app] = await db()
 		.select()
