@@ -20,8 +20,10 @@ const HLS_FILE_PATTERN = /^[A-Za-z0-9_-]+\.(m3u8|m4s)$/;
 const MEDIA_FILE_PATTERN = /^[A-Za-z0-9_-]+\.m4s$/;
 
 const SIGNED_URL_SECONDS = 12 * 60 * 60;
-const CACHE_SECONDS = 300;
-const PAUSED_CACHE_SECONDS = 60;
+// How long an answer may be served from a shared cache. It bounds how long a
+// deleted video keeps answering new viewers, and how long a paused app waits
+// for playback after a top-up.
+const CACHE_SECONDS = 60;
 
 export const PLAYBACK_CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
@@ -42,7 +44,6 @@ function notFound(): Response {
 	});
 }
 
-// Kept short in caches so playback comes back within a minute of a top-up.
 function paused(): Response {
 	return new Response(
 		"Playback is paused because the account that hosts this video is out of credit.",
@@ -50,7 +51,7 @@ function paused(): Response {
 			status: 402,
 			headers: {
 				...PLAYBACK_CORS_HEADERS,
-				"Cache-Control": `public, max-age=${PAUSED_CACHE_SECONDS}, s-maxage=${PAUSED_CACHE_SECONDS}`,
+				...CACHEABLE,
 				"Content-Type": "text/plain; charset=utf-8",
 			},
 		},
