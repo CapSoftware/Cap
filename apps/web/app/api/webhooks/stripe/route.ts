@@ -36,6 +36,7 @@ import {
 	saveCardFromCheckout,
 	settleAutoTopUpPaymentIntent,
 } from "@/lib/infra-auto-top-up";
+import { isFreeCreditCheckout } from "@/lib/infra-credit-code";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	attachSsoCheckout,
@@ -61,8 +62,14 @@ async function grantDeveloperCredits(
 	const { accountId, amountCents } = session.metadata ?? {};
 	const paymentIntentId =
 		typeof session.payment_intent === "string" ? session.payment_intent : null;
+	const free = isFreeCreditCheckout(session);
+	const reference = paymentIntentId
+		? ({ id: paymentIntentId, type: "stripe_payment_intent" } as const)
+		: free
+			? ({ id: session.id, type: "stripe_checkout_session" } as const)
+			: null;
 
-	if (!accountId || !amountCents || !paymentIntentId) {
+	if (!accountId || !amountCents || !reference) {
 		console.error("Missing required metadata for developer credits:", {
 			accountId,
 			amountCents,
@@ -71,13 +78,10 @@ async function grantDeveloperCredits(
 		return new Response("Missing metadata", { status: 400 });
 	}
 
-	// Only grant credits once the payment has actually settled. Without this
-	// guard a checkout session (e.g. an unpaid/async payment) could grant
-	// credits before money is captured.
-	if (session.payment_status !== "paid") {
+	if (session.payment_status !== "paid" && !free) {
 		console.log(
 			`Developer credits checkout not paid yet (payment_status=${session.payment_status}); skipping credit grant`,
-			{ accountId, paymentIntentId },
+			{ accountId, referenceId: reference.id },
 		);
 		return NextResponse.json({ received: true });
 	}
@@ -85,7 +89,7 @@ async function grantDeveloperCredits(
 	console.log("Processing developer credits purchase:", {
 		accountId,
 		amountCents,
-		paymentIntentId,
+		referenceId: reference.id,
 	});
 
 	const [existingTxn] = await db()
@@ -94,8 +98,8 @@ async function grantDeveloperCredits(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.referenceId, paymentIntentId),
-				eq(developerCreditTransactions.referenceType, "stripe_payment_intent"),
+				eq(developerCreditTransactions.referenceId, reference.id),
+				eq(developerCreditTransactions.referenceType, reference.type),
 			),
 		)
 		.limit(1);
@@ -111,11 +115,15 @@ async function grantDeveloperCredits(
 	await addCreditsToAccount({
 		accountId,
 		amountCents: Number(amountCents),
-		referenceId: paymentIntentId,
-		referenceType: "stripe_payment_intent",
+		referenceId: reference.id,
+		referenceType: reference.type,
 		metadata: {
 			amountCents: Number(amountCents),
 			stripeSessionId: session.id,
+			...(typeof session.amount_total === "number" &&
+			session.amount_total !== Number(amountCents)
+				? { paidCents: session.amount_total }
+				: {}),
 		},
 	});
 

@@ -71,6 +71,9 @@ const mockStripe = {
 			create: vi.fn(),
 		},
 	},
+	promotionCodes: {
+		list: vi.fn(),
+	},
 };
 
 vi.mock("@cap/utils", () => ({
@@ -399,6 +402,142 @@ describe("POST /api/developer/credits/checkout", () => {
 			makeRequest({ appId: "app-456", amountCents: 1000 }),
 		);
 		expect(res.status).toBe(500);
+	});
+
+	const readyToBuy = () => {
+		mockGetCurrentUser.mockResolvedValue({
+			...mockUser,
+			stripeCustomerId: "cus_exist",
+		});
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_exist" },
+			]);
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+	};
+
+	const promotion = (coupon: Record<string, unknown>) => ({
+		data: [{ id: "promo_123", coupon: { valid: true, ...coupon } }],
+	});
+
+	it("sends no discount when no code is given", async () => {
+		readyToBuy();
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000 }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.promotionCodes.list).not.toHaveBeenCalled();
+		const [params] = mockStripe.checkout.sessions.create.mock.calls[0] ?? [];
+		expect(params).not.toHaveProperty("discounts");
+		expect(params).not.toHaveProperty("allow_promotion_codes");
+	});
+
+	it("applies a code that is limited to the credits product", async () => {
+		readyToBuy();
+		mockStripe.promotionCodes.list.mockResolvedValue(
+			promotion({ applies_to: { products: ["prod_dev_test"] } }),
+		);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, code: " launch5 " }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.promotionCodes.list).toHaveBeenCalledWith({
+			code: "launch5",
+			active: true,
+			limit: 1,
+			expand: ["data.coupon.applies_to"],
+		});
+		expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				discounts: [{ promotion_code: "promo_123" }],
+				metadata: expect.objectContaining({ amountCents: "1000" }),
+			}),
+		);
+	});
+
+	it.each([
+		["is not limited to any product", promotion({})],
+		[
+			"is limited to another product",
+			promotion({ applies_to: { products: ["prod_pro_plan"] } }),
+		],
+		[
+			"has a coupon that is no longer valid",
+			promotion({ valid: false, applies_to: { products: ["prod_dev_test"] } }),
+		],
+		["does not exist", { data: [] }],
+	])("refuses a code that %s", async (_label, found) => {
+		readyToBuy();
+		mockStripe.promotionCodes.list.mockResolvedValue(found);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, code: "SOMECODE" }),
+		);
+
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toBe(
+			"That code cannot be used for this purchase",
+		);
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("returns 400 when Stripe will not apply the code to this purchase", async () => {
+		readyToBuy();
+		mockStripe.promotionCodes.list.mockResolvedValue(
+			promotion({ applies_to: { products: ["prod_dev_test"] } }),
+		);
+		mockStripe.checkout.sessions.create.mockRejectedValue(
+			Object.assign(new Error("total must be at least $0.50"), {
+				type: "StripeInvalidRequestError",
+			}),
+		);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 520, code: "FIVEOFF" }),
+		);
+
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toBe(
+			"That code cannot be used for this purchase",
+		);
+	});
+
+	it("returns 500 when the code lookup fails", async () => {
+		readyToBuy();
+		mockStripe.promotionCodes.list.mockRejectedValue(new Error("Stripe down"));
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, code: "FIVEOFF" }),
+		);
+
+		expect(res.status).toBe(500);
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("returns 400 for an empty or oversized code", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+
+		const empty = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, code: "   " }),
+		);
+		const long = await POST(
+			makeRequest({
+				appId: "app-456",
+				amountCents: 1000,
+				code: "A".repeat(65),
+			}),
+		);
+
+		expect(empty.status).toBe(400);
+		expect(long.status).toBe(400);
+		expect(mockStripe.promotionCodes.list).not.toHaveBeenCalled();
 	});
 
 	it("sets line_items with correct unit_amount", async () => {
