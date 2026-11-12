@@ -5,13 +5,14 @@ import {
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
 } from "@cap/database/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import type { StorageUsage } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import {
 	latestStorageCharge,
 	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
+	storageChargeDay,
 } from "@/lib/infra-standing";
 
 export type StorageDayResult =
@@ -91,6 +92,39 @@ export async function chargeStorageDay({
 			)
 			.limit(1);
 		if (billed) return { state: "skipped" as const };
+
+		const [snapshot] = await tx
+			.select({ processedAt: developerDailyStorageSnapshots.processedAt })
+			.from(developerDailyStorageSnapshots)
+			.where(
+				and(
+					eq(developerDailyStorageSnapshots.appId, appId),
+					eq(developerDailyStorageSnapshots.snapshotDate, dateKey),
+				),
+			)
+			.limit(1);
+		if (snapshot?.processedAt) return { state: "skipped" as const };
+
+		const chargedSinceDayStart = await tx
+			.select({ metadata: developerCreditTransactions.metadata })
+			.from(developerCreditTransactions)
+			.where(
+				and(
+					eq(developerCreditTransactions.accountId, accountId),
+					eq(developerCreditTransactions.type, "storage_daily"),
+					gte(
+						developerCreditTransactions.createdAt,
+						new Date(`${dateKey}T00:00:00.000Z`),
+					),
+				),
+			);
+		if (
+			chargedSinceDayStart.some(
+				(row) => storageChargeDay(row.metadata) === dateKey,
+			)
+		) {
+			return { state: "skipped" as const };
+		}
 
 		const lastCharge = await latestStorageCharge(tx, accountId);
 		const unresolvedShortSince =

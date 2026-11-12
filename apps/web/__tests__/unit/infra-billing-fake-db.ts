@@ -26,6 +26,7 @@ export type SnapshotRow = {
 	totalDurationMinutes: number;
 	videoCount: number;
 	microCreditsCharged: number;
+	processedAt?: Date | null;
 };
 
 export type VideoGroup = {
@@ -125,6 +126,10 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		if (keys === "createdAt,metadata") {
 			return newestFirst(storageRows()).slice(0, 1);
 		}
+		if (keys === "metadata") {
+			const since = asTime(rendered.params.at(-1));
+			return storageRows().filter((row) => row.createdAt.getTime() >= since);
+		}
 		if (keys === "createdAt,metadata,type") {
 			const types = rendered.params.slice(1);
 			return newestFirst(
@@ -156,6 +161,12 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					row.referenceType === referenceType,
 			);
 		}
+	}
+
+	if (query.table === developerDailyStorageSnapshots) {
+		return ledger.snapshots.filter((snapshot) =>
+			rendered.params.includes(snapshot.snapshotDate),
+		);
 	}
 
 	if (query.table === developerVideos) {
@@ -238,6 +249,7 @@ function insert(table: unknown) {
 							totalDurationMinutes: row.totalDurationMinutes,
 							videoCount: row.videoCount,
 							microCreditsCharged: row.microCreditsCharged,
+							processedAt: row.processedAt ?? null,
 						},
 					];
 				},

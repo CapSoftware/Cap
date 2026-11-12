@@ -49,11 +49,8 @@ export type InfraDbExecutor =
 
 const ACTIVE: InfraAppStanding = { state: "active", pausesAt: null };
 
-export function parseStorageCharge(row: {
-	createdAt: Date;
-	metadata: unknown;
-}): StorageCharge {
-	let metadata: unknown = row.metadata;
+function metadataFields(value: unknown): Record<string, unknown> {
+	let metadata: unknown = value;
 	if (typeof metadata === "string") {
 		try {
 			metadata = JSON.parse(metadata);
@@ -61,10 +58,21 @@ export function parseStorageCharge(row: {
 			metadata = null;
 		}
 	}
-	const fields =
-		typeof metadata === "object" && metadata !== null
-			? (metadata as Record<string, unknown>)
-			: {};
+	return typeof metadata === "object" && metadata !== null
+		? (metadata as Record<string, unknown>)
+		: {};
+}
+
+export function storageChargeDay(metadata: unknown): string | null {
+	const { snapshotDate } = metadataFields(metadata);
+	return typeof snapshotDate === "string" ? snapshotDate : null;
+}
+
+export function parseStorageCharge(row: {
+	createdAt: Date;
+	metadata: unknown;
+}): StorageCharge {
+	const fields = metadataFields(row.metadata);
 	const shortSince =
 		typeof fields.shortSince === "string" ? new Date(fields.shortSince) : null;
 	return {

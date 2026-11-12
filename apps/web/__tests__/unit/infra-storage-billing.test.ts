@@ -19,7 +19,11 @@ import {
 
 holder.db = fakeDb;
 
-import { storageUsage } from "@/lib/developer-pricing";
+import {
+	storageUsage,
+	uploadAdmissionMicroCredits,
+} from "@/lib/developer-pricing";
+import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
 import { availableBalance } from "@/lib/infra-balance";
 import {
 	getInfraAppStanding,
@@ -107,6 +111,7 @@ describe("daily storage charge", () => {
 				totalDurationMinutes: 21,
 				videoCount: 3,
 				microCreditsCharged: 144,
+				processedAt: ledger.now,
 			},
 		]);
 	});
@@ -195,6 +200,146 @@ describe("daily storage charge", () => {
 
 		expect(await charge()).toEqual({ state: "skipped" });
 		expect(ledger.rows).toHaveLength(0);
+	});
+});
+
+describe("a day the previous storage job already charged", () => {
+	const oldRow = () => ({
+		id: "old-job-row",
+		accountId: "account-1",
+		type: "storage_daily",
+		amountMicroCredits: -26,
+		balanceAfterMicroCredits: 999_974,
+		referenceId: null,
+		referenceType: "manual",
+		metadata: {
+			snapshotDate: dateKey(),
+			totalDurationMinutes: 10,
+			videoCount: 5,
+		},
+		createdAt: new Date(ledger.now.getTime() - 60 * 60 * 1000),
+	});
+	const oldSnapshot = () => ({
+		snapshotDate: dateKey(),
+		totalDurationMinutes: 10,
+		videoCount: 5,
+		microCreditsCharged: 26,
+		processedAt: new Date(ledger.now.getTime() - 60 * 60 * 1000),
+	});
+
+	beforeEach(() => {
+		ledger.account.balanceMicroCredits = 999_974;
+	});
+
+	it("is skipped, and its snapshot is left alone", async () => {
+		ledger.rows = [oldRow()];
+		ledger.snapshots = [oldSnapshot()];
+
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.account.balanceMicroCredits).toBe(999_974);
+		expect(ledger.rows).toHaveLength(1);
+		expect(ledger.snapshots).toEqual([oldSnapshot()]);
+	});
+
+	it("is skipped on the completed snapshot alone", async () => {
+		ledger.snapshots = [oldSnapshot()];
+
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.rows).toHaveLength(0);
+	});
+
+	it("is skipped on the old ledger row alone", async () => {
+		ledger.rows = [oldRow()];
+
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.rows).toHaveLength(1);
+		expect(ledger.snapshots).toHaveLength(0);
+	});
+
+	it("is charged again the next day, in the new form", async () => {
+		ledger.rows = [oldRow()];
+		ledger.snapshots = [oldSnapshot()];
+		advanceDays(1);
+
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+		});
+		expect(storageRows().at(-1)?.referenceType).toBe("storage_day");
+	});
+
+	it("leaves standing active: an old row was never short", async () => {
+		ledger.rows = [oldRow()];
+		ledger.account.balanceMicroCredits = 0;
+
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+	});
+});
+
+describe("admission prices a video the way the storage job will", () => {
+	const capped = {
+		appId: "app-1",
+		videoId: "video-new",
+		durationSeconds: 3600,
+		width: 3840,
+		height: 2160,
+		maxResolutionTier: "1080p",
+	};
+
+	beforeEach(() => {
+		ledger.videos = [];
+	});
+
+	it("requires exactly 7 days of what the job charges for the same row", async () => {
+		ledger.account.balanceMicroCredits = 1_000_000;
+		ledger.videos = [
+			{
+				appId: "app-1",
+				width: capped.width,
+				height: capped.height,
+				seconds: capped.durationSeconds,
+				count: 1,
+				status: "ready",
+				maxResolutionTier: capped.maxResolutionTier,
+			},
+		];
+		const jobUsage = await getAppStorageUsage("app-1");
+		ledger.videos = [];
+
+		const admission = await admitDeveloperVideoUpload(capped);
+
+		expect(jobUsage.minutesByTier).toEqual({
+			"1080p": 60,
+			"1440p": 0,
+			"2160p": 0,
+		});
+		expect(admission.requiredMicroCredits).toBe(
+			uploadAdmissionMicroCredits(jobUsage.monthlyMicroCredits),
+		);
+		expect(admission.requiredMicroCredits).toBe(1190);
+	});
+
+	it("admits a 4K source capped at 1080p on a balance that covers 1080p storage, and refuses one that does not", async () => {
+		ledger.account.balanceMicroCredits = 1190;
+		expect((await admitDeveloperVideoUpload(capped)).allowed).toBe(true);
+
+		ledger.account.balanceMicroCredits = 1189;
+		expect(await admitDeveloperVideoUpload(capped)).toMatchObject({
+			allowed: false,
+			reason: "insufficient_credits",
+			shortfallMicroCredits: 1,
+		});
+	});
+
+	it("needs 4K credit when the video is allowed to be stored at 4K", async () => {
+		ledger.account.balanceMicroCredits = 1190;
+
+		expect(
+			await admitDeveloperVideoUpload({
+				...capped,
+				maxResolutionTier: "2160p",
+			}),
+		).toMatchObject({ allowed: false, requiredMicroCredits: 3920 });
 	});
 });
 
