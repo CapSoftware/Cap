@@ -273,7 +273,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 }
                 if let entry = entry ?? self.created.withLock({ $0 }) {
                     // Cap shows it next time it's in front.
-                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl, uploaded: !handedOver), accessGroup: Self.keychainGroup)
+                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl, uploaded: !handedOver, durationSeconds: duration), accessGroup: Self.keychainGroup)
                 }
                 done()
             }

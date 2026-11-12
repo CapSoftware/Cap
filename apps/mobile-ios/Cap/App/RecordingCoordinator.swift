@@ -69,10 +69,16 @@ final class RecordingCoordinator {
     func collectFinishedScreenRecording(showHome: Bool) {
         guard let session, let entry = RecordingHandoff.take(), CapID(entry.capId) != nil else { return }
         // One the extension handed over is counted when its upload completes here.
-        if entry.uploaded == true { Usage.track("recording_completed", ["mode": "screen"]) }
+        if entry.uploaded == true { Self.trackCompleted(.screen, seconds: entry.durationSeconds) }
         refreshLibrary(session)
         RecentRecordings.shared.finishedElsewhere(capId: entry.capId, shareUrl: entry.shareUrl)
         if showHome { self.showHome() }
+    }
+
+    private static func trackCompleted(_ kind: RecentRecordings.Kind, seconds: Double?) {
+        var properties: [String: AnalyticsValue] = ["mode": kind == .camera ? "camera" : "screen"]
+        if let seconds, seconds.isFinite { properties["duration_seconds"] = .int(Int(seconds.rounded())) }
+        Usage.track("recording_completed", properties)
     }
 
     func cameraRecordingStopped() {
@@ -102,7 +108,7 @@ final class RecordingCoordinator {
             recent.progress(jobId: jobId, fraction: fraction)
             UploadActivities.shared.update(id: jobId, phase: .uploading, fraction: fraction)
         case let .completed(job):
-            Usage.track("recording_completed", ["mode": kind == .camera ? "camera" : "screen"])
+            Self.trackCompleted(kind, seconds: job.durationSeconds)
             recent.completed(jobId: job.id)
             let inApp = UIApplication.shared.applicationState == .active
             Task { await UploadActivities.shared.finish(id: job.id, phase: .done, dismissImmediately: inApp) }

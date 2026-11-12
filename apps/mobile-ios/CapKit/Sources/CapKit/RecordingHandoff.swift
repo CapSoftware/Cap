@@ -8,12 +8,14 @@ public enum RecordingHandoff {
         public let createdAt: Date
         /// True when the extension finished the upload itself. Otherwise Cap finishes it and sees it complete.
         public let uploaded: Bool?
+        public let durationSeconds: Double?
 
-        public init(capId: String, shareUrl: String, createdAt: Date = .now, uploaded: Bool? = nil) {
+        public init(capId: String, shareUrl: String, createdAt: Date = .now, uploaded: Bool? = nil, durationSeconds: Double? = nil) {
             self.capId = capId
             self.shareUrl = shareUrl
             self.createdAt = createdAt
             self.uploaded = uploaded
+            self.durationSeconds = durationSeconds
         }
     }
 

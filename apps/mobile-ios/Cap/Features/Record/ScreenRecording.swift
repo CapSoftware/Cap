@@ -204,7 +204,9 @@ final class ScreenRecordingSession {
         endActivity()
         if let recording {
             self.recording = nil
-            Usage.track("recording_stopped", ["mode": "screen", "duration_seconds": .int(Int(Date.now.timeIntervalSince(recording.startedAt).rounded()))])
+            // No length here: Cap may only notice the stop when it is next opened. The recorded length comes with
+            // `recording_completed`.
+            Usage.track("recording_stopped", ["mode": "screen"])
             ProcessStats.measure(since: recording.stats, process: "app", recordedSeconds: Date.now.timeIntervalSince(recording.startedAt), extra: ["bubble": CameraBubble.shared.isFloating ? 1 : 0]).save()
         }
         guard wasRecording else { return }
