@@ -268,7 +268,7 @@ The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`
 
 ### Delete Video
 
-Soft-delete a video. The video is marked as deleted and excluded from future queries.
+Delete a video. It is excluded from every query straight away. Its playback URLs stop working for new viewers within about a minute, and its files (the upload and every encoded output) are removed within about ten minutes, after which links that were already handed out stop working too.
 
 ```
 DELETE /api/developer/v1/videos/:id
