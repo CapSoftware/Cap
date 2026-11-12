@@ -462,8 +462,11 @@ Every upload also returns `shareUrl` and `embedUrl`. They are Cap's hosted playe
   title="Product demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
   allow="fullscreen; picture-in-picture"
+  loading="lazy"
 ></iframe>
 ```
+
+`loading="lazy"` leaves an embed further down the page unloaded until the viewer scrolls near it. The embed takes options in its URL, such as a start time, autoplay and loop. See [Embed Parameters](/docs/api/rest-api#embed-parameters).
 
 Use the hosted player when you want a video on a page with the least work. Build your own player, as above, when you need to control how it looks or react to what the viewer does. [Share and Embed](/docs/api/rest-api#share-and-embed) has the details.
 
