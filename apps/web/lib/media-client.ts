@@ -1,4 +1,5 @@
 import { serverEnv } from "@cap/env";
+import { readStreamBounded } from "@/lib/public-media-fetch";
 
 interface MediaServerError {
 	error: string;
@@ -230,6 +231,7 @@ export async function probeVideoViaMediaServer(
 
 export async function convertAudioToMp3ViaMediaServer(
 	audioUrl: string,
+	options: { maxBytes?: number } = {},
 ): Promise<Buffer> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
@@ -255,6 +257,10 @@ export async function convertAudioToMp3ViaMediaServer(
 		throw new Error(
 			errorData.details || errorData.error || "Audio conversion failed",
 		);
+	}
+
+	if (options.maxBytes !== undefined && response.body) {
+		return readStreamBounded(response.body, options.maxBytes);
 	}
 
 	const arrayBuffer = await response.arrayBuffer();
