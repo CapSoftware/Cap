@@ -684,6 +684,10 @@ ${chunk.text}`;
 		}
 	}
 
+	if (chunkSummaries.length === 0) {
+		throw new Error("No valid section analyses were generated");
+	}
+
 	const allChapters: { title: string; start: number }[] = [];
 	const sortedChapters = chunkSummaries
 		.flatMap((c) => c.chapters)
