@@ -4,11 +4,12 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
-import { Download, MoreVertical } from "lucide-react";
+import { AudioLines, Download, MoreVertical } from "lucide-react";
 import { useVideoDownload } from "./use-video-download";
 
 export function VideoDownloadMenu({
@@ -27,7 +28,7 @@ export function VideoDownloadMenu({
 	/** Trigger contents. Defaults to the editor's dots glyph. */
 	trigger?: React.ReactNode;
 }) {
-	const { download, isDownloading } = useVideoDownload(videoId);
+	const { download, downloadAudio, isDownloading } = useVideoDownload(videoId);
 
 	return (
 		<DropdownMenu modal={false}>
@@ -77,6 +78,14 @@ export function VideoDownloadMenu({
 						<span className="text-sm text-gray-12">Download video</span>
 					</DropdownMenuItem>
 				)}
+				<DropdownMenuSeparator />
+				<DropdownMenuItem
+					className="flex gap-2 items-center"
+					onClick={() => downloadAudio()}
+				>
+					<AudioLines className="size-3.5 shrink-0" aria-hidden />
+					<span className="text-sm text-gray-12">Download audio</span>
+				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

@@ -22,6 +22,7 @@ import { faUnlock } from "@fortawesome/free-solid-svg-icons/faUnlock";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
+	AudioLines,
 	Check,
 	Clock,
 	Copy,
@@ -310,7 +311,7 @@ export const ShareHeader = ({
 	const isOwner = user && user.id === data.owner.id;
 
 	const { webUrl } = usePublicEnv();
-	const { download, isDownloading } = useVideoDownload(data.id);
+	const { download, downloadAudio, isDownloading } = useVideoDownload(data.id);
 
 	const resolvedTitle = videoStatus?.name ?? data.name;
 	const effectivePasswordProtected =
@@ -1318,6 +1319,16 @@ export const ShareHeader = ({
 																	</p>
 																</DropdownMenuItem>
 															)}
+															<DropdownMenuItem
+																onClick={() => downloadAudio()}
+																disabled={isDownloading}
+																className="flex items-center gap-2 rounded-lg"
+															>
+																<AudioLines className="size-3.5" />
+																<p className="text-sm text-gray-12">
+																	Download audio
+																</p>
+															</DropdownMenuItem>
 														</>
 													)}
 													<DropdownMenuSeparator />
@@ -1338,36 +1349,23 @@ export const ShareHeader = ({
 									{/* Space and org members can download someone else's
 									    Cap, and they never see "Manage Cap", so the action
 									    has to stand on its own for them. */}
-									{!isOwner &&
-										canDownload &&
-										(hasEdits ? (
-											<VideoDownloadMenu
-												videoId={data.id}
-												hasEdits
-												triggerLabel="Download"
-												triggerClassName={clsx(
-													ACTION_BAR_BUTTON_CLASS,
-													"flex items-center justify-center border border-gray-5 bg-gray-3 text-gray-12 transition hover:bg-gray-6",
-												)}
-												trigger={
-													<>
-														<Download className="size-3.5" aria-hidden />
-														Download
-													</>
-												}
-											/>
-										) : (
-											<Button
-												variant="gray"
-												size="xs"
-												className={ACTION_BAR_BUTTON_CLASS}
-												disabled={isDownloading}
-												onClick={() => download("current")}
-											>
-												<Download className="size-3.5 text-gray-12" />
-												Download
-											</Button>
-										))}
+									{!isOwner && canDownload && (
+										<VideoDownloadMenu
+											videoId={data.id}
+											hasEdits={hasEdits}
+											triggerLabel="Download"
+											triggerClassName={clsx(
+												ACTION_BAR_BUTTON_CLASS,
+												"flex items-center justify-center border border-gray-5 bg-gray-3 text-gray-12 transition hover:bg-gray-6",
+											)}
+											trigger={
+												<>
+													<Download className="size-3.5" aria-hidden />
+													Download
+												</>
+											}
+										/>
+									)}
 								</div>
 							</div>
 						)}

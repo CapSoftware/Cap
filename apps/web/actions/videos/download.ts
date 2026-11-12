@@ -7,7 +7,12 @@ import { makeCurrentUser, Storage, VideosPolicy } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
+import {
+	checkHasAudioTrackViaMediaServer,
+	isMediaServerConfigured,
+} from "@/lib/media-client";
 import { runPromise } from "@/lib/server";
+import { resolveVideoAudioSource } from "@/lib/video-audio-download";
 import {
 	resolveVideoDownloadAccess,
 	type VideoDownloadVariant,
@@ -218,4 +223,46 @@ export async function getVideoDownloadInfo(
 			error: "Failed to prepare the video download.",
 		};
 	}
+}
+
+export async function getVideoAudioDownloadInfo(
+	videoId: Video.VideoId,
+): Promise<VideoDownloadInfo> {
+	if (!videoId) {
+		throw new Error("Missing required data for downloading video");
+	}
+
+	if (!isMediaServerConfigured()) {
+		return {
+			success: false,
+			error: "Audio downloads are not available on this server.",
+		};
+	}
+
+	const user = await getCurrentUser();
+	const source = await resolveVideoAudioSource(videoId, user);
+	if (!source.success) {
+		return { success: false, error: source.error };
+	}
+
+	let hasAudio: boolean;
+	try {
+		hasAudio = await checkHasAudioTrackViaMediaServer(source.sourceUrl);
+	} catch (error) {
+		console.error("Error checking audio track for download:", error);
+		return {
+			success: false,
+			error: "Failed to prepare the audio download.",
+		};
+	}
+
+	if (!hasAudio) {
+		return { success: false, error: "This video has no audio to download." };
+	}
+
+	return {
+		success: true,
+		downloadUrl: `/api/videos/${encodeURIComponent(videoId)}/audio`,
+		filename: source.filename,
+	};
 }
