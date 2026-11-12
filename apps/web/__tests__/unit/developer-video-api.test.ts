@@ -445,6 +445,16 @@ describe("developer video API", () => {
 		expect(mocks.redrive).not.toHaveBeenCalled();
 	});
 
+	it("tells the owner about a credit shortfall the public page keeps to itself", async () => {
+		const errorReason =
+			"Not enough credit to store this video at its measured length and size. Add at least $0.05 of credit and upload it again.";
+		mocks.store.video = developerVideo({ status: "errored", errorReason });
+
+		const { body } = await get("/video-1/status");
+
+		expect(body.data).toMatchObject({ status: "errored", errorReason });
+	});
+
 	it("builds URLs on the configured playback hostname", async () => {
 		mocks.playbackUrl = "https://stream.example/";
 

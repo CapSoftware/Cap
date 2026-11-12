@@ -56,17 +56,32 @@ export function infraVideoState(video: StateInput): InfraVideoState {
 	return "uploading";
 }
 
-const WRITTEN_FOR_CUSTOMERS =
-	/^(This (file|video) |The uploaded file |Not enough credit |Video is longer than )/;
+const ABOUT_THE_FILE =
+	/^(This (file|video) |The uploaded file |Video is longer than )/;
+const ABOUT_CREDIT = /^Not enough credit /;
+const MENTIONS_BILLING = /credit|balance|billing|payment|top.?up|\$/i;
 
 export const INFRA_VIDEO_FAILURE_FALLBACK =
 	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
+export const INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK =
+	"Its owner can see what went wrong.";
 
 // Some stored reasons come from the encoder and are worded for operators, so
-// only the sentences written for customers are passed on.
-export function infraVideoFailure(reason: string | null | undefined): string {
-	const text = reason?.trim();
-	return text && WRITTEN_FOR_CUSTOMERS.test(text)
+// only the sentences written for customers are passed on. The owner also gets
+// the ones about their credit. A viewer of the public page gets only the ones
+// about the file, and never a sentence that mentions billing, whatever it
+// starts with.
+export function infraVideoFailure(
+	reason: string | null | undefined,
+	audience: "owner" | "viewer" = "owner",
+): string {
+	const text = reason?.trim() ?? "";
+	if (audience === "viewer") {
+		return ABOUT_THE_FILE.test(text) && !MENTIONS_BILLING.test(text)
+			? text
+			: INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK;
+	}
+	return ABOUT_THE_FILE.test(text) || ABOUT_CREDIT.test(text)
 		? text
 		: INFRA_VIDEO_FAILURE_FALLBACK;
 }

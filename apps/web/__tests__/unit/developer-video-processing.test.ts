@@ -1201,6 +1201,36 @@ describe("developer video dispatch", () => {
 		);
 	});
 
+	it("keeps the media server's wording out of a rejected start's reason", async () => {
+		const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+		mocks.startJob.mockResolvedValue({
+			status: "rejected",
+			message: "Job queue refused /tmp/cap-media-server/abc/input.mp4",
+		});
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: { state: "failed", reason: "x" },
+				attempts: { hls: 2, mp4: 1 },
+			}),
+		});
+
+		expect(await dispatchDeveloperVideoPart("video-1", "encode-1", "mp4")).toBe(
+			"failed",
+		);
+
+		expect(video().status).toBe("errored");
+		expect(video().errorReason).toBe(
+			"This video could not be processed. Upload it again, or export it as an MP4 and upload that.",
+		);
+		expect(warnings).toHaveBeenCalledWith(
+			"[developer-video] Encode start rejected",
+			expect.objectContaining({
+				detail: "Job queue refused /tmp/cap-media-server/abc/input.mp4",
+			}),
+		);
+		warnings.mockRestore();
+	});
+
 	it("leaves a restarted video alone when an older run comes back", async () => {
 		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-9" });
 
