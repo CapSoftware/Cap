@@ -17,6 +17,7 @@ import {
 	isTranscriptStatus,
 	serializeTranscript,
 	TRANSCRIPT_STATUSES,
+	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperSecretAuth } from "../../../utils";
@@ -44,6 +45,8 @@ const readIdempotencyKey = (header: string | undefined) => {
 		? { ok: true as const, key: header }
 		: { ok: false as const };
 };
+
+const INCLUDE_VALUES = ["words", "segments"] as const;
 
 const invalidIdempotencyKey = apiErrorBody(
 	"invalid_idempotency_key",
@@ -157,6 +160,26 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
+	const include = new Set(
+		(c.req.query("include") ?? "")
+			.split(",")
+			.map((part) => part.trim())
+			.filter(Boolean),
+	);
+	const unknown = [...include].find(
+		(value) => !INCLUDE_VALUES.some((known) => known === value),
+	);
+	if (unknown !== undefined) {
+		return c.json(
+			apiErrorBody(
+				"invalid_include",
+				`include has an unknown value: ${unknown.slice(0, 64)}`,
+				`Use ${INCLUDE_VALUES.join(", ")} or both, separated by a comma.`,
+			),
+			400,
+		);
+	}
+
 	const transcript = await getTranscript(
 		c.get("developerAppId"),
 		c.req.param("id"),
@@ -172,13 +195,16 @@ app.get("/:id", async (c) => {
 		);
 	}
 
-	const include = new Set(
-		(c.req.query("include") ?? "")
-			.split(",")
-			.map((part) => part.trim())
-			.filter(Boolean),
-	);
-	const data = serializeTranscript(transcript, { includeText: true });
+	const data = {
+		...serializeTranscript(transcript, { includeText: true }),
+		...(transcript.status === "uploading"
+			? {
+					upload: {
+						expiresAt: transcriptUploadExpiry(transcript).toISOString(),
+					},
+				}
+			: {}),
+	};
 	if (!include.has("words") && !include.has("segments")) {
 		return c.json({ data });
 	}
