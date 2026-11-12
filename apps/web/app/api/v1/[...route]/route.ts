@@ -147,6 +147,8 @@ import {
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
+import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
+import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
@@ -3826,15 +3828,25 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireScope(principal, "developer:read", requestId);
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
 						const management = yield* AgentManagement;
-						const video = yield* management.getDeveloperVideo(
+						const read = management.getDeveloperVideo(
 							principal.id,
 							path.appId,
 							path.videoId,
 						);
+						const video = yield* read;
 						if (!video) {
 							return yield* developerResourceNotFound(requestId, "Video");
 						}
-						return { video: toAgentDeveloperVideo(video), requestId };
+						if (
+							!developerVideoRedrive({ ...video, deletedAt: null }, Date.now())
+						) {
+							return { video: toAgentDeveloperVideo(video), requestId };
+						}
+						const restarted = yield* Effect.promise(() =>
+							redriveDeveloperVideoProcessing(video.id).catch(() => false),
+						);
+						const current = restarted ? ((yield* read) ?? video) : video;
+						return { video: toAgentDeveloperVideo(current), requestId };
 					}),
 					requestId,
 				);

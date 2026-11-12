@@ -18,6 +18,12 @@ const state = vi.hoisted(() => ({
 	transactions: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
 	tables: {} as Record<string, unknown>,
+	redrive: vi.fn(async (_videoId: string) => false),
+}));
+
+vi.mock("@/lib/developer-video-start", async (original) => ({
+	...(await original<typeof import("@/lib/developer-video-start")>()),
+	redriveDeveloperVideoProcessing: state.redrive,
 }));
 
 vi.mock("@cap/database", () => {
@@ -342,6 +348,35 @@ describe("developer routes of the agent API", () => {
 
 		expect(finished.body.video.status).toBe("ready");
 		expect(waiting.body.video.status).toBe("uploading");
+	});
+
+	it("restarts processing that never started when the video is read", async () => {
+		state.apps = [{ id: APP }];
+		const stalled = videoRow({
+			status: "uploading",
+			processing: null,
+			updatedAt: new Date(Date.now() - 10 * 60_000),
+		});
+		const path = `/developer/apps/${APP}/videos/video0000000001`;
+		state.redrive.mockReset();
+		state.redrive.mockImplementation(async () => {
+			state.videos = [{ ...stalled, status: "processing" }];
+			return true;
+		});
+
+		state.videos = [stalled];
+		const restarted = await call("GET", path);
+
+		expect(state.redrive).toHaveBeenCalledExactlyOnceWith("video0000000001");
+		expect(restarted.body.video.status).toBe("processing");
+
+		state.redrive.mockReset();
+		state.redrive.mockResolvedValue(false);
+		state.videos = [videoRow()];
+		const ready = await call("GET", path);
+
+		expect(state.redrive).not.toHaveBeenCalled();
+		expect(ready.body.video.status).toBe("ready");
 	});
 
 	it("answers video not found inside an app the caller owns", async () => {
