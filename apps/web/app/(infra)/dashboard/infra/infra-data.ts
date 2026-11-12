@@ -3,7 +3,6 @@ import {
 	getCurrentUser,
 	type userSelectProps,
 } from "@cap/database/auth/session";
-import { decrypt } from "@cap/database/crypto";
 import {
 	developerApiKeys,
 	developerAppDomains,
@@ -16,7 +15,8 @@ import {
 } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { and, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
-import { cookies } from "next/headers";
+import type { Metadata } from "next";
+import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import {
@@ -30,7 +30,9 @@ import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
 import {
 	INFRA_APP_COOKIE,
 	INFRA_BASE_PATH,
+	INFRA_PATH_HEADER,
 	infraAppPath,
+	infraLoginReturnPath,
 	selectInfraApp,
 } from "@/lib/infra-routes";
 import type { InfraStorageSnapshot } from "@/lib/infra-usage";
@@ -44,9 +46,7 @@ import {
 export type DeveloperApiKey = Pick<
 	typeof developerApiKeys.$inferSelect,
 	"id" | "keyType" | "keyPrefix" | "createdAt" | "revokedAt"
-> & {
-	fullKey?: string;
-};
+>;
 
 export type DeveloperApp = typeof developerApps.$inferSelect & {
 	domains: (typeof developerAppDomains.$inferSelect)[];
@@ -92,7 +92,6 @@ export async function getDeveloperApps(
 					appId: developerApiKeys.appId,
 					keyType: developerApiKeys.keyType,
 					keyPrefix: developerApiKeys.keyPrefix,
-					encryptedKey: developerApiKeys.encryptedKey,
 					createdAt: developerApiKeys.createdAt,
 					revokedAt: developerApiKeys.revokedAt,
 				})
@@ -122,17 +121,6 @@ export async function getDeveloperApps(
 				.groupBy(developerVideos.appId),
 		]);
 
-	const decryptedPublicKeys = new Map<string, string>();
-	for (const k of allApiKeys) {
-		if (k.keyType === "public" && k.encryptedKey) {
-			try {
-				decryptedPublicKeys.set(k.id, await decrypt(k.encryptedKey));
-			} catch {
-				decryptedPublicKeys.set(k.id, `${k.keyPrefix}...`);
-			}
-		}
-	}
-
 	const domainsByApp = new Map<string, (typeof allDomains)[number][]>();
 	for (const d of allDomains) {
 		const list = domainsByApp.get(d.appId) ?? [];
@@ -159,10 +147,6 @@ export async function getDeveloperApps(
 			keyPrefix: k.keyPrefix,
 			createdAt: k.createdAt,
 			revokedAt: k.revokedAt,
-			fullKey:
-				k.keyType === "public"
-					? (decryptedPublicKeys.get(k.id) ?? `${k.keyPrefix}...`)
-					: undefined,
 		})),
 		creditAccount: accountsByApp.get(app.id) ?? null,
 		videoCount: countsByApp.get(app.id) ?? 0,
@@ -239,24 +223,23 @@ async function findDeveloperAppVideo(appId: string, videoId: string) {
 // Reading a video through the API restarts encoding that stalled or is due a
 // retry. A customer who only uses the console has no other read, so opening
 // the video's page does the same.
-export async function getDeveloperAppVideo(
-	appId: string,
-	videoId: string,
-): Promise<InfraVideoDetail | null> {
-	let row = await findDeveloperAppVideo(appId, videoId);
-	if (!row) return null;
-	if (
-		developerVideoRedrive({ ...row, deletedAt: null }, Date.now()) &&
-		(await redriveDeveloperVideoProcessing(videoId))
-	) {
-		row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
-	}
-	return toInfraVideoDetail(
-		{ ...row, legacy: row.playbackId === null && row.processing === null },
-		developerVideoPlaybackUrls(row),
-		row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
-	);
-}
+export const getDeveloperAppVideo = cache(
+	async (appId: string, videoId: string): Promise<InfraVideoDetail | null> => {
+		let row = await findDeveloperAppVideo(appId, videoId);
+		if (!row) return null;
+		if (
+			developerVideoRedrive({ ...row, deletedAt: null }, Date.now()) &&
+			(await redriveDeveloperVideoProcessing(videoId))
+		) {
+			row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
+		}
+		return toInfraVideoDetail(
+			{ ...row, legacy: row.playbackId === null && row.processing === null },
+			developerVideoPlaybackUrls(row),
+			row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
+		);
+	},
+);
 
 export async function getDeveloperTransactions(accountId: string, limit = 50) {
 	return db()
@@ -271,9 +254,21 @@ const getInfraAppsForUser = cache((userId: (typeof userSelectProps)["id"]) =>
 	getDeveloperApps({ id: userId }),
 );
 
+export type InfraAccess = "signed_out" | "outside_preview" | "allowed";
+
+export async function getInfraAccess(): Promise<InfraAccess> {
+	const user = await getCurrentUser();
+	if (!user) return "signed_out";
+	return canUseInfra(user.email) ? "allowed" : "outside_preview";
+}
+
 async function requireInfraUser(returnTo: string = INFRA_BASE_PATH) {
 	const user = await getCurrentUser();
-	if (!user) redirect(`/login?next=${encodeURIComponent(returnTo)}`);
+	if (!user) {
+		const requested = (await headers()).get(INFRA_PATH_HEADER);
+		const next = infraLoginReturnPath(requested, returnTo);
+		redirect(`/login?next=${encodeURIComponent(next)}`);
+	}
 	if (!canUseInfra(user.email)) notFound();
 	return user;
 }
@@ -327,6 +322,22 @@ export async function requireInfraApp(appId: string) {
 	if (!app) notFound();
 	return { app, apps };
 }
+
+// A page title is only sent once the app is known to exist for this viewer.
+// Anyone else gets the layouts' titles, so a missing app or an account outside
+// the preview never sees a section name in the tab.
+export const infraPageMetadata =
+	(title: string) =>
+	async ({
+		params,
+	}: {
+		params: Promise<{ appId: string }>;
+	}): Promise<Metadata> => {
+		if ((await getInfraAccess()) === "signed_out") return {};
+		const { appId } = await params;
+		await requireInfraApp(appId);
+		return { title: `${title} | Cap Infra` };
+	};
 
 export function toInfraAppSummary(app: DeveloperApp): InfraAppSummary {
 	return {

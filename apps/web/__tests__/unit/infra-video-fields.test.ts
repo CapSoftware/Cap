@@ -35,7 +35,6 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => mocks.user,
 }));
-vi.mock("@cap/database/crypto", () => ({ decrypt: async () => "cpk_test" }));
 vi.mock("@cap/utils", () => ({ userIsPro: () => false }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({
@@ -47,7 +46,10 @@ vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
 }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => null }) }));
+vi.mock("next/headers", () => ({
+	cookies: async () => ({ get: () => null }),
+	headers: async () => ({ get: () => null }),
+}));
 vi.mock("next/navigation", () => ({
 	redirect: (path: string) => {
 		throw new Error(`redirect:${path}`);
