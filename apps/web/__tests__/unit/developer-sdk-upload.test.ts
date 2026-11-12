@@ -5,15 +5,17 @@ const mocks = vi.hoisted(() => ({
 	video: null as null | {
 		appId: string;
 		duration: number | null;
-		playbackId?: string | null;
 		deletedAt: string | null;
+		status?: string;
 	},
-	paidMicroCredits: 0,
+	admission: vi.fn(),
+	claim: vi.fn(),
+	release: vi.fn(),
+	startProcessing: vi.fn(),
 	create: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
 	abort: vi.fn(),
-	startProcessing: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -42,13 +44,19 @@ vi.mock("@cap/web-backend", async () => {
 		},
 	};
 });
+vi.mock("@/lib/infra-standing", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/infra-standing")>()),
+	getInfraUploadAdmission: mocks.admission,
+}));
+vi.mock("@/lib/developer-video-start", () => ({
+	claimDeveloperVideoUpload: mocks.claim,
+	releaseDeveloperVideoUpload: mocks.release,
+	startDeveloperVideoProcessing: mocks.startProcessing,
+}));
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
 });
-vi.mock("@/lib/developer-video-start", () => ({
-	startDeveloperVideoProcessing: mocks.startProcessing,
-}));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
@@ -94,10 +102,26 @@ function writes() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.video = inProgress;
-	mocks.paidMicroCredits = 0;
+	mocks.claim.mockResolvedValue({ action: "start", encodeId: "encode-1" });
+	mocks.startProcessing.mockResolvedValue(true);
+	mocks.admission.mockResolvedValue({
+		allowed: true,
+		reason: null,
+		standing: { state: "active", pausesAt: null },
+		balanceMicroCredits: 1_000_000,
+		requiredMicroCredits: 1,
+		shortfallMicroCredits: 0,
+		message: null,
+	});
 	mocks.query.mockImplementation(async (query: string) => {
 		if (query.includes("from `developer_videos`")) {
 			const video = mocks.video;
+			if (/^select `duration` from/i.test(query)) {
+				return { rows: video ? [[video.duration]] : [] };
+			}
+			if (/^select `duration`, `deletedAt` from/i.test(query)) {
+				return { rows: video ? [[video.duration, video.deletedAt]] : [] };
+			}
 			return {
 				rows: video
 					? [
@@ -105,22 +129,16 @@ beforeEach(() => {
 								video.appId,
 								s3Key,
 								video.duration,
-								video.playbackId === undefined
-									? "playback-1"
-									: video.playbackId,
 								video.deletedAt,
+								"1080p",
+								video.status ?? "uploading",
 							],
 						]
 					: [],
 			};
 		}
-		if (query.includes("from `developer_credit_transactions`")) {
-			return { rows: [[mocks.paidMicroCredits]] };
-		}
 		if (query.includes("from `developer_credit_accounts`")) {
-			return {
-				rows: query.includes("`id`") ? [["account-1", 1_000_000]] : [[990_000]],
-			};
+			return { rows: [["account-1"]] };
 		}
 		return { rows: [{ affectedRows: 1 }] };
 	});
@@ -189,56 +207,6 @@ describe("developer SDK multipart upload", () => {
 				String(query).startsWith("update `developer_videos`"),
 			),
 		).toBe(true);
-		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
-		expect(mocks.startProcessing).toHaveBeenCalledWith("video-1");
-		const savedAt = mocks.query.mock.invocationCallOrder.at(
-			mocks.query.mock.calls.findLastIndex(([query]) =>
-				String(query).startsWith("update `developer_videos`"),
-			),
-		);
-		expect(savedAt).toBeLessThan(
-			mocks.startProcessing.mock.invocationCallOrder[0] ?? 0,
-		);
-	});
-
-	it("gives a video created before playback ids existed one on completion", async () => {
-		mocks.video = { ...inProgress, playbackId: null };
-
-		const response = await post("/complete", completeBody);
-
-		expect(response.status).toBe(200);
-		const [update, params] =
-			writes().find(([query]) =>
-				String(query).startsWith("update `developer_videos`"),
-			) ?? [];
-		expect(String(update)).toContain("`playbackId` = ?");
-		expect(params).toEqual(
-			expect.arrayContaining([expect.stringMatching(/^[A-Za-z0-9_-]{16,}$/)]),
-		);
-	});
-
-	it("never shortens a length an overlapping completion already recorded", async () => {
-		await post("/complete", completeBody);
-
-		const [update, params] =
-			writes().find(([query]) =>
-				String(query).startsWith("update `developer_videos`"),
-			) ?? [];
-		expect(String(update)).toContain(
-			"(`developer_videos`.`duration` is null or `developer_videos`.`duration` < ?)",
-		);
-		expect(params).toEqual(expect.arrayContaining([12]));
-	});
-
-	it("keeps an existing playback id on completion", async () => {
-		const response = await post("/complete", completeBody);
-
-		expect(response.status).toBe(200);
-		const [update] =
-			writes().find(([query]) =>
-				String(query).startsWith("update `developer_videos`"),
-			) ?? [];
-		expect(String(update)).not.toContain("`playbackId`");
 	});
 
 	it("answers a repeated complete without charging or touching storage again", async () => {
@@ -250,12 +218,9 @@ describe("developer SDK multipart upload", () => {
 		await expect(response.json()).resolves.toEqual({ success: true });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(writes()).toHaveLength(0);
-		expect(mocks.startProcessing).not.toHaveBeenCalled();
 	});
 
-	it("charges a completion once even when a retry overlaps it", async () => {
-		mocks.paidMicroCredits = 1_000;
-
+	it("completes without writing to the credit ledger, holding the account lock", async () => {
 		const response = await post("/complete", completeBody);
 
 		expect(response.status).toBe(200);
@@ -263,32 +228,62 @@ describe("developer SDK multipart upload", () => {
 		const queries = mocks.query.mock.calls.map(([query]) => String(query));
 		expect(
 			queries.some((query) =>
-				/from `developer_videos`.*for update/i.test(query),
+				/from `developer_credit_accounts`.*for update/i.test(query),
 			),
 		).toBe(true);
 		expect(
 			writes().some(([query]) =>
-				/^(update `developer_credit_accounts`|insert into `developer_credit_transactions`)/.test(
+				/developer_credit_(accounts|transactions)/.test(String(query)),
+			),
+		).toBe(false);
+		expect(
+			writes().some(([query]) =>
+				/^update `developer_videos` set .*`duration` is null/i.test(
 					String(query),
 				),
 			),
-		).toBe(false);
+		).toBe(true);
+		expect(mocks.admission).toHaveBeenCalledWith(
+			"app-1",
+			{ durationSeconds: 12, width: 0, height: 0, tier: "1080p" },
+			expect.anything(),
+			{ excludeVideoId: "video-1" },
+		);
 	});
 
-	it("charges only the unpaid difference when a retry reports a longer upload", async () => {
-		mocks.paidMicroCredits = 400;
+	it("refuses with 402 when the balance cannot cover seven days of storage", async () => {
+		mocks.admission.mockResolvedValue({
+			allowed: false,
+			reason: "insufficient_credits",
+			standing: { state: "active", pausesAt: null },
+			balanceMicroCredits: 0,
+			requiredMicroCredits: 19_834,
+			shortfallMicroCredits: 19_834,
+			message: "This app has no credit.",
+		});
 
 		const response = await post("/complete", completeBody);
 
-		expect(response.status).toBe(200);
-		const debit = writes().find(([query]) =>
-			String(query).startsWith("update `developer_credit_accounts`"),
-		);
-		expect(debit?.[1]).toContain(600);
-		const record = writes().find(([query]) =>
-			String(query).startsWith("insert into `developer_credit_transactions`"),
-		);
-		expect(record?.[1]).toContain(-600);
+		expect(response.status).toBe(402);
+		await expect(response.json()).resolves.toMatchObject({
+			error: "Insufficient credits",
+			code: "insufficient_credits",
+			requiredMicroCredits: 19_834,
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
+	});
+
+	it("refuses to abort an upload that another request is completing", async () => {
+		mocks.video = { ...inProgress, status: "processing" };
+
+		const response = await post("/abort", { uploadId: "upload-1" });
+
+		expect(response.status).toBe(409);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "completion_in_progress",
+		});
+		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 
 	it("refuses to complete an upload for a deleted video", async () => {

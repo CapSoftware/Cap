@@ -615,6 +615,10 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 											Db.developerCreditAccounts.autoTopUpThresholdMicroCredits,
 										autoTopUpAmountCents:
 											Db.developerCreditAccounts.autoTopUpAmountCents,
+										cardSaved:
+											sql<number>`${Db.developerCreditAccounts.stripePaymentMethodId} IS NOT NULL`.mapWith(
+												Boolean,
+											),
 									})
 									.from(Db.developerCreditAccounts)
 									.where(eq(Db.developerCreditAccounts.appId, appId))
