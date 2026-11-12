@@ -31,6 +31,12 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@cap/database/crypto", () => ({
+	encrypt: async (value: string) => `encrypted:${value}`,
+}));
+vi.mock("@/lib/developer-key-hash", () => ({
+	hashKey: async (value: string) => `hash:${value}`,
+}));
 
 const actions: [string, () => Promise<unknown>][] = [
 	[
@@ -134,6 +140,7 @@ describe("Cap Infra console actions and the preview list", () => {
 			);
 
 			expect(outcome).not.toBe("Unauthorized");
+			expect(mocks.touched.length).toBeGreaterThan(0);
 		},
 	);
 });
