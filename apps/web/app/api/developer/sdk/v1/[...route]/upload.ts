@@ -1,22 +1,20 @@
 import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
-import {
-	developerCreditAccounts,
-	developerCreditTransactions,
-	developerVideos,
-} from "@cap/database/schema";
+import { developerVideos } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
-import { UPLOAD_MICRO_CREDITS_PER_MINUTE } from "@/lib/developer-pricing";
+import {
+	chargeDeveloperVideoUpload,
+	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
+} from "@/lib/developer-video-charge";
 import { startDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
-const MAX_DURATION_SECS = 4 * 60 * 60;
+const MAX_DURATION_SECS = DEVELOPER_VIDEO_MAX_DURATION_SECONDS;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
 const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
@@ -245,102 +243,17 @@ app.post(
 				Math.max(plausibleDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
 			);
-			const durationMinutes = billingDuration / 60;
-			const microCreditsToDebit = Math.floor(
-				durationMinutes * UPLOAD_MICRO_CREDITS_PER_MINUTE,
-			);
-
-			if (microCreditsToDebit > 0) {
-				const debited = await db().transaction(async (tx) => {
-					await tx
-						.select({ id: developerVideos.id })
-						.from(developerVideos)
-						.where(eq(developerVideos.id, videoId))
-						.for("update");
-
-					const [account] = await tx
-						.select({
-							id: developerCreditAccounts.id,
-							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-						})
-						.from(developerCreditAccounts)
-						.where(eq(developerCreditAccounts.appId, appId))
-						.limit(1);
-
-					if (!account) return null;
-
-					const [paid] = await tx
-						.select({
-							total: sql<number>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
-						})
-						.from(developerCreditTransactions)
-						.where(
-							and(
-								eq(developerCreditTransactions.accountId, account.id),
-								eq(developerCreditTransactions.referenceId, videoId),
-								eq(
-									developerCreditTransactions.referenceType,
-									"developer_video",
-								),
-								eq(developerCreditTransactions.type, "video_create"),
-							),
-						);
-
-					const remainingMicroCredits =
-						microCreditsToDebit - Number(paid?.total ?? 0);
-					if (remainingMicroCredits <= 0) return true;
-
-					const [result] = await tx
-						.update(developerCreditAccounts)
-						.set({
-							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${remainingMicroCredits}`,
-						})
-						.where(
-							and(
-								eq(developerCreditAccounts.id, account.id),
-								sql`${developerCreditAccounts.balanceMicroCredits} >= ${remainingMicroCredits}`,
-							),
-						);
-
-					const affectedRows =
-						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
-					if (affectedRows === 0) {
-						return false;
-					}
-
-					const [updated] = await tx
-						.select({
-							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-						})
-						.from(developerCreditAccounts)
-						.where(eq(developerCreditAccounts.id, account.id))
-						.limit(1);
-
-					if (!updated) return false;
-
-					await tx.insert(developerCreditTransactions).values({
-						id: nanoId(),
-						accountId: account.id,
-						type: "video_create",
-						amountMicroCredits: -remainingMicroCredits,
-						balanceAfterMicroCredits: updated.balanceMicroCredits,
-						referenceId: videoId,
-						referenceType: "developer_video",
-						metadata: {
-							durationSeconds: billingDuration,
-							totalBytes,
-						},
-					});
-
-					return true;
-				});
-
-				if (debited === null) {
-					return c.json({ error: "Credit account not found" }, 402);
-				}
-				if (!debited) {
-					return c.json({ error: "Insufficient credits" }, 402);
-				}
+			const charged = await chargeDeveloperVideoUpload({
+				appId,
+				videoId,
+				durationSeconds: billingDuration,
+				metadata: { durationSeconds: billingDuration, totalBytes },
+			});
+			if (charged === "no-account") {
+				return c.json({ error: "Credit account not found" }, 402);
+			}
+			if (charged === "insufficient") {
+				return c.json({ error: "Insufficient credits" }, 402);
 			}
 
 			await Effect.gen(function* () {
