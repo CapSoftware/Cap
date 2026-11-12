@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	readMediaServerVideoJob,
 	startMediaServerVideoJob,
 	tryProbeVideoViaMediaServer,
 } from "@/lib/media-client";
@@ -100,6 +101,128 @@ describe("startMediaServerVideoJob", () => {
 		expect(await startMediaServerVideoJob("/video/process", {})).toEqual({
 			status: "unconfirmed",
 		});
+	});
+});
+
+describe("readMediaServerVideoJob", () => {
+	const job = (phase: string, extra: Record<string, unknown> = {}) => ({
+		jobId: "job-1",
+		videoId: "video-1",
+		phase,
+		progress: 40,
+		...extra,
+	});
+
+	it("asks for the job by id with the shared secret", async () => {
+		mockFetch.mockResolvedValue(json(job("processing")));
+
+		await readMediaServerVideoJob("job 1/x", "video-1");
+
+		const [url, init] = mockFetch.mock.calls[0] ?? [];
+		expect(url).toBe("http://media.example/video/process/job%201%2Fx/status");
+		expect(init.headers).toMatchObject({
+			"x-media-server-secret": "test-secret",
+		});
+		expect(init.method).toBeUndefined();
+	});
+
+	it.each([
+		"queued",
+		"downloading",
+		"probing",
+		"processing",
+		"uploading",
+		"generating_thumbnail",
+	])("reports a job in the %s phase as running", async (phase) => {
+		mockFetch.mockResolvedValue(json(job(phase)));
+
+		expect(await readMediaServerVideoJob("job-1", "video-1")).toEqual({
+			status: "running",
+		});
+	});
+
+	it.each(["complete", "error", "cancelled"])(
+		"returns the whole report of a job that ended as %s",
+		async (phase) => {
+			const report = job(phase, {
+				ladder: { renditions: [] },
+				message: "done",
+			});
+			mockFetch.mockResolvedValue(json(report));
+
+			expect(await readMediaServerVideoJob("job-1", "video-1")).toEqual({
+				status: "finished",
+				progress: report,
+			});
+		},
+	);
+
+	it("reports a job the media server no longer knows as missing", async () => {
+		mockFetch.mockResolvedValue(
+			json({ error: "Job not found", code: "NOT_FOUND" }, 404),
+		);
+
+		expect(await readMediaServerVideoJob("job-1", "video-1")).toEqual({
+			status: "missing",
+		});
+	});
+
+	it.each([
+		{
+			name: "a 404 that did not come from the media server",
+			setup: () =>
+				mockFetch.mockResolvedValue(
+					new Response("Application not found", { status: 404 }),
+				),
+		},
+		{
+			name: "a 404 without the not found code",
+			setup: () => mockFetch.mockResolvedValue(json({ error: "nope" }, 404)),
+		},
+		{ name: "a 500", setup: () => mockFetch.mockResolvedValue(json({}, 500)) },
+		{ name: "a 503", setup: () => mockFetch.mockResolvedValue(json({}, 503)) },
+		{
+			name: "a 401",
+			setup: () =>
+				mockFetch.mockResolvedValue(json({ error: "Unauthorized" }, 401)),
+		},
+		{
+			name: "a network failure",
+			setup: () => mockFetch.mockRejectedValue(networkError("ECONNREFUSED")),
+		},
+		{
+			name: "a timeout",
+			setup: () =>
+				mockFetch.mockRejectedValue(new DOMException("", "TimeoutError")),
+		},
+		{
+			name: "another job's report",
+			setup: () =>
+				mockFetch.mockResolvedValue(
+					json({ ...job("complete"), jobId: "job-2" }),
+				),
+		},
+		{
+			name: "another video's report",
+			setup: () =>
+				mockFetch.mockResolvedValue(
+					json({ ...job("complete"), videoId: "video-2" }),
+				),
+		},
+		{
+			name: "a report without a phase",
+			setup: () =>
+				mockFetch.mockResolvedValue(
+					json({ jobId: "job-1", videoId: "video-1" }),
+				),
+		},
+	])("cannot tell what happened to the job after $name", async ({ setup }) => {
+		setup();
+
+		expect(await readMediaServerVideoJob("job-1", "video-1")).toEqual({
+			status: "unreachable",
+		});
+		expect(mockFetch).toHaveBeenCalledTimes(1);
 	});
 });
 
