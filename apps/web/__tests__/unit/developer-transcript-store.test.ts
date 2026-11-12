@@ -528,18 +528,22 @@ describe("creating a transcript from a URL", () => {
 			idempotencyKey: "race-key-0001",
 		};
 		const racing = async (loser: Record<string, unknown>) => {
-			let winner: Awaited<ReturnType<typeof createTranscriptFromUrl>> | null =
-				null;
+			const winners: Awaited<ReturnType<typeof createTranscriptFromUrl>>[] = [];
 			const lost = await createTranscriptFromUrl(
 				"app-1",
 				{ ...original, ...loser },
 				{
 					isBlocked: async (url) => {
-						winner ??= await createTranscriptFromUrl("app-1", original, guards);
+						if (winners.length === 0) {
+							winners.push(
+								await createTranscriptFromUrl("app-1", original, guards),
+							);
+						}
 						return guards.isBlocked(url);
 					},
 				},
 			);
+			const [winner] = winners;
 			if (!winner) throw new Error("The winner never ran");
 			return { winner, lost };
 		};
