@@ -102,6 +102,7 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 import {
 	developerApps,
 	developerCreditAccounts,
+	developerCreditTransactions,
 	developerTranscripts,
 	users,
 } from "@cap/database/schema";
@@ -291,6 +292,80 @@ describe("creating a transcript from a URL", () => {
 		});
 		expect(transcripts()).toHaveLength(0);
 		expect(context.start).not.toHaveBeenCalled();
+	});
+
+	it("says how much to add below the minimum balance", async () => {
+		setBalance(400);
+		expect(await fromUrl()).toMatchObject({
+			ok: false,
+			status: 402,
+			code: "insufficient_credits",
+			message:
+				"Starting a transcript needs $0.01 of available credit. Add at least $0.01.",
+		});
+	});
+
+	it("answers 402 with the amount to add when the app is not in good standing", async () => {
+		const SHORT_SINCE = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		setBalance(2_500);
+		fake().seed(developerCreditTransactions, {
+			id: "charge-1",
+			accountId: "account-1",
+			type: "storage_daily",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "2026-11-10",
+			referenceType: "storage_day",
+			metadata: {
+				snapshotDate: "2026-11-10",
+				owedMicroCredits: 4_000,
+				chargedMicroCredits: 0,
+				shortSince: SHORT_SINCE,
+			},
+		});
+
+		const result = await fromUrl();
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 402,
+			code: "out_of_credit",
+			message:
+				"This app is out of credit, so new transcripts are blocked. Add at least $0.02 to start transcripts again.",
+		});
+		expect(transcripts()).toHaveLength(0);
+		expect(context.start).not.toHaveBeenCalled();
+
+		setBalance(4_000);
+		expect((await fromUrl()).ok).toBe(true);
+	});
+
+	it("still refuses an app whose grace period has run out", async () => {
+		const SHORT_SINCE = new Date(
+			Date.now() - 8 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		setBalance(3_999);
+		fake().seed(developerCreditTransactions, {
+			id: "charge-1",
+			accountId: "account-1",
+			type: "storage_daily",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "2026-11-10",
+			referenceType: "storage_day",
+			metadata: {
+				snapshotDate: "2026-11-10",
+				owedMicroCredits: 4_000,
+				chargedMicroCredits: 0,
+				shortSince: SHORT_SINCE,
+			},
+		});
+
+		expect(await fromUrl()).toMatchObject({
+			ok: false,
+			status: 402,
+			code: "out_of_credit",
+		});
 	});
 
 	it("answers 402 when running transcripts already hold the balance", async () => {

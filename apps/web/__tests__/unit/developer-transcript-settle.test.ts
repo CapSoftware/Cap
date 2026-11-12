@@ -57,6 +57,7 @@ import {
 	hasMinimumTranscriptBalance,
 	reserveTranscriptCredits,
 	settleTranscript,
+	transcriptStartRefusal,
 } from "@/lib/developer-transcript-billing";
 
 const ONE_HOUR = 3600;
@@ -525,5 +526,24 @@ describe("minimum balance to start", () => {
 	it("refuses an app without a credit account", async () => {
 		fake().rows(developerCreditAccounts).length = 0;
 		expect(await hasMinimumTranscriptBalance("app-1")).toBe(false);
+		expect(await transcriptStartRefusal("app-1")).toMatchObject({
+			code: "insufficient_credits",
+			shortfallMicroCredits: 1_000,
+		});
+	});
+
+	it("reports the shortfall after holds", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 10_500;
+		await reserveTranscriptCredits({
+			transcriptId: "tr-1",
+			durationSeconds: ONE_HOUR,
+		});
+		expect(await transcriptStartRefusal("app-1")).toEqual({
+			code: "insufficient_credits",
+			message:
+				"Starting a transcript needs $0.01 of available credit. Add at least $0.01.",
+			shortfallMicroCredits: 500,
+		});
 	});
 });

@@ -9,7 +9,7 @@ import {
 } from "@cap/database/schema";
 import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { start } from "workflow/api";
-import { hasMinimumTranscriptBalance } from "@/lib/developer-transcript-billing";
+import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
 	parseTranscriptLanguage,
@@ -54,12 +54,8 @@ const fail = (
 	hint: string,
 ): TranscriptFailure => ({ ok: false, status, code, message, hint });
 
-const INSUFFICIENT_CREDITS = fail(
-	402,
-	"insufficient_credits",
-	"Insufficient credits",
-	"Add credits to this app at https://cap.so/dashboard/infra, then retry.",
-);
+const ADD_CREDITS_HINT =
+	"Add credits to this app at https://cap.so/dashboard/infra, then retry.";
 
 const NOT_FOUND = fail(
 	404,
@@ -306,8 +302,10 @@ async function appOwnerCanUseInfra(appId: string) {
 async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	if (!(await appOwnerCanUseInfra(appId))) return NOT_AVAILABLE;
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
-	if (!(await hasMinimumTranscriptBalance(appId))) return INSUFFICIENT_CREDITS;
-	return null;
+	const refusal = await transcriptStartRefusal(appId);
+	return refusal
+		? fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT)
+		: null;
 }
 
 export async function createTranscriptFromUrl(

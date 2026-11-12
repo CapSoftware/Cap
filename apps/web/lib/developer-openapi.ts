@@ -1063,7 +1063,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			PaymentRequired: json(
 				ref("Error"),
-				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits.",
+				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits. For transcripts the code is out_of_credit when the app is not in good standing and insufficient_credits when the available balance is under the minimum, and the message says how much to add.",
 			),
 			Forbidden: json(
 				ref("Error"),

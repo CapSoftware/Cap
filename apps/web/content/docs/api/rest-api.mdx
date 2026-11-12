@@ -85,7 +85,7 @@ Standard HTTP status codes are used:
 | `200` | Success |
 | `400` | Bad request -- missing or invalid parameters |
 | `401` | Unauthorized -- invalid, missing, or revoked API key |
-| `402` | Payment required -- the app is out of credit, or its balance does not cover 7 days of storage |
+| `402` | Payment required -- the app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
 | `403` | Forbidden -- origin not allowed (SDK API in production) |
 | `404` | Not found -- the requested resource does not exist |
 | `429` | Too many requests -- more than 60 per minute for this key; wait for `Retry-After` seconds |
@@ -299,6 +299,16 @@ Send an audio or video file and get text back. Transcription costs $0.10 per aud
 
 A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](#get-transcript) every few seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
 
+Creating or starting a transcript can be refused. The response carries a `code` and a `message`:
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| `402` | `out_of_credit` | The app is in `grace` or `paused` because a daily storage charge could not be paid. The message says how much to add |
+| `402` | `insufficient_credits` | The available balance is under $0.01. The message says how much to add |
+| `409` | `idempotency_conflict` | The `Idempotency-Key` was already used for a different request, or for a transcript that was deleted |
+| `409` | `upload_not_found` | The file has not been uploaded yet |
+| `503` | `speech_unavailable` | Transcription is temporarily unavailable. Retry later |
+
 #### Transcribe a URL
 
 ```
@@ -456,10 +466,10 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 #### Transcript billing
 
 - The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio length itself and bills it to the nearest second, with a minimum of one second. A length sent by the client is never used.
-- Creating or starting a transcript needs an available balance of at least 1,000 micro-credits ($0.01). Below that the API answers `402`.
+- Creating or starting a transcript needs an app in good standing and an available balance of at least 1,000 micro-credits ($0.01). Otherwise the API answers `402`, with `code` set to `out_of_credit` when the app is in `grace` or `paused` and `insufficient_credits` when the balance is under the minimum. The `message` says how much to add.
 - Credits are taken once, when the transcript completes. Failed and deleted transcripts cost nothing, and a transcript that is retried internally is never charged twice.
 - While a transcript runs, Cap holds its cost against your balance without charging it. The available balance is your balance minus those holds. If the available balance cannot cover a transcript once its length is known, it ends with `insufficient_credits` before any transcription happens and nothing is charged.
-- If other usage, such as video uploads or storage, drains the balance while a transcript is running and it can no longer be paid for in full, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
+- Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
 - Cap deletes the source file once the transcript finishes. The text and timings are kept until you delete the transcript.
 
 ### Get Usage
