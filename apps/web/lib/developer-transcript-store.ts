@@ -378,17 +378,22 @@ export async function createTranscriptFromUrl(
 		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
 		: nanoId();
 
+	const differsFromRequest = (existing: TranscriptRow) => {
+		if (existing.sourceType !== "url") return IDEMPOTENCY_CONFLICT;
+		if (existing.sourceUrl !== url) return idempotencyMismatch("url");
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? transcriptNameFromUrl(url),
+		});
+		if (different) return idempotencyMismatch(different);
+		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
+	};
+
 	if (input.idempotencyKey) {
 		const existing = await findTranscriptAnyState(appId, id);
 		if (existing) {
-			if (existing.sourceType !== "url") return IDEMPOTENCY_CONFLICT;
-			if (existing.sourceUrl !== url) return idempotencyMismatch("url");
-			const different = replayedWithDifferent(existing, {
-				...options,
-				name: options.name ?? transcriptNameFromUrl(url),
-			});
-			if (different) return idempotencyMismatch(different);
-			if (existing.deletedAt) return IDEMPOTENCY_KEY_RETIRED;
+			const conflict = differsFromRequest(existing);
+			if (conflict) return conflict;
 			if (existing.status === "queued") {
 				await dispatchTranscript(id, "queued");
 			}
@@ -433,6 +438,11 @@ export async function createTranscriptFromUrl(
 		})
 		.onDuplicateKeyUpdate({ set: { id } });
 
+	const stored = await findTranscriptAnyState(appId, id);
+	if (!stored) return NOT_FOUND;
+	const conflict = differsFromRequest(stored);
+	if (conflict) return conflict;
+
 	const dispatched = await dispatchTranscript(id, "queued");
 	if (dispatched === "failed") {
 		await db()
@@ -450,9 +460,6 @@ export async function createTranscriptFromUrl(
 
 	const transcript = await findTranscript(appId, id);
 	if (!transcript) return NOT_FOUND;
-	if (transcript.sourceType !== "url" || transcript.sourceUrl !== url) {
-		return IDEMPOTENCY_CONFLICT;
-	}
 	return { ok: true, transcript };
 }
 

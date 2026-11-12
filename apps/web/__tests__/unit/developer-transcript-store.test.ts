@@ -518,6 +518,117 @@ describe("creating a transcript from a URL", () => {
 		expect(transcripts()).toHaveLength(1);
 	});
 
+	describe("two creates with one key that both miss the first lookup", () => {
+		const original = {
+			url: URL_A,
+			name: "Standup",
+			language: "en",
+			userId: "user-1",
+			metadata: { episode: 7 },
+			idempotencyKey: "race-key-0001",
+		};
+		const racing = async (loser: Record<string, unknown>) => {
+			let winner: Awaited<ReturnType<typeof createTranscriptFromUrl>> | null =
+				null;
+			const lost = await createTranscriptFromUrl(
+				"app-1",
+				{ ...original, ...loser },
+				{
+					isBlocked: async (url) => {
+						winner ??= await createTranscriptFromUrl("app-1", original, guards);
+						return guards.isBlocked(url);
+					},
+				},
+			);
+			if (!winner) throw new Error("The winner never ran");
+			return { winner, lost };
+		};
+
+		it.each([
+			["name", { name: "Renamed" }],
+			["language", { language: "de" }],
+			["userId", { userId: "user-2" }],
+			["metadata", { metadata: { episode: 8 } }],
+			["url", { url: URL_B }],
+		])("refuses the loser when its %s differs", async (field, change) => {
+			const { winner, lost } = await racing(change);
+
+			expect(winner).toMatchObject({ ok: true });
+			expect(lost).toMatchObject({
+				ok: false,
+				status: 409,
+				code: "idempotency_conflict",
+				message: `Idempotency key was already used with a different ${field}`,
+			});
+			expect(transcripts()).toHaveLength(1);
+			expect(transcripts()[0]).toMatchObject({
+				name: "Standup",
+				requestedLanguage: "en",
+				externalUserId: "user-1",
+				metadata: { episode: 7 },
+				sourceUrl: URL_A,
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("returns the winner's transcript to a loser that sent the same request", async () => {
+			const { winner, lost } = await racing({});
+
+			if (!winner.ok || !lost.ok) throw new Error("refused");
+			expect(lost.transcript.id).toBe(winner.transcript.id);
+			expect(transcripts()).toHaveLength(1);
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("refuses a loser whose winner was already deleted", async () => {
+			let done = false;
+			const lost = await createTranscriptFromUrl("app-1", original, {
+				isBlocked: async (url) => {
+					if (!done) {
+						done = true;
+						const first = await createTranscriptFromUrl(
+							"app-1",
+							original,
+							guards,
+						);
+						if (!first.ok) throw new Error("create failed");
+						await deleteTranscript("app-1", first.transcript.id);
+					}
+					return guards.isBlocked(url);
+				},
+			});
+
+			expect(lost).toMatchObject({
+				ok: false,
+				status: 409,
+				message: "Idempotency key belongs to a transcript that was deleted",
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+
+		it("lets exactly one of several different requests sent together through", async () => {
+			const results = await Promise.all(
+				["Alpha", "Beta", "Gamma", "Delta"].map((name) =>
+					createTranscriptFromUrl("app-1", { ...original, name }, guards),
+				),
+			);
+
+			const accepted = results.filter((result) => result.ok);
+			expect(accepted).toHaveLength(1);
+			for (const result of results) {
+				if (result.ok) continue;
+				expect(result).toMatchObject({
+					status: 409,
+					message: "Idempotency key was already used with a different name",
+				});
+			}
+			expect(transcripts()).toHaveLength(1);
+			const winner = accepted[0];
+			expect(winner?.ok && winner.transcript.name).toBe(transcripts()[0]?.name);
+			expect(context.start).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	it("names the URL when a key is reused for a different one", async () => {
 		await fromUrl(URL_A, "retry-key-0001");
 		expect(await fromUrl(URL_B, "retry-key-0001")).toMatchObject({
