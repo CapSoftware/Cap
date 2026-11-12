@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	beginPart,
 	createDeveloperVideoProcessingState,
+	DEVELOPER_VIDEO_PARTS,
 	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
@@ -121,21 +122,56 @@ describe("developer video processing state", () => {
 		expect(developerVideoStoredBytes(second)).toBe(30);
 	});
 
-	it("is ready only once both parts have finished", () => {
+	it("is ready as soon as the first output is finished", () => {
+		const mp4Done = complete("mp4", 300, running("hls", "h"));
+
+		expect(mp4Done.hls.state).toBe("running");
+		expect(resolveDeveloperVideoStatus(mp4Done, "processing")).toEqual({
+			status: "ready",
+			errorReason: null,
+		});
+
 		const hlsDone = complete("hls", 500);
 
 		expect(resolveDeveloperVideoStatus(hlsDone, "processing").status).toBe(
+			"ready",
+		);
+	});
+
+	it("is still processing while nothing can be played yet", () => {
+		const both = running("hls", "h", running("mp4", "m"));
+
+		expect(resolveDeveloperVideoStatus(both, "processing").status).toBe(
 			"processing",
 		);
+		expect(resolveDeveloperVideoStatus(fresh(), "processing").status).toBe(
+			"processing",
+		);
+	});
 
-		const bothDone = complete("mp4", 300, hlsDone);
+	it("stays ready and counts both outputs once the second one finishes", () => {
+		const bothDone = complete("mp4", 300, complete("hls", 500));
 
-		expect(resolveDeveloperVideoStatus(bothDone, "processing")).toEqual({
+		expect(resolveDeveloperVideoStatus(bothDone, "ready")).toEqual({
 			status: "ready",
 			errorReason: null,
 		});
 		expect(bothDone.hls).toEqual({ state: "complete", output: "t" });
 		expect(developerVideoStoredBytes(bothDone)).toBe(800);
+	});
+
+	it("stays ready when the second output fails after the first was playable", () => {
+		const mp4Done = complete("mp4", 300, running("hls", "h"));
+		const hlsFailed = failUnfinishedParts(mp4Done, "encoder crashed");
+
+		expect(hlsFailed.hls.state).toBe("failed");
+		expect(resolveDeveloperVideoStatus(hlsFailed, "ready").status).toBe(
+			"ready",
+		);
+	});
+
+	it("sends the MP4 to the encoder first", () => {
+		expect(DEVELOPER_VIDEO_PARTS).toEqual(["mp4", "hls"]);
 	});
 
 	it("retries a failed part once, then keeps the failure", () => {
@@ -347,6 +383,138 @@ describe("developer video redrive", () => {
 
 		expect(developerVideoRedrive(parked(now + 1), now)).toBeNull();
 		expect(developerVideoRedrive(parked(now), now)).toBe("retry-hls");
+	});
+
+	const lostPart = (hoursAgo: number) => ({
+		state: "running" as const,
+		token: "t",
+		jobId: "job-1",
+		startedAt: now - hoursAgo * 3_600_000,
+	});
+
+	it("retries adaptive streaming whose job was lost after the MP4 made the video ready", () => {
+		const encoding = (hoursAgo: number) =>
+			developerVideo({
+				status: "ready",
+				processing: processingState({
+					hls: lostPart(hoursAgo),
+					mp4: { state: "complete", output: "mp4-out" },
+				}),
+			});
+
+		expect(developerVideoRedrive(encoding(1), now)).toBeNull();
+		expect(developerVideoRedrive(encoding(7), now)).toBe("retry-hls");
+
+		const requeued = retryUnavailableHls(
+			encoding(7).processing ?? processingState(),
+			now,
+		);
+		expect(requeued?.hls).toEqual({ state: "pending" });
+		expect(requeued?.mp4).toEqual({ state: "complete", output: "mp4-out" });
+	});
+
+	it("retries an MP4 whose job was lost after adaptive streaming made the video ready", () => {
+		const encoding = (hoursAgo: number) =>
+			developerVideo({
+				status: "ready",
+				processing: processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: lostPart(hoursAgo),
+				}),
+			});
+
+		expect(developerVideoRedrive(encoding(1), now)).toBeNull();
+		expect(developerVideoRedrive(encoding(7), now)).toBe("retry-hls");
+
+		const requeued = retryUnavailableHls(
+			encoding(7).processing ?? processingState(),
+			now,
+		);
+		expect(requeued?.mp4).toEqual({ state: "pending" });
+		expect(requeued?.hls).toEqual({ state: "complete", output: "hls-out" });
+		expect(
+			retryUnavailableHls(encoding(1).processing ?? processingState(), now),
+		).toBeNull();
+	});
+
+	it("picks up an output left waiting on a ready video with no workflow", () => {
+		const waiting = (updatedAt: Date) =>
+			developerVideo({
+				status: "ready",
+				updatedAt,
+				processing: processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: { state: "pending" },
+				}),
+			});
+
+		expect(developerVideoRedrive(waiting(minutesAgo(1)), now)).toBeNull();
+		expect(developerVideoRedrive(waiting(minutesAgo(3)), now)).toBe(
+			"retry-hls",
+		);
+		const stuck = waiting(minutesAgo(3));
+		const requeued = retryUnavailableHls(
+			stuck.processing ?? processingState(),
+			now,
+		);
+		expect(requeued?.mp4).toEqual({ state: "pending" });
+		expect(requeued?.startedAt).toBe(now);
+	});
+
+	it("does not claim a waiting output again on the next read", () => {
+		const stuck = developerVideo({
+			status: "ready",
+			updatedAt: minutesAgo(30),
+			processing: processingState({
+				hls: { state: "complete", output: "hls-out" },
+				mp4: { state: "pending" },
+			}),
+		});
+		expect(developerVideoRedrive(stuck, now)).toBe("retry-hls");
+
+		const requeued = retryUnavailableHls(
+			stuck.processing ?? processingState(),
+			now,
+		);
+		const claimed = { ...stuck, processing: requeued };
+
+		expect(requeued).not.toEqual(stuck.processing);
+		expect(developerVideoRedrive(claimed, now + 1_000)).toBeNull();
+		expect(developerVideoRedrive(claimed, now + 119_000)).toBeNull();
+		expect(developerVideoRedrive(claimed, now + 121_000)).toBe("retry-hls");
+	});
+
+	it("does not requeue a fresh job while adaptive streaming is retried", () => {
+		const state = processingState({
+			hls: { state: "unavailable", reason: "not deployed", retryAt: now },
+			mp4: lostPart(1),
+		});
+
+		const requeued = retryUnavailableHls(state, now);
+
+		expect(requeued?.hls).toEqual({ state: "pending" });
+		expect(requeued?.mp4).toEqual(lostPart(1));
+	});
+
+	it("does not requeue outputs that finished or failed", () => {
+		expect(
+			retryUnavailableHls(
+				processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: { state: "complete", output: "mp4-out" },
+				}),
+				now,
+			),
+		).toBeNull();
+		expect(
+			retryUnavailableHls(
+				processingState({
+					hls: { state: "failed", reason: "bad file" },
+					mp4: { state: "complete", output: "mp4-out" },
+				}),
+				now,
+			),
+		).toBeNull();
 	});
 
 	it("leaves finished, errored and deleted videos alone", () => {
