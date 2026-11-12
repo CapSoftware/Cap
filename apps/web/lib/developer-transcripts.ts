@@ -255,6 +255,19 @@ export function buildTranscriptResult(input: {
 	};
 }
 
+export function transcriptWordCount(
+	result: Pick<TranscriptResultObject, "text" | "words">,
+) {
+	return result.words.length || result.text.split(/\s+/).filter(Boolean).length;
+}
+
+export function transcriptHasNoSpeech(row: {
+	status: string;
+	wordCount: number | null;
+}) {
+	return row.status === "complete" && row.wordCount === 0;
+}
+
 export function measuredTranscriptDuration(input: {
 	extractedAudioSeconds: number | null | undefined;
 	serviceDurationSeconds: number | null | undefined;

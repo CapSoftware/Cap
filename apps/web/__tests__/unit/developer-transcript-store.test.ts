@@ -841,6 +841,35 @@ describe("expiring stale transcripts", () => {
 	});
 });
 
+describe("a transcript that timed out", () => {
+	it("releases its hold and charges nothing", async () => {
+		setBalance(50_000);
+		const stuck = fake().seed(developerTranscripts, {
+			id: "stuck-held",
+			appId: "app-1",
+			status: "processing",
+			sourceType: "upload",
+			durationSeconds: 3_600,
+			reservedMicroCredits: 10_000,
+			queuedAt: new Date("2026-11-11T03:00:00Z"),
+			createdAt: new Date("2026-11-11T03:00:00Z"),
+			updatedAt: new Date("2026-11-11T03:00:00Z"),
+		});
+
+		await expireStaleTranscripts(new Date("2026-11-11T10:00:00Z"));
+
+		expect(stuck).toMatchObject({
+			status: "error",
+			errorCode: "timed_out",
+			reservedMicroCredits: 0,
+		});
+		expect(fake().rows(developerCreditTransactions)).toHaveLength(0);
+		expect(fake().rows(developerCreditAccounts)[0]?.balanceMicroCredits).toBe(
+			50_000,
+		);
+	});
+});
+
 describe("recovering a job that was claimed but never started", () => {
 	const minutesAgo = (minutes: number) =>
 		new Date(Date.now() - minutes * 60 * 1000);
