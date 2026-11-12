@@ -24,6 +24,15 @@ const mocks = vi.hoisted(() => ({
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
+	claim: vi.fn(),
+	release: vi.fn(),
+	startProcessing: vi.fn(),
+}));
+
+vi.mock("@/lib/developer-video-start", () => ({
+	claimDeveloperVideoUpload: mocks.claim,
+	releaseDeveloperVideoUpload: mocks.release,
+	startDeveloperVideoProcessing: mocks.startProcessing,
 }));
 
 vi.mock("@/lib/infra-standing", async (importOriginal) => ({
@@ -216,6 +225,8 @@ const complete = (body: {
 		}),
 	});
 
+const CLAIM = { action: "start", encodeId: "encode-1" };
+
 const admitted = {
 	allowed: true,
 	reason: null,
@@ -252,6 +263,18 @@ describe("developer SDK multipart completion", () => {
 		mocks.deletedAt = null;
 		mocks.admission.mockReset();
 		mocks.admission.mockResolvedValue(admitted);
+		mocks.claim.mockReset();
+		mocks.claim.mockImplementation(async () => {
+			mocks.events.push("claim");
+			return CLAIM;
+		});
+		mocks.release.mockReset();
+		mocks.release.mockResolvedValue(undefined);
+		mocks.startProcessing.mockReset();
+		mocks.startProcessing.mockImplementation(async () => {
+			mocks.events.push("hook");
+			return true;
+		});
 		mocks.complete.mockReset();
 		mocks.complete.mockImplementation(() => {
 			if (mocks.completeFailures > 0) {
@@ -300,13 +323,60 @@ describe("developer SDK multipart completion", () => {
 		expect(response.status).toBe(200);
 		expect(mocks.events).toEqual([
 			"admission",
+			"claim",
 			"complete",
 			"lock",
 			"admission",
 			"store",
+			"hook",
 		]);
 		expect(mocks.admission.mock.calls[0]).toHaveLength(2);
 		expect(mocks.admission.mock.calls[1]?.[2]).toBeDefined();
+	});
+
+	it("starts processing exactly once, with the claim, after the video is recorded", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
+		expect(mocks.startProcessing).toHaveBeenCalledWith("video-1", CLAIM);
+		expect(mocks.release).not.toHaveBeenCalled();
+	});
+
+	it("does not start processing for a repeated completion of a recorded video", async () => {
+		mocks.storedDuration = 60;
+
+		await complete({ durationInSecs: 60 });
+
+		expect(mocks.claim).not.toHaveBeenCalled();
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+	});
+
+	it("refuses a second completion while the first holds the claim, without touching the file", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		mocks.claim.mockResolvedValue(null);
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(409);
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+	});
+
+	it("releases the claim when storage fails to assemble the file", async () => {
+		mocks.completeFailures = 1;
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(500);
+		expect(mocks.release).toHaveBeenCalledWith("video-1", CLAIM);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+		errors.mockRestore();
 	});
 
 	it("removes the assembled file and says to upload again when a parallel upload took the allowance", async () => {
@@ -328,6 +398,8 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.complete).toHaveBeenCalledTimes(1);
 		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);
 		expect(mocks.deleteObject).toHaveBeenCalledWith(S3_KEY);
+		expect(mocks.release).toHaveBeenCalledWith("video-1", CLAIM);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
 		expect(mocks.videoUpdates).toEqual([]);
 		expect(mocks.storedDuration).toBe(null);
 	});
@@ -628,6 +700,12 @@ describe("removing files that were assembled but never recorded", () => {
 		mocks.headObject.mockReset();
 		mocks.admission.mockReset();
 		mocks.admission.mockResolvedValue(admitted);
+		mocks.claim.mockReset();
+		mocks.claim.mockResolvedValue(CLAIM);
+		mocks.release.mockReset();
+		mocks.release.mockResolvedValue(undefined);
+		mocks.startProcessing.mockReset();
+		mocks.startProcessing.mockResolvedValue(true);
 		mocks.listParts.mockReset();
 		mocks.listParts.mockImplementation(() =>
 			Effect.fail(new Error("no such upload")),
@@ -678,6 +756,8 @@ describe("removing files that were assembled but never recorded", () => {
 			code: "upload_removed",
 			error: expect.stringContaining("upload the file again"),
 		});
+		expect(mocks.release).toHaveBeenCalledWith("video-1", CLAIM);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
 		expect(mocks.storedDuration).toBe(null);
 		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
 		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);

@@ -252,6 +252,15 @@ describe("HLS ladder encode", () => {
 		expect(Math.abs(audioSeconds - videoSeconds)).toBeLessThan(0.5);
 	}, 180_000);
 
+	test("a slice leaves out the audio unless it asks for it", async () => {
+		const slice = await encodeHlsLadder(source, await probeVideoFile(source), {
+			range: { startSeconds: 16 },
+		});
+		ladders.push(slice);
+		expect(slice.result.audio).toBeNull();
+		expect(slice.files.map((file) => file.name)).not.toContain("audio.m4s");
+	}, 120_000);
+
 	test("slices line up when the source does not start at zero", async () => {
 		const offset = join(directory, "offset.mp4");
 		writeSource(offset, ["-output_ts_offset", "10"]);

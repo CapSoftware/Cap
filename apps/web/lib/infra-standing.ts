@@ -265,11 +265,15 @@ export async function getInfraBilling(
 	const [{ account, lastCharge, standing }, usage] = executor
 		? [
 				await appStanding(appId, now, executor),
-				await getAppStorageUsage(appId, newVideo, executor),
+				await getAppStorageUsage(appId, newVideo, executor, {
+					includeProcessing: true,
+				}),
 			]
 		: await Promise.all([
 				appStanding(appId, now),
-				getAppStorageUsage(appId, newVideo),
+				getAppStorageUsage(appId, newVideo, undefined, {
+					includeProcessing: true,
+				}),
 			]);
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,

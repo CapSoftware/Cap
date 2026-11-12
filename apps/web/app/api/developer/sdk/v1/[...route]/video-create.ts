@@ -1,3 +1,4 @@
+import { DEVELOPER_VIDEO_RESOLUTION_TIERS } from "@cap/database/types";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createInfraVideo } from "@/lib/infra-video-upload";
@@ -18,6 +19,7 @@ app.post(
 		z.object({
 			name: z.string().max(255).optional(),
 			userId: z.string().max(255).optional(),
+			maxResolutionTier: z.enum(DEVELOPER_VIDEO_RESOLUTION_TIERS).optional(),
 			metadata: z
 				.record(z.string(), z.unknown())
 				.optional()

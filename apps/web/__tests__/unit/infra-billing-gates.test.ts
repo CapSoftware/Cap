@@ -71,6 +71,11 @@ vi.mock("@cap/web-backend", () => ({
 	S3Buckets: {},
 }));
 vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
+vi.mock("@/lib/developer-video-start", () => ({
+	claimDeveloperVideoUpload: vi.fn(),
+	releaseDeveloperVideoUpload: vi.fn(),
+	startDeveloperVideoProcessing: vi.fn(),
+}));
 vi.mock("@/lib/developer-stripe-customer", () => ({
 	ensureDeveloperStripeCustomer: mocks.ensureCustomer,
 }));
@@ -186,6 +191,10 @@ describe("creating a video", () => {
 		expect(mocks.inserts).toEqual([
 			expect.objectContaining({ id: "video-1", appId: "app-1", name: "Demo" }),
 		]);
+		const playbackId = mocks.inserts[0]?.playbackId;
+		expect(typeof playbackId).toBe("string");
+		expect(String(playbackId).length).toBeGreaterThan(8);
+		expect(mocks.inserts[0]?.maxResolutionTier).toBeTruthy();
 	});
 });
 

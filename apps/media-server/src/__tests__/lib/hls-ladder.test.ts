@@ -92,6 +92,36 @@ describe("planHlsLadder", () => {
 		expect(planHlsLadder({ width: 2312, height: 1300 })[0]?.name).toBe("1440p");
 	});
 
+	test("labels a source wider than 16:9 by its pixel count", () => {
+		const film = planHlsLadder({ width: 1920, height: 804 });
+		expect(summary(film)).toEqual(["1080p=1920x804", "360p=860x360"]);
+		expect(film[0]?.maxBitrateKbps).toBe(4500);
+		expect(
+			summary(
+				planHlsLadder({ width: 1920, height: 804 }, { maxTier: "1080p" }),
+			),
+		).toEqual(["1080p=1920x804", "360p=860x360"]);
+		expect(planHlsLadder({ width: 804, height: 1920 })[0]?.name).toBe("1080p");
+		expect(planHlsLadder({ width: 2560, height: 1080 })[0]?.name).toBe("1440p");
+	});
+
+	test("keeps a wide source inside the requested tier", () => {
+		expect(
+			summary(
+				planHlsLadder({ width: 2560, height: 1080 }, { maxTier: "1080p" }),
+			),
+		).toEqual(["1080p=2560x1080", "720p=1706x720", "360p=854x360"]);
+		expect(
+			planHlsLadder({ width: 1920, height: 804 }, { maxTier: "720p" })[0],
+		).toMatchObject({ name: "720p", width: 1720, height: 720 });
+	});
+
+	test("does not lower the label of a source narrower than 16:9", () => {
+		expect(planHlsLadder({ width: 1080, height: 1080 })[0]?.name).toBe("1080p");
+		expect(planHlsLadder({ width: 1440, height: 1080 })[0]?.name).toBe("1080p");
+		expect(planHlsLadder({ width: 960, height: 720 })[0]?.name).toBe("720p");
+	});
+
 	test("keeps a tiny source as a single rendition at its own size", () => {
 		expect(summary(planHlsLadder({ width: 320, height: 240 }))).toEqual([
 			"360p=320x240",

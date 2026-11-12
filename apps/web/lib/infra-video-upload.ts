@@ -5,12 +5,23 @@ import {
 	developerCreditAccounts,
 	developerVideos,
 } from "@cap/database/schema";
+import type { DeveloperVideoResolutionTier } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import type { User } from "@cap/web-domain";
 import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { billableVideo } from "@/lib/developer-pricing";
+import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
+import {
+	createDeveloperPlaybackId,
+	DEVELOPER_VIDEO_DEFAULT_TIER,
+} from "@/lib/developer-video-plan";
+import type { DeveloperVideoClaim } from "@/lib/developer-video-processing";
+import {
+	claimDeveloperVideoUpload,
+	releaseDeveloperVideoUpload,
+	startDeveloperVideoProcessing,
+} from "@/lib/developer-video-start";
 import { canUseInfra } from "@/lib/infra-access";
 import {
 	getInfraUploadAdmission,
@@ -126,14 +137,17 @@ export async function createInfraVideo({
 	name,
 	userId,
 	metadata,
+	maxResolutionTier,
 }: {
 	appId: string;
 	name?: string;
 	userId?: string;
 	metadata?: Record<string, unknown>;
+	maxResolutionTier?: DeveloperVideoResolutionTier;
 }): Promise<
 	UploadResult<{
 		videoId: string;
+		playbackId: string;
 		s3Key: string;
 		shareUrl: string;
 		embedUrl: string;
@@ -145,6 +159,7 @@ export async function createInfraVideo({
 	}
 
 	const videoId = nanoId();
+	const playbackId = createDeveloperPlaybackId();
 	const s3Key = `developer/${appId}/${videoId}/video`;
 
 	await db()
@@ -156,12 +171,15 @@ export async function createInfraVideo({
 			name: name ?? "Untitled",
 			s3Key,
 			metadata,
+			playbackId,
+			maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 		});
 
 	const webUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
 
 	return ok({
 		videoId,
+		playbackId,
 		s3Key,
 		shareUrl: `${webUrl}/dev/${videoId}`,
 		embedUrl: `${webUrl}/embed/${videoId}?sdk=1`,
@@ -271,6 +289,8 @@ export async function completeInfraUpload({
 	if (!video.s3Key) return fail(400, "Video has no S3 key");
 	const s3Key = video.s3Key;
 
+	let claim: DeveloperVideoClaim | null = null;
+
 	try {
 		const measured = await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
@@ -304,19 +324,29 @@ export async function completeInfraUpload({
 			Math.max(plausibleDuration, sizeBasedMinDuration),
 			MAX_UPLOAD_DURATION_SECS,
 		);
-		const newVideo = billableVideo({
-			duration: storedDuration,
+		const upload = {
+			appId,
+			videoId,
+			durationSeconds: storedDuration,
 			width,
 			height,
-		});
+		};
 
 		if (!measured.assembled) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
-			const admission = await getInfraUploadAdmission(appId, newVideo);
+			const admission = await admitDeveloperVideoUpload(upload);
 			if (!admission.allowed) {
 				return { status: 402, body: uploadAdmissionError(admission) };
 			}
+		}
 
+		claim = await claimDeveloperVideoUpload(videoId);
+		if (!claim) {
+			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
+			return fail(409, "This upload is already being completed");
+		}
+
+		if (!measured.assembled) {
 			await Effect.gen(function* () {
 				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
@@ -360,7 +390,10 @@ export async function completeInfraUpload({
 			if (!current || current.deletedAt) return REMOVED;
 			if (current.duration !== null) return ALREADY_RECORDED;
 
-			const admission = await getInfraUploadAdmission(appId, newVideo, tx);
+			const admission = await admitDeveloperVideoUpload({
+				...upload,
+				executor: tx,
+			});
 			if (!admission.allowed) return admission;
 
 			await tx
@@ -376,6 +409,8 @@ export async function completeInfraUpload({
 		});
 
 		if ("removed" in admission) {
+			await releaseDeveloperVideoUpload(videoId, claim);
+			claim = null;
 			return fail(
 				409,
 				"This upload was removed before it was recorded. Create a new video and upload the file again.",
@@ -385,6 +420,8 @@ export async function completeInfraUpload({
 
 		if (!admission.allowed) {
 			await removeStoredFile(s3Key);
+			await releaseDeveloperVideoUpload(videoId, claim);
+			claim = null;
 			const refusal = uploadAdmissionError(admission);
 			return {
 				status: 402,
@@ -396,9 +433,14 @@ export async function completeInfraUpload({
 			};
 		}
 
+		await startDeveloperVideoProcessing(videoId, claim);
+
 		return ok({ success: true });
 	} catch (error) {
 		console.error("Error completing multipart upload:", error);
+		if (claim) {
+			await releaseDeveloperVideoUpload(videoId, claim).catch(() => {});
+		}
 		return fail(500, "Failed to complete upload");
 	}
 }

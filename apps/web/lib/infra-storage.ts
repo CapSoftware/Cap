@@ -13,6 +13,8 @@ type StoredVideoGroup = {
 	appId: string;
 	width: number | null;
 	height: number | null;
+	status: string;
+	maxResolutionTier: string | null;
 	seconds: number | string | null;
 	count: number | string;
 };
@@ -30,6 +32,8 @@ async function storedVideoGroups(
 				appId: developerVideos.appId,
 				width: developerVideos.width,
 				height: developerVideos.height,
+				status: developerVideos.status,
+				maxResolutionTier: developerVideos.maxResolutionTier,
 				seconds: sql<
 					number | string | null
 				>`COALESCE(SUM(${developerVideos.duration}), 0)`,
@@ -50,6 +54,8 @@ async function storedVideoGroups(
 				developerVideos.appId,
 				developerVideos.width,
 				developerVideos.height,
+				developerVideos.status,
+				developerVideos.maxResolutionTier,
 			);
 		groups.push(...rows);
 	}
@@ -60,6 +66,7 @@ export async function getStorageUsageByApp(
 	appIds: readonly string[],
 	extra?: { appId: string; video: BillableVideo | null },
 	executor: InfraDbExecutor = db(),
+	options: { includeProcessing?: boolean } = {},
 ) {
 	const entriesByApp = new Map<
 		string,
@@ -73,6 +80,9 @@ export async function getStorageUsageByApp(
 					duration: Number(group.seconds),
 					width: group.width,
 					height: group.height,
+					status: group.status,
+					maxResolutionTier: group.maxResolutionTier,
+					includeProcessing: options.includeProcessing,
 				}),
 				count: Number(group.count) || 0,
 			});
@@ -92,11 +102,13 @@ export async function getAppStorageUsage(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	executor: InfraDbExecutor = db(),
+	options: { includeProcessing?: boolean } = {},
 ): Promise<StorageUsage> {
 	const usageByApp = await getStorageUsageByApp(
 		[appId],
 		newVideo ? { appId, video: newVideo } : undefined,
 		executor,
+		options,
 	);
 	return usageByApp.get(appId) ?? storageUsage([]);
 }

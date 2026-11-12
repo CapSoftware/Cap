@@ -52,8 +52,15 @@ export function billableVideo(video: {
 	height: number | null | undefined;
 	status?: string | null;
 	maxResolutionTier?: string | null;
+	includeProcessing?: boolean;
 }): BillableVideo | null {
-	if (video.status !== undefined && video.status !== "ready") return null;
+	if (
+		video.status !== undefined &&
+		video.status !== "ready" &&
+		!(video.includeProcessing && video.status === "processing")
+	) {
+		return null;
+	}
 	const durationSeconds = positive(video.duration);
 	if (durationSeconds <= 0) return null;
 	const width = positive(video.width);

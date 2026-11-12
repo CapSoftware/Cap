@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
 		deletedAt: string | null;
 	},
 	admission: vi.fn(),
+	claim: vi.fn(),
+	release: vi.fn(),
+	startProcessing: vi.fn(),
 	create: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
@@ -43,6 +46,11 @@ vi.mock("@cap/web-backend", async () => {
 vi.mock("@/lib/infra-standing", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/infra-standing")>()),
 	getInfraUploadAdmission: mocks.admission,
+}));
+vi.mock("@/lib/developer-video-start", () => ({
+	claimDeveloperVideoUpload: mocks.claim,
+	releaseDeveloperVideoUpload: mocks.release,
+	startDeveloperVideoProcessing: mocks.startProcessing,
 }));
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
@@ -93,6 +101,8 @@ function writes() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.video = inProgress;
+	mocks.claim.mockResolvedValue({ action: "start", encodeId: "encode-1" });
+	mocks.startProcessing.mockResolvedValue(true);
 	mocks.admission.mockResolvedValue({
 		allowed: true,
 		reason: null,
