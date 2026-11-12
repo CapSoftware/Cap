@@ -214,13 +214,7 @@ export const Caps = ({
 				// Deleting is immediate and permanent, so the key only counts on the
 				// page itself: not inside an open dialog (Move, Share), not while a
 				// held key repeats, and not while the previous delete is running.
-				if (
-					!e.repeat &&
-					!isDeletingCaps &&
-					!["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") &&
-					!(active instanceof HTMLElement && active.isContentEditable) &&
-					!active?.closest('[role="dialog"], [role="alertdialog"]')
-				) {
+				if (!e.repeat && !isDeletingCaps && !isShortcutBlocked(active)) {
 					if (e.key === "Backspace") {
 						e.preventDefault();
 					}
@@ -230,11 +224,7 @@ export const Caps = ({
 			}
 
 			if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
-				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
-				) {
+				if (!e.repeat && !isShortcutBlocked(document.activeElement)) {
 					e.preventDefault();
 					setSelectedCaps(data.map((cap) => cap.id));
 				}
@@ -374,3 +364,11 @@ export const Caps = ({
 		</div>
 	);
 };
+
+function isShortcutBlocked(active: Element | null) {
+	return (
+		["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") ||
+		(active instanceof HTMLElement && active.isContentEditable) ||
+		!!active?.closest('[role="dialog"], [role="alertdialog"]')
+	);
+}
