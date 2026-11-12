@@ -9,6 +9,7 @@ WORKDIR /app
 COPY apps/media-server/package.json apps/media-server/bun.lock ./
 RUN bun install --frozen-lockfile --production
 
+COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
 COPY apps/media-server/capcodec.md ./capcodec.md
 

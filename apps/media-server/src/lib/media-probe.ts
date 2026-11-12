@@ -5,6 +5,7 @@ import type {
 	VideoCodec,
 } from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
+import { MediaAddressError } from "./media-address-guard";
 import {
 	createGuardedMediaFetch,
 	createMediaInput,
@@ -26,7 +27,6 @@ import {
 import { materializeMedia } from "./media-transfer";
 
 const PROBE_TIMEOUT_MS = 30_000;
-const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 export { canAcceptNewProbeOperation, getActiveProbeOperationCount };
 
@@ -103,7 +103,11 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 		await reader.cancel().catch(() => {});
 		return head.subarray(0, length);
 	} catch (error) {
-		if (error instanceof MediaInputPolicyError) throw error;
+		if (
+			error instanceof MediaInputPolicyError ||
+			error instanceof MediaAddressError
+		)
+			throw error;
 		return null;
 	}
 }
@@ -357,7 +361,7 @@ export async function probeTrackSpans(filePath: string): Promise<TrackSpans> {
 
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(videoUrl, {
+		const response = await createGuardedMediaFetch(videoUrl)(videoUrl, {
 			method: "HEAD",
 			signal: AbortSignal.timeout(10_000),
 		});

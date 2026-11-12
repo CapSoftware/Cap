@@ -11,6 +11,7 @@ import {
 	type SourceRef,
 	StreamSource,
 } from "mediabunny";
+import { assertMediaUrlAllowed } from "./media-address-guard";
 
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_LONG_RECORDING_METADATA_BYTES = 1024 * 1024 * 1024;
@@ -443,6 +444,7 @@ export async function readRecordingVideoTiming(
 		checkActive();
 		let response: Response;
 		try {
+			await assertMediaUrlAllowed(path);
 			response = await fetch(path, {
 				headers: {
 					Range: `bytes=${start}-${end - 1}`,

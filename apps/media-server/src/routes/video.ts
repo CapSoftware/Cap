@@ -45,7 +45,11 @@ import {
 	trackBackgroundTask,
 } from "../lib/lifecycle";
 import { logReason } from "../lib/log-redaction";
-import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
+import {
+	createGuardedMediaFetch,
+	PROCESS_TIMEOUT_MS,
+	UPLOAD_TIMEOUT_MS,
+} from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
 	renderEditedVideo,
@@ -3163,7 +3167,9 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetch(url, { signal: budget });
+					const response = await createGuardedMediaFetch(url, {
+						fetchImpl: fetch,
+					})(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;
