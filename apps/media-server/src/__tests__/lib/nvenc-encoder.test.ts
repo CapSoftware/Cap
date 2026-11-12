@@ -17,6 +17,8 @@ import {
 	pickMobileSafeH264Level,
 	probeVideoSourceTraits,
 	processVideo,
+	requireVideoSourceTraits,
+	sourceHasAudio,
 } from "../../lib/media-video";
 import {
 	buildNvencEncodeArgs,
@@ -507,6 +509,60 @@ describe("process video args", () => {
 		]);
 	});
 
+	test("converts an HDR source from the colours it declares", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const filter = (hdrColor: ProcessVideoArgsInput["hdrColor"]) => {
+			const args = buildProcessVideoArgs(
+				processArgs(source, { hdr: "arib-std-b67", hdrColor }),
+			);
+			return args[args.indexOf("-vf") + 1];
+		};
+		const toSdr = (primaries: string, matrix: string) =>
+			`zscale=w=1920:h=1080:tin=arib-std-b67:pin=${primaries}:min=${matrix}:t=linear:npl=203,` +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			`zscale=t=bt709:m=bt709:r=tv,format=yuv420p,${cpuScale}`;
+		expect(filter({ primaries: "bt709", matrix: "bt709" })).toBe(
+			toSdr("bt709", "bt709"),
+		);
+		expect(filter({ primaries: "smpte432", matrix: "bt2020nc" })).toBe(
+			toSdr("smpte432", "bt2020nc"),
+		);
+		expect(filter(undefined)).toBe(toSdr("bt2020", "bt2020nc"));
+		expect(filter({ primaries: "bt2020", matrix: "unknown" })).toBe(
+			toSdr("bt2020", "bt2020nc"),
+		);
+		for (const untagged of [
+			{ primaries: null, matrix: null },
+			{ primaries: "unknown", matrix: "unknown" },
+		]) {
+			expect(filter(untagged)).toBe(toSdr("bt2020:p=bt2020", "bt2020nc"));
+		}
+	});
+
+	test("encodes audio the probe cannot name instead of leaving it out", () => {
+		const source = metadata(1920, 1080, "h264");
+		const args = buildProcessVideoArgs(
+			processArgs(source, {
+				hasAudio: sourceHasAudio({ audioCodec: null, audioChannels: 2 }),
+				audioTranscode: true,
+			}),
+		);
+		expect(args).not.toContain("-an");
+		expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
+	});
+
+	test("decides whether a source has audio from its track", () => {
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: 6 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "aac", audioChannels: 2 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "opus", audioChannels: null })).toBe(
+			true,
+		);
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: null })).toBe(
+			false,
+		);
+	});
+
 	test("runs a 4K HEVC source fully on the GPU", () => {
 		const source = metadata(3840, 2160, "hevc");
 		expect(
@@ -675,13 +731,52 @@ describe("source traits", () => {
 		join(import.meta.dir, "..", "fixtures", name);
 
 	test("reads HDR and rotation in one probe", async () => {
+		const hdrColor = { primaries: "bt2020", matrix: "bt2020nc" };
 		expect(await probeVideoSourceTraits(fixture("test-rotated.mp4"))).toEqual({
 			rotation: 90,
 			hdr: "smpte2084",
+			hdrColor,
 		});
 		expect(
 			await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
-		).toEqual({ rotation: 0, hdr: "smpte2084" });
+		).toEqual({ rotation: 0, hdr: "smpte2084", hdrColor });
+	});
+
+	test("plans an encode from the same traits", async () => {
+		expect(
+			await requireVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual(await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")));
+		expect(
+			await requireVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("refuses to plan an encode for a source that cannot be probed", async () => {
+		await expect(
+			requireVideoSourceTraits(fixture("missing.mp4")),
+		).rejects.toThrow(
+			"Could not read the colour information of the source video",
+		);
+	});
+
+	test("refuses Dolby Vision profile 5, which has no convertible base layer", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+		await expect(
+			requireVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).rejects.toThrow("Dolby Vision profile 5");
+	});
+
+	test("stops with the cancellation when the job is cancelled mid probe", async () => {
+		const cancelled = new AbortController();
+		cancelled.abort(new Error("cancelled by the caller"));
+		await expect(
+			requireVideoSourceTraits(
+				fixture("test-with-audio.mp4"),
+				cancelled.signal,
+			),
+		).rejects.toThrow("cancelled by the caller");
 	});
 
 	test("reports a standard range, unrotated source as neither", async () => {

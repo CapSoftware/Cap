@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -5,27 +7,36 @@ const mocks = vi.hoisted(() => ({
 	keyRows: [] as { appId: string; environment?: string }[],
 	accounts: [] as { balanceMicroCredits: number }[],
 	videoStats: [] as Record<string, unknown>[],
+	storedVideos: [] as Record<string, unknown>[],
 	selected: [] as Record<string, unknown>[],
 	createVideo: vi.fn(),
 	initiate: vi.fn(),
 	billing: vi.fn(),
 	listTranscripts: vi.fn(),
+	firewall: vi.fn(),
 }));
+
+vi.mock("@vercel/firewall", () => ({ checkRateLimit: mocks.firewall }));
 
 vi.mock("@cap/database", async () => {
 	const schema = await import("@cap/database/schema");
-	const rowsFor = (table: unknown) => {
+	const rowsFor = (table: unknown, fields?: Record<string, unknown>) => {
 		if (table === schema.developerApiKeys) return mocks.keyRows;
 		if (table === schema.developerCreditAccounts) return mocks.accounts;
-		if (table === schema.developerVideos) return mocks.videoStats;
+		if (table === schema.developerVideos) {
+			return fields && "createdVideos" in fields
+				? mocks.videoStats
+				: mocks.storedVideos;
+		}
 		return [];
 	};
 	const select = (fields?: Record<string, unknown>) => ({
 		from: (table: unknown) => {
 			if (fields) mocks.selected.push(fields);
 			const where = () =>
-				Object.assign(Promise.resolve(rowsFor(table)), {
-					limit: async () => rowsFor(table),
+				Object.assign(Promise.resolve(rowsFor(table, fields)), {
+					limit: async () => rowsFor(table, fields),
+					groupBy: async () => rowsFor(table, fields),
 				});
 			const query = { innerJoin: () => query, where };
 			return query;
@@ -58,7 +69,8 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 	listTranscripts: mocks.listTranscripts,
 	isTranscriptIdempotencyKey: () => true,
 }));
-vi.mock("@/lib/infra-standing", () => ({
+vi.mock("@/lib/infra-standing", async (original) => ({
+	...(await original<typeof import("@/lib/infra-standing")>()),
 	getInfraBilling: mocks.billing,
 	infraBillingJson: (billing: Record<string, unknown>) => billing,
 }));
@@ -79,6 +91,10 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
+import {
+	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+} from "@/lib/developer-rate-limits";
 import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
 import {
 	INFRA_RESOLUTION_TIERS,
@@ -130,8 +146,26 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
 	mocks.accounts = [{ balanceMicroCredits: 4_532_000 }];
-	mocks.videoStats = [
-		{ createdVideos: 5, uploadedVideos: 3, totalDurationMinutes: 12.5 },
+	mocks.videoStats = [{ createdVideos: 5, uploadedVideos: 4 }];
+	mocks.storedVideos = [
+		{
+			appId: "app-1",
+			width: 1920,
+			height: 1080,
+			status: "ready",
+			maxResolutionTier: "1080p",
+			seconds: 750,
+			count: 3,
+		},
+		{
+			appId: "app-1",
+			width: 1920,
+			height: 1080,
+			status: "errored",
+			maxResolutionTier: "1080p",
+			seconds: 345.21,
+			count: 1,
+		},
 	];
 	mocks.selected = [];
 	mocks.billing.mockResolvedValue({ standing: { state: "active" } });
@@ -141,10 +175,12 @@ beforeEach(() => {
 	});
 	mocks.initiate.mockResolvedValue({ status: 200, body: { uploadId: "u-1" } });
 	mocks.listTranscripts.mockResolvedValue({ transcripts: [], hasMore: false });
+	mocks.firewall.mockResolvedValue({ rateLimited: false });
 });
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.unstubAllEnvs();
 });
 
 describe("rate limit headers", () => {
@@ -285,6 +321,315 @@ describe("rate limit headers", () => {
 			"X-RateLimit-Remaining",
 			"X-RateLimit-Reset",
 		]);
+	});
+});
+
+describe("rate limit shared across servers", () => {
+	const initiate = (key: string, headers: Record<string, string> = {}) =>
+		call(sdk, "POST", "/api/developer/sdk/v1/upload/multipart/initiate", {
+			key,
+			headers: { "Content-Type": "application/json", ...headers },
+			body: "{}",
+		});
+	const firewallCalls = () =>
+		mocks.firewall.mock.calls.map(([ruleId, options]) => ({
+			ruleId: ruleId as string,
+			key: options.rateLimitKey as string,
+			request: options.request as Request,
+		}));
+
+	beforeEach(() => {
+		vi.stubEnv("NODE_ENV", "production");
+	});
+
+	it("rejects when the shared rule says so, whatever this server has counted", async () => {
+		mocks.firewall.mockResolvedValue({ rateLimited: true });
+
+		const limited = await getUsage(freshKey("csk"));
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toEqual({
+			limit: "60",
+			remaining: "0",
+			reset: "60",
+			retryAfter: "60",
+		});
+		expect(await limited.json()).toMatchObject({
+			error: "Rate limit exceeded",
+			code: "rate_limited",
+			hint: "Wait for the Retry-After seconds, then retry. Each key allows 60 requests per minute.",
+		});
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+
+	it("rejects an upload token the same way and lets the page read why", async () => {
+		mocks.firewall.mockResolvedValue({ rateLimited: true });
+
+		const limited = await initiate(freshKey("cut"), {
+			Origin: "https://app.example",
+		});
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toEqual({
+			limit: "1200",
+			remaining: "0",
+			reset: "60",
+			retryAfter: "60",
+		});
+		expect(await limited.json()).toMatchObject({
+			code: "rate_limited",
+			hint: "Wait for the Retry-After seconds, then retry. Each upload token allows 1200 requests per minute.",
+		});
+		expect(limited.headers.get("Access-Control-Allow-Origin")).toBe("*");
+		expect(limited.headers.get("Access-Control-Expose-Headers")).toContain(
+			"Retry-After",
+		);
+		expect(mocks.initiate).not.toHaveBeenCalled();
+	});
+
+	it("lets the shared rule overrule a count this server kept alone", async () => {
+		const key = freshKey("csk");
+		for (let request = 1; request <= 60; request++) await getUsage(key);
+
+		const allowed = await getUsage(key);
+
+		expect(allowed.status).toBe(200);
+		expect(rateLimit(allowed)).toMatchObject({
+			limit: "60",
+			remaining: "0",
+			retryAfter: null,
+		});
+	});
+
+	it("asks one rule per kind of credential, keyed on a hash of it", async () => {
+		const secret = freshKey("csk");
+		const token = freshKey("cut");
+
+		await getUsage(secret);
+		await getUsage(secret, { Authorization: `bearer   ${secret}` });
+		await getUsage(freshKey("csk"));
+		await initiate(token);
+
+		const [first, again, other, upload] = firewallCalls();
+		expect([first, again, other, upload].map((asked) => asked?.ruleId)).toEqual(
+			[
+				"rl_developer_api_key",
+				"rl_developer_api_key",
+				"rl_developer_api_key",
+				"rl_developer_upload_token",
+			],
+		);
+		expect(first?.key).toMatch(/^[0-9a-f]{64}$/);
+		expect(again?.key).toBe(first?.key);
+		expect(other?.key).not.toBe(first?.key);
+		expect(upload?.key).toMatch(/^[0-9a-f]{64}$/);
+		for (const asked of firewallCalls()) {
+			for (const credential of [secret, token]) {
+				expect(asked.key).not.toContain(credential);
+				expect(JSON.stringify([...asked.request.headers])).not.toContain(
+					credential,
+				);
+			}
+		}
+	});
+
+	it.each([
+		["the rule does not exist yet", { rateLimited: false, error: "not-found" }],
+		["the firewall cannot be reached", new Error("fetch failed")],
+	])("counts on this server alone while %s", async (_label, outcome) => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
+		if (outcome instanceof Error) mocks.firewall.mockRejectedValue(outcome);
+		else mocks.firewall.mockResolvedValue(outcome);
+		const key = freshKey("csk");
+
+		const first = await getUsage(key);
+		expect(rateLimit(first)).toEqual({
+			limit: "60",
+			remaining: "59",
+			reset: "60",
+			retryAfter: null,
+		});
+		for (let request = 2; request <= 60; request++) {
+			expect((await getUsage(key)).status).toBe(200);
+		}
+		vi.advanceTimersByTime(25_000);
+		const limited = await getUsage(key);
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toEqual({
+			limit: "60",
+			remaining: "0",
+			reset: "35",
+			retryAfter: "35",
+		});
+	});
+});
+
+describe("upload tokens have their own budget", () => {
+	const initiate = (key: string) =>
+		call(sdk, "POST", "/api/developer/sdk/v1/upload/multipart/initiate", {
+			key,
+			headers: { "Content-Type": "application/json" },
+			body: "{}",
+		});
+
+	it("allows 1200 requests a minute on one token, then answers 429", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
+		const token = freshKey("cut");
+
+		const first = await initiate(token);
+		expect(first.status).toBe(200);
+		expect(rateLimit(first)).toEqual({
+			limit: "1200",
+			remaining: "1199",
+			reset: "60",
+			retryAfter: null,
+		});
+		for (let request = 2; request <= 1200; request++) await initiate(token);
+		vi.advanceTimersByTime(10_000);
+		const limited = await initiate(token);
+
+		expect(limited.status).toBe(429);
+		expect(rateLimit(limited)).toEqual({
+			limit: "1200",
+			remaining: "0",
+			reset: "50",
+			retryAfter: "50",
+		});
+		expect(rateLimit(await initiate(freshKey("cut"))).remaining).toBe("1199");
+	});
+
+	it("keeps the secret key at 60 a minute", async () => {
+		expect(rateLimit(await getUsage(freshKey("csk"))).limit).toBe("60");
+	});
+
+	it("documents the limits the limiter applies", async () => {
+		const key = rateLimit(await getUsage(freshKey("csk"))).limit;
+		const token = rateLimit(await initiate(freshKey("cut"))).limit;
+		const docs = readFileSync(
+			join(process.cwd(), "content/docs/api/rest-api.mdx"),
+			"utf8",
+		);
+		const spec = developerOpenApiSpec(ORIGIN);
+
+		expect(key).toBe(String(DEVELOPER_KEY_REQUESTS_PER_MINUTE));
+		expect(token).toBe(String(DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE));
+		expect(docs).toContain(`A secret key allows ${key} requests per minute`);
+		expect(docs).toContain(
+			`An upload token allows ${Number(token).toLocaleString("en-US")} requests per minute`,
+		);
+		expect(spec.info.description).toContain(
+			`A secret key is limited to ${key} requests per minute`,
+		);
+		expect(spec.info.description).toContain(
+			`each upload token to ${token} requests per minute`,
+		);
+	});
+});
+
+describe("browser access", () => {
+	const ORIGIN_HEADERS = { Origin: "https://app.example" };
+	const PREFLIGHT_HEADERS = {
+		...ORIGIN_HEADERS,
+		"Access-Control-Request-Method": "GET",
+		"Access-Control-Request-Headers": "authorization,content-type",
+	};
+	const corsHeaders = (response: Response) =>
+		[...response.headers.keys()].filter((name) =>
+			name.toLowerCase().startsWith("access-control-"),
+		);
+
+	it("sends no CORS header on any answer of the secret-key API", async () => {
+		const key = freshKey("csk");
+		const from = (method: Method, path: string, withKey = true) =>
+			call(rest, method, path, {
+				key: withKey ? key : undefined,
+				headers: ORIGIN_HEADERS,
+			});
+
+		const answers = [
+			await from("GET", "/api/developer/v1/usage"),
+			await from("GET", "/api/developer/v1/videos?limit=0"),
+			await from("GET", "/api/developer/v1/videos?userId="),
+			await from("GET", "/api/developer/v1/usage", false),
+			await from("GET", "/api/developer/v1/nope"),
+			await from("POST", "/api/developer/v1/usage"),
+		];
+		const sentWithKey = answers.length - 1;
+		for (let request = sentWithKey; request < 60; request++) {
+			await from("GET", "/api/developer/v1/usage");
+		}
+		answers.push(await from("GET", "/api/developer/v1/usage"));
+
+		expect(answers.map((response) => response.status)).toEqual([
+			200, 400, 400, 401, 404, 405, 429,
+		]);
+		for (const response of answers) {
+			expect(corsHeaders(response)).toEqual([]);
+			expect(response.headers.get("Vary")).toBeNull();
+		}
+	});
+
+	it.each([
+		"/api/developer/v1/videos",
+		"/api/developer/v1/videos/video-1",
+		"/api/developer/v1/videos/video-1/status",
+		"/api/developer/v1/uploads",
+		"/api/developer/v1/transcripts",
+		"/api/developer/v1/transactions",
+		"/api/developer/v1/usage",
+		"/api/developer/v1/nope",
+	])("refuses a preflight for %s", async (path) => {
+		const preflight = await call(rest, "OPTIONS", path, {
+			headers: PREFLIGHT_HEADERS,
+		});
+
+		expect(preflight.ok).toBe(false);
+		expect(corsHeaders(preflight)).toEqual([]);
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+
+	it("still answers a preflight for the upload routes", async () => {
+		const preflight = await call(
+			sdk,
+			"OPTIONS",
+			"/api/developer/sdk/v1/upload/multipart/presign-part",
+			{
+				headers: {
+					...PREFLIGHT_HEADERS,
+					"Access-Control-Request-Method": "POST",
+				},
+			},
+		);
+
+		expect(preflight.status).toBe(204);
+		expect(Object.fromEntries(preflight.headers)).toEqual({
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET,POST,OPTIONS",
+			"access-control-allow-headers": "Content-Type,Authorization",
+			"access-control-expose-headers":
+				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+			vary: "Access-Control-Request-Headers",
+		});
+	});
+
+	it("still lets a page read an upload route's answer", async () => {
+		const response = await call(
+			sdk,
+			"POST",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
+			{
+				key: freshKey("cut"),
+				headers: { ...ORIGIN_HEADERS, "Content-Type": "application/json" },
+				body: "{}",
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
 	});
 });
 
@@ -480,15 +825,18 @@ describe("usage", () => {
 		return (await response.json()).data;
 	};
 
-	it("counts only videos whose upload completed and reports the rest as uploading", async () => {
+	it("counts only stored videos and reports those without a file as uploading", async () => {
 		const data = await usage();
 
 		expect(data).toMatchObject({
 			balanceMicroCredits: 4_532_000,
 			balanceDollars: "45.32",
 			totalVideos: 3,
-			uploadingVideos: 2,
+			uploadingVideos: 1,
 			totalDurationMinutes: 12.5,
+			storage: {
+				minutesByTier: { "1080p": 12.5, "1440p": 0, "2160p": 0 },
+			},
 		});
 
 		const stats = mocks.selected.find((fields) => "uploadedVideos" in fields);
@@ -505,6 +853,7 @@ describe("usage", () => {
 
 	it("reports zero for an app with no videos", async () => {
 		mocks.videoStats = [];
+		mocks.storedVideos = [];
 		mocks.accounts = [];
 
 		expect(await usage()).toMatchObject({

@@ -88,6 +88,7 @@ export function developerVideoIsReady(
 export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 	return {
 		id: video.id,
+		externalUserId: video.externalUserId,
 		duration: video.duration,
 		width: video.width,
 		height: video.height,

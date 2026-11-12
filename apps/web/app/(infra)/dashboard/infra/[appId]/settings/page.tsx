@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
-import { requireInfraApp } from "../../infra-data";
+import { infraPageMetadata, requireInfraApp } from "../../infra-data";
 import { AppSettingsClient } from "./app-settings-client";
 
-export const metadata: Metadata = {
-	title: "Settings | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Settings");
 
 export default async function InfraSettingsPage({
 	params,

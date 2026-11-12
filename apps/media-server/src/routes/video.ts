@@ -1541,24 +1541,26 @@ async function encodeLadderAsync(
 					throw error;
 				}),
 			);
-			const failed = (await Promise.allSettled(uploads)).find(
+			const posterUrl = options.thumbnailPresignedUrl;
+			const poster = posterUrl
+				? generateThumbnail(
+						ladder.poster.path,
+						ladder.poster.durationSeconds,
+						{},
+						uploadSignal,
+					)
+						.then((image) =>
+							uploadToS3(image, posterUrl, "image/jpeg", uploadSignal),
+						)
+						.catch((error) => {
+							uploadsStopped.abort();
+							throw error;
+						})
+				: null;
+			const failed = (await Promise.allSettled([...uploads, poster])).find(
 				(upload) => upload.status === "rejected",
 			);
 			if (failed?.status === "rejected") throw failed.reason;
-			if (options.thumbnailPresignedUrl) {
-				const thumbnailData = await generateThumbnail(
-					input.path,
-					metadata.duration,
-					{},
-					signal,
-				);
-				await uploadToS3(
-					thumbnailData,
-					options.thumbnailPresignedUrl,
-					"image/jpeg",
-					signal,
-				);
-			}
 		});
 		signal.throwIfAborted();
 

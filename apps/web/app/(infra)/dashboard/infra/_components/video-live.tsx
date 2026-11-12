@@ -2,10 +2,11 @@
 
 import {
 	type InfraVideoListItem,
+	infraVideoDisplayState,
 	infraVideoIsChanging,
 } from "@/lib/infra-video-view";
 import { useLiveRefresh } from "./live-refresh";
-import { useUploadingVideoId } from "./uploads";
+import { useLocalUpload, useUploadingVideoId } from "./uploads";
 import { VideoStatus } from "./video-status";
 
 type Watched = Pick<InfraVideoListItem, "id" | "state" | "createdAt">;
@@ -27,10 +28,10 @@ export function WatchVideos({ videos }: { videos: Watched[] }) {
 }
 
 export function LiveVideoStatus({ video }: { video: Watched }) {
+	const localUpload = useLocalUpload();
 	return (
 		<VideoStatus
-			state={video.state}
-			uploadingHere={useUploadingVideoId() === video.id}
+			state={infraVideoDisplayState(video.state, localUpload(video.id))}
 		/>
 	);
 }

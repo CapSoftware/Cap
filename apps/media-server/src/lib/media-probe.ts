@@ -1,8 +1,14 @@
-import type {
-	AudioCodec,
-	InputTrack,
-	MediaCodec,
-	VideoCodec,
+import {
+	type AudioCodec,
+	EncodedPacketSink,
+	type InputFormat,
+	type InputTrack,
+	MATROSKA,
+	type MediaCodec,
+	MP4,
+	QTFF,
+	type VideoCodec,
+	WEBM,
 } from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
 import { MediaAddressError } from "./media-address-guard";
@@ -373,6 +379,83 @@ export async function probeTrackSpans(filePath: string): Promise<TrackSpans> {
 		withTimeout(
 			computeTrackSpans(normalizeLocalPath(filePath)),
 			PROBE_TIMEOUT_MS,
+		),
+	);
+}
+
+const FASTEST_STRETCH_FRAMES = 8;
+// Containers whose frame times come from an index or from cluster headers.
+// Timing every frame of a transport stream means reading the whole file
+// through the demuxer: 3 s and 770 MB of memory for a 1.5 GB file, against
+// 11 ms for an MP4 of the same length.
+const FRAME_TIMED_FORMATS: readonly InputFormat[] = [MP4, QTFF, MATROSKA, WEBM];
+
+// The frame rate of the fastest run of consecutive frames. A run is long enough
+// that two frames landing close together do not count, and short enough that
+// a burst of motion a quarter of a second long does.
+export function fastestFrameRate(timestamps: number[]): number | null {
+	const times = [...timestamps].sort((a, b) => a - b);
+	const run = Math.min(FASTEST_STRETCH_FRAMES, times.length - 1);
+	if (run < 1) return null;
+	let fastest = 0;
+	for (let index = run; index < times.length; index++) {
+		const seconds = (times[index] ?? 0) - (times[index - run] ?? 0);
+		if (seconds > 0) fastest = Math.max(fastest, run / seconds);
+	}
+	const fps = roundFps(fastest);
+	return fps > 0 ? fps : null;
+}
+
+async function measureFastestFrameRate(
+	path: string,
+	signal: AbortSignal,
+): Promise<number | null> {
+	const input = createMediaInput(path);
+	try {
+		if (!FRAME_TIMED_FORMATS.includes(await input.getFormat())) return null;
+		const videoTrack = await input.getPrimaryVideoTrack();
+		if (!videoTrack) return null;
+		const timestamps: number[] = [];
+		const packets = new EncodedPacketSink(videoTrack).packets(
+			undefined,
+			undefined,
+			{ metadataOnly: true, skipLiveWait: true },
+		);
+		for await (const packet of packets) {
+			signal.throwIfAborted();
+			timestamps.push(packet.timestamp);
+		}
+		return fastestFrameRate(timestamps);
+	} finally {
+		input.dispose();
+	}
+}
+
+export class ProbeBusyError extends Error {
+	override name = "ProbeBusyError";
+
+	constructor() {
+		super("Server is busy, please try again later");
+	}
+}
+
+// Reads the timestamp of every video frame in a local file, where the probe's
+// own frame rate looks at the opening packets only. Null when the container
+// is not one that can be timed cheaply.
+export async function probeFastestFrameRate(
+	filePath: string,
+	abortSignal?: AbortSignal,
+): Promise<number | null> {
+	if (!canAcceptNewProbeOperation()) throw new ProbeBusyError();
+	const stopped = new AbortController();
+	const signal = abortSignal
+		? AbortSignal.any([abortSignal, stopped.signal])
+		: stopped.signal;
+	return await withMediaOperation("probe", () =>
+		withTimeout(
+			measureFastestFrameRate(normalizeLocalPath(filePath), signal),
+			PROBE_TIMEOUT_MS,
+			() => stopped.abort(),
 		),
 	);
 }

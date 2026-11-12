@@ -41,32 +41,49 @@ export function summarizeStorageMonth(
 	return { chargedMicroCredits, billedDays };
 }
 
-export function formatCredits(microCredits: number) {
-	const dollars = (Number(microCredits) || 0) / MICRO_CREDITS_PER_DOLLAR;
-	return `$${dollars.toLocaleString("en-US", {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	})}`;
+const MICRO_CREDITS_PER_CENT = MICRO_CREDITS_PER_DOLLAR / 100;
+
+const wholeMicroCredits = (
+	microCredits: number,
+	round: (value: number) => number,
+) => {
+	const value = Number(microCredits);
+	return Number.isFinite(value) ? Math.max(0, round(value)) : 0;
+};
+
+function exactDollars(microCredits: number, grouped: boolean) {
+	const dollars = Math.floor(microCredits / MICRO_CREDITS_PER_DOLLAR);
+	const rest = microCredits % MICRO_CREDITS_PER_DOLLAR;
+	const decimals =
+		rest % MICRO_CREDITS_PER_CENT === 0
+			? String(rest / MICRO_CREDITS_PER_CENT).padStart(2, "0")
+			: String(rest).padStart(5, "0");
+	return `${grouped ? dollars.toLocaleString("en-US") : dollars}.${decimals}`;
 }
 
-const SMALLEST_CHARGE_DOLLARS = 1 / MICRO_CREDITS_PER_DOLLAR;
+export function creditDollars(microCredits: number) {
+	return exactDollars(wholeMicroCredits(microCredits, Math.floor), false);
+}
 
-// Amounts under a cent are shown to the digit they are charged at, so a real
-// charge never reads as zero.
+export function signedCreditDollars(microCredits: number) {
+	const size = wholeMicroCredits(Math.abs(Number(microCredits)), Math.round);
+	const sign = Number(microCredits) < 0 && size > 0 ? "-" : "";
+	return `${sign}${exactDollars(size, false)}`;
+}
+
+export function formatCredits(microCredits: number) {
+	return `$${exactDollars(wholeMicroCredits(microCredits, Math.floor), true)}`;
+}
+
+export function formatNeed(microCredits: number) {
+	return `$${exactDollars(wholeMicroCredits(microCredits, Math.ceil), true)}`;
+}
+
 export function formatCharge(microCredits: number) {
-	const dollars =
-		Math.abs(Number(microCredits) || 0) / MICRO_CREDITS_PER_DOLLAR;
-	const exact = dollars.toFixed(5);
-	if (dollars > 0 && Number(exact) < 0.01) {
-		if (dollars < SMALLEST_CHARGE_DOLLARS / 2) {
-			return `<$${SMALLEST_CHARGE_DOLLARS.toFixed(5)}`;
-		}
-		return `$${exact.replace(/0$/, "")}`;
-	}
-	return `$${dollars.toLocaleString("en-US", {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	})}`;
+	const size = Math.abs(Number(microCredits) || 0);
+	const whole = wholeMicroCredits(size, Math.round);
+	if (size > 0 && whole === 0) return `<$${exactDollars(1, true)}`;
+	return `$${exactDollars(whole, true)}`;
 }
 
 const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;

@@ -16,6 +16,9 @@ export const LIT =
 export const FOCUS =
 	"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]";
 
+export const FOCUS_INSET =
+	"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[rgba(232,236,244,0.8)]";
+
 export const TEXT_LINK =
 	"underline decoration-[rgba(232,236,244,0.28)] underline-offset-[4px] transition-colors duration-200 hover:text-[#E8ECF4] hover:decoration-[#E8ECF4]";
 
@@ -216,14 +219,19 @@ export function Split({
 export function Disclosure({
 	summary,
 	note,
+	open = false,
 	children,
 }: {
 	summary: string;
 	note?: string;
+	open?: boolean;
 	children: ReactNode;
 }) {
 	return (
-		<details className="group min-w-0 border-t border-[rgba(222,230,246,0.08)] pt-5">
+		<details
+			open={open}
+			className="group min-w-0 border-t border-[rgba(222,230,246,0.08)] pt-5"
+		>
 			<summary
 				className={clsx(
 					"flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[6px] text-[14px] text-[#E8ECF4] [&::-webkit-details-marker]:hidden",
@@ -292,7 +300,7 @@ export function Figure({
 				className={clsx(
 					MONO,
 					"m-0 text-[17px] leading-none tracking-[-0.04em] tabular-nums",
-					"sm:text-[28px]",
+					"sm:text-[22px] xl:text-[28px]",
 					lead ? "text-white" : "text-[rgba(232,236,244,0.82)]",
 				)}
 			>
