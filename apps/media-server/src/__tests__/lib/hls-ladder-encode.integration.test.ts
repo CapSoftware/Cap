@@ -21,6 +21,11 @@ import {
 	type EncodedHlsLadder,
 	encodeHlsLadder,
 } from "../../lib/hls-ladder-encode";
+import {
+	getMaxConcurrentProbeOperations,
+	registerMediaOperation,
+	unregisterMediaOperation,
+} from "../../lib/media-operations";
 import { probeVideoFile } from "../../lib/media-probe";
 import { generateThumbnail } from "../../lib/media-video";
 
@@ -331,6 +336,21 @@ describe("HLS ladder encode", () => {
 		expect(new Set(sliced.map((time) => Math.round(time * 30))).size).toBe(600);
 		expect(framesBetween(sliced, 12, 20)).toBe(240);
 	}, 180_000);
+
+	test("fails instead of guessing the frame rate when the probe pool is full", async () => {
+		const metadata = await probeVideoFile(source);
+		const running = Array.from(
+			{ length: getMaxConcurrentProbeOperations() },
+			() => registerMediaOperation("probe", () => {}),
+		);
+		try {
+			await expect(encodeHlsLadder(source, metadata)).rejects.toThrow(
+				"Server is busy",
+			);
+		} finally {
+			for (const operation of running) unregisterMediaOperation(operation);
+		}
+	}, 60_000);
 
 	test("starts a slice on time when it begins inside a still stretch", async () => {
 		const still = join(directory, "still.mp4");

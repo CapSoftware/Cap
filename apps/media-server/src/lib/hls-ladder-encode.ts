@@ -20,7 +20,7 @@ import {
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
-import { probeFastestFrameRate } from "./media-probe";
+import { ProbeBusyError, probeFastestFrameRate } from "./media-probe";
 import {
 	getProcessTimeoutMs,
 	requireVideoSourceTraits,
@@ -89,6 +89,10 @@ export async function encodeHlsLadder(
 	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
 		requireVideoSourceTraits(inputPath, abortSignal),
 		probeFastestFrameRate(inputPath, abortSignal).catch((error) => {
+			// A full probe pool fails the job, as it does for the probe before
+			// this one. Falling back would quietly encode a variable frame rate
+			// source on its opening rate whenever the server is busy.
+			if (error instanceof ProbeBusyError) throw error;
 			if (!abortSignal?.aborted) {
 				console.warn(
 					"[hls-ladder] Could not read frame timing, using the probed frame rate:",

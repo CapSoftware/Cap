@@ -409,6 +409,14 @@ async function measureFastestFrameRate(
 	}
 }
 
+export class ProbeBusyError extends Error {
+	override name = "ProbeBusyError";
+
+	constructor() {
+		super("Server is busy, please try again later");
+	}
+}
+
 // Reads the timestamp of every video frame in a local file, where the probe's
 // own frame rate looks at the opening packets only. Null when the container
 // is not one that can be timed cheaply.
@@ -416,9 +424,7 @@ export async function probeFastestFrameRate(
 	filePath: string,
 	abortSignal?: AbortSignal,
 ): Promise<number | null> {
-	if (!canAcceptNewProbeOperation()) {
-		throw new Error("Server is busy, please try again later");
-	}
+	if (!canAcceptNewProbeOperation()) throw new ProbeBusyError();
 	const stopped = new AbortController();
 	const signal = abortSignal
 		? AbortSignal.any([abortSignal, stopped.signal])
