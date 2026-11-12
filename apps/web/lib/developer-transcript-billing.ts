@@ -4,11 +4,7 @@ import {
 	developerTranscripts,
 } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import {
-	debitDeveloperUsage,
-	getAvailableDeveloperBalance,
-	heldTranscriptMicroCredits,
-} from "@/lib/developer-credits";
+import { debitDeveloperUsage } from "@/lib/developer-credits";
 import {
 	transcriptionBilledSeconds,
 	transcriptionMicroCredits,
@@ -17,6 +13,11 @@ import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
 } from "@/lib/developer-transcripts";
+import {
+	availableBalance,
+	heldTranscriptMicroCredits,
+} from "@/lib/infra-balance";
+import { accountStanding } from "@/lib/infra-standing";
 
 export const INSUFFICIENT_CREDITS_MESSAGE =
 	"The credit balance could not cover this transcript. Nothing was charged.";
@@ -31,14 +32,69 @@ export type TranscriptSettlement =
 	| { state: "insufficient_credits" }
 	| { state: "skipped"; reason: "missing" | "deleted" | "not_processing" };
 
-export const getAvailableTranscriptBalance = getAvailableDeveloperBalance;
+export type TranscriptStartRefusal = {
+	code: "out_of_credit" | "insufficient_credits";
+	message: string;
+	shortfallMicroCredits: number;
+};
+
+export function getAvailableTranscriptBalance(appId: string) {
+	return availableBalance(appId);
+}
+
+const dollarsUp = (microCredits: number) =>
+	`$${(Math.ceil(Math.max(0, microCredits) / 1000) / 100).toFixed(2)}`;
+
+export async function transcriptStartRefusal(
+	appId: string,
+	now: Date = new Date(),
+): Promise<TranscriptStartRefusal | null> {
+	const [account] = await db()
+		.select({ id: developerCreditAccounts.id })
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, appId))
+		.limit(1);
+	const available = account ? await availableBalance(appId) : null;
+	if (!account || available === null) {
+		return {
+			code: "insufficient_credits",
+			message: "This app has no credit. Add credits to start a transcript.",
+			shortfallMicroCredits: TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
+		};
+	}
+
+	const { standing, lastCharge } = await accountStanding(
+		db(),
+		{ id: account.id, balanceMicroCredits: available },
+		now,
+	);
+	if (standing.state !== "active") {
+		const shortfallMicroCredits =
+			Math.max(
+				lastCharge?.owedMicroCredits ?? 0,
+				TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
+			) - available;
+		return {
+			code: "out_of_credit",
+			message: `This app is out of credit, so new transcripts are blocked. Add at least ${dollarsUp(shortfallMicroCredits)} to start transcripts again.`,
+			shortfallMicroCredits,
+		};
+	}
+
+	if (available < TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS) {
+		const shortfallMicroCredits =
+			TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS - available;
+		return {
+			code: "insufficient_credits",
+			message: `Starting a transcript needs ${dollarsUp(TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS)} of available credit. Add at least ${dollarsUp(shortfallMicroCredits)}.`,
+			shortfallMicroCredits,
+		};
+	}
+	return null;
+}
 
 export async function hasMinimumTranscriptBalance(appId: string) {
-	const available = await getAvailableTranscriptBalance(appId);
-	return (
-		available !== null &&
-		available >= TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS
-	);
+	return (await transcriptStartRefusal(appId)) === null;
 }
 
 async function findTranscriptApp(transcriptId: string) {

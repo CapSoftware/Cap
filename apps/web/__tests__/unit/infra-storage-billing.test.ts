@@ -116,6 +116,51 @@ describe("daily storage charge", () => {
 		]);
 	});
 
+	it("leaves credit held for a running transcript alone", async () => {
+		ledger.account.balanceMicroCredits = 10_100;
+		ledger.heldMicroCredits = 10_000;
+
+		const result = await charge();
+
+		expect(result).toMatchObject({
+			state: "billed",
+			owedMicroCredits: 144,
+			chargedMicroCredits: 100,
+			balanceMicroCredits: 10_000,
+			fellShort: true,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(10_000);
+		expect(storageRows()).toEqual([
+			expect.objectContaining({
+				amountMicroCredits: -100,
+				balanceAfterMicroCredits: 10_000,
+			}),
+		]);
+	});
+
+	it("takes nothing when the whole balance is held, then charges in full once the hold is released", async () => {
+		ledger.account.balanceMicroCredits = 10_000;
+		ledger.heldMicroCredits = 10_000;
+
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 0,
+			fellShort: true,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(10_000);
+		expect((await standing()).state).toBe("grace");
+
+		ledger.heldMicroCredits = 0;
+		expect((await standing()).state).toBe("active");
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+			shortSince: null,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(9_856);
+	});
+
 	it("charges once per day however often it runs", async () => {
 		ledger.account.balanceMicroCredits = 1_000_000;
 
@@ -553,9 +598,12 @@ describe("which videos are billed after the pipeline measures them", () => {
 });
 
 describe("available balance", () => {
-	it("is the account balance today, and nothing for an app with no account", async () => {
+	it("is the account balance less credit held for running transcripts, and nothing for an app with no account", async () => {
 		ledger.account.balanceMicroCredits = 1234;
 		expect(await availableBalance("app-1")).toBe(1234);
+
+		ledger.heldMicroCredits = 1000;
+		expect(await availableBalance("app-1")).toBe(234);
 
 		ledger.account.exists = false;
 		expect(await availableBalance("app-1")).toBe(null);

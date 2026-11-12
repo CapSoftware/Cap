@@ -5,10 +5,10 @@ import {
 	type DeveloperCreditTransactionType,
 	developerCreditAccounts,
 	developerCreditTransactions,
-	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
+import { heldTranscriptMicroCredits } from "@/lib/infra-balance";
 
 export async function addCreditsToAccount({
 	accountId,
@@ -110,33 +110,6 @@ const affectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-type DeveloperCreditReader = Pick<DeveloperCreditTransaction, "select">;
-
-export async function heldTranscriptMicroCredits(
-	reader: DeveloperCreditReader,
-	appId: string,
-	exceptTranscriptId: string | null = null,
-) {
-	const [held] = await reader
-		.select({
-			total: sql<
-				string | number | null
-			>`COALESCE(SUM(${developerTranscripts.reservedMicroCredits}), 0)`,
-		})
-		.from(developerTranscripts)
-		.where(
-			and(
-				eq(developerTranscripts.appId, appId),
-				eq(developerTranscripts.status, "processing"),
-				isNull(developerTranscripts.deletedAt),
-				exceptTranscriptId
-					? ne(developerTranscripts.id, exceptTranscriptId)
-					: undefined,
-			),
-		);
-	return Number(held?.total ?? 0) || 0;
-}
-
 export async function debitDeveloperUsage(
 	tx: DeveloperCreditTransaction,
 	input: {
@@ -224,21 +197,4 @@ export async function debitDeveloperUsage(
 		chargedMicroCredits: remaining,
 		balanceAfter: updated.balanceMicroCredits,
 	};
-}
-
-export async function getDeveloperBalance(appId: string) {
-	const [account] = await db()
-		.select({
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-		})
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
-	return account ? account.balanceMicroCredits : null;
-}
-
-export async function getAvailableDeveloperBalance(appId: string) {
-	const balance = await getDeveloperBalance(appId);
-	if (balance === null) return null;
-	return balance - (await heldTranscriptMicroCredits(db(), appId));
 }
