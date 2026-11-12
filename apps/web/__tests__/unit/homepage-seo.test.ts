@@ -14,6 +14,7 @@ import {
 } from "@/components/pages/HomeTwo/metadata";
 import { HomeTwoSchema } from "@/components/pages/HomeTwo/Schema";
 import { homepageSchema, homepageSeo } from "@/components/pages/HomeTwo/seo";
+import { homepageCopy } from "@/data/homepage-copy";
 import { PRICING } from "@/data/pricing";
 
 describe("homepage SEO", () => {
@@ -51,8 +52,19 @@ describe("homepage SEO", () => {
 		const serialized = JSON.stringify(homepageSchema);
 		expect(serialized).not.toContain("aggregateRating");
 		expect(serialized).not.toContain("reviewRating");
-		expect(serialized).not.toContain("FAQPage");
 		expect(serialized).not.toContain("priceValidUntil");
+	});
+
+	it("marks up only the questions the homepage FAQ shows", () => {
+		const faq = homepageSchema["@graph"].find(
+			(entity) => entity["@type"] === "FAQPage",
+		);
+		expect(faq).toMatchObject({
+			mainEntity: homepageCopy.faq.items.map((item) => ({
+				name: item.question,
+				acceptedAnswer: { text: item.answer },
+			})),
+		});
 	});
 
 	it("uses the displayed plan prices and supported desktop platforms", () => {
