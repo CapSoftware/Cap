@@ -1,20 +1,27 @@
 import clsx from "clsx";
 import type { Metadata } from "next";
 import {
-	DELIVERY_DOLLARS_PER_1000_MINUTES,
-	SPEECH_DOLLARS_PER_HOUR,
-	STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
-	UPLOAD_DOLLARS_PER_MINUTE,
-} from "@/lib/developer-pricing";
-import { formatCredits } from "@/lib/infra-usage";
+	autoTopUpFailureText,
+	getAutoTopUpFailure,
+} from "@/lib/infra-auto-top-up";
+import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_RESOLUTION_TIERS,
+	INFRA_SPEECH_DOLLARS_PER_HOUR,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
+import { getInfraBilling } from "@/lib/infra-standing";
+import { formatCredits, INFRA_TIER_LABELS } from "@/lib/infra-usage";
 import { CreditTransactionTable } from "../../_components/credit-transaction-table";
 import { ProCredit } from "../../_components/pro-credit";
-import { Block, MONO, PageHeader } from "../../_components/ui";
+import { StandingNotice } from "../../_components/standing-notice";
+import { Block, MONO, PageHeader, TD, TH, TR } from "../../_components/ui";
 import {
 	getDeveloperTransactions,
 	getInfraProCredit,
 	requireInfraApp,
 } from "../../infra-data";
+import { AutoTopUp } from "./auto-top-up";
 import { TopUp } from "./top-up";
 
 export const metadata: Metadata = {
@@ -23,28 +30,42 @@ export const metadata: Metadata = {
 
 const dollars = (value: number) => `$${value.toFixed(2)}`;
 
-const rates = [
-	{
-		name: "Upload",
-		price: dollars(UPLOAD_DOLLARS_PER_MINUTE),
-		unit: "per minute uploaded",
-	},
+const tieredRates = [
 	{
 		name: "Storage",
-		price: dollars(STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH),
-		unit: "per 1,000 minutes stored per month",
+		unit: "per 1,000 minutes a month",
+		rates: INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 	},
 	{
 		name: "Delivery",
-		price: dollars(DELIVERY_DOLLARS_PER_1000_MINUTES),
 		unit: "per 1,000 minutes watched",
-	},
-	{
-		name: "Speech to text",
-		price: dollars(SPEECH_DOLLARS_PER_HOUR),
-		unit: "per audio hour",
+		rates: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 	},
 ];
+
+const flatRates = [
+	{
+		name: "Speech to text",
+		unit: "per audio hour",
+		price: dollars(INFRA_SPEECH_DOLLARS_PER_HOUR),
+	},
+	{ name: "Encoding and upload", unit: null, price: "Free" },
+];
+
+const failureDay = new Intl.DateTimeFormat("en-US", {
+	month: "long",
+	day: "numeric",
+	timeZone: "UTC",
+});
+
+const RATE_NAME =
+	"py-3 pr-6 text-left text-[13.5px] font-normal leading-[1.45] text-[#E8ECF4]";
+const RATE_UNIT = "block text-[12.5px] text-[rgba(232,236,244,0.46)]";
+const RATE_PRICE = clsx(
+	TD,
+	MONO,
+	"text-right text-[14px] tabular-nums text-white",
+);
 
 export default async function InfraBillingPage({
 	params,
@@ -53,19 +74,26 @@ export default async function InfraBillingPage({
 }) {
 	const { appId } = await params;
 	const { app } = await requireInfraApp(appId);
-	const [transactions, proCredit] = await Promise.all([
-		app.creditAccount
-			? getDeveloperTransactions(app.creditAccount.id)
-			: Promise.resolve([]),
+	const account = app.creditAccount;
+	const [transactions, proCredit, billing, failure] = await Promise.all([
+		account ? getDeveloperTransactions(account.id) : Promise.resolve([]),
 		getInfraProCredit(),
+		getInfraBilling(app.id),
+		account ? getAutoTopUpFailure(account.id) : Promise.resolve(null),
 	]);
-	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
+	const balance = account?.balanceMicroCredits ?? 0;
 
 	return (
 		<>
 			<PageHeader
 				title="Billing"
 				description={`Prepaid credits for ${app.name}. Usage is drawn from this balance.`}
+			/>
+
+			<StandingNotice
+				appId={app.id}
+				standing={billing.standing}
+				shortfallMicroCredits={billing.admission.shortfallMicroCredits}
 			/>
 
 			<div className="grid gap-x-16 gap-y-12 border-t border-[rgba(222,230,246,0.08)] pt-9 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -82,7 +110,7 @@ export default async function InfraBillingPage({
 						{formatCredits(balance)}
 					</p>
 					<div className="mt-9">
-						{app.creditAccount ? (
+						{account ? (
 							<>
 								<TopUp appId={app.id} />
 								<div className="mt-8 border-t border-[rgba(222,230,246,0.08)] pt-6">
@@ -98,31 +126,82 @@ export default async function InfraBillingPage({
 				</section>
 
 				<Block title="Rates">
-					<dl className="m-0">
-						{rates.map((rate) => (
-							<div
-								key={rate.name}
-								className="flex items-baseline justify-between gap-6 border-b border-[rgba(222,230,246,0.07)] py-3"
-							>
-								<dt className="text-[14px] text-[#E8ECF4]">{rate.name}</dt>
-								<dd className="m-0 flex flex-wrap items-baseline justify-end gap-x-2 text-right">
-									<span
-										className={clsx(
-											MONO,
-											"text-[14px] tabular-nums text-white",
-										)}
-									>
-										{rate.price}
-									</span>
-									<span className="text-[12.5px] text-[rgba(232,236,244,0.46)]">
-										{rate.unit}
-									</span>
-								</dd>
-							</div>
-						))}
-					</dl>
+					<div className="relative overflow-x-auto">
+						<table className="w-full border-collapse">
+							<thead>
+								<tr className={TR}>
+									<th className={TH}>
+										<span className="sr-only">Rate</span>
+									</th>
+									{INFRA_RESOLUTION_TIERS.map((tier) => (
+										<th key={tier} className={clsx(TH, "text-right")}>
+											{INFRA_TIER_LABELS[tier]}
+										</th>
+									))}
+								</tr>
+							</thead>
+							<tbody>
+								{tieredRates.map((rate) => (
+									<tr key={rate.name} className={TR}>
+										<th scope="row" className={RATE_NAME}>
+											{rate.name}
+											<span className={RATE_UNIT}>{rate.unit}</span>
+										</th>
+										{INFRA_RESOLUTION_TIERS.map((tier) => (
+											<td key={tier} className={RATE_PRICE}>
+												{dollars(rate.rates[tier])}
+											</td>
+										))}
+									</tr>
+								))}
+								{flatRates.map((rate) => (
+									<tr key={rate.name} className={TR}>
+										<th scope="row" className={RATE_NAME}>
+											{rate.name}
+											{rate.unit && (
+												<span className={RATE_UNIT}>{rate.unit}</span>
+											)}
+										</th>
+										<td
+											colSpan={INFRA_RESOLUTION_TIERS.length}
+											className={RATE_PRICE}
+										>
+											{rate.price}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+					<p className="m-0 mt-4 max-w-[520px] text-pretty text-[13px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
+						Storage is charged once a day for each video at its resolution.
+						Uploading needs a balance that covers seven days of storage.
+					</p>
 				</Block>
 			</div>
+
+			{account && (
+				<Block
+					title="Auto top-up"
+					description="Add credits from a saved card when the balance runs low."
+				>
+					<AutoTopUp
+						appId={app.id}
+						hasCard={!!account.stripePaymentMethodId}
+						enabled={account.autoTopUpEnabled}
+						thresholdMicroCredits={account.autoTopUpThresholdMicroCredits}
+						amountCents={account.autoTopUpAmountCents}
+						failure={
+							failure
+								? {
+										day: failureDay.format(failure.failedAt),
+										reason: autoTopUpFailureText(failure.reason),
+									}
+								: null
+						}
+					/>
+				</Block>
+			)}
 
 			<Block title="Transactions" description="The 50 most recent.">
 				<CreditTransactionTable transactions={transactions} />

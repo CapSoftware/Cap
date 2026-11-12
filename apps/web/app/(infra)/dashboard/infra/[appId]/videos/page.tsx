@@ -38,9 +38,7 @@ export default async function InfraVideosPage({
 					title="Videos"
 					description="No videos yet. Drop one in, or create it through the API, and it shows up here."
 				/>
-				{publicKeyValue && (
-					<UploadDrop appId={app.id} publicKey={publicKeyValue} />
-				)}
+				<UploadDrop appId={app.id} />
 				<div className="max-w-[640px]">
 					<GetStarted
 						appId={app.id}
@@ -48,19 +46,12 @@ export default async function InfraVideosPage({
 						isProduction={app.environment === "production"}
 						balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
 						proCredit={await getInfraProCredit()}
-						uploadHere={!!publicKeyValue}
+						uploadHere
 					/>
 				</div>
 			</>
 		);
 	}
 
-	return (
-		<VideosClient
-			appId={app.id}
-			videos={videos}
-			userId={userId ?? ""}
-			publicKey={publicKeyValue}
-		/>
-	);
+	return <VideosClient appId={app.id} videos={videos} userId={userId ?? ""} />;
 }

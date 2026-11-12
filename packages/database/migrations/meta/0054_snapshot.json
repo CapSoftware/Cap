@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "f1736edf-c73b-4c2b-8b8b-09d902ea82c8",
+	"id": "c9875b66-8528-4189-85b8-cde881af0fff",
 	"prevId": "f231f465-a0b5-4669-928d-444ffc2ac65a",
 	"tables": {
 		"accounts": {
@@ -1063,6 +1063,11 @@
 					"name": "app_id_unique",
 					"columns": ["appId"],
 					"isUnique": true
+				},
+				"owner_idx": {
+					"name": "owner_idx",
+					"columns": ["ownerId"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1157,6 +1162,11 @@
 				"account_type_created_idx": {
 					"name": "account_type_created_idx",
 					"columns": ["accountId", "type", "createdAt"],
+					"isUnique": false
+				},
+				"account_created_idx": {
+					"name": "account_created_idx",
+					"columns": ["accountId", "createdAt"],
 					"isUnique": false
 				},
 				"account_ref_dedup_idx": {
@@ -1275,247 +1285,6 @@
 			},
 			"checkConstraint": {}
 		},
-		"developer_transcripts": {
-			"name": "developer_transcripts",
-			"columns": {
-				"id": {
-					"name": "id",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"appId": {
-					"name": "appId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"externalUserId": {
-					"name": "externalUserId",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"name": {
-					"name": "name",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "'Untitled'"
-				},
-				"status": {
-					"name": "status",
-					"type": "varchar(16)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"sourceType": {
-					"name": "sourceType",
-					"type": "varchar(8)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"sourceUrl": {
-					"name": "sourceUrl",
-					"type": "varchar(2048)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"s3Key": {
-					"name": "s3Key",
-					"type": "varchar(512)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"resultKey": {
-					"name": "resultKey",
-					"type": "varchar(512)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"sourceBytes": {
-					"name": "sourceBytes",
-					"type": "bigint unsigned",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"durationSeconds": {
-					"name": "durationSeconds",
-					"type": "float",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"requestedLanguage": {
-					"name": "requestedLanguage",
-					"type": "varchar(16)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"language": {
-					"name": "language",
-					"type": "varchar(16)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"text": {
-					"name": "text",
-					"type": "mediumtext",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"wordCount": {
-					"name": "wordCount",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"reservedMicroCredits": {
-					"name": "reservedMicroCredits",
-					"type": "bigint unsigned",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"billedMicroCredits": {
-					"name": "billedMicroCredits",
-					"type": "bigint unsigned",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"errorCode": {
-					"name": "errorCode",
-					"type": "varchar(64)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"errorMessage": {
-					"name": "errorMessage",
-					"type": "varchar(512)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"metadata": {
-					"name": "metadata",
-					"type": "json",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"runId": {
-					"name": "runId",
-					"type": "varchar(32)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"queuedAt": {
-					"name": "queuedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"startedAt": {
-					"name": "startedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"completedAt": {
-					"name": "completedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"deletedAt": {
-					"name": "deletedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "(now())"
-				},
-				"updatedAt": {
-					"name": "updatedAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"onUpdate": true,
-					"default": "(now())"
-				}
-			},
-			"indexes": {
-				"dev_transcripts_app_list_idx": {
-					"name": "dev_transcripts_app_list_idx",
-					"columns": ["appId", "deletedAt", "createdAt", "id"],
-					"isUnique": false
-				},
-				"dev_transcripts_app_user_idx": {
-					"name": "dev_transcripts_app_user_idx",
-					"columns": ["appId", "externalUserId", "createdAt"],
-					"isUnique": false
-				},
-				"dev_transcripts_app_status_idx": {
-					"name": "dev_transcripts_app_status_idx",
-					"columns": ["appId", "status", "createdAt"],
-					"isUnique": false
-				},
-				"dev_transcripts_status_updated_idx": {
-					"name": "dev_transcripts_status_updated_idx",
-					"columns": ["status", "updatedAt"],
-					"isUnique": false
-				}
-			},
-			"foreignKeys": {
-				"developer_transcripts_appId_developer_apps_id_fk": {
-					"name": "developer_transcripts_appId_developer_apps_id_fk",
-					"tableFrom": "developer_transcripts",
-					"tableTo": "developer_apps",
-					"columnsFrom": ["appId"],
-					"columnsTo": ["id"],
-					"onDelete": "no action",
-					"onUpdate": "no action"
-				}
-			},
-			"compositePrimaryKeys": {
-				"developer_transcripts_id": {
-					"name": "developer_transcripts_id",
-					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
 		"developer_videos": {
 			"name": "developer_videos",
 			"columns": {
@@ -1597,8 +1366,66 @@
 					"notNull": false,
 					"autoincrement": false
 				},
+				"status": {
+					"name": "status",
+					"type": "varchar(16)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'uploading'"
+				},
+				"playbackId": {
+					"name": "playbackId",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"maxResolutionTier": {
+					"name": "maxResolutionTier",
+					"type": "varchar(8)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'1080p'"
+				},
+				"renditions": {
+					"name": "renditions",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"storedBytes": {
+					"name": "storedBytes",
+					"type": "bigint unsigned",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"errorReason": {
+					"name": "errorReason",
+					"type": "varchar(512)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"processing": {
+					"name": "processing",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"deletedAt": {
 					"name": "deletedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"filesDeletedAt": {
+					"name": "filesDeletedAt",
 					"type": "timestamp",
 					"primaryKey": false,
 					"notNull": false,
@@ -1636,6 +1463,16 @@
 				"app_deleted_idx": {
 					"name": "app_deleted_idx",
 					"columns": ["appId", "deletedAt"],
+					"isUnique": false
+				},
+				"playback_id_idx": {
+					"name": "playback_id_idx",
+					"columns": ["playbackId"],
+					"isUnique": true
+				},
+				"files_pending_idx": {
+					"name": "files_pending_idx",
+					"columns": ["filesDeletedAt", "deletedAt"],
 					"isUnique": false
 				}
 			},

@@ -1051,7 +1051,7 @@ impl MainWindow {
         window.on_window_should_close(cx, |_, cx| {
             // The custom Windows X hides to the tray; native close requests must still quit.
             #[cfg(target_os = "windows")]
-            cx.defer(crate::menus::quit);
+            cx.defer(|cx| crate::menus::quit(crate::menus::QuitSource::MainWindowClose, cx));
             #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false

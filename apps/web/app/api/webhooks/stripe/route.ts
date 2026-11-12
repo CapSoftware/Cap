@@ -32,6 +32,10 @@ import {
 	US_EIN_METADATA_KEY,
 } from "@/lib/checkout/customer-us-ein";
 import { addCreditsToAccount } from "@/lib/developer-credits";
+import {
+	saveCardFromCheckout,
+	settleAutoTopUpPaymentIntent,
+} from "@/lib/infra-auto-top-up";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	attachSsoCheckout,
@@ -47,6 +51,8 @@ const relevantEvents = new Set([
 	"customer.subscription.deleted",
 	"invoice.paid",
 	"invoice.payment_failed",
+	"payment_intent.succeeded",
+	"payment_intent.payment_failed",
 ]);
 
 async function grantDeveloperCredits(
@@ -473,6 +479,16 @@ export const POST = async (req: Request) => {
 	if (relevantEvents.has(event.type)) {
 		try {
 			if (
+				event.type === "payment_intent.succeeded" ||
+				event.type === "payment_intent.payment_failed"
+			) {
+				await settleAutoTopUpPaymentIntent(
+					event.data.object as Stripe.PaymentIntent,
+					event.type === "payment_intent.succeeded" ? "succeeded" : "failed",
+				);
+				return NextResponse.json({ received: true });
+			}
+			if (
 				event.type === "customer.subscription.created" ||
 				event.type === "customer.subscription.updated" ||
 				event.type === "customer.subscription.deleted"
@@ -531,6 +547,10 @@ export const POST = async (req: Request) => {
 				const session = event.data.object as Stripe.Checkout.Session;
 				if (session.metadata?.type === "saml_sso") {
 					await attachSsoCheckout(session.id);
+					return NextResponse.json({ received: true });
+				}
+				if (session.metadata?.type === "developer_card") {
+					await saveCardFromCheckout(session);
 					return NextResponse.json({ received: true });
 				}
 				const subscriptionId =
