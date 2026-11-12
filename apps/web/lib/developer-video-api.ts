@@ -50,6 +50,7 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,
 		filesDeletedAt: _filesDeletedAt,
+		s3Key: _s3Key,
 		...fields
 	} = video;
 	return {

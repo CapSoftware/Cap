@@ -77,7 +77,11 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 				query.params.includes(video.appId);
 			const live =
 				!query.sql.includes("`deletedAt` is null") || video.deletedAt === null;
-			if (!identified || !scoped || !live) return [];
+			const owned =
+				!query.sql.includes("`externalUserId` = ?") ||
+				(video.externalUserId !== null &&
+					query.params.includes(video.externalUserId));
+			if (!identified || !scoped || !live || !owned) return [];
 			return fields && "video" in fields ? [{ video }] : [video];
 		};
 		const chain = {

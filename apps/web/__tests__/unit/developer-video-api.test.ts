@@ -73,6 +73,7 @@ async function get(path: string) {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.store.video = ready();
+	mocks.store.updates = [];
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
 	mocks.redrive.mockResolvedValue(false);
@@ -92,7 +93,6 @@ describe("developer video API", () => {
 			width: 1920,
 			height: 1080,
 			fps: 30,
-			s3Key: "developer/app-1/video-1/video",
 			transcriptionStatus: null,
 			metadata: null,
 			status: "ready",
@@ -128,6 +128,144 @@ describe("developer video API", () => {
 			hlsUrl: `${BASE}/master.m3u8`,
 		});
 		expect(body.data[0]).not.toHaveProperty("processing");
+	});
+
+	it("keeps the storage key out of get and list responses", async () => {
+		for (const path of ["/video-1", "/"]) {
+			const { body } = await get(path);
+			expect(JSON.stringify(body)).not.toContain("s3Key");
+			expect(JSON.stringify(body)).not.toContain("developer/app-1");
+		}
+	});
+
+	it("returns exactly the fields the OpenAPI description lists", async () => {
+		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
+
+		const video = await get("/video-1");
+		expect(Object.keys(video.body.data).sort()).toEqual(
+			Object.keys(schemas.DeveloperVideo.properties).sort(),
+		);
+		const status = await get("/video-1/status");
+		expect(Object.keys(status.body.data).sort()).toEqual(
+			Object.keys(schemas.VideoStatus.properties).sort(),
+		);
+	});
+
+	describe("list filters", () => {
+		beforeEach(() => {
+			mocks.store.video = { ...ready(), externalUserId: "user-1" };
+		});
+
+		it.each([
+			["userId=user-1", 1],
+			["externalUserId=user-1", 1],
+			["userId=user-1&externalUserId=user-1", 1],
+			["userId=user-2", 0],
+			["externalUserId=user-2", 0],
+			["limit=1&offset=0", 1],
+		])("applies ?%s", async (query, count) => {
+			const { status, body } = await get(`/?${query}`);
+
+			expect(status).toBe(200);
+			expect(body.data).toHaveLength(count);
+		});
+
+		it.each([
+			["externalUserid=user-2", "unknown_parameter"],
+			["userid=user-2", "unknown_parameter"],
+			["user_id=user-2", "unknown_parameter"],
+			["limit=0", "invalid_limit"],
+			["limit=abc", "invalid_limit"],
+			["limit=-1", "invalid_limit"],
+			["limit=101", "invalid_limit"],
+			["offset=abc", "invalid_offset"],
+			["offset=-5", "invalid_offset"],
+			["userId=user-1&externalUserId=user-2", "conflicting_parameters"],
+		])("refuses ?%s rather than listing every video", async (query, code) => {
+			const { status, body } = await get(`/?${query}`);
+
+			expect(status).toBe(400);
+			expect(body).toMatchObject({ code });
+			expect(typeof body.error).toBe("string");
+			expect(typeof body.hint).toBe("string");
+			expect(body).not.toHaveProperty("data");
+		});
+	});
+
+	describe("not found", () => {
+		it.each([
+			["GET", "/missing"],
+			["GET", "/missing/status"],
+			["DELETE", "/missing"],
+		])("gives %s %s a code and a hint", async (method, path) => {
+			const response = await app.request(path, { method });
+
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({
+				error: "Video not found",
+				code: "video_not_found",
+				hint: expect.stringContaining("belongs to this app"),
+			});
+		});
+
+		it("hides a deleted video from get and status", async () => {
+			mocks.store.video = { ...ready(), deletedAt: new Date() };
+
+			for (const path of ["/video-1", "/video-1/status"]) {
+				const { status, body } = await get(path);
+				expect(status).toBe(404);
+				expect(body.code).toBe("video_not_found");
+			}
+		});
+	});
+
+	describe("delete", () => {
+		const remove = (path = "/video-1") =>
+			app.request(path, { method: "DELETE" });
+
+		it("deletes a video", async () => {
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+		});
+
+		it("answers a repeated delete with success and leaves the row alone", async () => {
+			const first = await remove();
+			const deletedAt = mocks.store.video?.deletedAt;
+			const second = await remove();
+
+			expect(first.status).toBe(200);
+			expect(second.status).toBe(200);
+			expect(await second.json()).toEqual({ success: true });
+			expect(mocks.store.updates).toHaveLength(1);
+			expect(mocks.store.video?.deletedAt).toBe(deletedAt);
+		});
+
+		it("still answers 404 for a video of another app, deleted or not", async () => {
+			for (const deletedAt of [null, new Date()]) {
+				mocks.store.video = { ...ready(), appId: "app-2", deletedAt };
+
+				const response = await remove();
+
+				expect(response.status).toBe(404);
+				expect(await response.json()).toMatchObject({
+					code: "video_not_found",
+				});
+			}
+			expect(mocks.store.updates).toHaveLength(0);
+		});
+
+		it("answers 404 for a video that never existed", async () => {
+			mocks.store.video = null;
+
+			const response = await remove();
+
+			expect(response.status).toBe(404);
+			expect(mocks.store.updates).toHaveLength(0);
+		});
 	});
 
 	it("keeps the status endpoint's fields and adds playback", async () => {
