@@ -68,6 +68,40 @@
 	background: #000;
 }
 
+.cover {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	display: grid;
+	place-items: center;
+	width: 64px;
+	height: 64px;
+	margin: -32px 0 0 -32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.6);
+	color: inherit;
+	cursor: pointer;
+	transition: opacity 0.2s;
+}
+
+.cover svg {
+	width: 24px;
+	height: 24px;
+	fill: currentColor;
+	pointer-events: none;
+}
+
+.player[data-playing="true"] .cover:not(:focus-visible) {
+	opacity: 0;
+	pointer-events: none;
+}
+
+.player[data-controls="false"] .bar {
+	display: none;
+}
+
 .bar {
 	position: absolute;
 	left: 0;
@@ -106,6 +140,7 @@
 }
 
 .control:focus-visible,
+.cover:focus-visible,
 .track:focus-visible {
 	outline: 2px solid rgba(232, 236, 244, 0.85);
 	outline-offset: 1px;
@@ -196,6 +231,7 @@
 
 @media (prefers-reduced-motion: reduce) {
 	.bar,
+	.cover,
 	.spinner,
 	.rail {
 		transition: none;
