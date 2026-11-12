@@ -1,13 +1,14 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
+import { Cause, Effect } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card";
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
 import { Button, FOCUS, Input, MONO } from "../../_components/ui";
 
@@ -19,6 +20,14 @@ const NOTE =
 	"m-0 max-w-[520px] text-pretty text-[13.5px] leading-[1.6] text-[rgba(232,236,244,0.58)]";
 
 const dollars = (value: string) => Number.parseFloat(value);
+
+const asError = (error: unknown) =>
+	error instanceof Error ? error : new Error(String(error));
+
+const messageOf = (cause: Cause.Cause<Error>, fallback: string) => {
+	const error = Cause.squash(cause);
+	return error instanceof Error && error.message ? error.message : fallback;
+};
 
 export function AutoTopUp({
 	appId,
@@ -69,29 +78,33 @@ export function AutoTopUp({
 		return () => clearTimeout(timer);
 	}, [justSaved, hasCard, checks, router, appId]);
 
-	const saveCard = useMutation({
-		mutationFn: async () => {
-			const res = await fetch("/api/developer/credits/card", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ appId }),
-			});
-			const data: { url?: string; error?: string } = await res
-				.json()
-				.catch(() => ({}));
-			if (!res.ok || !data.url) {
-				throw new Error(data.error ?? "Could not open the card form");
-			}
-			window.location.href = data.url;
-		},
-		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Could not open the card form",
-			),
+	const saveCard = useEffectMutation({
+		mutationFn: () =>
+			Effect.tryPromise({
+				try: async () => {
+					const res = await fetch("/api/developer/credits/card", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ appId }),
+					});
+					const data: { url?: string } = await res.json().catch(() => ({}));
+					if (!res.ok || !data.url) {
+						throw new Error("Could not open the card form");
+					}
+					window.location.href = data.url;
+				},
+				catch: asError,
+			}),
+		onError: (cause) =>
+			toast.error(messageOf(cause, "Could not open the card form")),
 	});
 
-	const removeCard = useMutation({
-		mutationFn: () => removeDeveloperSavedCard(appId),
+	const removeCard = useEffectMutation({
+		mutationFn: () =>
+			Effect.tryPromise({
+				try: () => removeDeveloperSavedCard(appId),
+				catch: asError,
+			}),
 		onSuccess: () => {
 			setEnabled(false);
 			toast.success("Card removed");
@@ -100,24 +113,26 @@ export function AutoTopUp({
 		onError: () => toast.error("Could not remove the card"),
 	});
 
-	const save = useMutation({
+	const save = useEffectMutation({
 		mutationFn: () =>
-			updateDeveloperAutoTopUp({
-				appId,
-				enabled,
-				thresholdMicroCredits: Math.round(
-					dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
-				),
-				amountCents: Math.round(dollars(amount) * 100),
+			Effect.tryPromise({
+				try: () =>
+					updateDeveloperAutoTopUp({
+						appId,
+						enabled,
+						thresholdMicroCredits: Math.round(
+							dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
+						),
+						amountCents: Math.round(dollars(amount) * 100),
+					}),
+				catch: asError,
 			}),
 		onSuccess: () => {
 			toast.success(enabled ? "Auto top-up is on" : "Auto top-up is off");
 			router.refresh();
 		},
-		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Could not save auto top-up",
-			),
+		onError: (cause) =>
+			toast.error(messageOf(cause, "Could not save auto top-up")),
 	});
 
 	if (!hasCard) {
