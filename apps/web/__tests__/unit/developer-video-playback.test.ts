@@ -107,7 +107,7 @@ describe("developer video playback route", () => {
 		);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("cache-control")).toBe(
-			"public, max-age=300, s-maxage=300",
+			"public, max-age=60, s-maxage=60",
 		);
 	});
 
@@ -153,7 +153,7 @@ describe("developer video playback route", () => {
 			`https://cdn.example/${key}?expires=43200&sig=a,b`,
 		);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
-		expect(response.headers.get("cache-control")).toContain("max-age=300");
+		expect(response.headers.get("cache-control")).toContain("max-age=60");
 	});
 
 	it.each([
