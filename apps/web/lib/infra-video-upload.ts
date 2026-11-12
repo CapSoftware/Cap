@@ -36,6 +36,11 @@ export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
 export const MAX_PRESIGN_BATCH = 50;
 const STORED_BYTES_PER_SECOND = 2_500_000;
 const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
+// A file is billed for at least its size at STORED_BYTES_PER_SECOND, and for
+// at most MAX_UPLOAD_DURATION_SECS. Past this size the two meet, so every
+// further byte would be stored without being billed.
+export const MAX_UPLOAD_BYTES =
+	MAX_UPLOAD_DURATION_SECS * STORED_BYTES_PER_SECOND;
 
 const ALLOWED_CONTENT_TYPES = [
 	"video/mp4",
@@ -102,6 +107,14 @@ const partsMismatch = () =>
 		"parts_mismatch",
 		"Uploaded parts do not match the request",
 		"Send each uploaded part once, with its partNumber and the ETag header its PUT returned. Upload any missing part again first.",
+	);
+
+const fileTooLarge = () =>
+	fail(
+		400,
+		"file_too_large",
+		`The file is larger than the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit`,
+		"The upload was discarded and the video can take a new one. Export the video at a lower bitrate or split it, then call initiate again and upload the smaller file.",
 	);
 
 const MIN_PART_BYTES = 5 * 1024 * 1024;
@@ -568,6 +581,11 @@ export async function completeInfraUpload({
 
 		const { totalBytes } = measured;
 		if (totalBytes === null) return partsMismatch();
+		const tooLarge = totalBytes > MAX_UPLOAD_BYTES;
+		if (tooLarge && !measured.assembled) {
+			await discardOpenUpload(s3Key, uploadId);
+			return fileTooLarge();
+		}
 		const storedDuration = recordedUploadDuration(durationInSecs, totalBytes);
 		const upload = {
 			appId,
@@ -593,6 +611,13 @@ export async function completeInfraUpload({
 				"Another request is completing this upload. Try again shortly.",
 				"Wait a few seconds, then send the same request again. Do not abort or delete.",
 			);
+		}
+
+		if (tooLarge) {
+			await removeStoredFile(s3Key);
+			await releaseDeveloperVideoUpload(videoId, claim);
+			claim = null;
+			return fileTooLarge();
 		}
 
 		if (!measured.assembled) {
@@ -662,6 +687,19 @@ export async function completeInfraUpload({
 		}
 		console.error("Error completing multipart upload:", error);
 		return storageFailure("Failed to complete upload");
+	}
+}
+
+// A failed abort leaves the parts for the upload cleanup, which aborts any
+// upload still open a day after it was opened.
+async function discardOpenUpload(s3Key: string, uploadId: string) {
+	try {
+		await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+			yield* bucket.multipart.abort(s3Key, uploadId);
+		}).pipe(provideOptionalAuth, runPromise);
+	} catch (error) {
+		console.error("Error aborting an oversized upload:", s3Key, error);
 	}
 }
 
