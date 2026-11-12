@@ -83,12 +83,19 @@ describe("process developer video workflow", () => {
 		expect(mocks.dispatch).not.toHaveBeenCalled();
 	});
 
-	it("tries an unclear probe error a few times, then says the file could not be opened", async () => {
+	it("gives an unclear probe error about ten minutes to clear, then says the file could not be opened", async () => {
 		mocks.prepare.mockResolvedValue("unclear");
 
 		expect(await run()).toEqual({ success: false });
 
-		expect(mocks.prepare).toHaveBeenCalledTimes(4);
+		expect(mocks.prepare).toHaveBeenCalledTimes(6);
+		expect(mocks.sleep.mock.calls.map(([wait]) => wait)).toEqual([
+			"20s",
+			"40s",
+			"80s",
+			"160s",
+			"320s",
+		]);
 		expect(mocks.fail.mock.calls).toEqual([
 			[
 				"video-1",

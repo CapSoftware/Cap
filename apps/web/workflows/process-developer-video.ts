@@ -27,9 +27,25 @@ const TIMED_OUT =
 const INTERNAL_FAILURE =
 	"Processing failed because of a problem on our side. Upload the video again.";
 const UNOPENABLE = "The uploaded file could not be opened. Upload it again.";
-const MAX_UNCLEAR_PROBES = 4;
+// An unclear probe error is tried again after 20, 40, 80, 160 and 320
+// seconds, so a storage or media-server fault has about ten minutes to clear
+// and a file that never opens costs six probes.
+const MAX_UNCLEAR_PROBES = 6;
+const MAX_UNCLEAR_WAIT_SECONDS = 320;
 
 type Prepared = DeveloperVideoPreparation | { refused: string };
+
+function prepareWaitSeconds(
+	prepared: DeveloperVideoPreparation,
+	unclear: number,
+): number {
+	if (prepared === "probing") return PROBING_POLL_SECONDS;
+	if (prepared !== "unclear") return RETRY_SECONDS;
+	return Math.min(
+		MAX_UNCLEAR_WAIT_SECONDS,
+		RETRY_SECONDS * 2 ** Math.max(0, unclear - 1),
+	);
+}
 
 export async function processDeveloperVideoWorkflow(
 	payload: ProcessDeveloperVideoPayload,
@@ -57,9 +73,7 @@ export async function processDeveloperVideoWorkflow(
 				await failVideo(videoId, encodeId, TIMED_OUT);
 				return { success: false };
 			}
-			await sleep(
-				`${prepared === "probing" ? PROBING_POLL_SECONDS : RETRY_SECONDS}s`,
-			);
+			await sleep(`${prepareWaitSeconds(prepared, unclear)}s`);
 		}
 
 		for (let poll = 0; ; poll++) {
