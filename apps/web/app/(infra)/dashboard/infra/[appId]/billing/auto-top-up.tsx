@@ -7,10 +7,10 @@ import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card";
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
+import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { infraAppPath } from "@/lib/infra-routes";
 import { Button, FOCUS, Input, MONO } from "../../_components/ui";
 
-const MICRO_CREDITS_PER_DOLLAR = 100_000;
 const DEFAULT_THRESHOLD_DOLLARS = 5;
 const DEFAULT_AMOUNT_DOLLARS = 25;
 const CARD_CHECKS = 6;
