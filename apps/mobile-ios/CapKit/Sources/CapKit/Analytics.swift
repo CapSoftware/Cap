@@ -143,7 +143,8 @@ public final class Analytics: Sendable {
         configuration: Configuration = Configuration(),
         isEnabled: Bool = true,
         currentUserId: @escaping @Sendable () -> String?,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) {
         // Unbounded, because losing the result of a send would leave the worker waiting for it forever. The worker
         // never waits on the network, so nothing builds up here.
@@ -164,6 +165,7 @@ public final class Analytics: Sendable {
                 configuration: configuration,
                 currentUserId: currentUserId,
                 now: now,
+                sleep: sleep,
                 commands: continuation
             )
             for await command in stream {
@@ -235,6 +237,7 @@ extension Analytics {
         let configuration: Configuration
         let currentUserId: @Sendable () -> String?
         let now: @Sendable () -> Date
+        let sleep: @Sendable (Duration) async -> Void
         let commands: AsyncStream<Command>.Continuation
 
         private var pending: [Queued] = []
@@ -259,6 +262,7 @@ extension Analytics {
             configuration: Configuration,
             currentUserId: @escaping @Sendable () -> String?,
             now: @escaping @Sendable () -> Date,
+            sleep: @escaping @Sendable (Duration) async -> Void,
             commands: AsyncStream<Command>.Continuation
         ) {
             self.api = api
@@ -267,6 +271,7 @@ extension Analytics {
             self.configuration = configuration
             self.currentUserId = currentUserId
             self.now = now
+            self.sleep = sleep
             self.commands = commands
         }
 
@@ -415,8 +420,9 @@ extension Analytics {
             timerGeneration += 1
             let generation = timerGeneration
             let commands = commands
+            let sleep = sleep
             timer = Task.detached(priority: .utility) {
-                try? await Task.sleep(for: delay)
+                await sleep(delay)
                 guard !Task.isCancelled else { return }
                 commands.yield(.timer(generation))
             }

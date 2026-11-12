@@ -12,8 +12,40 @@ private final class Box<Value: Sendable>: Sendable {
     }
 }
 
+/// Stands in for the clock the queue waits on: every wait is recorded and only ends when a test says so, so no
+/// test depends on how fast the machine running it is.
+private final class ManualTimers: Sendable {
+    private struct State {
+        var delays: [Duration] = []
+        var held: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    var delays: [Duration] { state.withLock { $0.delays } }
+
+    func sleep(_ delay: Duration) async {
+        await withCheckedContinuation { continuation in
+            state.withLock {
+                $0.delays.append(delay)
+                $0.held.append(continuation)
+            }
+        }
+    }
+
+    /// Ends every wait. One the queue has cancelled wakes up and does nothing.
+    func fire() {
+        let held = state.withLock { state in
+            defer { state.held = [] }
+            return state.held
+        }
+        for continuation in held { continuation.resume() }
+    }
+}
+
 private struct Rig {
     let analytics: Analytics
+    let timers = ManualTimers()
     let transport: RecordingTransport
     let credentials: Box<CredentialSnapshot?>
     let status: Box<Int>
@@ -43,11 +75,9 @@ private struct Rig {
             .appending(path: "analytics-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
             .appending(path: "queue.json")
         var configuration = Analytics.Configuration()
-        // Nothing goes out by itself unless a test asks for it.
-        configuration.flushInterval = .seconds(600)
         configuration.flushThreshold = 10_000
-        configuration.retryDelay = .seconds(600)
         configure(&configuration)
+        let timers = timers
         self.analytics = Analytics(
             api: api,
             app: Self.app,
@@ -55,7 +85,8 @@ private struct Rig {
             configuration: configuration,
             isEnabled: isEnabled,
             currentUserId: { credentials.value?.userId },
-            now: { clock.value }
+            now: { clock.value },
+            sleep: { await timers.sleep($0) }
         )
         self.transport = transport
         self.credentials = credentials
@@ -67,7 +98,14 @@ private struct Rig {
     var requests: [URLRequest] { transport.requests }
 
     func events(_ index: Int) throws -> [[String: Any]] {
-        try #require(try bodyJSON(requests[index])["events"] as? [[String: Any]])
+        let requests = requests
+        try #require(requests.indices.contains(index))
+        return try #require(try bodyJSON(requests[index])["events"] as? [[String: Any]])
+    }
+
+    /// Timers register from their own tasks, so the order they appear in is not the order they were asked for.
+    func waits(_ seconds: Int...) -> Bool {
+        timers.delays.sorted() == seconds.map { Duration.seconds($0) }.sorted()
     }
 
     func names(_ index: Int) throws -> [String] {
@@ -154,15 +192,19 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     }
 
     @Test func waitsForTheIntervalThenSendsOnce() async throws {
-        let rig = Rig { $0.flushInterval = .milliseconds(400) }
+        let rig = Rig()
         rig.analytics.track("app_opened")
         rig.analytics.track("screen_view", ["screen": "caps"])
         rig.analytics.track("screen_view", ["screen": "settings"])
+        #expect(await eventually { rig.waits(30) })
         #expect(rig.requests.isEmpty)
+
+        rig.timers.fire()
         #expect(await eventually { rig.requests.count == 1 })
-        try? await Task.sleep(for: .milliseconds(250))
-        #expect(rig.requests.count == 1)
         #expect(try rig.names(0) == ["app_opened", "screen_view", "screen_view"])
+        await rig.analytics.flush()
+        #expect(rig.requests.count == 1)
+        #expect(rig.waits(30))
     }
 
     @Test func sendsWithoutWaitingOnceEnoughEventsQueue() async throws {
@@ -183,10 +225,10 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     }
 
     @Test func doesNothingWithNothingToSend() async {
-        let rig = Rig { $0.flushInterval = .milliseconds(20) }
+        let rig = Rig()
         await rig.analytics.flush()
-        try? await Task.sleep(for: .milliseconds(100))
         #expect(rig.requests.isEmpty)
+        #expect(rig.timers.delays.isEmpty)
         #expect(!rig.hasStoredQueue)
     }
 
@@ -247,33 +289,39 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     }
 
     @Test func keepsEventsThroughAFailureAndRetriesByItself() async throws {
-        let rig = Rig { $0.retryDelay = .milliseconds(60) }
+        let rig = Rig { $0.retryDelay = .seconds(45) }
         rig.status.value = 503
         rig.analytics.track("upload_started", ["source": "photos"])
         await rig.analytics.flush()
         #expect(rig.requests.count == 1)
         #expect(rig.hasStoredQueue)
+        #expect(await eventually { rig.waits(30, 45) })
 
         rig.status.value = 200
+        rig.timers.fire()
         #expect(await eventually { rig.requests.count == 2 })
         #expect(try rig.names(1) == ["upload_started"])
-        #expect(await eventually { !rig.hasStoredQueue })
-        try? await Task.sleep(for: .milliseconds(200))
+        await rig.analytics.flush()
+        #expect(!rig.hasStoredQueue)
         #expect(rig.requests.count == 2)
+        #expect(rig.waits(30, 45))
     }
 
     @Test func backsOffLongerAfterEachFailure() async {
         let rig = Rig {
-            $0.retryDelay = .milliseconds(40)
-            $0.maxRetryDelay = .milliseconds(160)
+            $0.retryDelay = .seconds(40)
+            $0.maxRetryDelay = .seconds(160)
         }
         rig.status.value = 0
         rig.analytics.track("app_opened")
-        let started = ContinuousClock.now
         await rig.analytics.flush()
-        // One attempt now, then retries 40, 80 and 160 ms apart: a fourth attempt cannot land before 280 ms.
-        #expect(await eventually { rig.requests.count == 4 })
-        #expect(ContinuousClock.now - started >= .milliseconds(270))
+        #expect(await eventually { rig.requests.count == 1 && rig.waits(30, 40) })
+        rig.timers.fire()
+        #expect(await eventually { rig.requests.count == 2 && rig.waits(30, 40, 80) })
+        rig.timers.fire()
+        #expect(await eventually { rig.requests.count == 3 && rig.waits(30, 40, 80, 160) })
+        rig.timers.fire()
+        #expect(await eventually { rig.requests.count == 4 && rig.waits(30, 40, 80, 160, 160) })
     }
 
     @Test func savesWhatIsWaitingWhileARequestIsStillOut() async throws {
@@ -281,14 +329,13 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         let storage = FileManager.default.temporaryDirectory
             .appending(path: "analytics-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
             .appending(path: "queue.json")
-        var configuration = Analytics.Configuration()
-        configuration.flushInterval = .seconds(600)
+        let timers = ManualTimers()
         let analytics = Analytics(
             api: CapAPI(environment: .production, transport: transport, credentials: { testCredentials }),
             app: Rig.app,
             storage: storage,
-            configuration: configuration,
-            currentUserId: { testCredentials.userId }
+            currentUserId: { testCredentials.userId },
+            sleep: { await timers.sleep($0) }
         )
         let saved: @Sendable () -> [String] = {
             guard let data = try? Data(contentsOf: storage),
@@ -318,17 +365,20 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     }
 
     @Test func leavesNoTimerRunningForEventsItMayNotSend() async throws {
-        let rig = Rig { $0.flushInterval = .milliseconds(30) }
+        let rig = Rig()
         rig.status.value = 0
         rig.analytics.track("cap_opened")
         await rig.analytics.flush()
+        #expect(await eventually { rig.waits(30, 30) })
+
         rig.status.value = 200
         rig.credentials.value = nil
         await rig.analytics.flush()
-        let settled = rig.requests.count
-        try? await Task.sleep(for: .milliseconds(300))
-        #expect(rig.requests.count == settled)
-        #expect(settled == 1)
+        rig.timers.fire()
+        await rig.analytics.flush()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(rig.requests.count == 1)
+        #expect(rig.waits(30, 30))
     }
 
     @Test func sendsWhatAnEarlierLaunchCouldNot() async throws {
