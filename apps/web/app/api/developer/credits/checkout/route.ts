@@ -12,6 +12,7 @@ import { canUseInfra } from "@/lib/infra-access";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { findCreditCode } from "@/lib/infra-credit-code-lookup";
 import { infraAppPath } from "@/lib/infra-routes";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
 
@@ -73,6 +74,16 @@ app.post(
 
 		let promotionCodeId: string | null = null;
 		if (code) {
+			const limited = await isRateLimited(RATE_LIMIT_IDS.INFRA_CREDIT_CODE, {
+				key: `infra-credit-code:${user.id}`,
+				headers: c.req.raw.headers,
+			});
+			if (limited) {
+				return c.json(
+					{ error: "Too many code attempts. Try again in a few minutes" },
+					429,
+				);
+			}
 			try {
 				promotionCodeId = await findCreditCode(code);
 			} catch (error) {

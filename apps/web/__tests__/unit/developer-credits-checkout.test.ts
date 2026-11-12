@@ -521,6 +521,44 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 
+	it("stops looking codes up after ten attempts by one user", async () => {
+		mockStripe.promotionCodes.list.mockResolvedValue({ data: [] });
+		const attempt = async (userId: string) => {
+			mockGetCurrentUser.mockResolvedValue({
+				...mockUser,
+				id: userId,
+				stripeCustomerId: "cus_exist",
+			});
+			mockDb.limit
+				.mockResolvedValueOnce([{ ...mockApp, ownerId: userId }])
+				.mockResolvedValueOnce([
+					{ ...mockAccount, stripeCustomerId: "cus_exist" },
+				]);
+			return POST(
+				makeRequest({ appId: "app-456", amountCents: 1000, code: "GUESS" }),
+			);
+		};
+
+		for (let i = 0; i < 10; i++) {
+			expect((await attempt("user-guesser")).status).toBe(400);
+		}
+		const blocked = await attempt("user-guesser");
+
+		expect(blocked.status).toBe(429);
+		expect(mockStripe.promotionCodes.list).toHaveBeenCalledTimes(10);
+		expect((await attempt("user-other")).status).toBe(400);
+	});
+
+	it("does not count purchases without a code against the code limit", async () => {
+		for (let i = 0; i < 12; i++) {
+			readyToBuy();
+			const res = await POST(
+				makeRequest({ appId: "app-456", amountCents: 1000 }),
+			);
+			expect(res.status).toBe(200);
+		}
+	});
+
 	it("returns 400 for an empty or oversized code", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 
