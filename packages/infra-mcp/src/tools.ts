@@ -1,0 +1,704 @@
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
+import { z } from "zod";
+import type { Config } from "./config";
+import { LocalError, withContext } from "./errors";
+import { inspectFile, storageTimeoutMs } from "./files";
+import {
+	asRecord,
+	confirmed,
+	dataOf,
+	type InfraClient,
+	listOf,
+	storagePut,
+} from "./http";
+import {
+	page,
+	transactionRow,
+	transcriptView,
+	videoDetail,
+	videoLinks,
+	videoRow,
+} from "./shape";
+import { type UploadTuning, uploadVideo } from "./upload";
+import { type WaitTuning, waitFor } from "./wait";
+
+export type ToolKind = "read" | "write" | "delete";
+
+export type ToolCall = {
+	signal: AbortSignal;
+	progress: (done: number, total: number | undefined, message: string) => void;
+	announce: (event: string, fields: Record<string, unknown>) => void;
+};
+
+export type ToolDeps = {
+	config: Config;
+	client: InfraClient;
+	upload: UploadTuning;
+	wait: WaitTuning;
+};
+
+export type Tool = {
+	name: string;
+	title: string;
+	description: string;
+	kind: ToolKind;
+	input: z.ZodRawShape;
+	run: (args: unknown, call: ToolCall) => Promise<unknown>;
+};
+
+function tool<Shape extends z.ZodRawShape>(definition: {
+	name: string;
+	title: string;
+	description: string;
+	kind: ToolKind;
+	input: Shape;
+	run: (args: z.infer<z.ZodObject<Shape>>, call: ToolCall) => Promise<unknown>;
+}): Tool {
+	const schema = z.object(definition.input);
+	return {
+		...definition,
+		run: (args, call) => definition.run(schema.parse(args), call),
+	};
+}
+
+export const TRANSCRIPT_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+export const RESOLUTION_TIERS = ["1080p", "1440p", "2160p"] as const;
+export const TRANSCRIPT_STATUSES = [
+	"uploading",
+	"queued",
+	"processing",
+	"complete",
+	"error",
+] as const;
+const MAX_WAIT_SECONDS = 900;
+
+const videoId = z.string().min(1).describe("The video id");
+const transcriptId = z.string().min(1).describe("The transcript id");
+const userScope = z
+	.string()
+	.min(1)
+	.max(255)
+	.optional()
+	.describe("Only match a video created with exactly this userId");
+const limit = z
+	.number()
+	.int()
+	.min(1)
+	.max(100)
+	.optional()
+	.describe("How many to return, 1 to 100 (default 50)");
+const offset = z
+	.number()
+	.int()
+	.min(0)
+	.optional()
+	.describe("How many to skip (default 0)");
+const timeoutSeconds = z
+	.number()
+	.int()
+	.min(1)
+	.max(MAX_WAIT_SECONDS)
+	.optional()
+	.describe(
+		`Longest time to wait, in seconds (default and maximum ${MAX_WAIT_SECONDS})`,
+	);
+const metadata = z
+	.record(z.string(), z.unknown())
+	.optional()
+	.describe("Your own JSON object to store with it, under 8 KB");
+
+const waitAgain = (toolName: string) =>
+	`Still in progress when the wait ended. Call ${toolName} again to keep waiting.`;
+
+export function createTools(deps: ToolDeps): Tool[] {
+	const { client, config } = deps;
+	const transcript = (fields: Record<string, unknown>, text = false) =>
+		transcriptView(fields, config.consoleUrl, { text });
+
+	const waitOutcome = (
+		outcome: { settled: boolean; waitedSeconds: number; lastError: unknown },
+		toolName: string,
+	) =>
+		outcome.settled
+			? { waitedSeconds: outcome.waitedSeconds }
+			: {
+					timedOut: true,
+					waitedSeconds: outcome.waitedSeconds,
+					...(outcome.lastError instanceof Error
+						? { lastPollError: outcome.lastError.message }
+						: {}),
+					next: waitAgain(toolName),
+				};
+
+	const transcriptFromFile = async (
+		path: string,
+		options: Record<string, unknown>,
+		headers: Record<string, string> | undefined,
+		call: ToolCall,
+	) => {
+		const file = await inspectFile(path, {
+			maxBytes: TRANSCRIPT_MAX_FILE_BYTES,
+			what: "a transcript file",
+		});
+		const created = dataOf(
+			await client.call("createTranscriptUpload", {
+				body: { fileName: file.fileName, contentLength: file.size, ...options },
+				headers,
+				signal: call.signal,
+			}),
+		);
+		const id = String(created.id ?? "");
+		const target = created.upload === null ? null : asRecord(created.upload);
+		if (id === "" || (target !== null && typeof target.url !== "string")) {
+			throw new LocalError(
+				"unexpected_response",
+				"Cap answered in a shape this server does not understand",
+				null,
+			);
+		}
+		call.announce("transcript_created", { transcriptId: id });
+		if (target === null) return transcript(created);
+
+		try {
+			const stream = createReadStream(file.path);
+			const stored = await storagePut(
+				String(target.url),
+				Readable.toWeb(stream) as ReadableStream<Uint8Array>,
+				{
+					headers: Object.fromEntries(
+						Object.entries(asRecord(target.headers)).map(([name, value]) => [
+							name,
+							String(value),
+						]),
+					),
+					signal: call.signal,
+					timeoutMs: storageTimeoutMs(file.size),
+				},
+			).finally(() => stream.destroy());
+			if (stored.status < 200 || stored.status >= 300) {
+				throw new LocalError(
+					"file_upload_failed",
+					`The file could not be stored (status ${stored.status})`,
+					null,
+				);
+			}
+			return transcript(
+				dataOf(
+					await client.call("startTranscript", { id, signal: call.signal }),
+				),
+			);
+		} catch (error) {
+			throw withContext(error, {
+				transcriptId: id,
+				next: "The transcript exists without its file and is not charged. Remove it with transcripts_delete, then create it again.",
+			});
+		}
+	};
+
+	return [
+		tool({
+			name: "videos_upload",
+			title: "Upload a video",
+			description:
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free, and stored video is billed daily by its length and resolution tier until it is deleted. Pass videoId to retry a failed upload into the same video.",
+			kind: "write",
+			input: {
+				path: z
+					.string()
+					.min(1)
+					.describe("Absolute path of the video file on this machine"),
+				name: z
+					.string()
+					.max(255)
+					.optional()
+					.describe("Video name (defaults to the file name)"),
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe("Your own user id for this video, used to filter lists"),
+				maxResolutionTier: z
+					.enum(RESOLUTION_TIERS)
+					.optional()
+					.describe(
+						"Highest resolution to encode and bill (default 1080p, the cheapest)",
+					),
+				metadata,
+				durationSeconds: z
+					.number()
+					.positive()
+					.max(4 * 60 * 60)
+					.optional()
+					.describe(
+						"Length of the video if known. Cap measures it after the upload either way",
+					),
+				videoId: z
+					.string()
+					.min(1)
+					.optional()
+					.describe(
+						"Retry into this existing video whose upload never completed, instead of creating a new one",
+					),
+			},
+			run: async (args, call) => {
+				const uploaded = await uploadVideo(client, deps.upload, args, {
+					signal: call.signal,
+					onVideo: (id) => call.announce("video_created", { videoId: id }),
+					onProgress: (done, total) =>
+						call.progress(done, total, `Uploaded part ${done} of ${total}`),
+				});
+				return {
+					videoId: uploaded.videoId,
+					status: "processing",
+					bytes: uploaded.bytes,
+					...videoLinks(uploaded),
+					next: "Call videos_wait with this videoId to get the playback links when encoding finishes.",
+				};
+			},
+		}),
+		tool({
+			name: "videos_get",
+			title: "Get a video",
+			description:
+				"Get one video: its status, length, playback links (HLS, MP4, poster) and share and embed links. Free to call.",
+			kind: "read",
+			input: { videoId, userId: userScope },
+			run: async (args, call) =>
+				videoDetail(
+					dataOf(
+						await client.call("getVideo", {
+							id: args.videoId,
+							query: { userId: args.userId },
+							signal: call.signal,
+						}),
+					),
+				),
+		}),
+		tool({
+			name: "videos_wait",
+			title: "Wait for a video",
+			description:
+				"Wait until a video is ready or has failed, then return its status, length, playback id and HLS, MP4, poster, share and embed links. If the time runs out, the result has timedOut set with the last known status, so call it again. Free to call.",
+			kind: "read",
+			input: { videoId, userId: userScope, timeoutSeconds },
+			run: async (args, call) => {
+				let pages: Record<string, unknown> | null = null;
+				const firstLook = () => pages ?? {};
+				const outcome = await waitFor({
+					poll: async (deadlineAt) => {
+						const reply = await client.call(
+							pages === null ? "getVideo" : "getVideoStatus",
+							{
+								id: args.videoId,
+								query: { userId: args.userId },
+								signal: call.signal,
+								deadlineAt,
+							},
+						);
+						const video = dataOf(reply);
+						pages ??= video;
+						return video;
+					},
+					settled: (video) =>
+						video.ready === true ||
+						video.status === "ready" ||
+						video.status === "errored" ||
+						video.status === "uploading",
+					tuning: deps.wait,
+					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
+					signal: call.signal,
+					onPoll: (video, polls) =>
+						call.progress(
+							polls,
+							undefined,
+							`Video is ${String(video?.status ?? "unknown")}`,
+						),
+				});
+				const last = outcome.last ?? {};
+				return {
+					videoId: args.videoId,
+					status: last.status ?? "unknown",
+					...(last.errorReason ? { errorReason: last.errorReason } : {}),
+					duration: last.duration ?? null,
+					...videoLinks({ ...firstLook(), ...last }),
+					...waitOutcome(outcome, "videos_wait"),
+					...(last.status === "uploading"
+						? {
+								next: "This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",
+							}
+						: {}),
+				};
+			},
+		}),
+		tool({
+			name: "videos_list",
+			title: "List videos",
+			description:
+				"List the app's videos, newest first, with status, length and share link. Filter by userId and page with limit and offset. Free to call.",
+			kind: "read",
+			input: {
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe("Only videos created with exactly this userId"),
+				limit,
+				offset,
+			},
+			run: async (args, call) => {
+				const size = args.limit ?? 50;
+				const skip = args.offset ?? 0;
+				const reply = await client.call("listVideos", {
+					query: { userId: args.userId, limit: size, offset: skip },
+					signal: call.signal,
+				});
+				const videos = listOf(reply).map(videoRow);
+				return { videos, ...page(reply, size, skip, videos.length) };
+			},
+		}),
+		tool({
+			name: "videos_delete",
+			title: "Delete a video",
+			description:
+				"Delete a video and its files for good. This cannot be undone, breaks its playback, share and embed links, and stops its daily storage charge.",
+			kind: "delete",
+			input: { videoId, userId: userScope },
+			run: async (args, call) => {
+				confirmed(
+					await client.call("deleteVideo", {
+						id: args.videoId,
+						query: { userId: args.userId },
+						signal: call.signal,
+					}),
+				);
+				return { videoId: args.videoId, deleted: true };
+			},
+		}),
+		tool({
+			name: "transcripts_create",
+			title: "Create a transcript",
+			description:
+				"Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
+			kind: "write",
+			input: {
+				url: z
+					.string()
+					.min(1)
+					.max(2048)
+					.optional()
+					.describe("Public http or https link to an audio or video file"),
+				path: z
+					.string()
+					.min(1)
+					.optional()
+					.describe("Absolute path of an audio or video file on this machine"),
+				videoId: z
+					.string()
+					.min(1)
+					.optional()
+					.describe(
+						"A stored video with status ready, transcribed from its MP4",
+					),
+				name: z.string().max(255).optional().describe("Display name"),
+				language: z
+					.string()
+					.max(16)
+					.optional()
+					.describe(
+						"Language of the audio as a two-letter code such as en, if known. Leave out to detect it",
+					),
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe(
+						"Your own user id for this transcript, used to filter lists",
+					),
+				metadata,
+				idempotencyKey: z
+					.string()
+					.regex(/^[A-Za-z0-9._-]{8,128}$/)
+					.optional()
+					.describe(
+						"Repeat the same key to get the same transcript back instead of a second, billed one",
+					),
+			},
+			run: async (args, call) => {
+				const sources = [args.url, args.path, args.videoId].filter(
+					(source) => source !== undefined,
+				);
+				if (sources.length !== 1) {
+					throw new LocalError(
+						"invalid_source",
+						"Send exactly one of url, path or videoId",
+						null,
+					);
+				}
+				const headers =
+					args.idempotencyKey === undefined
+						? undefined
+						: { "Idempotency-Key": args.idempotencyKey };
+				const options = {
+					...(args.name === undefined ? {} : { name: args.name }),
+					...(args.language === undefined ? {} : { language: args.language }),
+					...(args.userId === undefined ? {} : { userId: args.userId }),
+				};
+				const next =
+					"Call transcripts_wait with this id, then transcripts_text for the text.";
+
+				if (args.path !== undefined) {
+					return {
+						...(await transcriptFromFile(
+							args.path,
+							{
+								...options,
+								...(args.metadata === undefined
+									? {}
+									: { metadata: args.metadata }),
+							},
+							headers,
+							call,
+						)),
+						next,
+					};
+				}
+
+				let url = args.url;
+				let stored: Record<string, unknown> | undefined = args.metadata;
+				let name = args.name;
+				if (args.videoId !== undefined) {
+					const video = dataOf(
+						await client.call("getVideo", {
+							id: args.videoId,
+							signal: call.signal,
+						}),
+					);
+					if (typeof video.mp4Url !== "string") {
+						throw withContext(
+							new LocalError(
+								"video_not_ready",
+								"This video has no MP4 to transcribe yet",
+								"Call videos_wait until its status is ready, then create the transcript again.",
+							),
+							{ videoId: args.videoId, videoStatus: video.status ?? "unknown" },
+						);
+					}
+					url = video.mp4Url;
+					stored = { ...args.metadata, videoId: args.videoId };
+					name ??= typeof video.name === "string" ? video.name : undefined;
+				}
+
+				const created = dataOf(
+					await client.call("createTranscript", {
+						body: {
+							url,
+							...options,
+							...(name === undefined ? {} : { name }),
+							...(stored === undefined ? {} : { metadata: stored }),
+						},
+						headers,
+						signal: call.signal,
+					}),
+				);
+				return { ...transcript(created), next };
+			},
+		}),
+		tool({
+			name: "transcripts_get",
+			title: "Get a transcript",
+			description:
+				"Get one transcript: status, length, word count, cost and, once complete, its text. Set words or segments to add timings in seconds. Free to call.",
+			kind: "read",
+			input: {
+				transcriptId,
+				words: z
+					.boolean()
+					.optional()
+					.describe("Include every word with start and end times"),
+				segments: z
+					.boolean()
+					.optional()
+					.describe("Include sentence-sized segments with start and end times"),
+			},
+			run: async (args, call) => {
+				const include = [
+					args.words ? "words" : null,
+					args.segments ? "segments" : null,
+				].filter((part) => part !== null);
+				const found = dataOf(
+					await client.call("getTranscript", {
+						id: args.transcriptId,
+						query: {
+							include: include.length > 0 ? include.join(",") : undefined,
+						},
+						signal: call.signal,
+					}),
+				);
+				return {
+					...transcript(found, true),
+					...(args.words ? { words: found.words ?? null } : {}),
+					...(args.segments ? { segments: found.segments ?? null } : {}),
+				};
+			},
+		}),
+		tool({
+			name: "transcripts_wait",
+			title: "Wait for a transcript",
+			description:
+				"Wait until a transcript is complete or has failed, then return its status, length, word count and cost, without the text. If the time runs out, the result has timedOut set with the last known status, so call it again. Free to call.",
+			kind: "read",
+			input: { transcriptId, timeoutSeconds },
+			run: async (args, call) => {
+				const outcome = await waitFor({
+					poll: async (deadlineAt) =>
+						dataOf(
+							await client.call("getTranscript", {
+								id: args.transcriptId,
+								signal: call.signal,
+								deadlineAt,
+							}),
+						),
+					settled: (found) =>
+						found.status === "complete" ||
+						found.status === "error" ||
+						found.status === "uploading",
+					tuning: deps.wait,
+					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
+					signal: call.signal,
+					onPoll: (found, polls) =>
+						call.progress(
+							polls,
+							undefined,
+							`Transcript is ${String(found?.status ?? "unknown")}`,
+						),
+				});
+				const last = outcome.last;
+				return {
+					...(last === null
+						? { id: args.transcriptId, status: "unknown" }
+						: transcript(last)),
+					...waitOutcome(outcome, "transcripts_wait"),
+					...(last?.status === "uploading"
+						? {
+								next: "This transcript never received its file. Remove it with transcripts_delete, then create it again.",
+							}
+						: {}),
+				};
+			},
+		}),
+		tool({
+			name: "transcripts_text",
+			title: "Get transcript text",
+			description:
+				"Get only the text of a complete transcript. The text is null until the transcript is complete, and empty when the audio has no speech. Free to call.",
+			kind: "read",
+			input: { transcriptId },
+			run: async (args, call) => {
+				const found = dataOf(
+					await client.call("getTranscript", {
+						id: args.transcriptId,
+						signal: call.signal,
+					}),
+				);
+				return {
+					id: found.id ?? args.transcriptId,
+					status: found.status ?? "unknown",
+					text: found.status === "complete" ? (found.text ?? "") : null,
+					...(found.status === "error" && found.error !== null
+						? { error: asRecord(found.error) }
+						: {}),
+				};
+			},
+		}),
+		tool({
+			name: "transcripts_list",
+			title: "List transcripts",
+			description:
+				"List the app's transcripts, newest first, without their text. Filter by userId or status and page with limit and offset. Free to call.",
+			kind: "read",
+			input: {
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe("Only transcripts created with exactly this userId"),
+				status: z
+					.enum(TRANSCRIPT_STATUSES)
+					.optional()
+					.describe("Only transcripts in this status"),
+				limit,
+				offset,
+			},
+			run: async (args, call) => {
+				const size = args.limit ?? 50;
+				const skip = args.offset ?? 0;
+				const reply = await client.call("listTranscripts", {
+					query: {
+						userId: args.userId,
+						status: args.status,
+						limit: size,
+						offset: skip,
+					},
+					signal: call.signal,
+				});
+				const transcripts = listOf(reply).map((row) => transcript(row));
+				return { transcripts, ...page(reply, size, skip, transcripts.length) };
+			},
+		}),
+		tool({
+			name: "transcripts_delete",
+			title: "Delete a transcript",
+			description:
+				"Delete a transcript, its text and its stored files for good. This cannot be undone. A transcript deleted before it completes is not charged.",
+			kind: "delete",
+			input: { transcriptId },
+			run: async (args, call) => {
+				confirmed(
+					await client.call("deleteTranscript", {
+						id: args.transcriptId,
+						signal: call.signal,
+					}),
+				);
+				return { transcriptId: args.transcriptId, deleted: true };
+			},
+		}),
+		tool({
+			name: "account_usage",
+			title: "Get usage and balance",
+			description:
+				"Get the app's credit balance, standing, whether it can take an upload, stored minutes, what storage costs per day and the current rates. Free to call. Credit is added in the console, not through this server.",
+			kind: "read",
+			input: {},
+			run: async (_args, call) => ({
+				...dataOf(await client.call("getUsage", { signal: call.signal })),
+				addCreditAt: config.consoleUrl,
+			}),
+		}),
+		tool({
+			name: "account_transactions",
+			title: "List transactions",
+			description:
+				"List the app's ledger, newest first: every credit added and every charge taken, with the balance after each. Free to call.",
+			kind: "read",
+			input: { limit, offset },
+			run: async (args, call) => {
+				const size = args.limit ?? 50;
+				const skip = args.offset ?? 0;
+				const reply = await client.call("listTransactions", {
+					query: { limit: size, offset: skip },
+					signal: call.signal,
+				});
+				const transactions = listOf(reply).map(transactionRow);
+				return {
+					transactions,
+					...page(reply, size, skip, transactions.length),
+				};
+			},
+		}),
+	];
+}
