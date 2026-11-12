@@ -275,6 +275,57 @@ describe("HLS ladder encode", () => {
 		expectSameFrames(videoFrameTimes(join(output, "720p.m3u8")), wholeFrames);
 	}, 180_000);
 
+	function writeFiltered(path: string, seconds: number, select: string) {
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			`testsrc2=size=640x360:rate=30:duration=${seconds}`,
+			"-vf",
+			`select='${select}'`,
+			"-fps_mode",
+			"vfr",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"ultrafast",
+			"-pix_fmt",
+			"yuv420p",
+			"-y",
+			path,
+		]);
+	}
+
+	function framesBetween(times: number[], start: number, end: number) {
+		return times.filter((time) => time >= start - 0.001 && time < end - 0.001)
+			.length;
+	}
+
+	test("starts a slice on time when it begins inside a still stretch", async () => {
+		const still = join(directory, "still.mp4");
+		writeFiltered(still, SOURCE_SECONDS, "not(between(t,13,20))");
+		expect(framesBetween(videoFrameTimes(still), 13.1, 20)).toBe(0);
+		const whole = videoFrameTimes(
+			fileNamed(await encode(undefined, true, still), "360p.m3u8").path,
+		);
+		expect(whole.length).toBe(SOURCE_SECONDS * 30);
+
+		const ranges = planHlsLadderSlices(SOURCE_SECONDS, 2, 8);
+		expect(ranges[1]).toEqual({ startSeconds: 16 });
+		const [first, second] = await Promise.all(
+			ranges.map((range) => encode(range, false, still)),
+		);
+		if (!first || !second) throw new Error("missing slice");
+		const firstFrames = videoFrameTimes(fileNamed(first, "360p.m3u8").path);
+		const secondFrames = videoFrameTimes(fileNamed(second, "360p.m3u8").path);
+		expect(firstFrames.length).toBe(16 * 30);
+		expect(secondFrames.length).toBe((SOURCE_SECONDS - 16) * 30);
+		expect(secondFrames[0]).toBeCloseTo(16, 3);
+		expect(firstFrames.length + secondFrames.length).toBe(whole.length);
+	}, 180_000);
+
 	test("keeps a rotated source in the orientation it plays in", async () => {
 		const rotated = join(directory, "rotated.mp4");
 		execFileSync("ffmpeg", [

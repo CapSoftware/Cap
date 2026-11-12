@@ -373,6 +373,18 @@ describe("buildHlsLadderArgs", () => {
 		);
 	});
 
+	test("keeps the frames before a slice's seek point for the grid to hold", () => {
+		const slice = buildHlsLadderArgs(
+			argsInput({
+				hasAudio: false,
+				range: { startSeconds: 112, durationSeconds: 112 },
+			}),
+		);
+		expect(slice.indexOf("-noaccurate_seek")).toBe(slice.indexOf("-ss") - 1);
+		expect(slice.indexOf("-ss")).toBeLessThan(slice.indexOf("-i"));
+		expect(buildHlsLadderArgs(argsInput())).not.toContain("-noaccurate_seek");
+	});
+
 	test("starts the first slice at the beginning of the source", () => {
 		const args = buildHlsLadderArgs(
 			argsInput({

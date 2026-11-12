@@ -200,6 +200,12 @@ const SLICE_OUTPUT_ARGS = ["-hls_segment_options", "movflags=+frag_discont"];
 // timestamp to zero so seeking, trimming and the audio all share one origin.
 const SOURCE_CLOCK_ARGS = ["-copyts", "-start_at_zero"];
 const SLICE_SEEK_MARGIN_SECONDS = 2;
+// An accurate seek throws away every frame before the seek point. A slice that
+// starts inside a still stretch then has no earlier frame to repeat and begins
+// at the next source frame, short of its start. Keeping the frames from the
+// keyframe before the seek point gives the frame grid one to hold; the trim
+// filter still cuts the start exactly.
+const SLICE_SEEK_ARGS = ["-noaccurate_seek"];
 
 function sliceSeekSeconds(range: HlsLadderRange): number {
 	return Math.max(0, range.startSeconds - SLICE_SEEK_MARGIN_SECONDS);
@@ -209,6 +215,7 @@ function sliceInputArgs(range: HlsLadderRange | null | undefined): string[] {
 	if (!range) return [];
 	const seek = sliceSeekSeconds(range);
 	return [
+		...SLICE_SEEK_ARGS,
 		"-ss",
 		String(seek),
 		...(range.durationSeconds === undefined
