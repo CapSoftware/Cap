@@ -389,6 +389,33 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         #expect(transport.requests.count == 2)
     }
 
+    @Test func doesNotSpinWhenTheSessionItWasToldAboutIsNotThere() async {
+        let transport = RecordingTransport { _ in (200, Data(#"{"success":true}"#.utf8)) }
+        let timers = ManualTimers()
+        let stamps = Box(0)
+        var configuration = Analytics.Configuration()
+        configuration.flushThreshold = 1
+        let analytics = Analytics(
+            api: CapAPI(environment: .production, transport: transport, credentials: { nil }),
+            app: Rig.app,
+            storage: nil,
+            configuration: configuration,
+            currentUserId: { testCredentials.userId },
+            now: {
+                stamps.value += 1
+                return Rig.start
+            },
+            sleep: { await timers.sleep($0) }
+        )
+        analytics.track("cap_opened")
+        await analytics.flush()
+        await analytics.flush()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(transport.requests.isEmpty)
+        // One stamp for the event, then a few per round. A round that restarted itself would run this into the thousands.
+        #expect(stamps.value < 20)
+    }
+
     @Test func leavesNoTimerRunningForEventsItMayNotSend() async throws {
         let rig = Rig()
         rig.status.value = 0

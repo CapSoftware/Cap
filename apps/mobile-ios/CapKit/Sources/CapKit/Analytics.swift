@@ -253,6 +253,8 @@ extension Analytics {
         private var roundEnd: UInt64 = 0
         /// The session changed mid-round; the signed-in events wait for the next one.
         private var skipsUser = false
+        /// Whether the current round sent anything. A round that sent nothing must not start another by itself.
+        private var delivered = false
         private var waiters: [CheckedContinuation<Void, Never>] = []
 
         init(
@@ -323,6 +325,7 @@ extension Analytics {
             pending.removeAll { $0.event.time < oldest }
             roundEnd = nextId
             skipsUser = false
+            delivered = false
             sendNext()
         }
 
@@ -361,6 +364,7 @@ extension Analytics {
             case nil:
                 remove(ids)
                 failures = 0
+                delivered = true
                 sendNext()
             case .notFound:
                 // A server from before this endpoint existed. Stop asking until the next launch.
@@ -389,7 +393,7 @@ extension Analytics {
             // Only events this session may send count; another user's wait for sign-in without a timer running.
             let user = currentUserId()
             let ready = pending.count { $0.event.userId == nil || $0.event.userId == user }
-            if failures == 0, ready >= configuration.flushThreshold {
+            if delivered, failures == 0, ready >= configuration.flushThreshold {
                 // Enough arrived while the last request was out.
                 beginRound()
             } else if ready > 0 {
