@@ -165,6 +165,32 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(400);
 	});
 
+	it("refuses a purchase from an account outside the preview list", async () => {
+		const { buildEnv } = await import("@cap/env");
+		const env = buildEnv as { NEXT_PUBLIC_IS_CAP?: string };
+		env.NEXT_PUBLIC_IS_CAP = "true";
+		try {
+			mockGetCurrentUser.mockResolvedValue(mockUser);
+			const res = await POST(
+				makeRequest({ appId: "app-456", amountCents: 1000 }),
+			);
+			expect(res.status).toBe(403);
+			expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+
+			mockGetCurrentUser.mockResolvedValue({
+				...mockUser,
+				email: "richie@cap.so",
+			});
+			mockDb.limit.mockResolvedValueOnce([]);
+			const allowed = await POST(
+				makeRequest({ appId: "app-456", amountCents: 1000 }),
+			);
+			expect(allowed.status).toBe(404);
+		} finally {
+			env.NEXT_PUBLIC_IS_CAP = "";
+		}
+	});
+
 	it("returns 404 when app is not found", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([]);
@@ -288,6 +314,31 @@ describe("POST /api/developer/credits/checkout", () => {
 				},
 			}),
 		);
+	});
+
+	it("returns the buyer to the app's Cap Infra billing page", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			...mockUser,
+			stripeCustomerId: "cus_exist",
+		});
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([
+				{ ...mockAccount, stripeCustomerId: "cus_exist" },
+			]);
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+
+		await POST(makeRequest({ appId: "app-456", amountCents: 2500 }));
+
+		const [params] = mockStripe.checkout.sessions.create.mock.calls[0] ?? [];
+		const successUrl = new URL(params.success_url);
+		const cancelUrl = new URL(params.cancel_url);
+		expect(successUrl.pathname).toBe("/dashboard/infra/app-456/billing");
+		expect(successUrl.searchParams.get("purchase")).toBe("success");
+		expect(cancelUrl.pathname).toBe("/dashboard/infra/app-456/billing");
+		expect(cancelUrl.search).toBe("");
 	});
 
 	it("returns checkout URL on success", async () => {

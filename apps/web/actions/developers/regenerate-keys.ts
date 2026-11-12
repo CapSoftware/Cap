@@ -65,7 +65,7 @@ export async function regenerateDeveloperKeys(appId: string) {
 		]);
 	});
 
-	revalidatePath("/dashboard/developers");
+	revalidatePath("/dashboard/infra", "layout");
 	return {
 		publicKey: publicKeyRaw,
 		secretKey: secretKeyRaw,

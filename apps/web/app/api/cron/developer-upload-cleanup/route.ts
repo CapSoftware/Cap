@@ -9,6 +9,7 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { Effect, Layer, Option, Schema } from "effect";
+import { purgeDeletedDeveloperVideos } from "@/lib/developer-video-purge";
 import { apiToHandler } from "@/lib/server";
 
 const DEVELOPER_UPLOAD_PREFIX = "developer/";
@@ -21,6 +22,8 @@ class Api extends HttpApi.make("DeveloperUploadCleanupApi").add(
 				Schema.Struct({
 					aborted: Schema.Number,
 					failed: Schema.Number,
+					purged: Schema.Number,
+					purgeFailed: Schema.Number,
 				}),
 			)
 			.addError(HttpApiError.Unauthorized)
@@ -105,9 +108,26 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						),
 						Effect.mapError(() => new HttpApiError.InternalServerError()),
 					);
-					if (result.failed > 0)
+					const purge = yield* Effect.tryPromise(() =>
+						purgeDeletedDeveloperVideos(),
+					).pipe(
+						Effect.tapError((error) =>
+							Effect.sync(() =>
+								console.error(
+									"[developer-upload-cleanup] Failed to purge deleted videos",
+									error,
+								),
+							),
+						),
+						Effect.mapError(() => new HttpApiError.InternalServerError()),
+					);
+					if (result.failed > 0 || purge.failed > 0)
 						return yield* new HttpApiError.InternalServerError();
-					return result;
+					return {
+						...result,
+						purged: purge.purged,
+						purgeFailed: purge.failed,
+					};
 				}),
 			),
 		),

@@ -4,13 +4,16 @@ import {
 	developerCreditAccounts,
 	users,
 } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
-import { STRIPE_DEVELOPER_CREDITS_PRODUCT_ID, stripe } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { stripe } from "@cap/utils";
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import { canUseInfra } from "@/lib/infra-access";
+import { infraAppPath } from "@/lib/infra-routes";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
 
@@ -31,6 +34,10 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const { appId, amountCents } = c.req.valid("json");
+
+		if (!canUseInfra(user.email)) {
+			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
+		}
 
 		const [app] = await db()
 			.select()
@@ -104,18 +111,15 @@ app.post(
 					{
 						price_data: {
 							currency: "usd",
-							product:
-								STRIPE_DEVELOPER_CREDITS_PRODUCT_ID[
-									buildEnv.NEXT_PUBLIC_IS_CAP ? "production" : "development"
-								],
+							product: developerCreditsProductId(),
 							unit_amount: amountCents,
 						},
 						quantity: 1,
 					},
 				],
 				mode: "payment",
-				success_url: `${serverEnv().WEB_URL}/dashboard/developers/credits?purchase=success`,
-				cancel_url: `${serverEnv().WEB_URL}/dashboard/developers/credits`,
+				success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?purchase=success`,
+				cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
 				metadata: {
 					type: "developer_credits",
 					appId,
