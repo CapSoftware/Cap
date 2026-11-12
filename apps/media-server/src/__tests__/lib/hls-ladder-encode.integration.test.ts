@@ -353,6 +353,20 @@ describe("HLS ladder encode", () => {
 		expect(secondFrames.length).toBe((SOURCE_SECONDS - 16) * 30);
 		expect(secondFrames[0]).toBeCloseTo(16, 3);
 		expect(firstFrames.length + secondFrames.length).toBe(whole.length);
+
+		const bounded = videoFrameTimes(
+			fileNamed(
+				await encode({ startSeconds: 16, durationSeconds: 4 }, false, still),
+				"360p.m3u8",
+			).path,
+		);
+		const wholeBetween = whole.filter(
+			(time) => time >= 16 - 0.001 && time < 20 - 0.001,
+		);
+		expect(bounded.length).toBe(4 * 30);
+		expect(bounded.length).toBe(wholeBetween.length);
+		expect(bounded[0]).toBeCloseTo(wholeBetween[0] ?? Number.NaN, 3);
+		expect(bounded.at(-1)).toBeCloseTo(wholeBetween.at(-1) ?? Number.NaN, 3);
 	}, 180_000);
 
 	test("keeps audio in a codec the probe cannot name", async () => {
