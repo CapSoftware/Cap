@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { db } from "@cap/database";
 import { developerTranscripts } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { sleep } from "workflow";
 import {
 	extractTranscriptAudioBytes,
 	TRANSCRIPT_AUDIO_BITS_PER_SECOND,
@@ -14,10 +15,18 @@ import {
 	TRANSCRIPT_AUDIO_MAX_SECONDS,
 } from "@/lib/developer-transcript-audio";
 import {
+	holdTranscriptCredits,
 	INSUFFICIENT_CREDITS_MESSAGE,
 	reserveTranscriptCredits,
 	settleTranscript,
+	type TranscriptHold,
 } from "@/lib/developer-transcript-billing";
+import {
+	insufficientHoldMessage,
+	transcriptHoldCoversSeconds,
+	transcriptHoldForAudioSeconds,
+	transcriptHoldForSourceBytes,
+} from "@/lib/developer-transcript-hold";
 import {
 	claimTranscriptRun,
 	failTranscriptRun,
@@ -58,13 +67,94 @@ import { fetchStorageUrl } from "@/lib/storage-fetch";
 
 const URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
+const HOLD_WAIT_LIMIT_SECONDS = 15 * 60;
+const HOLD_RETRY_MAX_SECONDS = 10;
+const HOLD_RAISE_LIMIT = 2;
+
 type StepFailure = { ok: false; code: TranscriptErrorCode; message: string };
+
+type KnownSource = { bytes: number | null };
+
+type HoldWait = {
+	ok: false;
+	wait: true;
+	neededMicroCredits: number;
+	availableMicroCredits: number;
+	known: KnownSource | null;
+};
+
+type HoldRaise = { ok: false; raise: true; reportedSeconds: number | null };
+
+type HoldGate = { waitedSeconds: number; tries: number };
 
 const failure = (code: TranscriptErrorCode, message: string): StepFailure => ({
 	ok: false,
 	code,
 	message,
 });
+
+const notHeld = (
+	hold: Exclude<TranscriptHold, { state: "held" }>,
+	known: KnownSource | null,
+): StepFailure | HoldWait => {
+	if (hold.state === "skipped") {
+		return failure("source_missing", FAILURE_MESSAGES.source_missing);
+	}
+	if (hold.state === "insufficient") {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				hold.neededMicroCredits,
+				hold.availableMicroCredits,
+			),
+		);
+	}
+	return {
+		ok: false,
+		wait: true,
+		neededMicroCredits: hold.neededMicroCredits,
+		availableMicroCredits: hold.availableMicroCredits,
+		known,
+	};
+};
+
+const nextHoldWait = (
+	gate: HoldGate,
+	wait: HoldWait,
+): StepFailure | { seconds: number } => {
+	if (gate.waitedSeconds >= HOLD_WAIT_LIMIT_SECONDS) {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				wait.neededMicroCredits,
+				wait.availableMicroCredits,
+			),
+		);
+	}
+	const seconds = Math.min(HOLD_RETRY_MAX_SECONDS, 2 + gate.tries);
+	gate.tries += 1;
+	gate.waitedSeconds += seconds;
+	return { seconds };
+};
+
+const asFailure = (result: StepFailure | HoldWait | HoldRaise): StepFailure => {
+	if ("wait" in result) {
+		return failure(
+			"insufficient_credits",
+			insufficientHoldMessage(
+				result.neededMicroCredits,
+				result.availableMicroCredits,
+			),
+		);
+	}
+	if ("raise" in result) {
+		return failure(
+			"transcription_failed",
+			FAILURE_MESSAGES.transcription_failed,
+		);
+	}
+	return result;
+};
 
 const FAILURE_MESSAGES = {
 	source_missing: "The source file was not found",
@@ -96,22 +186,48 @@ export async function developerTranscribeWorkflow(
 			return { success: true, message: "Transcript is not waiting to run" };
 		}
 
-		const source = await prepareTranscriptSource(transcriptId);
-		if (!source.ok) {
+		const gate: HoldGate = { waitedSeconds: 0, tries: 0 };
+		const stop = async (result: StepFailure | HoldWait | HoldRaise) => {
+			const failed = asFailure(result);
 			await failTranscriptStep(
 				transcriptId,
 				runId,
-				source.code,
-				source.message,
+				failed.code,
+				failed.message,
 			);
-			return { success: false, message: source.message };
-		}
+			return { success: false, message: failed.message };
+		};
 
-		const audio = await extractTranscriptAudio(transcriptId);
-		if (!audio.ok) {
-			await failTranscriptStep(transcriptId, runId, audio.code, audio.message);
-			return { success: false, message: audio.message };
+		let source = await prepareTranscriptSource(transcriptId, null);
+		while (!source.ok && "wait" in source) {
+			const next = nextHoldWait(gate, source);
+			if ("code" in next) return stop(next);
+			await sleep(`${next.seconds}s`);
+			source = await prepareTranscriptSource(
+				transcriptId,
+				source.known ?? { bytes: null },
+			);
 		}
+		if (!source.ok) return stop(source);
+
+		let audio = await extractTranscriptAudio(transcriptId);
+		for (
+			let raises = 0;
+			!audio.ok && "raise" in audio && raises < HOLD_RAISE_LIMIT;
+			raises++
+		) {
+			const { reportedSeconds } = audio;
+			let raised = await raiseTranscriptHold(transcriptId, reportedSeconds);
+			while (!raised.ok && "wait" in raised) {
+				const next = nextHoldWait(gate, raised);
+				if ("code" in next) return stop(next);
+				await sleep(`${next.seconds}s`);
+				raised = await raiseTranscriptHold(transcriptId, reportedSeconds);
+			}
+			if (!raised.ok) return stop(raised);
+			audio = await extractTranscriptAudio(transcriptId);
+		}
+		if (!audio.ok) return stop(audio);
 
 		const transcription = await transcribeTranscriptAudio(transcriptId);
 		if (!transcription.ok) {
@@ -154,6 +270,7 @@ async function loadTranscript(transcriptId: string) {
 			sourceUrl: developerTranscripts.sourceUrl,
 			requestedLanguage: developerTranscripts.requestedLanguage,
 			durationSeconds: developerTranscripts.durationSeconds,
+			reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 			deletedAt: developerTranscripts.deletedAt,
 		})
 		.from(developerTranscripts)
@@ -195,9 +312,21 @@ async function spoolToStorage(
 	}
 }
 
+async function holdForSource(
+	transcriptId: string,
+	known: KnownSource,
+): Promise<StepFailure | HoldWait | null> {
+	const hold = await holdTranscriptCredits({
+		transcriptId,
+		microCredits: transcriptHoldForSourceBytes(known.bytes),
+	});
+	return hold.state === "held" ? null : notHeld(hold, known);
+}
+
 async function prepareTranscriptSource(
 	transcriptId: string,
-): Promise<{ ok: true } | StepFailure> {
+	known: KnownSource | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
 	"use step";
 
 	const transcript = await loadTranscript(transcriptId);
@@ -214,12 +343,26 @@ async function prepareTranscriptSource(
 		if (existingSize > TRANSCRIPT_MAX_UPLOAD_BYTES) {
 			return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
 		}
-		return { ok: true };
+		return (
+			(await holdForSource(transcript.id, { bytes: existingSize })) ?? {
+				ok: true,
+			}
+		);
 	}
 
-	if (existingSize !== null && existingSize > 0) return { ok: true };
+	if (existingSize !== null && existingSize > 0) {
+		return (
+			(await holdForSource(transcript.id, { bytes: existingSize })) ?? {
+				ok: true,
+			}
+		);
+	}
 	if (!transcript.sourceUrl) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
+	}
+	if (known) {
+		const refused = await holdForSource(transcript.id, known);
+		if (refused) return refused;
 	}
 
 	try {
@@ -232,6 +375,13 @@ async function prepareTranscriptSource(
 		);
 		if (!response.body) {
 			return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
+		}
+		const refused = await holdForSource(transcript.id, {
+			bytes: contentLength !== null && contentLength > 0 ? contentLength : null,
+		});
+		if (refused) {
+			await response.body.cancel().catch(() => {});
+			return refused;
 		}
 		const contentType =
 			response.headers.get("content-type") ?? "application/octet-stream";
@@ -279,23 +429,56 @@ async function prepareTranscriptSource(
 	}
 }
 
+async function raiseTranscriptHold(
+	transcriptId: string,
+	reportedSeconds: number | null,
+): Promise<{ ok: true } | StepFailure | HoldWait> {
+	"use step";
+
+	const hold = await holdTranscriptCredits({
+		transcriptId,
+		microCredits: transcriptHoldForAudioSeconds(reportedSeconds),
+		releaseWhileWaiting: true,
+	});
+	return hold.state === "held" ? { ok: true } : notHeld(hold, null);
+}
+
 async function extractTranscriptAudio(
 	transcriptId: string,
-): Promise<{ ok: true } | StepFailure> {
+): Promise<{ ok: true } | StepFailure | HoldRaise> {
 	"use step";
 
 	const transcript = await loadTranscript(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
+	const heldSeconds = transcriptHoldCoversSeconds(
+		Number(transcript.reservedMicroCredits) || 0,
+	);
+	if (heldSeconds <= 0) {
+		return failure("insufficient_credits", INSUFFICIENT_CREDITS_MESSAGE);
+	}
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
+	if (
+		transcript.durationSeconds !== null &&
+		((await developerObjectSize(keys.audio)) ?? 0) > 0
+	) {
+		return { ok: true };
+	}
 	const sourceUrl = await developerObjectUrl(keys.source);
 	if (!(await urlIsSelfContainedMedia(sourceUrl))) {
 		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
 	}
-	const extracted = await extractTranscriptAudioBytes(sourceUrl);
+	const extracted = await extractTranscriptAudioBytes(sourceUrl, heldSeconds);
 	if (extracted.state === "too_long") {
 		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+	}
+	if (extracted.state === "over_limit") {
+		return {
+			ok: false,
+			raise: true,
+			reportedSeconds: extracted.reportedSeconds,
+		};
 	}
 	if (extracted.state === "no_audio" || extracted.audio.length === 0) {
 		return failure("no_audio_track", FAILURE_MESSAGES.no_audio_track);
@@ -308,6 +491,9 @@ async function extractTranscriptAudio(
 
 	if (durationSeconds > TRANSCRIPT_AUDIO_MAX_SECONDS) {
 		return failure("duration_too_long", FAILURE_MESSAGES.duration_too_long);
+	}
+	if (durationSeconds > heldSeconds) {
+		return { ok: false, raise: true, reportedSeconds: null };
 	}
 
 	await putDeveloperObject(keys.audio, audio, "audio/mpeg");
