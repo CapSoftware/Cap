@@ -42,6 +42,7 @@ vi.mock("@cap/database", async () => {
 					errorCode: null,
 					errorMessage: null,
 					metadata: null,
+					runId: null,
 					queuedAt: null,
 					startedAt: null,
 					completedAt: null,
@@ -251,8 +252,9 @@ describe("creating a transcript from a URL", () => {
 		expect(context.start).toHaveBeenCalledTimes(1);
 		expect(context.start).toHaveBeenCalledWith(
 			"developer-transcribe-workflow",
-			[{ transcriptId: "generated-1" }],
+			[{ transcriptId: "generated-1", runId: transcripts()[0]?.runId }],
 		);
+		expect(transcripts()[0]?.runId).toEqual(expect.any(String));
 	});
 
 	it.each([
@@ -774,6 +776,7 @@ describe("recovering a job that was claimed but never started", () => {
 			status: "queued",
 			sourceType,
 			sourceUrl: sourceType === "url" ? URL_A : null,
+			runId: "run-first",
 			queuedAt: startedAt,
 			startedAt,
 			createdAt: startedAt,
@@ -786,9 +789,12 @@ describe("recovering a job that was claimed but never started", () => {
 
 		expect(result.ok).toBe(true);
 		expect(context.start).toHaveBeenCalledTimes(1);
+		const row = transcripts().find((transcript) => transcript.id === "stale");
+		expect(row?.runId).toEqual(expect.any(String));
+		expect(row?.runId).not.toBe("run-first");
 		expect(context.start).toHaveBeenCalledWith(
 			"developer-transcribe-workflow",
-			[{ transcriptId: "stale" }],
+			[{ transcriptId: "stale", runId: row?.runId }],
 		);
 	});
 

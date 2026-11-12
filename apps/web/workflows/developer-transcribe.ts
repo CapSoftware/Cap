@@ -6,13 +6,17 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { db } from "@cap/database";
 import { developerTranscripts } from "@cap/database/schema";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { extractAudioFromUrl } from "@/lib/audio-extract";
 import {
 	INSUFFICIENT_CREDITS_MESSAGE,
 	reserveTranscriptCredits,
 	settleTranscript,
 } from "@/lib/developer-transcript-billing";
+import {
+	claimTranscriptRun,
+	failTranscriptRun,
+} from "@/lib/developer-transcript-run";
 import {
 	parseTranscriptLanguage,
 	transcribeSpeech,
@@ -75,6 +79,7 @@ const FAILURE_MESSAGES = {
 
 interface DeveloperTranscribePayload {
 	transcriptId: string;
+	runId: string;
 }
 
 export async function developerTranscribeWorkflow(
@@ -82,30 +87,36 @@ export async function developerTranscribeWorkflow(
 ) {
 	"use workflow";
 
-	const { transcriptId } = payload;
+	const { transcriptId, runId } = payload;
 
 	try {
-		const claimed = await claimTranscript(transcriptId);
+		const claimed = await claimTranscript(transcriptId, runId);
 		if (!claimed) {
 			return { success: true, message: "Transcript is not waiting to run" };
 		}
 
 		const source = await prepareTranscriptSource(transcriptId);
 		if (!source.ok) {
-			await failTranscript(transcriptId, source.code, source.message);
+			await failTranscriptStep(
+				transcriptId,
+				runId,
+				source.code,
+				source.message,
+			);
 			return { success: false, message: source.message };
 		}
 
 		const audio = await extractTranscriptAudio(transcriptId);
 		if (!audio.ok) {
-			await failTranscript(transcriptId, audio.code, audio.message);
+			await failTranscriptStep(transcriptId, runId, audio.code, audio.message);
 			return { success: false, message: audio.message };
 		}
 
 		const transcription = await transcribeTranscriptAudio(transcriptId);
 		if (!transcription.ok) {
-			await failTranscript(
+			await failTranscriptStep(
 				transcriptId,
+				runId,
 				transcription.code,
 				transcription.message,
 			);
@@ -122,8 +133,9 @@ export async function developerTranscribeWorkflow(
 					: `Transcript was not completed: ${settlement}`,
 		};
 	} catch (error) {
-		await failTranscript(
+		await failTranscriptStep(
 			transcriptId,
+			runId,
 			"transcription_failed",
 			FAILURE_MESSAGES.transcription_failed,
 		);
@@ -149,21 +161,13 @@ async function loadTranscript(transcriptId: string) {
 	return row && !row.deletedAt ? row : null;
 }
 
-async function claimTranscript(transcriptId: string): Promise<boolean> {
+async function claimTranscript(
+	transcriptId: string,
+	runId: string,
+): Promise<boolean> {
 	"use step";
 
-	await db()
-		.update(developerTranscripts)
-		.set({ status: "processing" })
-		.where(
-			and(
-				eq(developerTranscripts.id, transcriptId),
-				inArray(developerTranscripts.status, ["queued", "processing"]),
-				isNull(developerTranscripts.deletedAt),
-			),
-		);
-	const row = await loadTranscript(transcriptId);
-	return row?.status === "processing";
+	return claimTranscriptRun(transcriptId, runId);
 }
 
 async function spoolToStorage(
@@ -462,36 +466,23 @@ async function transcriptStorage(transcriptId: string) {
 	};
 }
 
-async function failTranscript(
+async function failTranscriptStep(
 	transcriptId: string,
+	runId: string,
 	code: TranscriptErrorCode,
 	message: string,
 ): Promise<void> {
 	"use step";
 
-	await db()
-		.update(developerTranscripts)
-		.set({
-			status: "error",
-			errorCode: code,
-			errorMessage: message.slice(0, 512),
-			reservedMicroCredits: 0,
-			completedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(developerTranscripts.id, transcriptId),
-				inArray(developerTranscripts.status, ["queued", "processing"]),
-			),
-		);
-
-	const storage = await transcriptStorage(transcriptId);
-	if (!storage) return;
-	await deleteDeveloperObjects(
-		storage.status === "complete"
-			? [storage.keys.source, storage.keys.audio]
-			: [storage.keys.source, storage.keys.audio, storage.keys.result],
+	const { failed, appId } = await failTranscriptRun(
+		transcriptId,
+		runId,
+		code,
+		message,
 	);
+	if (!failed || !appId) return;
+	const keys = transcriptObjectKeys(appId, transcriptId);
+	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
 }
 
 async function cleanupTranscriptObjects(

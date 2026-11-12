@@ -41,6 +41,7 @@ const row = (
 	errorCode: null,
 	errorMessage: null,
 	metadata: null,
+	runId: "run-1",
 	queuedAt: new Date("2026-11-11T10:00:00Z"),
 	startedAt: new Date("2026-11-11T10:00:00Z"),
 	completedAt: new Date("2026-11-11T10:00:20Z"),

@@ -59,6 +59,9 @@ const {
 	reserveTranscriptCredits,
 	settleTranscript,
 } = await import("@/lib/developer-transcript-billing");
+const { claimTranscriptRun, failTranscriptRun } = await import(
+	"@/lib/developer-transcript-run"
+);
 const {
 	createTranscriptFromUrl,
 	createTranscriptUpload,
@@ -509,6 +512,41 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			);
 		expect(row?.text).toBeNull();
 		expect(await balanceOf(appId)).toBe(60_000);
+	});
+
+	it("lets exactly one run claim a transcript and only that run fail it", async () => {
+		const appId = await makeApp(10_000);
+		const transcriptId = await makeTranscript(appId, {
+			status: "queued",
+			runId: "run-current",
+		});
+		const runs = ["run-old-1", "run-old-2", "run-current", "run-old-3"];
+
+		const claims = await Promise.all(
+			[...runs, ...runs].map((runId) =>
+				claimTranscriptRun(transcriptId, runId),
+			),
+		);
+		expect(claims).toEqual(
+			[...runs, ...runs].map((runId) => runId === "run-current"),
+		);
+
+		expect(
+			(await failTranscriptRun(transcriptId, "run-old-1", "timed_out", "x"))
+				.failed,
+		).toBe(false);
+		expect(await getTranscript(appId, transcriptId)).toMatchObject({
+			status: "processing",
+			errorCode: null,
+		});
+		expect(
+			(await failTranscriptRun(transcriptId, "run-current", "no_speech", "x"))
+				.failed,
+		).toBe(true);
+		expect(await getTranscript(appId, transcriptId)).toMatchObject({
+			status: "error",
+			errorCode: "no_speech",
+		});
 	});
 
 	it("expires only stale unfinished transcripts", async () => {

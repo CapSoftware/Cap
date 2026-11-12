@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "002a6a93-a2d5-4db6-9f41-42712e2edf63",
+	"id": "f1736edf-c73b-4c2b-8b8b-09d902ea82c8",
 	"prevId": "f231f465-a0b5-4669-928d-444ffc2ac65a",
 	"tables": {
 		"accounts": {
@@ -1417,6 +1417,13 @@
 				"metadata": {
 					"name": "metadata",
 					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"runId": {
+					"name": "runId",
+					"type": "varchar(32)",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false

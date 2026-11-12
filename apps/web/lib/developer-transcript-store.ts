@@ -226,10 +226,12 @@ async function dispatchTranscript(
 	sourceBytes?: number,
 ) {
 	const now = new Date();
+	const runId = nanoId();
 	const claim = await db()
 		.update(developerTranscripts)
 		.set({
 			status: "queued",
+			runId,
 			startedAt: now,
 			...(sourceBytes !== undefined ? { sourceBytes } : {}),
 		})
@@ -260,7 +262,7 @@ async function dispatchTranscript(
 		);
 
 	try {
-		await start(developerTranscribeWorkflow, [{ transcriptId }]);
+		await start(developerTranscribeWorkflow, [{ transcriptId, runId }]);
 		return "dispatched" as const;
 	} catch (error) {
 		console.error(
@@ -277,6 +279,7 @@ async function dispatchTranscript(
 			.where(
 				and(
 					eq(developerTranscripts.id, transcriptId),
+					eq(developerTranscripts.runId, runId),
 					eq(developerTranscripts.status, "queued"),
 				),
 			);
@@ -599,6 +602,7 @@ const summaryColumns = {
 	errorCode: developerTranscripts.errorCode,
 	errorMessage: developerTranscripts.errorMessage,
 	metadata: developerTranscripts.metadata,
+	runId: developerTranscripts.runId,
 	queuedAt: developerTranscripts.queuedAt,
 	startedAt: developerTranscripts.startedAt,
 	completedAt: developerTranscripts.completedAt,
