@@ -16,10 +16,12 @@ const mocks = vi.hoisted(() => ({
 	listUploads: vi.fn(),
 	abort: vi.fn(),
 	purge: vi.fn(),
+	purgeFailed: vi.fn(),
 }));
 
 vi.mock("@/lib/developer-video-purge", () => ({
 	purgeDeletedDeveloperVideos: mocks.purge,
+	purgeFailedDeveloperVideoFiles: mocks.purgeFailed,
 }));
 
 vi.mock("@cap/web-backend", async () => {
@@ -85,6 +87,8 @@ describe("developer upload cleanup cron", () => {
 		);
 		mocks.purge.mockReset();
 		mocks.purge.mockResolvedValue({ purged: 0, failed: 0 });
+		mocks.purgeFailed.mockReset();
+		mocks.purgeFailed.mockResolvedValue({ purged: 0, failed: 0 });
 		mocks.abort.mockReset();
 		mocks.abort.mockImplementation((key: string, uploadId: string) =>
 			mocks.failingAborts.has(uploadId)
@@ -169,10 +173,30 @@ describe("developer upload cleanup cron", () => {
 		expect(response.status).toBe(500);
 	});
 
+	it("removes the files of failed videos on every run and counts them with the purge", async () => {
+		mocks.purge.mockResolvedValue({ purged: 3, failed: 0 });
+		mocks.purgeFailed.mockResolvedValue({ purged: 2, failed: 0 });
+
+		const response = await runCron();
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ purged: 5, purgeFailed: 0 });
+		expect(mocks.purgeFailed).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a failure when a failed video's files could not be removed", async () => {
+		mocks.purgeFailed.mockResolvedValue({ purged: 1, failed: 1 });
+
+		const response = await runCron();
+
+		expect(response.status).toBe(500);
+	});
+
 	it("does not purge without the cron secret", async () => {
 		await runCron("Bearer wrong-secret-value");
 
 		expect(mocks.purge).not.toHaveBeenCalled();
+		expect(mocks.purgeFailed).not.toHaveBeenCalled();
 	});
 
 	it("follows listing pages", async () => {

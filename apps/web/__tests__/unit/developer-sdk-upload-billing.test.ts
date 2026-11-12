@@ -527,7 +527,7 @@ describe("developer SDK multipart completion", () => {
 
 	it("keeps the four hour cap for submitted and size-derived durations", async () => {
 		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 50_000_000_000 },
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 36_000_000_000 },
 		];
 		const response = await complete({ durationInSecs: FOUR_HOURS_SECS + 600 });
 
