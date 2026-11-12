@@ -6,7 +6,6 @@ import {
 import { redriveDeveloperVideoProcessing } from "./developer-video-start";
 import { developerVideoRedrive } from "./developer-video-state";
 import { getInfraAppStanding } from "./infra-standing";
-import { infraVideoFailure } from "./infra-video-view";
 
 const DEFAULT_WIDTH = 16;
 const DEFAULT_HEIGHT = 9;
@@ -25,7 +24,7 @@ export type DeveloperVideoPlayer = DeveloperVideoFrame &
 				poster: string | null;
 		  }
 		| { kind: "processing"; uploading: boolean }
-		| { kind: "failed"; reason: string }
+		| { kind: "failed" }
 		| { kind: "paused" }
 	);
 
@@ -64,13 +63,7 @@ export async function loadDeveloperVideoPlayer(
 	if (!video) return null;
 	const frame = frameOf(video);
 
-	if (video.status === "errored") {
-		return {
-			...frame,
-			kind: "failed",
-			reason: infraVideoFailure(video.errorReason, "viewer"),
-		};
-	}
+	if (video.status === "errored") return { ...frame, kind: "failed" };
 
 	const { hlsUrl, mp4Url, posterUrl } = developerVideoPlaybackUrls(video);
 	if (hlsUrl || mp4Url) {

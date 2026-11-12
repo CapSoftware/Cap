@@ -732,15 +732,24 @@ describe("client mistakes on complete and abort", () => {
 		},
 	);
 
-	it("gives the completion race its code and a hint", async () => {
+	it("gives the completion race its code, the longest wait and a Retry-After", async () => {
 		mocks.claim.mockResolvedValue(null);
 
 		const response = await post("/complete", completeBody);
 
+		expect(response.headers.get("Retry-After")).toBe("5");
 		expect(await refusal(response)).toMatchObject({
 			status: 409,
 			code: "completion_in_progress",
+			hint: "Wait for the Retry-After seconds, then send the same request again. If an earlier request was cut off, this can last up to 15 minutes. Do not abort or delete.",
 		});
+	});
+
+	it("sends no Retry-After with any other refusal of complete", async () => {
+		const response = await post("/complete", { ...completeBody, parts: [] });
+
+		expect(response.status).toBe(400);
+		expect(response.headers.get("Retry-After")).toBeNull();
 	});
 });
 

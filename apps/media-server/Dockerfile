@@ -9,6 +9,7 @@ WORKDIR /app
 COPY apps/media-server/package.json apps/media-server/bun.lock ./
 RUN bun install --frozen-lockfile --production
 
+COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
 COPY apps/media-server/capcodec.md ./capcodec.md
 
@@ -26,6 +27,7 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/preverify.test.ts \
 	&& bun test src/__tests__/lib/lifecycle.test.ts src/__tests__/lib/temp-files.test.ts src/__tests__/lib/process-guards.test.ts \
 	&& bun test src/__tests__/lib/media-input-policy.test.ts \
+	&& bun test src/__tests__/lib/media-address-guard.test.ts src/__tests__/lib/media-relay.integration.test.ts src/__tests__/lib/source-frame-limit.integration.test.ts src/__tests__/lib/encode-stall.test.ts src/__tests__/lib/auth.test.ts \
 	&& bun test src/__tests__/routes/lifecycle.test.ts \
 	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/live-transcribe.test.ts src/__tests__/routes/live-transcribe.test.ts \

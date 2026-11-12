@@ -10,6 +10,7 @@ import {
 	getJob,
 	getJobTotals,
 	type JobProgress,
+	MAX_RETAINED_TERMINAL_JOBS,
 	type RecordingWorkerAcknowledgement,
 	sendWebhook,
 	touchJob,
@@ -424,6 +425,31 @@ describe("job cleanup", () => {
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	});
+
+	test("keeps at most a fixed number of finished jobs, dropping the oldest first", () => {
+		const active = createTrackedJob("job-cap-active");
+		active.phase = "processing";
+		const finished = Array.from(
+			{ length: MAX_RETAINED_TERMINAL_JOBS },
+			(_, index) => {
+				const job = createTrackedJob(`job-cap-${index}`);
+				job.phase = "complete";
+				job.webhookUrl = "https://webhook.example.test/progress";
+				return job.jobId;
+			},
+		);
+		expect(getJob(finished[0] as string)).toBeDefined();
+
+		const overflow = createTrackedJob("job-cap-overflow");
+		overflow.phase = "error";
+		expect(getJob(finished[0] as string)).toBeDefined();
+
+		createTrackedJob("job-cap-next");
+		expect(getJob(finished[0] as string)).toBeUndefined();
+		expect(getJob(finished[1] as string)).toBeDefined();
+		expect(getJob(active.jobId)).toBe(active);
+		expect(getJob(overflow.jobId)).toBe(overflow);
 	});
 
 	test("bounds unacknowledged terminal retention and retains expired active jobs for delivery", () => {

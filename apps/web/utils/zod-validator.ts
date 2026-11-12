@@ -1,6 +1,6 @@
 import { zValidator as honoZValidator } from "@hono/zod-validator";
 import type { Context, Env, MiddlewareHandler, ValidationTargets } from "hono";
-import type { z } from "zod";
+import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
 
 type Validator<
@@ -78,6 +78,20 @@ const issueSummary = (issues: readonly z.core.$ZodIssue[]) =>
 		)
 		.join("; ");
 
+const FIX_FIELDS_HINT =
+	"Fix the fields listed in issues, then send the request again.";
+
+function validationHint(
+	schema: z.ZodType,
+	issues: readonly z.core.$ZodIssue[],
+) {
+	const unknownField = issues.some(
+		(issue) => issue.code === "unrecognized_keys" && issue.path.length === 0,
+	);
+	if (!unknownField || !(schema instanceof z.ZodObject)) return FIX_FIELDS_HINT;
+	return `This request accepts ${Object.keys(schema.shape).join(", ")}. Field names are case-sensitive.`;
+}
+
 export const developerZValidator = <
 	T extends z.ZodType,
 	Target extends keyof ValidationTargets,
@@ -94,7 +108,7 @@ export const developerZValidator = <
 					...apiErrorBody(
 						"invalid_request",
 						`Invalid request: ${issueSummary(result.error.issues)}`,
-						"Fix the fields listed in issues, then send the request again.",
+						validationHint(schema, result.error.issues),
 					),
 					issues: result.error.issues,
 				},

@@ -122,6 +122,40 @@
 	visibility: hidden;
 }
 
+.cover {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	display: grid;
+	place-items: center;
+	width: 64px;
+	height: 64px;
+	margin: -32px 0 0 -32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.6);
+	color: inherit;
+	cursor: pointer;
+	transition: opacity 0.2s;
+}
+
+.cover svg {
+	width: 24px;
+	height: 24px;
+	fill: currentColor;
+	pointer-events: none;
+}
+
+.player[data-playing="true"] .cover:not(:focus-visible) {
+	opacity: 0;
+	pointer-events: none;
+}
+
+.player[data-controls="false"] .chrome {
+	display: none;
+}
+
 .chrome {
 	position: absolute;
 	left: 0;
@@ -266,6 +300,7 @@
 }
 
 .control:focus-visible,
+.cover:focus-visible,
 .track:focus-visible,
 .volumeTrack:focus-visible,
 .item:focus-visible {
@@ -435,6 +470,7 @@
 
 @media (prefers-reduced-motion: reduce) {
 	.chrome,
+	.cover,
 	.spinner,
 	.rail,
 	.thumb,

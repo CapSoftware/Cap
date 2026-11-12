@@ -380,7 +380,8 @@ describe("generateThumbnail integration tests", () => {
 			},
 		});
 		const controller = new AbortController();
-		const input = `http://127.0.0.1:${server.port}/${crypto.randomUUID()}.mp4`;
+		const name = `${crypto.randomUUID()}.mp4`;
+		const input = `http://127.0.0.1:${server.port}/${name}`;
 		const reason = new Error("Recording worker lease expired");
 		const outcome = generateThumbnail(input, 5, {}, controller.signal).catch(
 			(error: unknown) => error,
@@ -409,7 +410,7 @@ describe("generateThumbnail integration tests", () => {
 							.split("\n");
 			const pids = commands
 				.filter(
-					(command) => command.includes("ffmpeg") && command.includes(input),
+					(command) => command.includes("ffmpeg") && command.includes(name),
 				)
 				.map((command) => Number.parseInt(command.trim(), 10));
 			expect(pids).toHaveLength(1);

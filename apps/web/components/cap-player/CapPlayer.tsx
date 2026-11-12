@@ -11,11 +11,10 @@ import {
 } from "react";
 import styles from "./player.module.css";
 import {
+	type Attachment,
 	AUTO_LEVEL,
 	attachSource,
-	type CapPlayerAttachment,
 	type CapPlayerLevel,
-	type CapPlayerPreload,
 	type CapPlayerSource,
 	resolutionLabel,
 } from "./source";
@@ -36,9 +35,10 @@ export interface CapPlayerProps {
 	poster?: string;
 	aspectRatio?: string;
 	autoPlay?: boolean;
-	preload?: CapPlayerPreload;
 	muted?: boolean;
 	loop?: boolean;
+	controls?: boolean;
+	startAt?: number;
 	focusOnMount?: boolean;
 	accentColor?: string;
 	hideControls?: readonly CapPlayerControl[];
@@ -58,6 +58,8 @@ const VOLUME_KEY = "cap-player-volume";
 const DEFAULT_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const MENU_CLEARANCE = 64;
 const MENU_MIN_HEIGHT = 76;
+const HOVER_INTENT_MS = 100;
+const PLAYS = '[data-action="toggle"], [data-action="surface"]';
 const NO_CONTROLS: readonly CapPlayerControl[] = [];
 
 type MenuName = "speed" | "quality";
@@ -249,9 +251,10 @@ export const CapPlayer = ({
 	poster,
 	aspectRatio = "16 / 9",
 	autoPlay = false,
-	preload = "metadata",
 	muted: startMuted = false,
 	loop = false,
+	controls = true,
+	startAt = 0,
 	focusOnMount = false,
 	accentColor,
 	hideControls = NO_CONTROLS,
@@ -273,7 +276,7 @@ export const CapPlayer = ({
 	const playRef = useRef<HTMLButtonElement>(null);
 	const volumeRef = useRef<HTMLDivElement>(null);
 	const volumeFillRef = useRef<HTMLDivElement>(null);
-	const attachmentRef = useRef<CapPlayerAttachment | null>(null);
+	const attachmentRef = useRef<Attachment | null>(null);
 	const menuDismissedAt = useRef(-1);
 	const levelsRef = useRef<readonly CapPlayerLevel[]>([]);
 	const live = useRef({ onFirstPlay, onEnded, speeds });
@@ -281,7 +284,9 @@ export const CapPlayer = ({
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
-	const [sound, setSound] = useState<"muted" | "low" | "high">("high");
+	const [sound, setSound] = useState<"muted" | "low" | "high">(
+		startMuted ? "muted" : "high",
+	);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [failed, setFailed] = useState(false);
 	const [speed, setSpeed] = useState(1);
@@ -310,7 +315,7 @@ export const CapPlayer = ({
 			{ hls, mp4 },
 			{
 				autoPlay,
-				preload,
+				startAt,
 				onFatal: () => setFailed(true),
 				onLevels: setLevels,
 			},
@@ -318,9 +323,13 @@ export const CapPlayer = ({
 		attachmentRef.current = attachment;
 		return () => {
 			attachmentRef.current = null;
-			attachment.detach();
+			attachment.stop();
 		};
-	}, [hls, mp4, autoPlay, preload]);
+	}, [hls, mp4, autoPlay, startAt]);
+
+	useLayoutEffect(() => {
+		if (videoRef.current) videoRef.current.muted = startMuted;
+	}, [startMuted]);
 
 	useLayoutEffect(() => {
 		if (focusOnMount) playRef.current?.focus({ preventScroll: true });
@@ -355,6 +364,7 @@ export const CapPlayer = ({
 		let frame = 0;
 		let idleTimer = 0;
 		let waitTimer = 0;
+		let intentTimer = 0;
 		let shownText = "";
 		let scrubbing = false;
 		let resumeAfterScrub = false;
@@ -673,6 +683,27 @@ export const CapPlayer = ({
 			wake();
 		};
 
+		// Loading may start a moment before the click that plays: when the
+		// mouse rests on a play button, or is pressed anywhere that plays. A
+		// mouse that only crosses the player must not start a download.
+		const onIntent = (event: PointerEvent) => {
+			window.clearTimeout(intentTimer);
+			if (event.pointerType !== "mouse") return;
+			if (!(event.target instanceof Element)) return;
+			if (event.type === "pointerdown") {
+				if (event.button !== 0) return;
+				if (event.target.closest(PLAYS)) attachmentRef.current?.warm();
+			} else if (
+				event.type === "pointerover" &&
+				event.target.closest('button[data-action="toggle"]')
+			) {
+				intentTimer = window.setTimeout(
+					() => attachmentRef.current?.warm(),
+					HOVER_INTENT_MS,
+				);
+			}
+		};
+
 		const onAction = (event: Event) => {
 			const target = event.target;
 			if (!(target instanceof Element)) return;
@@ -735,6 +766,9 @@ export const CapPlayer = ({
 			root.addEventListener(name, handler as EventListener);
 		}
 		root.addEventListener("keydown", onKey);
+		root.addEventListener("pointerover", onIntent);
+		root.addEventListener("pointerleave", onIntent);
+		root.addEventListener("pointerdown", onIntent);
 		root.addEventListener("click", onAction);
 		root.addEventListener("dblclick", onDoubleClick);
 		root.addEventListener("pointerdown", onPointerDown, true);
@@ -763,6 +797,7 @@ export const CapPlayer = ({
 			cancelAnimationFrame(frame);
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(waitTimer);
+			window.clearTimeout(intentTimer);
 			for (const [name, handler] of videoEvents) {
 				video.removeEventListener(name, handler);
 			}
@@ -773,6 +808,9 @@ export const CapPlayer = ({
 				root.removeEventListener(name, handler as EventListener);
 			}
 			root.removeEventListener("keydown", onKey);
+			root.removeEventListener("pointerover", onIntent);
+			root.removeEventListener("pointerleave", onIntent);
+			root.removeEventListener("pointerdown", onIntent);
 			root.removeEventListener("click", onAction);
 			root.removeEventListener("dblclick", onDoubleClick);
 			root.removeEventListener("pointerdown", onPointerDown, true);
@@ -841,6 +879,7 @@ export const CapPlayer = ({
 			}
 			data-playing={playing}
 			data-started={started}
+			data-controls={controls}
 			data-idle="false"
 			data-waiting="false"
 			data-menu={menu ?? undefined}
@@ -849,10 +888,9 @@ export const CapPlayer = ({
 				ref={videoRef}
 				className={styles.video}
 				poster={poster}
-				preload={autoPlay ? "auto" : preload}
-				playsInline
-				muted={startMuted}
+				preload="none"
 				loop={loop}
+				playsInline
 				data-action="surface"
 				aria-label={title}
 			>
@@ -864,13 +902,23 @@ export const CapPlayer = ({
 					This video could not be played.
 				</p>
 			) : null}
-			{started || failed ? null : (
+			{controls || failed ? null : (
+				<button
+					type="button"
+					className={styles.cover}
+					data-action="toggle"
+					aria-label={playing ? "Pause" : "Play"}
+				>
+					{playing ? <PauseIcon /> : <PlayIcon />}
+				</button>
+			)}
+			{!controls || started || failed ? null : (
 				<button
 					type="button"
 					className={styles.start}
 					data-action="toggle"
 					tabIndex={-1}
-					aria-label="Play"
+					aria-hidden="true"
 				>
 					<PlayIcon />
 				</button>

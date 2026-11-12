@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DownloadTooLargeError,
 	downloadUrlToPathParallel,
 	parallelDownloadOptionsFromEnv,
 	planRanges,
@@ -135,6 +136,28 @@ describe("parallel download", () => {
 		);
 		expect(result.ranged).toBe(true);
 		expect(result.parts).toBe(6);
+		expect(Buffer.compare(await readFile(path), payload)).toBe(0);
+	});
+
+	test("stops at the byte cap, ranged or streamed", async () => {
+		for (const [name, concurrency] of [
+			["file", 4],
+			["plain", 1],
+		] as const) {
+			await expect(
+				downloadUrlToPathParallel(
+					`http://localhost:${server.port}/${name}`,
+					join(dir, `capped-${name}.bin`),
+					{ concurrency, partBytes: MB, maxBytes: 2 * MB },
+				),
+			).rejects.toBeInstanceOf(DownloadTooLargeError);
+		}
+		const path = join(dir, "under-cap.bin");
+		await downloadUrlToPathParallel(
+			`http://localhost:${server.port}/file`,
+			path,
+			{ concurrency: 4, partBytes: MB, maxBytes: payload.length },
+		);
 		expect(Buffer.compare(await readFile(path), payload)).toBe(0);
 	});
 

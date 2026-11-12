@@ -85,6 +85,8 @@ const { claimTranscriptRun, failTranscriptRun } = await import(
 );
 const { completeDeveloperVideoUpload, createDeveloperVideoUpload } =
 	await import("@/lib/developer-video-upload");
+const { getSpeechUsage } = await import("@/lib/developer-transcript-usage");
+const { transcriptUploadExpiry } = await import("@/lib/developer-transcripts");
 const { availableBalance } = await import("@/lib/infra-balance");
 const { getInfraAppStanding, getInfraUploadAdmission } = await import(
 	"@/lib/infra-standing"
@@ -617,6 +619,52 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(byOffset.length).toBe(4);
 	});
 
+	it("filters by the exact bytes of the user ID", async () => {
+		const appId = await makeApp(100_000);
+		const alice = await makeTranscript(appId, { externalUserId: "alice" });
+		await makeTranscript(appId, { externalUserId: "bob" });
+		await makeTranscript(appId, { externalUserId: null });
+
+		const listedFor = async (userId: string) =>
+			(await listTranscripts(appId, { limit: 10, userId })).transcripts.map(
+				(row) => row.id,
+			);
+
+		expect(await listedFor("alice")).toEqual([alice]);
+		for (const other of [
+			"ALICE",
+			"Alice",
+			"àlice",
+			"Alicé",
+			"alice ",
+			"alic",
+			"",
+		]) {
+			expect([other, await listedFor(other)]).toEqual([other, []]);
+		}
+	});
+
+	it("keeps user IDs that differ only by case or accent apart", async () => {
+		const appId = await makeApp(100_000);
+		const ids = ["k9Xq", "K9xQ", "k9xq", "élan", "elan"];
+		const created = new Map<string, string>();
+		for (const userId of ids) {
+			created.set(
+				userId,
+				await makeTranscript(appId, { externalUserId: userId }),
+			);
+		}
+
+		for (const userId of ids) {
+			const { transcripts, hasMore } = await listTranscripts(appId, {
+				limit: 1,
+				userId,
+			});
+			expect(transcripts.map((row) => row.id)).toEqual([created.get(userId)]);
+			expect(hasMore).toBe(false);
+		}
+	});
+
 	it("stores a long transcript and removes it on delete", async () => {
 		const appId = await makeApp(100_000);
 		const other = await makeApp(0);
@@ -947,5 +995,168 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			expect(await balanceOf(appId)).toBe(100_000);
 			expect(await ledgerOf(appId)).toHaveLength(0);
 		}
+	});
+
+	it("reports speech usage that matches the ledger, by UTC month, with holds and without failures", async () => {
+		const appId = await makeApp(100_000);
+		const now = new Date();
+		const monthStart = new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+		);
+
+		const first = await makeTranscript(appId);
+		const second = await makeTranscript(appId);
+		await settle(first, 1800.07);
+		await settle(second, 300.096);
+		const deleted = await makeTranscript(appId);
+		await settle(deleted, 60);
+		await deleteTranscript(appId, deleted);
+
+		const failed = await makeTranscript(appId);
+		await failTranscriptRun(failed, "run-none", "no_audio_track", "x");
+		await database()
+			.update(developerTranscripts)
+			.set({ status: "error", durationSeconds: 7200 })
+			.where(eq(developerTranscripts.id, failed));
+
+		await makeTranscript(appId, {
+			status: "complete",
+			durationSeconds: 3600,
+			billedMicroCredits: 10_000,
+			completedAt: new Date(monthStart.getTime() - 1000),
+		});
+		await makeTranscript(appId, {
+			status: "complete",
+			durationSeconds: 36,
+			billedMicroCredits: 100,
+			completedAt: monthStart,
+		});
+
+		const running = await makeTranscript(appId);
+		await reserveTranscriptCredits({
+			transcriptId: running,
+			durationSeconds: 3600,
+		});
+
+		const usage = await getSpeechUsage(appId, now);
+		const ledger = await ledgerOf(appId);
+		const charged = ledger
+			.filter((row) => row.type === "transcription")
+			.reduce((total, row) => total - row.amount, 0);
+
+		expect(charged).toBe(5_000 + 833 + 166);
+		expect(usage.speech).toMatchObject({
+			periodStart: monthStart.toISOString(),
+			microCredits: charged + 100,
+			transcripts: 4,
+		});
+		expect(usage.speech.seconds).toBeCloseTo(1800.07 + 300.096 + 60 + 36, 2);
+		expect(usage.heldMicroCredits).toBe(10_000);
+		expect(usage.availableMicroCredits).toBe(100_000 - charged - 10_000);
+		expect(await balanceOf(appId)).toBe(100_000 - charged);
+
+		const lastMonth = await getSpeechUsage(
+			appId,
+			new Date(monthStart.getTime() - 1000),
+		);
+		expect(lastMonth.speech.transcripts).toBe(5);
+		expect(lastMonth.speech.seconds).toBeCloseTo(
+			3600 + 1800.07 + 300.096 + 60 + 36,
+			2,
+		);
+		expect(lastMonth.speech.microCredits).toBe(charged + 100 + 10_000);
+	});
+
+	it("refuses a replay with different fields and re-issues the upload URL with a later expiry", async () => {
+		const appId = await makeApp(100_000);
+		const request = {
+			fileName: "standup.mp3",
+			contentLength: 2048,
+			userId: "user-1",
+			metadata: { show: "daily", episode: 7 },
+			idempotencyKey: `key-${id()}`,
+		};
+		const created = await createTranscriptUpload(appId, request);
+		if (!created.ok || !created.upload) throw new Error("create failed");
+
+		expect(
+			await createTranscriptUpload(appId, { ...request, userId: "user-2" }),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "idempotency_conflict",
+			message: "Idempotency key was already used with a different userId",
+		});
+		expect(
+			await createTranscriptUpload(appId, {
+				...request,
+				metadata: { episode: 8, show: "daily" },
+			}),
+		).toMatchObject({ ok: false, status: 409 });
+
+		await database()
+			.update(developerTranscripts)
+			.set({ updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+			.where(eq(developerTranscripts.id, created.transcript.id));
+		const stale = await getTranscript(appId, created.transcript.id);
+		if (!stale) throw new Error("missing");
+		expect(transcriptUploadExpiry(stale).getTime()).toBeLessThan(Date.now());
+
+		const again = await createTranscriptUpload(appId, {
+			...request,
+			metadata: { episode: 7, show: "daily" },
+		});
+		if (!again.ok || !again.upload) throw new Error("replay failed");
+		expect(again.transcript.id).toBe(created.transcript.id);
+		const fresh = await getTranscript(appId, created.transcript.id);
+		if (!fresh) throw new Error("missing");
+		expect(transcriptUploadExpiry(fresh).toISOString()).toBe(
+			again.upload.expiresAt,
+		);
+		expect(new Date(again.upload.expiresAt).getTime()).toBeGreaterThan(
+			Date.now() + 59 * 60 * 1000,
+		);
+	});
+
+	it("never reports more available than balance minus holds while a transcript settles", async () => {
+		const seen = new Set<number>();
+		for (let round = 0; round < 12; round++) {
+			const appId = await makeApp(50_000);
+			const transcriptId = await makeTranscript(appId);
+			await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+			const usages: Awaited<ReturnType<typeof getSpeechUsage>>[] = [];
+			let settling = true;
+			const readers = Array.from({ length: 6 }, async () => {
+				while (settling) usages.push(await getSpeechUsage(appId));
+				usages.push(await getSpeechUsage(appId));
+			});
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			const settled = await settle(transcriptId, 3600);
+			settling = false;
+			await Promise.all(readers);
+
+			expect(settled).toMatchObject({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+			});
+			for (const usage of usages) {
+				expect(usage.availableMicroCredits).toBe(
+					usage.balanceMicroCredits - usage.heldMicroCredits,
+				);
+				expect(usage.availableMicroCredits).toBe(40_000);
+				expect([
+					[50_000, 10_000],
+					[40_000, 0],
+				]).toContainEqual([usage.balanceMicroCredits, usage.heldMicroCredits]);
+				seen.add(usage.balanceMicroCredits);
+			}
+			expect(await getSpeechUsage(appId)).toMatchObject({
+				balanceMicroCredits: 40_000,
+				heldMicroCredits: 0,
+				availableMicroCredits: 40_000,
+			});
+		}
+		expect([...seen].sort()).toEqual([40_000, 50_000]);
 	});
 });

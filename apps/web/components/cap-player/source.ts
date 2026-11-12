@@ -13,12 +13,18 @@ export interface CapPlayerLevel {
 	label: string;
 }
 
-export interface CapPlayerAttachment {
-	detach: () => void;
+export interface Attachment {
+	stop: () => void;
+	warm: () => void;
 	setLevel: (index: number) => void;
 }
 
-export type CapPlayerPreload = "auto" | "metadata";
+export interface AttachOptions {
+	autoPlay: boolean;
+	startAt?: number;
+	onFatal: () => void;
+	onLevels?: (levels: CapPlayerLevel[]) => void;
+}
 
 export const AUTO_LEVEL = -1;
 
@@ -77,7 +83,10 @@ export const listLevels = (
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
-const HELD_SEEK_TOLERANCE = 0.5;
+
+// Seconds hls.js may buffer ahead of the playhead before anyone presses play.
+// Any value below one segment loads exactly the segment under the playhead.
+export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 
 type ConnectionHint = { downlink?: number };
 
@@ -132,43 +141,85 @@ export const pickStartingLevel = (
 	return pick;
 };
 
+export const startWithin = (startAt: number, duration: number) =>
+	Number.isFinite(duration) && startAt > 0 && startAt < duration ? startAt : 0;
+
+// A browser that refuses to start with sound is asked again without it. One
+// that refuses both leaves the video paused with its sound setting untouched.
+export const playAllowingMuted = async (
+	video: Pick<HTMLVideoElement, "play" | "muted">,
+) => {
+	try {
+		await video.play();
+	} catch (error) {
+		const refused = error instanceof Error && error.name === "NotAllowedError";
+		if (!refused || video.muted) return;
+		video.muted = true;
+		try {
+			await video.play();
+		} catch {
+			video.muted = false;
+		}
+	}
+};
+
 const release = (video: HTMLVideoElement) => {
 	video.removeAttribute("src");
 	video.load();
 };
 
+const afterDocumentLoad = (run: () => void) => {
+	if (document.readyState === "complete") {
+		run();
+		return () => undefined;
+	}
+	window.addEventListener("load", run, { once: true });
+	return () => window.removeEventListener("load", run);
+};
+
 export const attachSource = (
 	video: HTMLVideoElement,
 	source: CapPlayerSource,
-	options: {
-		autoPlay: boolean;
-		preload?: CapPlayerPreload;
-		onFatal: () => void;
-		onLevels?: (levels: CapPlayerLevel[]) => void;
-	},
-): CapPlayerAttachment => {
+	options: AttachOptions,
+): Attachment => {
 	const { autoPlay, onFatal, onLevels } = options;
-	const eager = autoPlay || options.preload === "auto";
+	const startAt = options.startAt ?? 0;
 	const mode = pickPlaybackMode(video, source);
 	let cancelled = false;
 	let detach = () => release(video);
+	let cancelWarm: () => void = () => undefined;
+	let startPending = startAt > 0;
+	let hlsSeeks = false;
 	let setLevel: (index: number) => void = () => undefined;
 
 	const start = () => {
-		if (!autoPlay) return;
-		void video.play().catch((error: unknown) => {
-			const blocked =
-				error instanceof DOMException && error.name === "NotAllowedError";
-			if (!blocked || video.muted) return;
-			video.muted = true;
-			void video.play().catch(() => undefined);
-		});
+		if (autoPlay) void playAllowingMuted(video);
 	};
 
 	const position = () => ({
 		resumeAt: video.currentTime,
 		wasPlaying: !video.paused,
 	});
+
+	const seekToStart = () => {
+		if (!startPending || hlsSeeks) return;
+		startPending = false;
+		const at = startWithin(startAt, video.duration);
+		if (at > 0) video.currentTime = at;
+	};
+
+	// WebKit holds the document's load event, and with it the load event of a
+	// page that embeds this one, for as long as a media element with a source
+	// is preloading. So the element starts at preload="none" and only reads
+	// its metadata, or autoplays, once the document has loaded.
+	const warmAfterLoad = (fromTheStart: boolean) => {
+		cancelWarm();
+		cancelWarm = afterDocumentLoad(() => {
+			if (cancelled) return;
+			if (video.paused) video.preload = "metadata";
+			if (fromTheStart) start();
+		});
+	};
 
 	let fileAttached = false;
 
@@ -191,26 +242,50 @@ export const attachSource = (
 			video.removeEventListener("error", onFatal);
 			release(video);
 		};
-		video.preload = eager || resumeAt > 0 ? "auto" : "metadata";
+		video.preload = "none";
 		video.src = source.mp4;
-		if (resumeAt > 0) video.currentTime = resumeAt;
+		if (resumeAt > 0) {
+			startPending = false;
+			video.currentTime = resumeAt;
+		}
 		if (wasPlaying) void video.play().catch(() => undefined);
-		else if (resumeAt === 0) start();
+		else warmAfterLoad(resumeAt === 0);
 	}
 
-	const attachment: CapPlayerAttachment = {
-		detach: () => {
-			cancelled = true;
-			video.removeEventListener("error", onNativeError);
-			detach();
-		},
+	const stop = () => {
+		cancelled = true;
+		cancelWarm();
+		video.removeEventListener("error", onNativeError);
+		video.removeEventListener("loadedmetadata", seekToStart);
+		detach();
+	};
+
+	// Safari plays HLS itself and cannot preload a single segment: at
+	// preload="auto" it keeps downloading and cannot be stopped again. So it
+	// holds only the playlists until the viewer is about to press play.
+	const warm = () => {
+		if (mode !== "native" || fileAttached || cancelled) return;
+		if (video.paused && document.readyState === "complete") {
+			video.preload = "auto";
+		}
+	};
+
+	const attachment: Attachment = {
+		stop,
+		warm,
 		setLevel: (index) => setLevel(index),
 	};
 
 	if (mode === "none") {
 		onFatal();
-		return { detach: () => undefined, setLevel: () => undefined };
+		return {
+			stop: () => undefined,
+			warm: () => undefined,
+			setLevel: () => undefined,
+		};
 	}
+
+	video.addEventListener("loadedmetadata", seekToStart);
 
 	if (mode === "file") {
 		playFile({ resumeAt: 0, wasPlaying: false });
@@ -218,9 +293,10 @@ export const attachSource = (
 	}
 
 	if (mode === "native" && source.hls) {
+		video.preload = "none";
 		video.src = source.hls;
 		video.addEventListener("error", onNativeError);
-		start();
+		warmAfterLoad(true);
 		return attachment;
 	}
 
@@ -239,17 +315,51 @@ export const attachSource = (
 				abrEwmaDefaultEstimateMax: estimate,
 				startFragPrefetch: true,
 				backBufferLength: 30,
+				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
 			});
-			let separateAudio = false;
+			let playRequested = false;
+			let picked = AUTO_LEVEL;
+			const bufferFreely = () => {
+				playRequested = true;
+				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
+				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
+			};
+			// hls.js seeks to the start time itself. The time stays pending
+			// until that seek lands, so a fallback to the MP4 before then
+			// still starts at it.
+			const reachedStart = () => {
+				startPending = false;
+			};
+			const destroy = () => {
+				hlsSeeks = false;
+				video.removeEventListener("play", bufferFreely);
+				video.removeEventListener("seeked", reachedStart);
+				hls.destroy();
+			};
+			hlsSeeks = true;
+			video.addEventListener("seeked", reachedStart, { once: true });
+			video.addEventListener("play", bufferFreely);
+			if (!video.paused) bufferFreely();
+			// Until play, hls.js keeps to one rendition and one segment. The
+			// level is fixed because the first segment's speed reading would
+			// otherwise send it off to fetch a second rendition's playlist.
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
-				separateAudio = data.altAudio;
 				onLevels?.(listLevels(data.levels));
-				hls.startLevel = pickStartingLevel(
+				const level = pickStartingLevel(
 					data.levels,
 					video.clientWidth * window.devicePixelRatio,
 					estimate,
 				);
-				hls.startLoad();
+				hls.startLevel = level;
+				if (!playRequested) hls.loadLevel = level;
+				hls.startLoad(startPending ? startAt : -1);
+			});
+			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
+				if (!startPending) return;
+				if (startWithin(startAt, data.details.totalduration) === 0) {
+					startPending = false;
+					hls.startLoad(0);
+				}
 			});
 			let recovered = false;
 			hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -260,52 +370,19 @@ export const attachSource = (
 					return;
 				}
 				const reached = position();
-				hls.destroy();
+				destroy();
 				playFile(reached);
 			});
-			let heldAt = 0;
-			const resume = () => {
-				video.removeEventListener("play", resume);
-				video.removeEventListener("seeking", resumeOnSeek);
-				hls.startLoad();
+			// A pick changes rendition at the next segment. Switching at once
+			// flushes the whole buffer and freezes the picture on a slow line.
+			setLevel = (index) => {
+				picked = index;
+				hls.nextLevel = index;
 			};
-			const resumeOnSeek = () => {
-				if (Math.abs(video.currentTime - heldAt) > HELD_SEEK_TOLERANCE)
-					resume();
-			};
-			const holdUntilPlay = () => {
-				if (!video.paused) return;
-				heldAt = video.currentTime;
-				hls.stopLoad();
-				video.addEventListener("play", resume);
-				video.addEventListener("seeking", resumeOnSeek);
-			};
-			if (!eager) {
-				const arrived = new Set<string>();
-				const onBuffered = (
-					_event: unknown,
-					data: { frag: { type: string; sn: number | "initSegment" } },
-				) => {
-					if (data.frag.sn === "initSegment") return;
-					arrived.add(data.frag.type);
-					const audioReady = !separateAudio || arrived.has("audio");
-					if (!arrived.has("main") || !audioReady) return;
-					hls.off(Hls.Events.FRAG_BUFFERED, onBuffered);
-					holdUntilPlay();
-				};
-				hls.on(Hls.Events.FRAG_BUFFERED, onBuffered);
-			}
 			video.preload = "auto";
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);
-			detach = () => {
-				video.removeEventListener("play", resume);
-				video.removeEventListener("seeking", resumeOnSeek);
-				hls.destroy();
-			};
-			setLevel = (index) => {
-				hls.nextLevel = index;
-			};
+			detach = destroy;
 			start();
 		})
 		.catch(() => playFile());

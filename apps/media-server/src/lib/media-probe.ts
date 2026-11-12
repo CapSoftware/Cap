@@ -11,6 +11,7 @@ import {
 	WEBM,
 } from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
+import { MediaAddressError } from "./media-address-guard";
 import {
 	createGuardedMediaFetch,
 	createMediaInput,
@@ -21,6 +22,7 @@ import {
 	withTimeout,
 } from "./media-common";
 import {
+	exceedsSourceFrameLimit,
 	looksLikeTextContainer,
 	MediaInputPolicyError,
 } from "./media-input-policy";
@@ -32,7 +34,6 @@ import {
 import { materializeMedia } from "./media-transfer";
 
 const PROBE_TIMEOUT_MS = 30_000;
-const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 export { canAcceptNewProbeOperation, getActiveProbeOperationCount };
 
@@ -70,6 +71,11 @@ const SNIFF_BYTES = 4096;
 export class UnreadableMediaInputError extends Error {
 	override name = "UnreadableMediaInputError";
 }
+
+// Not a policy violation: those count against the uploader, and a camera
+// original that is simply too big should not.
+export const FRAME_TOO_LARGE_MESSAGE =
+	"Video frame is larger than 8K, the largest size this server accepts";
 
 export function isUnreadableMediaInput(error: unknown): boolean {
 	return (
@@ -109,7 +115,11 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 		await reader.cancel().catch(() => {});
 		return head.subarray(0, length);
 	} catch (error) {
-		if (error instanceof MediaInputPolicyError) throw error;
+		if (
+			error instanceof MediaInputPolicyError ||
+			error instanceof MediaAddressError
+		)
+			throw error;
 		return null;
 	}
 }
@@ -258,6 +268,18 @@ async function readMediaMetadata(
 	const videoTrack = await input.getPrimaryVideoTrack();
 	if (!videoTrack) {
 		throw new UnreadableMediaInputError("No video stream found");
+	}
+	if (
+		exceedsSourceFrameLimit(
+			await videoTrack.getCodedWidth(),
+			await videoTrack.getCodedHeight(),
+		) ||
+		exceedsSourceFrameLimit(
+			await videoTrack.getDisplayWidth(),
+			await videoTrack.getDisplayHeight(),
+		)
+	) {
+		throw new UnreadableMediaInputError(FRAME_TOO_LARGE_MESSAGE);
 	}
 
 	const audioTrack = await input.getPrimaryAudioTrack();
@@ -440,7 +462,7 @@ export async function probeFastestFrameRate(
 
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(videoUrl, {
+		const response = await createGuardedMediaFetch(videoUrl)(videoUrl, {
 			method: "HEAD",
 			signal: AbortSignal.timeout(10_000),
 		});
