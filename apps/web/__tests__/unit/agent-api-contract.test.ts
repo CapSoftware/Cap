@@ -411,6 +411,10 @@ describe("agent API contract", () => {
 		);
 
 		expect(listSource).toContain(".limit(limit + 1)");
+		expect(listSource).toContain(
+			"eq(Db.developerVideos.externalUserId, externalUserId)",
+		);
+		expect(listSource).toContain("externalUserId} AS BINARY) = CAST(");
 		expect(listSource).not.toContain("s3Key:");
 		expect(listSource).not.toContain("metadata:");
 

@@ -59,6 +59,23 @@ export async function isRateLimited(
 	}
 }
 
+/**
+ * The firewall's decision for a keyed rule, or `undefined` when it cannot
+ * answer: the cases in which `isRateLimited` falls back to its own window.
+ * For callers that keep and report their own window, such as the developer
+ * API, and need to know whether the shared rule decided.
+ */
+export function sharedRateLimitDecision(
+	ruleId: string,
+	opts: { key: string; headers: Headers },
+): Promise<boolean | undefined> {
+	return checkFirewallRateLimit(
+		ruleId,
+		firewallRequestHeaders(opts.headers),
+		opts.key,
+	);
+}
+
 async function appRouterHeaders(): Promise<Headers> {
 	try {
 		return new Headers(await nextHeaders());
@@ -198,6 +215,10 @@ export const RATE_LIMIT_IDS = {
 	MOBILE_EVENTS: "rl_mobile_events",
 	/** Code attempts on Cap Infra credit checkout (guessing guard). Suggested: 10 / 10m per key (user). */
 	INFRA_CREDIT_CODE: "rl_infra_credit_code",
+	/** Developer REST API requests per secret key. 60 / 1m per key (hash of the credential). */
+	DEVELOPER_API_KEY: "rl_developer_api_key",
+	/** Developer SDK upload requests per upload token. 1200 / 1m per key (hash of the credential). */
+	DEVELOPER_UPLOAD_TOKEN: "rl_developer_upload_token",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
