@@ -431,6 +431,12 @@ describe("audio with no speech", () => {
 			false,
 		);
 		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 1 }),
+		).toBe(false);
+		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 0 }),
+		).toBe(true);
+		expect(
 			transcriptHasNoSpeech({ status: "processing", wordCount: null }),
 		).toBe(false);
 

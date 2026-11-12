@@ -595,6 +595,7 @@ const summaryColumns = {
 	requestedLanguage: developerTranscripts.requestedLanguage,
 	language: developerTranscripts.language,
 	wordCount: developerTranscripts.wordCount,
+	hasText: sql<number>`(${developerTranscripts.text} IS NOT NULL AND ${developerTranscripts.text} <> '')`,
 	reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 	billedMicroCredits: developerTranscripts.billedMicroCredits,
 	errorCode: developerTranscripts.errorCode,

@@ -59,7 +59,9 @@ export type TranscriptResultObject = {
 
 type TranscriptRow = typeof developerTranscripts.$inferSelect;
 
-export type TranscriptSummaryRow = Omit<TranscriptRow, "text">;
+export type TranscriptSummaryRow = Omit<TranscriptRow, "text"> & {
+	hasText?: boolean | number | null;
+};
 
 export function isTranscriptStatus(
 	value: string | undefined | null,
@@ -264,8 +266,9 @@ export function transcriptWordCount(
 export function transcriptHasNoSpeech(row: {
 	status: string;
 	wordCount: number | null;
+	hasText?: boolean | number | null;
 }) {
-	return row.status === "complete" && row.wordCount === 0;
+	return row.status === "complete" && row.wordCount === 0 && !row.hasText;
 }
 
 export function measuredTranscriptDuration(input: {

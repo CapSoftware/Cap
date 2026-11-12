@@ -62,6 +62,7 @@ type ConsoleTranscript = Pick<
 	| "durationSeconds"
 	| "billedMicroCredits"
 	| "wordCount"
+	| "hasText"
 	| "errorMessage"
 	| "createdAt"
 >;

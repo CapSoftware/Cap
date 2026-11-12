@@ -313,6 +313,12 @@ pub fn transcript_has_no_speech(value: &Value) -> bool {
             .and_then(|transcript| transcript.get("wordCount"))
             .and_then(Value::as_u64)
             == Some(0)
+        && value
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
 }
 
 pub fn video_create_body(
@@ -464,6 +470,13 @@ mod tests {
         assert!(!no_speech("error", json!(0)));
         assert!(!no_speech("processing", json!(null)));
         assert!(!transcript_has_no_speech(&json!({ "text": "" })));
+        assert!(!transcript_has_no_speech(&json!({
+            "transcript": { "status": "complete", "wordCount": 0 },
+            "text": "hello there",
+        })));
+        assert!(transcript_has_no_speech(&json!({
+            "transcript": { "status": "complete", "wordCount": 0 },
+        })));
     }
 
     #[test]

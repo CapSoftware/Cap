@@ -118,6 +118,7 @@ import {
 	transcriptIdForIdempotencyKey,
 	validateTranscriptOptions,
 } from "@/lib/developer-transcript-store";
+import { transcriptHasNoSpeech } from "@/lib/developer-transcripts";
 import { isBlockedS3Endpoint } from "@/lib/s3-endpoint-policy";
 
 const URL_A = "https://media.example.com/standup.mp3";
@@ -714,6 +715,26 @@ describe("reading and listing", () => {
 		const page = await listTranscripts("app-1", { limit: 2 });
 		expect(page.transcripts).toHaveLength(2);
 		expect(page.hasMore).toBe(false);
+	});
+
+	it("does not call an older transcript silent when it has text but no word count", async () => {
+		seed("tr-old-text", { status: "complete", wordCount: 0, text: "hello" });
+		seed("tr-silent", { status: "complete", wordCount: 0, text: "" });
+		seed("tr-never-set", { status: "complete", wordCount: 0, text: null });
+
+		const { transcripts: listed } = await listTranscripts("app-1", {
+			limit: 10,
+		});
+		const silent = Object.fromEntries(
+			listed.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+		);
+
+		expect(silent).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(listed.every((row) => !("text" in row))).toBe(true);
 	});
 
 	it("pages by cursor without skipping or repeating", async () => {
