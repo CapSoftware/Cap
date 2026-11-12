@@ -55,6 +55,9 @@ export interface HlsLadderResult {
 export interface EncodedHlsLadder {
 	files: HlsLadderFile[];
 	result: HlsLadderResult;
+	// The largest rendition and the length of video in it. A poster taken from
+	// it has the colours viewers see, where the source may still be HDR.
+	poster: { path: string; durationSeconds: number };
 	cleanup: () => Promise<void>;
 }
 
@@ -260,7 +263,15 @@ export async function encodeHlsLadder(
 				bytes: media.bytes,
 			};
 		}
-		return { files, result: { encoder, renditions, audio }, cleanup };
+		const [top] = master.video;
+		const posterFile = files.find((file) => file.name === top?.media);
+		if (!posterFile) throw new Error("HLS ladder is missing a rendition");
+		return {
+			files,
+			result: { encoder, renditions, audio },
+			poster: { path: posterFile.path, durationSeconds: sliceSeconds },
+			cleanup,
+		};
 	} catch (error) {
 		await cleanup();
 		abortSignal?.throwIfAborted();

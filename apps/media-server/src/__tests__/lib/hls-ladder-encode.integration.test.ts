@@ -22,6 +22,7 @@ import {
 	encodeHlsLadder,
 } from "../../lib/hls-ladder-encode";
 import { probeVideoFile } from "../../lib/media-probe";
+import { generateThumbnail } from "../../lib/media-video";
 
 const SOURCE_SECONDS = 26;
 
@@ -382,6 +383,26 @@ describe("HLS ladder encode", () => {
 		const slice = await encode({ startSeconds: 0 }, true, lossless);
 		expect(slice.result.audio?.media).toBe("audio.m4s");
 	}, 120_000);
+
+	test("offers its largest rendition as the source of the poster", async () => {
+		const ladder = await encode();
+		expect(ladder.poster.path).toBe(fileNamed(ladder, "720p.m4s").path);
+		expect(ladder.poster.durationSeconds).toBeCloseTo(SOURCE_SECONDS, 0);
+		const poster = await generateThumbnail(
+			ladder.poster.path,
+			ladder.poster.durationSeconds,
+		);
+		expect(poster[0]).toBe(0xff);
+		expect(poster[1]).toBe(0xd8);
+
+		const slice = await encode({ startSeconds: 16 }, false);
+		expect(slice.poster.durationSeconds).toBeCloseTo(SOURCE_SECONDS - 16, 0);
+		const slicePoster = await generateThumbnail(
+			slice.poster.path,
+			slice.poster.durationSeconds,
+		);
+		expect(slicePoster[1]).toBe(0xd8);
+	}, 180_000);
 
 	test("keeps a rotated source in the orientation it plays in", async () => {
 		const rotated = join(directory, "rotated.mp4");
