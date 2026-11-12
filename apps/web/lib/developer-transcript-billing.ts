@@ -9,6 +9,7 @@ import {
 	transcriptionBilledSeconds,
 	transcriptionMicroCredits,
 } from "@/lib/developer-pricing";
+import { TRANSCRIPT_FULL_HOLD_MICRO_CREDITS } from "@/lib/developer-transcript-hold";
 import {
 	TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS,
 	type TranscriptErrorCode,
@@ -25,6 +26,15 @@ export const INSUFFICIENT_CREDITS_MESSAGE =
 export type TranscriptReservation =
 	| { state: "reserved"; reservedMicroCredits: number }
 	| { state: "insufficient_credits" }
+	| { state: "skipped" };
+
+export type TranscriptHold =
+	| { state: "held"; reservedMicroCredits: number }
+	| {
+			state: "contended" | "insufficient";
+			neededMicroCredits: number;
+			availableMicroCredits: number;
+	  }
 	| { state: "skipped" };
 
 export type TranscriptSettlement =
@@ -106,13 +116,88 @@ async function findTranscriptApp(transcriptId: string) {
 	return transcript?.appId ?? null;
 }
 
+export async function holdTranscriptCredits(input: {
+	transcriptId: string;
+	microCredits: number;
+	releaseWhileWaiting?: boolean;
+}): Promise<TranscriptHold> {
+	const appId = await findTranscriptApp(input.transcriptId);
+	if (!appId) return { state: "skipped" };
+	const needed = Math.max(0, Math.ceil(input.microCredits));
+
+	return db().transaction(async (tx) => {
+		const [account] = await tx
+			.select({
+				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			})
+			.from(developerCreditAccounts)
+			.where(eq(developerCreditAccounts.appId, appId))
+			.limit(1)
+			.for("update");
+
+		const [transcript] = await tx
+			.select({
+				status: developerTranscripts.status,
+				deletedAt: developerTranscripts.deletedAt,
+				reservedMicroCredits: developerTranscripts.reservedMicroCredits,
+			})
+			.from(developerTranscripts)
+			.where(eq(developerTranscripts.id, input.transcriptId))
+			.limit(1)
+			.for("update");
+		if (
+			!transcript ||
+			transcript.deletedAt ||
+			transcript.status !== "processing"
+		) {
+			return { state: "skipped" };
+		}
+
+		const current = Number(transcript.reservedMicroCredits) || 0;
+		if (current >= needed) {
+			return { state: "held", reservedMicroCredits: current };
+		}
+
+		const heldByOthers = await heldTranscriptMicroCredits(
+			tx,
+			appId,
+			input.transcriptId,
+		);
+		const available = (account?.balanceMicroCredits ?? 0) - heldByOthers;
+		if (!account || available < needed) {
+			const contended = Boolean(account) && heldByOthers > 0;
+			if (contended && input.releaseWhileWaiting && current > 0) {
+				await tx
+					.update(developerTranscripts)
+					.set({ reservedMicroCredits: 0 })
+					.where(eq(developerTranscripts.id, input.transcriptId));
+			}
+			return {
+				state: contended ? "contended" : "insufficient",
+				neededMicroCredits: needed,
+				availableMicroCredits: Math.max(0, available),
+			};
+		}
+
+		await tx
+			.update(developerTranscripts)
+			.set({ reservedMicroCredits: needed })
+			.where(eq(developerTranscripts.id, input.transcriptId));
+
+		return { state: "held", reservedMicroCredits: needed };
+	});
+}
+
 export async function reserveTranscriptCredits(input: {
 	transcriptId: string;
 	durationSeconds: number;
 }): Promise<TranscriptReservation> {
 	const appId = await findTranscriptApp(input.transcriptId);
 	if (!appId) return { state: "skipped" };
-	const cost = transcriptionMicroCredits(input.durationSeconds);
+	const cost = Math.min(
+		transcriptionMicroCredits(input.durationSeconds),
+		TRANSCRIPT_FULL_HOLD_MICRO_CREDITS,
+	);
 
 	return db().transaction(async (tx) => {
 		const [account] = await tx

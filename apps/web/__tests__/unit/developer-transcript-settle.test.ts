@@ -52,13 +52,22 @@ import {
 	developerTranscripts,
 } from "@cap/database/schema";
 import { debitDeveloperUsage } from "@/lib/developer-credits";
+import { transcriptionMicroCredits } from "@/lib/developer-pricing";
 import {
 	getAvailableTranscriptBalance,
 	hasMinimumTranscriptBalance,
+	holdTranscriptCredits,
 	reserveTranscriptCredits,
 	settleTranscript,
 	transcriptStartRefusal,
 } from "@/lib/developer-transcript-billing";
+import {
+	insufficientHoldMessage,
+	TRANSCRIPT_FULL_HOLD_MICRO_CREDITS,
+	transcriptHoldCoversSeconds,
+	transcriptHoldForAudioSeconds,
+	transcriptHoldForSourceBytes,
+} from "@/lib/developer-transcript-hold";
 
 const ONE_HOUR = 3600;
 
@@ -329,24 +338,35 @@ describe("transcript holds", () => {
 	});
 
 	it("can be repeated without holding twice", async () => {
-		await reserve("tr-1", 5 * ONE_HOUR);
-		expect(await reserve("tr-1", 5 * ONE_HOUR)).toEqual({
+		await reserve("tr-1", 4 * ONE_HOUR);
+		expect(await reserve("tr-1", 4 * ONE_HOUR)).toEqual({
 			state: "reserved",
-			reservedMicroCredits: 50_000,
+			reservedMicroCredits: 40_000,
 		});
-		expect(await getAvailableTranscriptBalance("app-1")).toBe(0);
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(10_000);
+	});
+
+	it("never holds more than four hours cost for the second of slack past the limit", async () => {
+		expect(await reserve("tr-1", 4 * ONE_HOUR + 1)).toEqual({
+			state: "reserved",
+			reservedMicroCredits: 40_000,
+		});
+		expect(await settle(4 * ONE_HOUR + 1)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 40_000,
+		});
 	});
 
 	it("releases the hold when the transcript fails or completes", async () => {
 		addTranscript("tr-2");
-		await reserve("tr-1", 5 * ONE_HOUR);
-		expect((await reserve("tr-2", ONE_HOUR)).state).toBe(
+		await reserve("tr-1", 4 * ONE_HOUR);
+		expect((await reserve("tr-2", 2 * ONE_HOUR)).state).toBe(
 			"insufficient_credits",
 		);
 
 		const first = transcript("tr-1");
 		if (first) first.status = "error";
-		expect((await reserve("tr-2", ONE_HOUR)).state).toBe("reserved");
+		expect((await reserve("tr-2", 2 * ONE_HOUR)).state).toBe("reserved");
 
 		await settle(ONE_HOUR, "tr-2");
 		expect(await getAvailableTranscriptBalance("app-1")).toBe(40_000);
@@ -503,6 +523,176 @@ describe("holds and other usage", () => {
 			reservedMicroCredits: 9_000,
 		});
 		expect((await otherUsage(10_000, "video-1")).state).toBe("debited");
+	});
+});
+
+describe("the hold taken before any work", () => {
+	const hold = (transcriptId: string, microCredits: number) =>
+		holdTranscriptCredits({ transcriptId, microCredits });
+
+	it("bounds the audio a file can contain by its size at 4 kbps, up to four hours", () => {
+		expect(TRANSCRIPT_FULL_HOLD_MICRO_CREDITS).toBe(40_000);
+		expect(transcriptHoldForSourceBytes(null)).toBe(40_000);
+		expect(transcriptHoldForSourceBytes(0)).toBe(1_000);
+		expect(transcriptHoldForSourceBytes(180_000)).toBe(1_000);
+		expect(transcriptHoldForSourceBytes(180_500)).toBe(
+			transcriptionMicroCredits(361),
+		);
+		expect(transcriptHoldForSourceBytes(1_000_000)).toBe(5_555);
+		expect(transcriptHoldForSourceBytes(7_199_999)).toBe(40_000);
+		expect(transcriptHoldForSourceBytes(2 * 1024 ** 3)).toBe(40_000);
+	});
+
+	it("never says a hold covers more audio than it pays for", () => {
+		expect(transcriptHoldCoversSeconds(0)).toBe(0);
+		expect(transcriptHoldCoversSeconds(1_000)).toBe(360);
+		expect(transcriptHoldCoversSeconds(39_999)).toBe(14_399);
+		expect(transcriptHoldCoversSeconds(40_000)).toBe(4 * ONE_HOUR + 1);
+		for (let held = 1; held < 40_000; held += 37) {
+			expect(
+				transcriptionMicroCredits(transcriptHoldCoversSeconds(held)),
+			).toBeLessThanOrEqual(held);
+		}
+	});
+
+	it("covers the length a file reports when it is raised to it", () => {
+		expect(transcriptHoldForAudioSeconds(null)).toBe(40_000);
+		expect(transcriptHoldForAudioSeconds(20_000)).toBe(40_000);
+		expect(transcriptHoldForAudioSeconds(10)).toBe(1_000);
+		for (const seconds of [361, 999.4, 1_000, 5_000.9, 14_390]) {
+			expect(
+				transcriptHoldCoversSeconds(transcriptHoldForAudioSeconds(seconds)),
+			).toBeGreaterThanOrEqual(seconds);
+		}
+	});
+
+	it("records the hold and takes it out of the available balance", async () => {
+		expect(await hold("tr-1", 40_000)).toEqual({
+			state: "held",
+			reservedMicroCredits: 40_000,
+		});
+		expect(transcript()?.reservedMicroCredits).toBe(40_000);
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(10_000);
+		expect(ledger()).toHaveLength(0);
+		expect(account()?.balanceMicroCredits).toBe(50_000);
+	});
+
+	it("fails outright when nothing else holds credit, with what it needed and what there was", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 1_000;
+		expect(await hold("tr-1", 40_000)).toEqual({
+			state: "insufficient",
+			neededMicroCredits: 40_000,
+			availableMicroCredits: 1_000,
+		});
+		expect(transcript()?.reservedMicroCredits).toBe(0);
+		expect(insufficientHoldMessage(40_000, 1_000)).toBe(
+			"This transcript needs $0.40 of available credit until its audio is measured, and $0.01 is available. Add at least $0.39. Nothing was charged.",
+		);
+	});
+
+	it("gives its own hold back while it waits for a raise, so two raises cannot block each other", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 2_500;
+		addTranscript("tr-2");
+		const raise = (transcriptId: string) =>
+			holdTranscriptCredits({
+				transcriptId,
+				microCredits: 2_006,
+				releaseWhileWaiting: true,
+			});
+		await hold("tr-1", 1_000);
+		await hold("tr-2", 1_000);
+
+		expect((await raise("tr-1")).state).toBe("contended");
+		expect(transcript()?.reservedMicroCredits).toBe(0);
+		expect(await raise("tr-2")).toEqual({
+			state: "held",
+			reservedMicroCredits: 2_006,
+		});
+		expect(await raise("tr-1")).toEqual({
+			state: "contended",
+			neededMicroCredits: 2_006,
+			availableMicroCredits: 494,
+		});
+	});
+
+	it("keeps its hold while waiting when it has not asked to give it back", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 2_500;
+		addTranscript("tr-2");
+		await hold("tr-1", 1_000);
+		await hold("tr-2", 1_000);
+
+		expect((await hold("tr-1", 2_006)).state).toBe("contended");
+		expect(transcript()?.reservedMicroCredits).toBe(1_000);
+	});
+
+	it("reports contention when other transcripts hold the credit it needs", async () => {
+		addTranscript("tr-2");
+		await hold("tr-1", 40_000);
+		expect(await hold("tr-2", 40_000)).toEqual({
+			state: "contended",
+			neededMicroCredits: 40_000,
+			availableMicroCredits: 10_000,
+		});
+		expect(transcript("tr-2")?.reservedMicroCredits).toBe(0);
+
+		await reserveTranscriptCredits({
+			transcriptId: "tr-1",
+			durationSeconds: 60,
+		});
+		expect((await hold("tr-2", 40_000)).state).toBe("held");
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(
+			50_000 - 40_000 - 166,
+		);
+	});
+
+	it("never lets holds placed together exceed the balance", async () => {
+		for (let index = 2; index <= 8; index++) addTranscript(`tr-${index}`);
+		const results = await Promise.all(
+			Array.from({ length: 8 }, (_, index) => hold(`tr-${index + 1}`, 20_000)),
+		);
+		expect(results.filter((result) => result.state === "held")).toHaveLength(2);
+		expect(
+			results.filter((result) => result.state === "contended"),
+		).toHaveLength(6);
+		expect(await getAvailableTranscriptBalance("app-1")).toBe(10_000);
+	});
+
+	it("keeps a larger hold it already has and raises a smaller one when it fits", async () => {
+		await hold("tr-1", 5_000);
+		expect(await hold("tr-1", 1_000)).toEqual({
+			state: "held",
+			reservedMicroCredits: 5_000,
+		});
+		expect(await hold("tr-1", 40_000)).toEqual({
+			state: "held",
+			reservedMicroCredits: 40_000,
+		});
+		expect(await hold("tr-1", 50_001)).toEqual({
+			state: "insufficient",
+			neededMicroCredits: 50_001,
+			availableMicroCredits: 50_000,
+		});
+		expect(transcript()?.reservedMicroCredits).toBe(40_000);
+	});
+
+	it("holds nothing for a deleted or finished transcript, or an app without credit", async () => {
+		addTranscript("tr-2", { status: "complete" });
+		expect(await hold("tr-2", 1_000)).toEqual({ state: "skipped" });
+		expect(await hold("missing", 1_000)).toEqual({ state: "skipped" });
+
+		fake().rows(developerCreditAccounts).length = 0;
+		expect(await hold("tr-1", 1_000)).toEqual({
+			state: "insufficient",
+			neededMicroCredits: 1_000,
+			availableMicroCredits: 0,
+		});
+
+		const current = transcript();
+		if (current) current.deletedAt = new Date();
+		expect(await hold("tr-1", 1_000)).toEqual({ state: "skipped" });
 	});
 });
 
