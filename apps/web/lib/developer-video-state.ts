@@ -234,6 +234,7 @@ export function developerVideoStoredBytes(
 export function developerVideoRedrive(
 	video: {
 		status: DeveloperVideoStatus;
+		playbackId: string | null;
 		duration: number | null;
 		deletedAt: Date | null;
 		updatedAt: Date;
@@ -245,6 +246,9 @@ export function developerVideoRedrive(
 	if (video.deletedAt) return null;
 	if (video.status === "uploading") {
 		if (options.uploadCompleted) return "start";
+		// Uploaded before encoding existed: it stays as it was rather than
+		// being re-encoded the first time someone reads it.
+		if (video.playbackId === null && video.processing === null) return null;
 		return video.duration !== null &&
 			now - video.updatedAt.getTime() >= NEVER_STARTED_GRACE_MS
 			? "start"

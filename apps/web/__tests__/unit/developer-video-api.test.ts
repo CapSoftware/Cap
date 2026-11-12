@@ -155,6 +155,10 @@ describe("developer video API", () => {
 			status: "uploading",
 			playbackId: null,
 			processing: null,
+			updatedAt: new Date(Date.now() - 60 * 60_000),
+		});
+		mocks.redrive.mockImplementation(async () => {
+			throw new Error("a legacy video must not be re-encoded on read");
 		});
 
 		const { body } = await get("/video-1/status");

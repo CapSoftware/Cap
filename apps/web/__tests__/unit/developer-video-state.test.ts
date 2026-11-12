@@ -314,6 +314,17 @@ describe("developer video redrive", () => {
 		).toBe("start");
 	});
 
+	it("leaves a video uploaded before encoding existed as it was", () => {
+		const legacy = developerVideo({
+			status: "uploading",
+			playbackId: null,
+			processing: null,
+			updatedAt: minutesAgo(60),
+		});
+
+		expect(developerVideoRedrive(legacy, now)).toBeNull();
+	});
+
 	it("restarts processing that has been stuck for hours", () => {
 		const startedAt = (hours: number) =>
 			developerVideo({
