@@ -3,8 +3,9 @@
 import { classNames } from "@cap/utils/helpers";
 import { Check } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { DownloadCtaLink } from "@/components/download/DownloadCtaLink";
 import { homepageCopy } from "@/data/homepage-copy";
 import {
 	BODY_TEXT,
@@ -15,7 +16,7 @@ import {
 	type ModeTheme,
 } from "./theme";
 
-const { commercial, pro, subtitle, lovedBy } = homepageCopy.pricing;
+const { free, commercial, pro, subtitle, lovedBy } = homepageCopy.pricing;
 
 const BLURB = {
 	commercial:
@@ -36,10 +37,7 @@ const PlanCard = ({
 	cadence,
 	note,
 	features,
-	cta,
-	href,
-	onClick,
-	primary,
+	action,
 	theme,
 }: {
 	name: string;
@@ -49,10 +47,7 @@ const PlanCard = ({
 	cadence: string;
 	note: string;
 	features: readonly string[];
-	cta: string;
-	href: string;
-	onClick?: () => void;
-	primary?: boolean;
+	action: ReactNode;
 	theme: ModeTheme;
 }) => (
 	<div className="flex flex-col rounded-[20px] bg-white p-7 shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_1px_2px_rgba(17,17,17,0.03)] lg:p-8">
@@ -69,7 +64,7 @@ const PlanCard = ({
 		</div>
 
 		<p
-			className={`${BODY_TEXT} mt-3 min-h-[48px] max-w-[380px] text-[15px] leading-[1.5] text-[rgba(17,17,17,0.72)]`}
+			className={`${BODY_TEXT} mt-3 min-h-[48px] max-w-[380px] text-[15px] leading-[1.5] text-[rgba(17,17,17,0.72)] lg:min-h-[72px]`}
 		>
 			{blurb}
 		</p>
@@ -82,13 +77,7 @@ const PlanCard = ({
 		</div>
 		<p className="mt-2 text-[13.5px] text-[rgba(17,17,17,0.64)]">{note}</p>
 
-		<Link
-			href={href}
-			onClick={onClick}
-			className={classNames(primary ? BTN_PRIMARY : BTN_SECONDARY, "mt-7")}
-		>
-			{cta}
-		</Link>
+		{action}
 
 		<ul className="mt-8 space-y-3 border-t border-[#E1E7EE] pt-7">
 			{features.map((feature) => (
@@ -114,7 +103,7 @@ export const Pricing = () => {
 
 	return (
 		<section className="px-5 py-20 lg:py-28">
-			<div className="mx-auto max-w-[1060px]">
+			<div className="mx-auto max-w-[1180px]">
 				<div className="mx-auto flex max-w-[760px] flex-col items-center text-center">
 					<h2
 						className={`${H_SECTION} text-balance text-[clamp(34px,4.6vw,54px)] leading-[1.02]`}
@@ -153,7 +142,25 @@ export const Pricing = () => {
 					</p>
 				</div>
 
-				<div className="mt-14 grid gap-3 lg:grid-cols-2">
+				<div className="mt-14 grid gap-3 lg:grid-cols-3">
+					<PlanCard
+						name={free.title}
+						blurb={free.description}
+						price={money(0)}
+						cadence="for personal use"
+						note="No card needed."
+						features={free.features}
+						action={
+							<DownloadCtaLink
+								sourcePage="home_pricing"
+								ctaLocation="free_plan"
+								className={classNames(BTN_SECONDARY, "mt-7")}
+							>
+								{free.cta}
+							</DownloadCtaLink>
+						}
+						theme={MODE_THEME.studio}
+					/>
 					<PlanCard
 						name={commercial.title}
 						blurb={BLURB.commercial}
@@ -167,8 +174,14 @@ export const Pricing = () => {
 								: `Or ${money(commercial.pricing.yearly)} a year if you would rather pay as you go.`
 						}
 						features={commercial.features}
-						cta={commercial.cta}
-						href="/pricing"
+						action={
+							<Link
+								href="/pricing"
+								className={classNames(BTN_SECONDARY, "mt-7")}
+							>
+								{commercial.cta}
+							</Link>
+						}
 						theme={MODE_THEME.screenshot}
 					/>
 					<PlanCard
@@ -183,16 +196,21 @@ export const Pricing = () => {
 								: `Billed monthly. Switch to annual for ${money(pro.pricing.annual)} a month.`
 						}
 						features={pro.features}
-						cta={pro.cta}
-						href="/pricing"
-						onClick={() =>
-							trackEvent("pricing_cta_clicked", {
-								source_page: "home_pricing",
-								cta_location: "primary",
-								target_url: "/pricing",
-							})
+						action={
+							<Link
+								href="/pricing"
+								onClick={() =>
+									trackEvent("pricing_cta_clicked", {
+										source_page: "home_pricing",
+										cta_location: "primary",
+										target_url: "/pricing",
+									})
+								}
+								className={classNames(BTN_PRIMARY, "mt-7")}
+							>
+								{pro.cta}
+							</Link>
 						}
-						primary
 						theme={MODE_THEME.instant}
 					/>
 				</div>
