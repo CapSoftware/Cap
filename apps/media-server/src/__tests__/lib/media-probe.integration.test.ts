@@ -61,6 +61,16 @@ describe("mediaProbe integration tests", () => {
 			expect(metadata.sampleRate).toBeNull();
 		});
 
+		test("reports the length of a file whose timestamps start an hour in", async () => {
+			const metadata = await probeVideo(
+				`file://${join(FIXTURES_DIR, "test-offset-start.m2ts")}`,
+			);
+
+			expect(metadata.duration).toBeGreaterThan(1.8);
+			expect(metadata.duration).toBeLessThan(2.2);
+			expect(metadata.width).toBe(64);
+		});
+
 		test("throws error for non-existent video", async () => {
 			await expectRejected(probeVideo("file:///nonexistent/path/to/video.mp4"));
 		});
