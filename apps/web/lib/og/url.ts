@@ -28,7 +28,9 @@ export const ogImageUrl = ({ title, tag, description }: OgImageParams) => {
 type MarketingMetadataParams = {
 	/** SEO <title>. */
 	title: string;
-	description?: string;
+	/** Required: the page always sets the key, so leaving it out would clear
+	 * the root layout's description instead of inheriting it. */
+	description: string;
 	/** Canonical path, e.g. "/pricing". */
 	path?: string;
 	/** Overrides for the image text; falls back to `title` / `description`. */

@@ -131,6 +131,7 @@ jobs:
           __tests__/unit/invite-decline.test.ts
           __tests__/unit/linkified-text.test.ts
           __tests__/unit/loom-import-ui.test.ts
+          __tests__/unit/marketing-metadata.test.ts
           __tests__/unit/messenger-message-limits.test.ts
           __tests__/unit/messenger-poll-ordering.test.ts
           __tests__/unit/media-comment-playback-cleanup.test.ts
