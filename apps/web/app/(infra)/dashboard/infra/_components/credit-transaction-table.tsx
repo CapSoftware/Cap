@@ -12,6 +12,7 @@ const typeLabels: Record<string, string> = {
 	adjustment: "Adjustment",
 	pro_credit: "Cap Pro credit",
 	topup_failed: "Auto top-up declined",
+	topup_pending: "Auto top-up pending",
 };
 
 function labelFor(tx: DeveloperTransaction) {

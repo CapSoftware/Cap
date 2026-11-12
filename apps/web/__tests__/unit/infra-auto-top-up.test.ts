@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 	emailsEnabled: false,
 	createPaymentIntent: vi.fn(),
 	retrieveSetupIntent: vi.fn(),
+	retrievePaymentMethod: vi.fn(),
 	detachPaymentMethod: vi.fn(),
 	sendEmail: vi.fn(),
 }));
@@ -26,7 +27,10 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => ({
 		paymentIntents: { create: mocks.createPaymentIntent },
 		setupIntents: { retrieve: mocks.retrieveSetupIntent },
-		paymentMethods: { detach: mocks.detachPaymentMethod },
+		paymentMethods: {
+			detach: mocks.detachPaymentMethod,
+			retrieve: mocks.retrievePaymentMethod,
+		},
 	}),
 }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: mocks.sendEmail }));
@@ -120,8 +124,10 @@ beforeEach(() => {
 	mocks.retrieveSetupIntent.mockReset();
 	mocks.retrieveSetupIntent.mockResolvedValue({
 		status: "succeeded",
-		payment_method: "pm_new",
+		payment_method: { id: "pm_new", customer: "cus_2", created: 2000 },
 	});
+	mocks.retrievePaymentMethod.mockReset();
+	mocks.retrievePaymentMethod.mockResolvedValue({ id: "pm_1", created: 1000 });
 	mocks.detachPaymentMethod.mockReset();
 	mocks.detachPaymentMethod.mockResolvedValue({});
 });
@@ -318,7 +324,7 @@ describe("auto top-up charge", () => {
 		expect(topUps()).toHaveLength(2);
 	});
 
-	it("grants nothing while a payment is processing, then once when it succeeds", async () => {
+	it("grants nothing for a processing payment, then once when it succeeds", async () => {
 		mocks.createPaymentIntent.mockResolvedValue(intent("pi_1", "processing"));
 
 		expect(await runAutoTopUp("account-1", now())).toEqual({
@@ -326,7 +332,15 @@ describe("auto top-up charge", () => {
 			paymentIntentId: "pi_1",
 		});
 		expect(ledger.account.balanceMicroCredits).toBe(30_000);
-		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.rows).toEqual([
+			expect.objectContaining({
+				type: "topup_pending",
+				amountMicroCredits: 0,
+				balanceAfterMicroCredits: 30_000,
+				referenceId: "pi_1",
+				referenceType: "auto_top_up_pending",
+			}),
+		]);
 
 		await settleAutoTopUpPaymentIntent(
 			intent("pi_1", "succeeded"),
@@ -339,6 +353,27 @@ describe("auto top-up charge", () => {
 
 		expect(topUps()).toHaveLength(1);
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
+	});
+
+	it("does not start a second payment after a processing one, even on the next UTC day", async () => {
+		ledger.now = new Date("2026-11-11T23:50:00Z");
+		mocks.createPaymentIntent.mockResolvedValue(intent("pi_1", "processing"));
+		await runAutoTopUp("account-1", now());
+		await runAutoTopUp("account-1", now());
+
+		later(0.5);
+		expect(now().toISOString().slice(0, 10)).toBe("2026-11-12");
+		expect(await runAutoTopUp("account-1", now())).toEqual({
+			state: "skipped",
+			reason: "recent_attempt",
+		});
+		later(23);
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			reason: "recent_attempt",
+		});
+
+		expect(mocks.createPaymentIntent).toHaveBeenCalledTimes(1);
+		expect(ledger.rows).toHaveLength(1);
 	});
 
 	it("switches auto top-up off and adds no credit when the card is declined", async () => {
@@ -481,7 +516,9 @@ describe("saving a card from checkout", () => {
 
 		expect(await saveCardFromCheckout(session())).toBe(true);
 
-		expect(mocks.retrieveSetupIntent).toHaveBeenCalledWith("seti_1");
+		expect(mocks.retrieveSetupIntent).toHaveBeenCalledWith("seti_1", {
+			expand: ["payment_method"],
+		});
 		expect(ledger.account).toMatchObject({
 			stripeCustomerId: "cus_2",
 			stripePaymentMethodId: "pm_new",
@@ -490,11 +527,47 @@ describe("saving a card from checkout", () => {
 		expect(mocks.detachPaymentMethod).not.toHaveBeenCalled();
 	});
 
-	it("detaches the card it replaces", async () => {
+	it("replaces an older card and detaches it", async () => {
 		expect(await saveCardFromCheckout(session())).toBe(true);
 
 		expect(ledger.account.stripePaymentMethodId).toBe("pm_new");
 		expect(mocks.detachPaymentMethod).toHaveBeenCalledWith("pm_1");
+	});
+
+	it("does nothing when the same checkout is delivered again", async () => {
+		await saveCardFromCheckout(session());
+		mocks.detachPaymentMethod.mockClear();
+
+		expect(await saveCardFromCheckout(session())).toBe(true);
+
+		expect(ledger.account.stripePaymentMethodId).toBe("pm_new");
+		expect(mocks.detachPaymentMethod).not.toHaveBeenCalled();
+	});
+
+	it("ignores a replayed older checkout so it cannot roll back a newer card", async () => {
+		ledger.account.stripeCustomerId = "cus_2";
+		ledger.account.stripePaymentMethodId = "pm_newer";
+		mocks.retrievePaymentMethod.mockResolvedValue({
+			id: "pm_newer",
+			created: 3000,
+		});
+
+		expect(await saveCardFromCheckout(session())).toBe(false);
+
+		expect(ledger.account.stripePaymentMethodId).toBe("pm_newer");
+		expect(mocks.detachPaymentMethod).not.toHaveBeenCalled();
+	});
+
+	it("ignores a replayed checkout whose card was since removed", async () => {
+		ledger.account.stripePaymentMethodId = null;
+		mocks.retrieveSetupIntent.mockResolvedValue({
+			status: "succeeded",
+			payment_method: { id: "pm_new", customer: null, created: 2000 },
+		});
+
+		expect(await saveCardFromCheckout(session())).toBe(false);
+
+		expect(ledger.account.stripePaymentMethodId).toBe(null);
 	});
 
 	it("stores nothing unless the setup succeeded for a known account", async () => {

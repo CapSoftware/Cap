@@ -1097,6 +1097,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"adjustment",
 		"pro_credit",
 		"topup_failed",
+		"topup_pending",
 	),
 	amountMicroCredits: Schema.Number,
 	balanceAfterMicroCredits: Schema.Number,

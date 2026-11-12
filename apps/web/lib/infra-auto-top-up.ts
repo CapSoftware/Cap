@@ -18,6 +18,8 @@ import { utcDateKey } from "@/lib/infra-usage";
 
 export const AUTO_TOP_UP_REFERENCE_TYPE = "auto_top_up" as const;
 export const AUTO_TOP_UP_FAILED_REFERENCE_TYPE = "auto_top_up_failed" as const;
+export const AUTO_TOP_UP_PENDING_REFERENCE_TYPE =
+	"auto_top_up_pending" as const;
 export const AUTO_TOP_UP_METADATA_TYPE = "developer_auto_top_up";
 export const AUTO_TOP_UP_MIN_AMOUNT_CENTS = 500;
 export const AUTO_TOP_UP_MAX_AMOUNT_CENTS = 100_000;
@@ -130,6 +132,7 @@ async function lastAttempt(accountId: string) {
 				inArray(developerCreditTransactions.referenceType, [
 					AUTO_TOP_UP_REFERENCE_TYPE,
 					AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
+					AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
 				]),
 			),
 		)
@@ -214,6 +217,57 @@ async function failAutoTopUp({
 		await sendInfraTopUpFailedEmail({ accountId, referenceId, amountCents });
 	}
 	return recorded;
+}
+
+async function recordPendingAutoTopUp({
+	accountId,
+	paymentIntentId,
+	amountCents,
+	period,
+}: {
+	accountId: string;
+	paymentIntentId: string;
+	amountCents: number;
+	period: string;
+}) {
+	await db().transaction(async (tx) => {
+		const [account] = await tx
+			.select({
+				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			})
+			.from(developerCreditAccounts)
+			.where(eq(developerCreditAccounts.id, accountId))
+			.limit(1)
+			.for("update");
+		if (!account) return;
+
+		const [existing] = await tx
+			.select({ id: developerCreditTransactions.id })
+			.from(developerCreditTransactions)
+			.where(
+				and(
+					eq(developerCreditTransactions.accountId, accountId),
+					eq(developerCreditTransactions.referenceId, paymentIntentId),
+					eq(
+						developerCreditTransactions.referenceType,
+						AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+					),
+				),
+			)
+			.limit(1);
+		if (existing) return;
+
+		await tx.insert(developerCreditTransactions).values({
+			id: nanoId(),
+			accountId,
+			type: "topup_pending",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: account.balanceMicroCredits,
+			referenceId: paymentIntentId,
+			referenceType: AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+			metadata: { amountCents, period },
+		});
+	});
 }
 
 function grantAutoTopUp({
@@ -351,6 +405,12 @@ export async function runAutoTopUp(
 	}
 
 	if (paymentIntent.status === "processing") {
+		await recordPendingAutoTopUp({
+			accountId,
+			paymentIntentId: paymentIntent.id,
+			amountCents,
+			period,
+		});
 		return { state: "pending", paymentIntentId: paymentIntent.id };
 	}
 
@@ -451,12 +511,21 @@ export async function saveCardFromCheckout(session: Stripe.Checkout.Session) {
 		return false;
 	}
 
-	const setupIntent = await stripe().setupIntents.retrieve(setupIntentId);
-	const paymentMethodId =
-		typeof setupIntent.payment_method === "string"
+	const setupIntent = await stripe().setupIntents.retrieve(setupIntentId, {
+		expand: ["payment_method"],
+	});
+	const paymentMethod =
+		typeof setupIntent.payment_method === "object"
 			? setupIntent.payment_method
-			: setupIntent.payment_method?.id;
-	if (setupIntent.status !== "succeeded" || !paymentMethodId) return false;
+			: null;
+	if (setupIntent.status !== "succeeded" || !paymentMethod) return false;
+
+	const attachedTo =
+		typeof paymentMethod.customer === "string"
+			? paymentMethod.customer
+			: paymentMethod.customer?.id;
+	if (attachedTo !== customerId) return false;
+	const paymentMethodId = paymentMethod.id;
 
 	const [previous] = await db()
 		.select({
@@ -466,6 +535,14 @@ export async function saveCardFromCheckout(session: Stripe.Checkout.Session) {
 		.where(eq(developerCreditAccounts.id, accountId))
 		.limit(1);
 	if (!previous) return false;
+	if (previous.stripePaymentMethodId === paymentMethodId) return true;
+
+	if (previous.stripePaymentMethodId) {
+		const current = await stripe()
+			.paymentMethods.retrieve(previous.stripePaymentMethodId)
+			.catch(() => null);
+		if (current && current.created > paymentMethod.created) return false;
+	}
 
 	await db()
 		.update(developerCreditAccounts)

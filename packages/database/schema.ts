@@ -1931,7 +1931,8 @@ export type DeveloperCreditTransactionType =
 	| "refund"
 	| "adjustment"
 	| "pro_credit"
-	| "topup_failed";
+	| "topup_failed"
+	| "topup_pending";
 
 export type DeveloperCreditReferenceType =
 	| "developer_video"
@@ -1940,7 +1941,8 @@ export type DeveloperCreditReferenceType =
 	| "pro_monthly_credit"
 	| "storage_day"
 	| "auto_top_up"
-	| "auto_top_up_failed";
+	| "auto_top_up_failed"
+	| "auto_top_up_pending";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -1957,6 +1959,7 @@ export const developerCreditTransactions = mysqlTable(
 				"adjustment",
 				"pro_credit",
 				"topup_failed",
+				"topup_pending",
 			],
 		})
 			.notNull()
@@ -1979,6 +1982,7 @@ export const developerCreditTransactions = mysqlTable(
 				"storage_day",
 				"auto_top_up",
 				"auto_top_up_failed",
+				"auto_top_up_pending",
 			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),

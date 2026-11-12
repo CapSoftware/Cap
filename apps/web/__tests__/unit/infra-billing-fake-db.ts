@@ -127,7 +127,8 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				ledger.rows.filter(
 					(row) =>
 						row.referenceType === "auto_top_up" ||
-						row.referenceType === "auto_top_up_failed",
+						row.referenceType === "auto_top_up_failed" ||
+						row.referenceType === "auto_top_up_pending",
 				),
 			).slice(0, 1);
 		}
