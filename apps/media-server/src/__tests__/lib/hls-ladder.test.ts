@@ -231,6 +231,70 @@ describe("buildHlsLadderArgs", () => {
 		);
 	});
 
+	test("converts an HDR source to standard range before anything is scaled", () => {
+		const toSdr =
+			"zscale=w=1920:h=1080:tin=arib-std-b67:pin=bt2020:min=bt2020nc:t=linear:npl=203," +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			"zscale=t=bt709:m=bt709:r=tv,format=yuv420p,";
+		const onGpu = buildHlsLadderArgs(
+			argsInput({
+				videoCodec: "hevc",
+				hdr: "arib-std-b67",
+				nvenc: { options: NVENC, gpuDecode: true },
+			}),
+		);
+		expect(valueAfter(onGpu, "-filter_complex")).toBe(
+			`[0:v]fps=30,${toSdr}format=nv12,hwupload_cuda,split=3[s0][s1][s2];` +
+				"[s0]scale_cuda=1920:1080:format=nv12[v0];" +
+				"[s1]scale_cuda=1280:720:format=nv12[v1];" +
+				"[s2]scale_cuda=640:360:format=nv12[v2]",
+		);
+		expect(onGpu).not.toContain("-hwaccel");
+		expect(onGpu).not.toContain("hevc_cuvid");
+		expect(valueAfter(onGpu, "-color_trc")).toBe("bt709");
+		expect(valueAfter(onGpu, "-color_primaries")).toBe("bt709");
+		expect(valueAfter(onGpu, "-colorspace")).toBe("bt709");
+
+		const onCpu = buildHlsLadderArgs(
+			argsInput({ videoCodec: "hevc", hdr: "smpte2084" }),
+		);
+		expect(valueAfter(onCpu, "-filter_complex")).toStartWith(
+			`[0:v]fps=30,${toSdr.replace("arib-std-b67", "smpte2084")}split=3[s0][s1][s2];`,
+		);
+		expect(valueAfter(onCpu, "-color_trc")).toBe("bt709");
+	});
+
+	test("converts an HDR slice after it is trimmed", () => {
+		const args = buildHlsLadderArgs(
+			argsInput({
+				videoCodec: "hevc",
+				hasAudio: false,
+				hdr: "smpte2084",
+				range: { startSeconds: 4, durationSeconds: 4 },
+				nvenc: { options: NVENC, gpuDecode: false },
+			}),
+		);
+		expect(valueAfter(args, "-filter_complex")).toStartWith(
+			"[0:v]fps=30,trim=start=4:end=8,zscale=w=1920:h=1080:tin=smpte2084:",
+		);
+	});
+
+	test("leaves a standard range source exactly as it was", () => {
+		for (const nvenc of [
+			null,
+			{ options: NVENC, gpuDecode: false },
+			{ options: NVENC, gpuDecode: true },
+		]) {
+			const args = buildHlsLadderArgs(argsInput({ videoCodec: "hevc", nvenc }));
+			expect(
+				buildHlsLadderArgs(argsInput({ videoCodec: "hevc", nvenc, hdr: null })),
+			).toEqual(args);
+			expect(args.join(" ")).not.toContain("zscale");
+			expect(args).not.toContain("-color_trc");
+		}
+	});
+
 	test("falls back to software encoding without a GPU", () => {
 		const args = buildHlsLadderArgs(argsInput());
 		expect(valueAfter(args, "-c:v")).toBe("libx264");

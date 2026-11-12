@@ -18,10 +18,13 @@ const app = new Hono()
 	.route("/videos", videos.app)
 	.route("/transcripts", transcripts.app)
 	.route("/usage", usage.app)
-	.notFound(developerApiNotFound)
 	.onError(developerApiError);
+
+app.notFound((c) => developerApiNotFound(c, app.routes));
 
 export const GET = handle(app);
 export const POST = handle(app);
+export const PUT = handle(app);
+export const PATCH = handle(app);
 export const DELETE = handle(app);
 export const OPTIONS = handle(app);

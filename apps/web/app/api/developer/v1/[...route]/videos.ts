@@ -2,7 +2,8 @@ import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
-import { parseDeveloperVideosPagination } from "@/lib/developer-pagination";
+import { apiErrorBody } from "@/lib/api-errors";
+import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	serializeDeveloperVideo,
 	serializeDeveloperVideoStatus,
@@ -33,6 +34,14 @@ async function findAppVideoAndRedrive(appId: string, videoId: string) {
 	return started ? findAppVideo(appId, videoId) : video;
 }
 
+const videoNotFound = apiErrorBody(
+	"video_not_found",
+	"Video not found",
+	"Check the video ID and that it belongs to this app. Deleted videos are not returned.",
+);
+
+const LIST_FILTERS = ["userId", "externalUserId"];
+
 export const app = new Hono<{
 	Variables: {
 		developerAppId: string;
@@ -42,11 +51,27 @@ export const app = new Hono<{
 
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
-	const userId = c.req.query("userId");
-	const { limit, offset } = parseDeveloperVideosPagination(
-		c.req.query("limit"),
-		c.req.query("offset"),
-	);
+	const query = c.req.query();
+	const parsed = parseDeveloperListQuery(query, LIST_FILTERS);
+	if (!parsed.ok) {
+		return c.json(apiErrorBody(parsed.code, parsed.message, parsed.hint), 400);
+	}
+	const { limit, offset } = parsed;
+	if (
+		query.userId !== undefined &&
+		query.externalUserId !== undefined &&
+		query.userId !== query.externalUserId
+	) {
+		return c.json(
+			apiErrorBody(
+				"conflicting_parameters",
+				"userId and externalUserId name the same filter",
+				"Send one of them, or the same value in both.",
+			),
+			400,
+		);
+	}
+	const userId = query.userId ?? query.externalUserId;
 
 	const conditions = [
 		eq(developerVideos.appId, appId),
@@ -75,7 +100,7 @@ app.get("/:id", async (c) => {
 	);
 
 	if (!video) {
-		return c.json({ error: "Video not found" }, 404);
+		return c.json(videoNotFound, 404);
 	}
 
 	return c.json({ data: serializeDeveloperVideo(video) });
@@ -86,25 +111,23 @@ app.delete("/:id", async (c) => {
 	const videoId = c.req.param("id");
 
 	const [video] = await db()
-		.select()
+		.select({ deletedAt: developerVideos.deletedAt })
 		.from(developerVideos)
 		.where(
-			and(
-				eq(developerVideos.id, videoId),
-				eq(developerVideos.appId, appId),
-				isNull(developerVideos.deletedAt),
-			),
+			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
 		)
 		.limit(1);
 
 	if (!video) {
-		return c.json({ error: "Video not found" }, 404);
+		return c.json(videoNotFound, 404);
 	}
 
-	await db()
-		.update(developerVideos)
-		.set({ deletedAt: new Date() })
-		.where(eq(developerVideos.id, videoId));
+	if (!video.deletedAt) {
+		await db()
+			.update(developerVideos)
+			.set({ deletedAt: new Date() })
+			.where(eq(developerVideos.id, videoId));
+	}
 
 	return c.json({ success: true });
 });
@@ -116,7 +139,7 @@ app.get("/:id/status", async (c) => {
 	);
 
 	if (!video) {
-		return c.json({ error: "Video not found" }, 404);
+		return c.json(videoNotFound, 404);
 	}
 
 	return c.json({ data: serializeDeveloperVideoStatus(video) });

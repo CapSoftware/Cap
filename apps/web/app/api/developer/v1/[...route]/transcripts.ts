@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
-import { parseDeveloperVideosPagination } from "@/lib/developer-pagination";
+import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	createTranscriptFromUrl,
 	createTranscriptUpload,
@@ -18,7 +18,7 @@ import {
 	serializeTranscript,
 	TRANSCRIPT_STATUSES,
 } from "@/lib/developer-transcripts";
-import { zValidator } from "@/utils/zod-validator";
+import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 export const app = new Hono<{
@@ -53,7 +53,10 @@ const invalidIdempotencyKey = apiErrorBody(
 
 app.post(
 	"/",
-	zValidator("json", z.object({ url: z.string().min(1), ...optionsSchema })),
+	developerZValidator(
+		"json",
+		z.object({ url: z.string().min(1), ...optionsSchema }),
+	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
 		if (!idempotency.ok) return c.json(invalidIdempotencyKey, 400);
@@ -69,7 +72,7 @@ app.post(
 
 app.post(
 	"/uploads",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			fileName: z.string().max(255).optional(),
@@ -108,10 +111,11 @@ app.post("/:id/start", async (c) => {
 });
 
 app.get("/", async (c) => {
-	const { limit, offset } = parseDeveloperVideosPagination(
-		c.req.query("limit"),
-		c.req.query("offset"),
-	);
+	const parsed = parseDeveloperListQuery(c.req.query(), ["userId", "status"]);
+	if (!parsed.ok) {
+		return c.json(apiErrorBody(parsed.code, parsed.message, parsed.hint), 400);
+	}
+	const { limit, offset } = parsed;
 	const status = c.req.query("status");
 	if (status !== undefined && !isTranscriptStatus(status)) {
 		return c.json(

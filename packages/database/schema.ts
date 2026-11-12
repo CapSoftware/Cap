@@ -2053,6 +2053,7 @@ export type DeveloperCreditReferenceType =
 	| "developer_video"
 	| "developer_transcript"
 	| "stripe_payment_intent"
+	| "stripe_checkout_session"
 	| "manual"
 	| "pro_monthly_credit"
 	| "storage_day"
@@ -2095,6 +2096,7 @@ export const developerCreditTransactions = mysqlTable(
 				"developer_video",
 				"developer_transcript",
 				"stripe_payment_intent",
+				"stripe_checkout_session",
 				"manual",
 				"pro_monthly_credit",
 				"storage_day",

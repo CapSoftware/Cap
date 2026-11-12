@@ -15,6 +15,7 @@ import {
 	buildProcessVideoArgs,
 	type ProcessVideoArgsInput,
 	pickMobileSafeH264Level,
+	probeVideoSourceTraits,
 	processVideo,
 } from "../../lib/media-video";
 import {
@@ -438,6 +439,74 @@ describe("process video args", () => {
 		]);
 	});
 
+	test("converts a 4K HDR source to standard range on the CPU at the size it is encoded at", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const sdrColor = [
+			"-color_primaries",
+			"bt709",
+			"-color_trc",
+			"bt709",
+			"-colorspace",
+			"bt709",
+			"-color_range",
+			"tv",
+		];
+		const toSdr =
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:min=bt2020nc:t=linear:npl=203," +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			"zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, {
+					inputPath: "in.mov",
+					hdr: "smpte2084",
+					nvenc: { options: defaults, gpuDecode: true },
+				}),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			...nvencVideoArgs,
+			"-vf",
+			`${toSdr},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-bsf:v",
+			"h264_metadata=level=4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, { inputPath: "in.mov", hdr: "arib-std-b67" }),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"medium",
+			"-crf",
+			"23",
+			"-vf",
+			`${toSdr.replace("smpte2084", "arib-std-b67")},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-level:v",
+			"4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+	});
+
 	test("runs a 4K HEVC source fully on the GPU", () => {
 		const source = metadata(3840, 2160, "hevc");
 		expect(
@@ -598,6 +667,34 @@ describe("process video args", () => {
 			"-an",
 			...outputTail.slice(2),
 		]);
+	});
+});
+
+describe("source traits", () => {
+	const fixture = (name: string) =>
+		join(import.meta.dir, "..", "fixtures", name);
+
+	test("reads HDR and rotation in one probe", async () => {
+		expect(await probeVideoSourceTraits(fixture("test-rotated.mp4"))).toEqual({
+			rotation: 90,
+			hdr: "smpte2084",
+		});
+		expect(
+			await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual({ rotation: 0, hdr: "smpte2084" });
+	});
+
+	test("reports a standard range, unrotated source as neither", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("reports nothing known for a file that cannot be probed", async () => {
+		expect(await probeVideoSourceTraits(fixture("missing.mp4"))).toEqual({
+			rotation: null,
+			hdr: null,
+		});
 	});
 });
 

@@ -96,6 +96,10 @@ const rememberReferralClick = (
 
 const DUB_PROXY_PREFIX = "/_proxy/dub/";
 
+// Developer video pages are embedded on other sites, so they never set a
+// cookie, not even the referral click.
+const DEVELOPER_VIDEO_PREFIX = "/dev/";
+
 const dubProxyTarget = (path: string) => {
 	if (path === `${DUB_PROXY_PREFIX}script.js`) {
 		return "https://www.dubcdn.com/analytics/script.js";
@@ -130,6 +134,7 @@ export async function proxy(request: NextRequest) {
 	}
 
 	const response = await route(request);
+	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
 	return rememberReferralClick(
 		request,
 		isFrameProtectedPath(path) ? setFrameHeaders(response) : response,
@@ -180,6 +185,7 @@ async function route(request: NextRequest) {
 				path.startsWith("/terms") ||
 				path.startsWith("/verify-otp") ||
 				path.startsWith("/embed/") ||
+				path.startsWith(DEVELOPER_VIDEO_PREFIX) ||
 				path.startsWith("/.well-known/workflow/") ||
 				path.startsWith("/.well-known/oauth-") ||
 				path.startsWith("/.well-known/mcp") ||
