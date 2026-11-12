@@ -1036,7 +1036,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							minutesByTier: {
 								type: "object",
 								description:
-									"Minutes stored in each resolution tier, by pixel count: up to 2,073,600 pixels, up to 4,194,304 pixels, and above.",
+									"Minutes stored in each resolution tier. A video counts in the lower of its maxResolutionTier and the tier of its source by pixel count: up to 2,073,600 pixels, up to 4,194,304 pixels, and above.",
 								required: ["1080p", "1440p", "2160p"],
 								properties: {
 									"1080p": { type: "number" },
