@@ -7,6 +7,7 @@ import {
 	SPEECH_DOLLARS_PER_HOUR,
 	UPLOAD_ADMISSION_DAYS,
 } from "@/lib/developer-pricing";
+import { getSpeechUsage } from "@/lib/developer-transcript-usage";
 import { INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/infra-pricing";
 import { getInfraBilling, infraBillingJson } from "@/lib/infra-standing";
 import { withDeveloperSecretAuth } from "../../../utils";
@@ -21,7 +22,7 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[account], [videoStats], billing] = await Promise.all([
+	const [[account], [videoStats], billing, speech] = await Promise.all([
 		db()
 			.select()
 			.from(developerCreditAccounts)
@@ -41,6 +42,7 @@ app.get("/", async (c) => {
 				),
 			),
 		getInfraBilling(appId),
+		getSpeechUsage(appId),
 	]);
 
 	const uploadedVideos = videoStats?.uploadedVideos ?? 0;
@@ -58,6 +60,7 @@ app.get("/", async (c) => {
 			),
 			totalDurationMinutes: videoStats?.totalDurationMinutes ?? 0,
 			...infraBillingJson(billing),
+			...speech,
 			rates: {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 				storageDollarsPer1000MinutesPerMonth:

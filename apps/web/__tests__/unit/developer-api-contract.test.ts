@@ -58,6 +58,18 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 	listTranscripts: mocks.listTranscripts,
 	isTranscriptIdempotencyKey: () => true,
 }));
+vi.mock("@/lib/developer-transcript-usage", () => ({
+	getSpeechUsage: async () => ({
+		availableMicroCredits: 0,
+		heldMicroCredits: 0,
+		speech: {
+			periodStart: "2026-11-01T00:00:00.000Z",
+			seconds: 0,
+			microCredits: 0,
+			transcripts: 0,
+		},
+	}),
+}));
 vi.mock("@/lib/infra-standing", () => ({
 	getInfraBilling: mocks.billing,
 	infraBillingJson: (billing: Record<string, unknown>) => billing,
