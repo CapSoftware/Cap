@@ -640,6 +640,20 @@ export async function applyDeveloperVideoProgress(
 		token,
 		payload,
 	);
+	if (
+		outcome.type === "complete" &&
+		outcome.duration &&
+		processing.probe?.duration == null
+	) {
+		try {
+			await chargeForProbedDuration(video, outcome.duration);
+		} catch (error) {
+			const reason =
+				error instanceof Error ? error.message : "Video processing failed";
+			await failDeveloperVideoProcessing(video.id, encodeId, reason);
+			return { success: true, applied: true };
+		}
+	}
 	const applied = await settleDeveloperVideoPart(
 		video.id,
 		encodeId,

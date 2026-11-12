@@ -319,9 +319,9 @@ describe("developer video webhook", () => {
 });
 
 describe("developer video measured facts", () => {
-	const unmeasured = (overrides = {}) =>
+	const unmeasured = (overrides = {}, duration = 999) =>
 		developerVideo({
-			duration: 999,
+			duration,
 			processing: processingState({
 				probe: { duration: null, width: 1920, height: 1080, fps: null },
 				hls: runningPart("t-hls"),
@@ -342,6 +342,55 @@ describe("developer video measured facts", () => {
 		expect(video().processing?.mp4.state).toBe("complete");
 		expect(video().processing?.probe?.duration).toBe(40.8);
 		expect(video()).toMatchObject({ duration: 40.8, fps: null });
+	});
+
+	it("charges for a length that only the encoded output revealed", async () => {
+		mocks.store.video = unmeasured({}, 60);
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", metadata: { duration: 480 } },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(mocks.charge).toHaveBeenCalledWith(
+			expect.objectContaining({ videoId: "video-1", durationSeconds: 480 }),
+		);
+		expect(video().processing?.mp4.state).toBe("complete");
+	});
+
+	it("fails the video when the output's length can't be paid for", async () => {
+		mocks.store.video = unmeasured({}, 60);
+		mocks.charge.mockResolvedValue("insufficient");
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", metadata: { duration: 480 } },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(video().status).toBe("errored");
+		expect(video().processing?.mp4.state).toBe("failed");
+		expect(video().processing?.hls.state).toBe("failed");
+		expect(video().errorReason).toContain("Not enough credit");
+	});
+
+	it("fails the video when the output is longer than the length limit", async () => {
+		mocks.store.video = unmeasured({}, 60);
+
+		await applyDeveloperVideoProgress(
+			{
+				videoId: "video-1",
+				phase: "complete",
+				metadata: { duration: 5 * 60 * 60 },
+			},
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(mocks.charge).not.toHaveBeenCalled();
+		expect(video().status).toBe("errored");
+		expect(video().errorReason).toContain("4 hour limit");
 	});
 
 	it("takes the duration from the stored rendition playlist when the source had none", async () => {
