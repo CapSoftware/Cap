@@ -2478,7 +2478,7 @@ impl CapMcpServer {
     ) -> CallToolResult {
         if let Some(result) = Self::require_confirmation(
             input.confirmed,
-            "upload the video and charge the app's credits",
+            "upload the video, whose storage is billed daily from the app's credits",
         ) {
             return result;
         }
