@@ -119,7 +119,10 @@ import {
 	transcriptIdForIdempotencyKey,
 	validateTranscriptOptions,
 } from "@/lib/developer-transcript-store";
-import { transcriptHasNoSpeech } from "@/lib/developer-transcripts";
+import {
+	transcriptHasNoSpeech,
+	transcriptUploadExpiry,
+} from "@/lib/developer-transcripts";
 import { isBlockedS3Endpoint } from "@/lib/s3-endpoint-policy";
 
 const URL_A = "https://media.example.com/standup.mp3";
@@ -449,6 +452,98 @@ describe("creating a transcript from a URL", () => {
 		expect(context.start).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		["name", { name: "Renamed" }],
+		["language", { language: "de" }],
+		["userId", { userId: "user-2" }],
+		["metadata", { metadata: { episode: 8 } }],
+	])(
+		"refuses a replay with a different %s and names it",
+		async (field, change) => {
+			const original = {
+				url: URL_A,
+				name: "Standup",
+				language: "en",
+				userId: "user-1",
+				metadata: { episode: 7, show: "daily" },
+				idempotencyKey: "retry-key-0001",
+			};
+			const first = await createTranscriptFromUrl("app-1", original, guards);
+			if (!first.ok) throw new Error("create failed");
+
+			const replay = await createTranscriptFromUrl(
+				"app-1",
+				{ ...original, ...change },
+				guards,
+			);
+
+			expect(replay).toMatchObject({
+				ok: false,
+				status: 409,
+				code: "idempotency_conflict",
+				message: `Idempotency key was already used with a different ${field}`,
+			});
+			expect(transcripts()).toHaveLength(1);
+			expect(transcripts()[0]).toMatchObject({
+				name: "Standup",
+				requestedLanguage: "en",
+				externalUserId: "user-1",
+			});
+			expect(context.start).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("accepts a replay that sends the same request, whatever the key order of its metadata", async () => {
+		const original = {
+			url: URL_A,
+			name: " Standup ",
+			language: "en",
+			userId: "user-1",
+			metadata: { show: "daily", nested: { b: 2, a: 1 }, episode: 7 },
+			idempotencyKey: "retry-key-0001",
+		};
+		const first = await createTranscriptFromUrl("app-1", original, guards);
+		const replay = await createTranscriptFromUrl(
+			"app-1",
+			{
+				...original,
+				name: "Standup",
+				metadata: { episode: 7, nested: { a: 1, b: 2 }, show: "daily" },
+			},
+			guards,
+		);
+
+		if (!first.ok || !replay.ok) throw new Error("replay refused");
+		expect(replay.transcript.id).toBe(first.transcript.id);
+		expect(transcripts()).toHaveLength(1);
+	});
+
+	it("names the URL when a key is reused for a different one", async () => {
+		await fromUrl(URL_A, "retry-key-0001");
+		expect(await fromUrl(URL_B, "retry-key-0001")).toMatchObject({
+			status: 409,
+			code: "idempotency_conflict",
+			message: "Idempotency key was already used with a different url",
+		});
+	});
+
+	it("lists the supported codes when the language is not one of them", async () => {
+		const result = await createTranscriptFromUrl(
+			"app-1",
+			{ url: URL_A, language: "en-US" },
+			guards,
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			status: 400,
+			code: "invalid_language",
+		});
+		if (result.ok) throw new Error("accepted");
+		expect(result.hint).toContain('"auto"');
+		expect(result.hint).toContain("en, es, fr, de");
+		expect(result.hint).toContain("he");
+	});
+
 	it("rejects an idempotency key whose transcript was deleted", async () => {
 		const created = await fromUrl(URL_A, "retry-key-0001");
 		if (!created.ok) throw new Error("create failed");
@@ -555,6 +650,79 @@ describe("creating a transcript from an upload", () => {
 		expect(transcripts()).toHaveLength(1);
 		expect(second.ok && second.upload?.url).not.toBe(
 			first.ok && first.upload?.url,
+		);
+	});
+
+	it.each([
+		["name", { name: "Renamed" }],
+		["name", { fileName: "other.mp3" }],
+		["language", { language: "auto" }],
+		["userId", { userId: "user-2" }],
+		["metadata", { metadata: { a: 2 } }],
+	])("refuses an upload replay with a different %s", async (field, change) => {
+		const original = {
+			fileName: "standup.mp3",
+			contentLength: 2048,
+			language: "en",
+			userId: "user-1",
+			metadata: { a: 1 },
+			idempotencyKey: "upload-key-0001",
+		};
+		const first = await createTranscriptUpload("app-1", original);
+		if (!first.ok) throw new Error("create failed");
+
+		expect(
+			await createTranscriptUpload("app-1", { ...original, ...change }),
+		).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "idempotency_conflict",
+			message: `Idempotency key was already used with a different ${field}`,
+		});
+		expect(transcripts()).toHaveLength(1);
+	});
+
+	it("moves the upload expiry forward when a replay issues a new URL", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-11-12T14:28:41.400Z"));
+			const first = await upload(1024, "upload-key-0002");
+			if (!first.ok || !first.upload) throw new Error("create failed");
+			expect(first.upload.expiresAt).toBe("2026-11-12T15:28:41.000Z");
+			expect(transcriptUploadExpiry(first.transcript).toISOString()).toBe(
+				first.upload.expiresAt,
+			);
+
+			vi.setSystemTime(new Date("2026-11-12T15:40:00.000Z"));
+			const again = await upload(1024, "upload-key-0002");
+			if (!again.ok || !again.upload) throw new Error("replay failed");
+			expect(again.upload.expiresAt).toBe("2026-11-12T16:40:00.000Z");
+			expect(again.upload.url).not.toBe(first.upload.url);
+
+			const stored = await getTranscript("app-1", first.transcript.id);
+			if (!stored) throw new Error("missing");
+			expect(transcriptUploadExpiry(stored).toISOString()).toBe(
+				"2026-11-12T16:40:00.000Z",
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("tells a caller whose upload URL expired how to get a new one", async () => {
+		const created = await upload(1024, "upload-key-0003");
+		if (!created.ok) throw new Error("create failed");
+
+		const started = await startTranscriptUpload("app-1", created.transcript.id);
+
+		expect(started).toMatchObject({
+			ok: false,
+			status: 409,
+			code: "upload_not_found",
+		});
+		if (started.ok) throw new Error("started");
+		expect(started.hint).toContain(
+			"repeat the create request with the same Idempotency-Key",
 		);
 	});
 
@@ -914,6 +1082,7 @@ describe("recovering a job that was claimed but never started", () => {
 			status: "queued",
 			sourceType,
 			sourceUrl: sourceType === "url" ? URL_A : null,
+			name: sourceType === "url" ? "standup" : "Untitled",
 			runId: "run-first",
 			queuedAt: startedAt,
 			startedAt,

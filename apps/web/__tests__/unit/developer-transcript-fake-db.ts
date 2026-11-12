@@ -298,7 +298,7 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							row[key] = value;
 						}
 					}
-					row.updatedAt = now();
+					if (!("updatedAt" in values)) row.updatedAt = now();
 				}
 				return [{ affectedRows: matches.length }];
 			},
