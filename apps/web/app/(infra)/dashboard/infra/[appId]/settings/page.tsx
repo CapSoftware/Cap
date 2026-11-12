@@ -21,6 +21,8 @@ export default async function InfraSettingsPage({
 			appId={app.id}
 			name={app.name}
 			environment={app.environment}
+			balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
+			videoCount={app.videoCount}
 			domains={
 				<DomainsSection
 					appId={app.id}

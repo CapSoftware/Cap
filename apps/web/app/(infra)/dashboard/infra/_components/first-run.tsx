@@ -16,7 +16,7 @@ import {
 import { ProCredit } from "./pro-credit";
 import { Brand } from "./shell";
 import { Step, StepNote, Steps } from "./steps";
-import { Button, ButtonLink, EnvTag, FOCUS } from "./ui";
+import { Button, ButtonLink, Disclosure, EnvTag, FOCUS } from "./ui";
 
 const QUIET_LINK = clsx(
 	"rounded-[6px] px-2.5 py-1.5 text-[13.5px] text-[rgba(232,236,244,0.58)] transition-colors duration-200 hover:text-[#E8ECF4]",
@@ -59,8 +59,9 @@ export function FirstRun({
 						Set up Cap Infra.
 					</h1>
 					<p className={clsx(LEAD, "mt-5")}>
-						Name an app and your API keys are ready. Usage is billed from
-						prepaid credits, with no plans or seats.
+						Name an app, drop in a video, and Cap stores it and plays it
+						wherever you put it. Usage is billed from prepaid credits, with no
+						plans or seats.
 					</p>
 					<p className={clsx(LEAD, "mt-4")}>
 						Infra is separate from Cap. Your recordings, plan and team stay
@@ -116,53 +117,71 @@ export function FirstRun({
 								</div>
 							)}
 						</Step>
-						<Step title="Copy your keys" state={created ? "current" : "next"}>
-							{created ? (
-								<KeysReveal app={created} />
-							) : (
+						<Step title="Add credit" state={created ? "current" : "next"}>
+							{!created ? (
 								<StepNote>
-									A public key for the browser and a secret key for your server.
+									Uploading needs a balance. Credits start at $5
+									{proCredit.status === "not_pro"
+										? "."
+										: ", and your Cap Pro plan covers the first $5 each month."}
 								</StepNote>
+							) : proCredit.status === "not_pro" ? (
+								<div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+									<ButtonLink
+										variant="ghost"
+										href={infraAppPath(created.appId, "billing")}
+									>
+										Add credits
+									</ButtonLink>
+									<StepNote>
+										Uploading needs a balance. Credits start at $5, and Cap Pro
+										includes $5 every month.
+									</StepNote>
+								</div>
+							) : (
+								<ProCredit
+									appId={created.appId}
+									credit={proCredit}
+									refresh={false}
+								/>
 							)}
 						</Step>
-						<Step title="Start building" state={created ? "current" : "next"}>
+						<Step
+							title="Drop in your first video"
+							state={created ? "current" : "next"}
+						>
 							{created ? (
-								<div className="flex flex-col gap-6">
-									{proCredit.status === "not_pro" ? (
-										<StepNote>
-											Uploading needs a balance. Credits start at $5, and Cap
-											Pro includes $5 every month.
-										</StepNote>
-									) : (
-										<ProCredit
-											appId={created.appId}
-											credit={proCredit}
-											refresh={false}
-										/>
-									)}
-									<AgentSetup compact />
-									<div className="flex flex-wrap gap-2.5">
-										<ButtonLink href={infraAppPath(created.appId)}>
-											Open dashboard
-										</ButtonLink>
-										{proCredit.status === "not_pro" && (
-											<ButtonLink
-												variant="ghost"
-												href={infraAppPath(created.appId, "billing")}
-											>
-												Add credits
-											</ButtonLink>
-										)}
-									</div>
+								<div className="flex flex-col items-start gap-4">
+									<StepNote>
+										Drop a video into your new app. Once it has processed you
+										can watch it there and copy the links that play it on your
+										site.
+									</StepNote>
+									<ButtonLink href={infraAppPath(created.appId, "videos")}>
+										Upload a video
+									</ButtonLink>
 								</div>
 							) : (
 								<StepNote>
-									Hand one prompt to your agent, or drop your first video into
-									the dashboard.
+									Watch it in the console, then copy the links that play it on
+									your site.
 								</StepNote>
 							)}
 						</Step>
 					</Steps>
+					{created && (
+						<div className="mt-10">
+							<Disclosure
+								summary="Using the API"
+								note="Your keys and an agent prompt. The secret key is shown here once."
+							>
+								<div className="flex flex-col gap-8">
+									<KeysReveal app={created} />
+									<AgentSetup compact />
+								</div>
+							</Disclosure>
+						</div>
+					)}
 				</div>
 			</main>
 		</div>

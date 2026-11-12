@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { addDeveloperDomain } from "@/actions/developers/add-domain";
+import { refusalMessage, settled } from "@/lib/infra-action-result";
+import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import { DomainRow } from "../../_components/domain-row";
 import { Button, Input, Split } from "../../_components/ui";
 
@@ -19,19 +21,19 @@ export function DomainsSection({
 }) {
 	const router = useRouter();
 	const inputId = useId();
+	const problemId = useId();
 	const [newDomain, setNewDomain] = useState("");
+	const [problem, setProblem] = useState<string | null>(null);
 
 	const add = useMutation({
-		mutationFn: () => addDeveloperDomain(appId, newDomain),
-		onSuccess: () => {
+		mutationFn: (origin: string) => settled(addDeveloperDomain(appId, origin)),
+		onSuccess: (result) => {
 			setNewDomain("");
-			toast.success("Domain added");
+			toast.success(`${result.domain} added`);
 			router.refresh();
 		},
 		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Could not add the domain",
-			),
+			setProblem(refusalMessage(error, "Could not add the domain. Try again.")),
 	});
 
 	return (
@@ -39,8 +41,8 @@ export function DomainsSection({
 			title="Allowed domains"
 			description={
 				environment === "development"
-					? "This is a development app, so its public key works from any origin. Domains here apply once you switch it to production."
-					: "Your public key only works from these origins."
+					? "This is a development app, so it takes uploads from any website. The websites listed here apply once you switch it to production."
+					: "The websites that may upload to this app with its public key. Type a domain like myshop.com."
 			}
 		>
 			<form
@@ -48,17 +50,32 @@ export function DomainsSection({
 				onSubmit={(e) => {
 					e.preventDefault();
 					if (!newDomain.trim() || add.isPending) return;
-					add.mutate();
+					const allowed = normalizeAllowedOrigin(newDomain);
+					if (!allowed.ok) {
+						setProblem(allowed.message);
+						return;
+					}
+					setProblem(null);
+					add.mutate(allowed.origin);
 				}}
 			>
 				<label htmlFor={inputId} className="sr-only">
-					Origin to allow
+					Website to allow
 				</label>
 				<Input
 					id={inputId}
 					value={newDomain}
-					onChange={(e) => setNewDomain(e.target.value)}
-					placeholder="https://myapp.com"
+					onChange={(e) => {
+						setNewDomain(e.target.value);
+						setProblem(null);
+					}}
+					placeholder="myshop.com"
+					autoComplete="off"
+					autoCapitalize="none"
+					spellCheck={false}
+					inputMode="url"
+					aria-invalid={problem ? true : undefined}
+					aria-describedby={problem ? problemId : undefined}
 					className="min-w-[12rem] flex-1"
 				/>
 				<Button
@@ -70,6 +87,15 @@ export function DomainsSection({
 					Add domain
 				</Button>
 			</form>
+			{problem && (
+				<p
+					id={problemId}
+					role="alert"
+					className="m-0 mt-2.5 max-w-[520px] text-pretty text-[13px] leading-[1.5] text-[#F2A199]"
+				>
+					{problem}
+				</p>
+			)}
 			{domains.length > 0 ? (
 				<ul className="m-0 mt-5 max-w-[520px] list-none border-t border-[rgba(222,230,246,0.07)] p-0">
 					{domains.map((d) => (

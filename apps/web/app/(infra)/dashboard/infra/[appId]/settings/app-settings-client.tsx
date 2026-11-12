@@ -6,7 +6,9 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperApp } from "@/actions/developers/delete-app";
 import { updateDeveloperApp } from "@/actions/developers/update-app";
+import { refusalMessage, settled } from "@/lib/infra-action-result";
 import { INFRA_BASE_PATH } from "@/lib/infra-routes";
+import { formatCredits } from "@/lib/infra-usage";
 import {
 	type Environment,
 	EnvironmentChoice,
@@ -19,11 +21,15 @@ export function AppSettingsClient({
 	appId,
 	name: initialName,
 	environment: initialEnvironment,
+	balanceMicroCredits,
+	videoCount,
 	domains,
 }: {
 	appId: string;
 	name: string;
 	environment: Environment;
+	balanceMicroCredits: number;
+	videoCount: number;
 	domains: React.ReactNode;
 }) {
 	const router = useRouter();
@@ -37,15 +43,13 @@ export function AppSettingsClient({
 		name.trim() !== initialName || environment !== initialEnvironment;
 
 	const update = useMutation({
-		mutationFn: () => updateDeveloperApp({ appId, name, environment }),
+		mutationFn: () => settled(updateDeveloperApp({ appId, name, environment })),
 		onSuccess: () => {
 			toast.success("App saved");
 			router.refresh();
 		},
 		onError: (error) =>
-			toast.error(
-				error instanceof Error ? error.message : "Could not save the app",
-			),
+			toast.error(refusalMessage(error, "Could not save the app")),
 	});
 
 	const remove = useMutation({
@@ -103,7 +107,7 @@ export function AppSettingsClient({
 
 				<Split
 					title="Delete app"
-					description="Revokes both API keys straight away. Anything using them stops working."
+					description="Revokes both API keys straight away and deletes its videos. Any credit left in the app goes with it."
 				>
 					<Button variant="danger" onClick={() => setConfirmDelete(true)}>
 						Delete app
@@ -114,7 +118,27 @@ export function AppSettingsClient({
 			<ConfirmDialog
 				open={confirmDelete}
 				title="Delete app"
-				description={`Delete ${initialName}? Its API keys are revoked immediately. This cannot be undone here.`}
+				description={
+					<>
+						Delete {initialName}? Its API keys stop working straight away
+						{videoCount > 0 &&
+							` and its ${videoCount.toLocaleString("en-US")} ${videoCount === 1 ? "video is" : "videos are"} deleted`}
+						.{" "}
+						{balanceMicroCredits > 0 ? (
+							<>
+								The{" "}
+								<strong className="font-medium text-[#E8ECF4]">
+									{formatCredits(balanceMicroCredits)}
+								</strong>{" "}
+								of credit left in this app is lost with it. Credit cannot be
+								moved to another app.
+							</>
+						) : (
+							"This app has no credit left to lose."
+						)}{" "}
+						This cannot be undone here.
+					</>
+				}
 				confirmLabel="Delete app"
 				loading={remove.isPending}
 				onConfirm={() => remove.mutate()}

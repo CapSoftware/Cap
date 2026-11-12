@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { createDeveloperApp } from "@/actions/developers/create-app";
+import { refusalMessage, settled } from "@/lib/infra-action-result";
 import { infraAppPath } from "@/lib/infra-routes";
 import { CopyTextButton, KeyRow } from "./copy";
 import { Modal } from "./dialog";
@@ -19,27 +20,20 @@ export type CreatedApp = {
 	secretKey: string;
 };
 
-const ENVIRONMENTS: { value: Environment; label: string; note: string }[] = [
-	{
-		value: "development",
-		label: "Development",
-		note: "The public key works from any origin.",
-	},
-	{
-		value: "production",
-		label: "Production",
-		note: "The public key only works from domains you allow.",
-	},
+const ENVIRONMENTS: { value: Environment; label: string }[] = [
+	{ value: "development", label: "Development" },
+	{ value: "production", label: "Production" },
 ];
 
 export function EnvironmentChoice({
 	value,
 	onChange,
+	switchable = false,
 }: {
 	value: Environment;
 	onChange: (value: Environment) => void;
+	switchable?: boolean;
 }) {
-	const current = ENVIRONMENTS.find((e) => e.value === value);
 	return (
 		<div>
 			<fieldset className="m-0 inline-flex min-w-0 rounded-[9px] border-0 p-[3px] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12)]">
@@ -66,7 +60,9 @@ export function EnvironmentChoice({
 				})}
 			</fieldset>
 			<p className="m-0 mt-2.5 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
-				{current?.note}
+				A development app takes uploads from any website, and a production app
+				only from the websites you allow.
+				{switchable && " You can switch at any time in Settings."}
 			</p>
 		</div>
 	);
@@ -80,15 +76,13 @@ export function useCreateApp(
 ) {
 	return useMutation({
 		mutationFn: (input: { name: string; environment: Environment }) =>
-			createDeveloperApp(input),
+			settled(createDeveloperApp(input)),
 		onSuccess: (result, input) => {
 			rememberInfraApp(result.appId);
 			onCreated(result, input);
 		},
 		onError: (error) => {
-			toast.error(
-				error instanceof Error ? error.message : "Could not create the app",
-			);
+			toast.error(refusalMessage(error, "Could not create the app"));
 		},
 	});
 }
@@ -153,7 +147,11 @@ export function AppNameForm({
 					className="h-10 max-w-[420px]"
 				/>
 			</div>
-			<EnvironmentChoice value={environment} onChange={setEnvironment} />
+			<EnvironmentChoice
+				value={environment}
+				onChange={setEnvironment}
+				switchable
+			/>
 			<div className="flex gap-2 pt-1">
 				<Button type="submit" disabled={!ready} loading={pending}>
 					{submitLabel}
