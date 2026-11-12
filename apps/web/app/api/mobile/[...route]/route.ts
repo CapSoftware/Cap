@@ -82,6 +82,7 @@ import {
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
 	resolveMobileRequestOrigin,
@@ -89,8 +90,9 @@ import {
 } from "@/lib/mobile-request-origin";
 import { createNotification, sendFirstViewEmail } from "@/lib/Notification";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
+import { acceptsClientEvents, sendClientEvents } from "@/lib/server-analytics";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
@@ -161,6 +163,7 @@ type MobileOrganizationIconInput =
 type MobileProfileInput = (typeof Mobile.MobileProfileInput)["Type"];
 type MobileProfileImageInput = (typeof Mobile.MobileProfileImageInput)["Type"];
 type MobilePushTokenInput = (typeof Mobile.MobilePushTokenInput)["Type"];
+type MobileEventsInput = (typeof Mobile.MobileEventsInput)["Type"];
 type MobileNotificationPreferences =
 	(typeof Mobile.MobileNotificationPreferences)["Type"];
 type MobileNotificationPreferencesInput =
@@ -3215,6 +3218,52 @@ const toHeaders = (headers: Record<string, string>) => {
 	return result;
 };
 
+// The app sends these signed in or not, so there is no auth middleware here: a
+// session the server no longer accepts must not turn a usage report into a 401,
+// which the app answers by signing the user out.
+const trackMobileEvents = Effect.fn("Mobile.trackEvents")(function* (
+	input: MobileEventsInput,
+	authorization: string | undefined,
+	request: HttpServerRequest.HttpServerRequest,
+) {
+	const headers = toHeaders(request.headers);
+	const limited = yield* Effect.promise(() =>
+		isRateLimited(RATE_LIMIT_IDS.MOBILE_EVENTS, { headers }),
+	);
+	if (limited) return yield* Effect.fail(new Mobile.MobileTooManyRequests());
+	if (!acceptsClientEvents()) return { success: true as const };
+
+	const events = prepareMobileEvents(input, Date.now());
+	if (events.length === 0) return { success: true as const };
+
+	const apiKey = parseBearerToken(authorization);
+	let profileId: string | null = null;
+	if (apiKey?.length === 36) {
+		const database = yield* Database;
+		const [session] = yield* database.use((db) =>
+			db
+				.select({ userId: Db.authApiKeys.userId })
+				.from(Db.authApiKeys)
+				.where(eq(Db.authApiKeys.id, apiKey))
+				.limit(1),
+		);
+		profileId = session?.userId ?? null;
+	}
+
+	const result = yield* Effect.promise(() =>
+		sendClientEvents({
+			profileId,
+			userAgent: mobileUserAgent(input.app),
+			ip: clientAddress(headers),
+			events,
+		}),
+	);
+	if (result && result.sent === 0) {
+		return yield* Effect.fail(new HttpApiError.InternalServerError());
+	}
+	return { success: true as const };
+});
+
 const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	loomUrlInput: string,
 	request: HttpServerRequest.HttpServerRequest,
@@ -3752,6 +3801,13 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					)
 					.handle("removePushToken", ({ payload }) =>
 						withMappedErrors(removePushToken(payload.token)),
+					)
+					.handle("trackEvents", ({ payload, headers, request }) =>
+						trackMobileEvents(payload, headers.authorization, request).pipe(
+							Effect.catchTag("DatabaseError", () =>
+								Effect.fail(new HttpApiError.InternalServerError()),
+							),
+						),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>

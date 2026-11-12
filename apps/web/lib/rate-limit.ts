@@ -94,9 +94,7 @@ async function checkFirewallRateLimit(
 // Self-hosted proxies (nginx, Caddy, Traefik) append it to x-forwarded-for, so
 // there only the last entry comes from infrastructure. IPv6 is grouped by /64,
 // the block one host is normally assigned.
-export function rateLimitClientAddress(
-	headersList: Headers,
-): string | undefined {
+export function clientAddress(headersList: Headers): string | undefined {
 	const forwardedFor = headersList
 		.get("x-forwarded-for")
 		?.split(",")
@@ -107,6 +105,13 @@ export function rateLimitClientAddress(
 		process.env.VERCEL === "1"
 			? realIp || forwardedFor?.[0]
 			: forwardedFor?.at(-1) || realIp;
+	return address || undefined;
+}
+
+export function rateLimitClientAddress(
+	headersList: Headers,
+): string | undefined {
+	const address = clientAddress(headersList);
 	return address ? clientNetwork(address) : undefined;
 }
 
@@ -189,6 +194,8 @@ export const RATE_LIMIT_IDS = {
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
 	VIEWER_DOWNLOAD: "rl_viewer_download",
+	/** Usage event batches from the iOS app (OpenPanel ingest). Suggested: 240 / 1m per IP. */
+	MOBILE_EVENTS: "rl_mobile_events",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -237,6 +244,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	},
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 240, windowMs: MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
