@@ -88,8 +88,10 @@ describe("mediaProbe integration tests", () => {
 			}
 		});
 
-		function serve(body: Uint8Array | string, requests: string[] = []) {
-			const data = typeof body === "string" ? Buffer.from(body) : body;
+		function serve(body: string, requests: string[] = []) {
+			const data = new TextEncoder().encode(body);
+			const slice = (start: number, end: number) =>
+				data.buffer.slice(start, end) as ArrayBuffer;
 			return Bun.serve({
 				port: 0,
 				fetch(request) {
@@ -100,13 +102,13 @@ describe("mediaProbe integration tests", () => {
 					const match = request.headers
 						.get("range")
 						?.match(/^bytes=(\d+)-(\d*)$/);
-					if (!match) return new Response(data);
+					if (!match) return new Response(slice(0, data.length));
 					const start = Number.parseInt(match[1] ?? "0", 10);
 					const end = Math.min(
 						match[2] ? Number.parseInt(match[2], 10) : data.length - 1,
 						data.length - 1,
 					);
-					return new Response(data.subarray(start, end + 1), {
+					return new Response(slice(start, end + 1), {
 						status: 206,
 						headers: {
 							"Content-Range": `bytes ${start}-${end}/${data.length}`,
@@ -121,12 +123,13 @@ describe("mediaProbe integration tests", () => {
 			const listener = (reason: unknown) => {
 				seen.push(reason);
 			};
-			process.on("unhandledRejection", listener);
+			const events: NodeJS.EventEmitter = process;
+			events.on("unhandledRejection", listener);
 			try {
 				await run();
 				await new Promise((resolve) => setTimeout(resolve, 50));
 			} finally {
-				process.off("unhandledRejection", listener);
+				events.off("unhandledRejection", listener);
 			}
 			return seen;
 		}
@@ -153,7 +156,7 @@ describe("mediaProbe integration tests", () => {
 		});
 
 		test("says an empty remote file is empty", async () => {
-			const server = serve(new Uint8Array(0));
+			const server = serve("");
 
 			try {
 				await expect(probeVideo(`${server.url}video`)).rejects.toThrow(
