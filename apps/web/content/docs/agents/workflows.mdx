@@ -165,34 +165,6 @@ The import command also supports `--wait`. For a batch migration, process one ex
 
 For CSV limits, owner and space mapping, large-batch controls, and source-unavailable handling, read [Migrating to Cap](/docs/migrating-to-cap).
 
-## Transcribe a file or upload a video to a developer app
-
-Developer apps are Cap Infra apps. With the `full` login profile an agent can upload a video to an app, wait until it plays and read its links, and turn audio or video into text from a local file or a public URL. A transcript spends the app's prepaid credits and a stored video is billed daily, so the agent confirms the app, the file and the price first.
-
-```sh
-cap developers list
-cap developers videos upload <app-id> ./demo.mp4 --wait --yes
-cap developers videos get <app-id> <video-id>
-cap developers videos wait <app-id> <video-id>
-cap developers videos list <app-id>
-cap developers transcripts create <app-id> --file ./standup.m4a --wait --yes
-cap developers transcripts create <app-id> --url https://example.com/talk.mp3 --yes
-cap developers transcripts wait <app-id> <transcript-id>
-cap developers transcripts text <app-id> <transcript-id>
-cap developers usage <app-id>
-cap developers transactions <app-id>
-```
-
-To check that the installed CLI has these commands, run `cap developers videos --help` and look for `upload`, `get` and `wait`. If they are missing, run `cap update`. If they are still missing after that, the release that includes them is not out yet, so use the [REST API](/docs/api/rest-api) for those steps. `cap upload` is a different command: it uploads to your personal Cap library, never to a developer app.
-
-A video carries its `status` (`uploading`, `processing`, `ready` or `errored`), `errorReason`, `durationSeconds`, `width`, `height`, `playbackId`, and its `hlsUrl`, `mp4Url`, `posterUrl`, `shareUrl` and `embedUrl`. The file links are `null` until the status is `ready`. `--wait` and `videos wait` stop after 900 seconds unless `--timeout-seconds` says otherwise.
-
-Over MCP the same work is `developer_video_upload` (with `wait` to block until the video is ready), `developer_video_wait`, `developer_video_get`, `developer_videos_list`, `developer_transcript_create` (with `file_path` or `url`, and `wait` to block until the text is ready), `developer_transcript_wait`, `developer_transcript_get`, `developer_transcripts_list` and `developer_transcript_delete`. Transcription is billed per audio hour. Uploading is free and stored video is billed daily. The signed upload URL stays inside the CLI and is never printed or returned to the agent.
-
-With `--json`, a command that fails prints one JSON object on stdout with `error`, `code`, `message`, and when they are known `hint` and `requestId`, and exits with a non-zero code. A wait that fails or times out also carries the `videoId` or `transcriptId` it was waiting for. Commands that delete or revoke (`developers delete`, `developers keys rotate`, `developers domains remove`, `developers videos delete`, `developers transcripts delete`) accept `--dry-run`, which prints what would change and changes nothing.
-
-**Success check:** The video status is `ready` and its `shareUrl` opens, or the transcript status is `complete` and its text is returned. A `queued` or `processing` status is not treated as done. Audio with no speech completes with an empty transcript and is billed for its length; a transcript that fails is not charged. If the app is out of credits the command reports `INSUFFICIENT_CREDITS`; create a checkout link with `cap developers credits purchase`.
-
 ## Use Cap for administration or development
 
 Cap also exposes account, organization, notification, storage, billing, and developer workflows. Ask the agent to discover the current surface rather than copying commands from an old prompt:
