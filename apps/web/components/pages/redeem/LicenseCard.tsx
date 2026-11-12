@@ -8,6 +8,7 @@ import { useReducedMotion } from "@/components/pages/HomeTwo/visibility";
 import {
 	groupLicenseKey,
 	LICENSE_KEY_LENGTH,
+	LICENSE_KEY_SLOTS,
 	type LicenseDuration,
 } from "@/lib/license-redeem";
 
@@ -215,9 +216,8 @@ export const LicenseCard = ({
 							shownKey ? "" : "text-[rgba(17,17,17,0.34)]",
 						)}
 					>
-						{groups.map((group, index) => (
-							// biome-ignore lint/suspicious/noArrayIndexKey: fixed six slots that never reorder
-							<span key={index}>{group}</span>
+						{LICENSE_KEY_SLOTS.map((slot, index) => (
+							<span key={slot}>{groups[index]}</span>
 						))}
 					</p>
 

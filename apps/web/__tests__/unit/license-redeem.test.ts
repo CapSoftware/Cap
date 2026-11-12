@@ -365,9 +365,9 @@ describe("license server calls", () => {
 			duration: "lifetime",
 			email: "b••••@cap.test",
 			licenses: [
-				{ licenseKey: KEY, redeemed: false },
-				{ licenseKey: null, redeemed: true },
-				{ licenseKey: null, redeemed: true },
+				{ position: 1, licenseKey: KEY, redeemed: false },
+				{ position: 2, licenseKey: null, redeemed: true },
+				{ position: 3, licenseKey: null, redeemed: true },
 			],
 		});
 	});

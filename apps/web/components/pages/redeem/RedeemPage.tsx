@@ -32,6 +32,7 @@ import {
 	giftLink,
 	groupLicenseKey,
 	isLicenseKey,
+	LICENSE_KEY_SLOTS,
 	type LicenseDuration,
 	lookupGift,
 	lookupPurchase,
@@ -232,9 +233,8 @@ const KeyRow = ({
 					"grid w-fit grid-cols-3 gap-x-[0.8em] gap-y-1 text-[13.5px] leading-none text-[#111111] sm:text-[14.5px]",
 				)}
 			>
-				{groupLicenseKey(licenseKey).map((group, index) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: fixed six slots that never reorder
-					<span key={index}>{group}</span>
+				{LICENSE_KEY_SLOTS.map((slot, index) => (
+					<span key={slot}>{groupLicenseKey(licenseKey)[index]}</span>
 				))}
 			</span>
 		</span>
@@ -271,12 +271,14 @@ const fireConfetti = async (card: HTMLElement | null) => {
 
 export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 	const [view, setView] = useState<View>({ kind: "enter" });
-	const [sessionId, setSessionId] = useState<string | null>(null);
+	const [order, setOrder] = useState<{
+		sessionId: string;
+		attempt: number;
+	} | null>(null);
 	const [keyInput, setKeyInput] = useState("");
 	const [email, setEmail] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [formError, setFormError] = useState<string | null>(null);
-	const [pollRun, setPollRun] = useState(0);
 	const cardRef = useRef<HTMLDivElement | null>(null);
 	const emailRef = useRef<HTMLInputElement | null>(null);
 	const lookupRun = useRef(0);
@@ -320,14 +322,17 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 		(intent: RedeemIntent) => {
 			setEmail("");
 			setFormError(null);
+			setBusy(false);
 			if ("session" in intent) {
 				lookupRun.current += 1;
 				setView({ kind: "ordering" });
-				setSessionId(intent.session);
-				setPollRun((run) => run + 1);
+				setOrder((current) => ({
+					sessionId: intent.session,
+					attempt: (current?.attempt ?? 0) + 1,
+				}));
 				return;
 			}
-			setSessionId(null);
+			setOrder(null);
 			setKeyInput(intent.key);
 			setView({ kind: "opening" });
 			void openGift(intent.key, "link");
@@ -369,9 +374,9 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 
 	// Stripe redirects here the moment payment succeeds, usually a second or
 	// two before its webhook has created the license, so the order is polled.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: pollRun restarts the polling when the buyer asks to check again
 	useEffect(() => {
-		if (!sessionId) return;
+		if (!order) return;
+		const { sessionId } = order;
 		const controller = new AbortController();
 		let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -410,7 +415,7 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 			controller.abort();
 			if (timer) clearTimeout(timer);
 		};
-	}, [sessionId, licenseApiUrl, pollRun]);
+	}, [order, licenseApiUrl]);
 
 	useEffect(() => {
 		if (view.kind === "claimable") emailRef.current?.focus();
@@ -441,9 +446,13 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 		}
 		setBusy(true);
 		setFormError(null);
+		// Another gift or order opened while this claim was in flight owns the
+		// page now, so this response must not replace it or clear its intent.
+		const run = lookupRun.current;
 		const result = await claimGift(licenseApiUrl, view.licenseKey, address);
-		setBusy(false);
 		trackEvent("license_gift_claim", { result: result.status });
+		if (run !== lookupRun.current) return;
+		setBusy(false);
 		if (result.status === "claimed") {
 			forgetIntent();
 			setView({
@@ -736,7 +745,12 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 					<Panel>
 						<button
 							type="button"
-							onClick={() => setPollRun((run) => run + 1)}
+							onClick={() =>
+								setOrder(
+									(current) =>
+										current && { ...current, attempt: current.attempt + 1 },
+								)
+							}
 							className={classNames(BTN_PRIMARY, "w-full cursor-pointer")}
 						>
 							<span className="relative">Check again</span>
@@ -778,8 +792,7 @@ export const RedeemPage = ({ licenseApiUrl }: { licenseApiUrl: string }) => {
 									: giftLink(window.location.origin, license.licenseKey);
 								return (
 									<li
-										// biome-ignore lint/suspicious/noArrayIndexKey: claimed gifts carry no key, and the order is fixed
-										key={index}
+										key={license.position}
 										className="flex items-center justify-between gap-3 rounded-[12px] bg-[#F4F7FA] py-2.5 pl-4 pr-2.5"
 									>
 										<span className="min-w-0">

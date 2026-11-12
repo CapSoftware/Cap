@@ -23,8 +23,10 @@ export type GiftClaim =
 	| Refused;
 
 export type PurchasedLicense =
-	| { licenseKey: string; redeemed: false }
-	| { licenseKey: null; redeemed: true };
+	| { position: number; licenseKey: string; redeemed: false }
+	| { position: number; licenseKey: null; redeemed: true };
+
+export const LICENSE_KEY_SLOTS = ["k1", "k2", "k3", "k4", "k5", "k6"] as const;
 
 export type PurchaseLookup =
 	| { status: "pending" }
@@ -220,10 +222,11 @@ export async function lookupPurchase(
 		for (const entry of data.licenses) {
 			if (!isRecord(entry)) return { status: "unavailable" };
 			const key = entry.licenseKey;
+			const position = licenses.length + 1;
 			if (entry.redeemed === true) {
-				licenses.push({ licenseKey: null, redeemed: true });
+				licenses.push({ position, licenseKey: null, redeemed: true });
 			} else if (typeof key === "string" && isLicenseKey(key)) {
-				licenses.push({ licenseKey: key, redeemed: false });
+				licenses.push({ position, licenseKey: key, redeemed: false });
 			} else {
 				return { status: "unavailable" };
 			}
