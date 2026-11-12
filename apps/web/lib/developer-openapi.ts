@@ -79,7 +79,7 @@ const playbackProperties = {
 		type: "string",
 		enum: ["uploading", "processing", "ready", "errored"],
 		description:
-			"uploading until the upload completes, processing while it encodes, then ready or errored.",
+			"uploading until the upload completes, processing until the first output can be played, then ready or errored.",
 	},
 	errorReason: {
 		type: ["string", "null"],
@@ -91,7 +91,8 @@ const playbackProperties = {
 	},
 	renditions: {
 		type: "array",
-		description: "Encoded HLS renditions, largest first. Empty until ready.",
+		description:
+			"Encoded HLS renditions, largest first. Empty until hlsUrl is set.",
 		items: {
 			type: "object",
 			required: ["name", "width", "height", "bitrate", "bytes"],
@@ -112,12 +113,13 @@ const playbackProperties = {
 		type: ["string", "null"],
 		format: "uri",
 		description:
-			"Adaptive HLS master playlist. Null until ready, or when only the MP4 is available.",
+			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready.",
 	},
 	mp4Url: {
 		type: ["string", "null"],
 		format: "uri",
-		description: "Progressive MP4. Null until ready.",
+		description:
+			"Progressive MP4. Null until it is encoded, which can be after the video is ready.",
 	},
 	posterUrl: {
 		type: ["string", "null"],
@@ -320,7 +322,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperUsage",
 				summary: "Get usage",
 				description:
-					"Returns the app's remaining credit balance and the count and total minutes of its videos.",
+					"Returns the app's remaining credit balance, the count and total minutes of its videos, its standing, what it needs to take an upload and what storage costs it per day.",
 				tags: ["Usage"],
 				security: secretAuth,
 				responses: {
@@ -334,7 +336,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createSdkVideo",
 				summary: "Create a video",
 				description:
-					"Creates a video record and returns its ID with share and embed URLs. Requires a credit balance of at least 5,000 micro-credits. Upload the file next with initiateSdkUpload.",
+					"Creates a video record and returns its ID with share and embed URLs. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Upload the file next with initiateSdkUpload.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CreateVideoRequest"),
@@ -382,13 +384,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload, records duration and dimensions, and debits 5,000 micro-credits per minute of video (at most 4 hours). Repeating the call after the upload completed returns success without charging again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload completed."),
 					"402": response("PaymentRequired"),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -403,6 +406,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("AbortUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload was aborted."),
+					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
 			},
@@ -469,6 +473,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"balanceDollars",
 					"totalVideos",
 					"totalDurationMinutes",
+					"standing",
+					"upload",
+					"storage",
 				],
 				properties: {
 					balanceMicroCredits: {
@@ -481,6 +488,90 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 					totalVideos: { type: "integer" },
 					totalDurationMinutes: { type: "number" },
+					standing: {
+						type: "object",
+						required: ["state", "pausesAt"],
+						properties: {
+							state: {
+								type: "string",
+								enum: ["active", "grace", "paused"],
+								description:
+									"active: in good standing. grace: a daily storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+							},
+							pausesAt: {
+								type: ["string", "null"],
+								format: "date-time",
+								description:
+									"When playback pauses, 7 days after the app first fell short. Null while active.",
+							},
+						},
+					},
+					upload: {
+						type: "object",
+						required: [
+							"allowed",
+							"reason",
+							"requiredMicroCredits",
+							"shortfallMicroCredits",
+							"message",
+						],
+						properties: {
+							allowed: {
+								type: "boolean",
+								description: "Whether the app can create a video right now.",
+							},
+							reason: {
+								type: ["string", "null"],
+								enum: [
+									"no_account",
+									"out_of_credit",
+									"insufficient_credits",
+									null,
+								],
+							},
+							requiredMicroCredits: {
+								type: "integer",
+								description:
+									"Balance needed to upload: 7 days of storage for everything stored.",
+							},
+							shortfallMicroCredits: {
+								type: "integer",
+								description:
+									"How much to add before uploading. 0 when allowed.",
+							},
+							message: { type: ["string", "null"] },
+						},
+					},
+					storage: {
+						type: "object",
+						required: [
+							"minutesByTier",
+							"dailyMicroCredits",
+							"monthlyMicroCredits",
+						],
+						properties: {
+							minutesByTier: {
+								type: "object",
+								description:
+									"Minutes stored in each resolution tier, by pixel count: up to 2,073,600 pixels, up to 4,194,304 pixels, and above.",
+								required: ["1080p", "1440p", "2160p"],
+								properties: {
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
+							dailyMicroCredits: {
+								type: "integer",
+								description:
+									"What one day of storage costs at what is stored now.",
+							},
+							monthlyMicroCredits: {
+								type: "integer",
+								description: "The same over a 30 day month.",
+							},
+						},
+					},
 				},
 			},
 			CreateVideoRequest: {
@@ -606,13 +697,17 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			PaymentRequired: json(
 				ref("Error"),
-				"The app does not have enough credits.",
+				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits.",
 			),
 			Forbidden: json(
 				ref("Error"),
 				"A production app was called without an allowed Origin.",
 			),
 			NotFound: json(ref("Error"), "The video or route does not exist."),
+			CompletionInProgress: json(
+				ref("Error"),
+				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new video and upload again.",
+			),
 			UploadCompleted: json(
 				ref("Error"),
 				"The video's upload already completed. Create a new video to upload again.",

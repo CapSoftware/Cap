@@ -50,6 +50,7 @@ export interface DeveloperVideoProcessingState {
 	encodeId: string;
 	startedAt: number;
 	probe: DeveloperVideoProbe | null;
+	probing?: { token: string; startedAt: number };
 	hls: DeveloperVideoPartState;
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;

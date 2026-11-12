@@ -5,7 +5,8 @@ import type {
 	DeveloperVideoStatus,
 } from "@cap/database/types";
 
-export const DEVELOPER_VIDEO_PARTS = ["hls", "mp4"] as const;
+// The MP4 comes first: it is the quicker output, so it is sent to the encoder first.
+export const DEVELOPER_VIDEO_PARTS = ["mp4", "hls"] as const;
 export const DEVELOPER_VIDEO_MAX_PART_ATTEMPTS = 2;
 
 const MAX_REASON_LENGTH = 500;
@@ -191,11 +192,45 @@ export function failUnfinishedParts(
 	return next;
 }
 
+function partWasLost(
+	part: DeveloperVideoPartState,
+	now: number,
+	lastStarted: number,
+): boolean {
+	if (part.state === "running") {
+		return now - part.startedAt >= STALE_PROCESSING_MS;
+	}
+	return (
+		part.state === "pending" && now - lastStarted >= NEVER_STARTED_GRACE_MS
+	);
+}
+
+// A ready video keeps playing from the output it has while the other one is
+// retried: adaptive streaming the media server could not make earlier, or a
+// job that stopped reporting. developerVideoRedrive decides when that is due.
 export function retryUnavailableHls(
 	state: DeveloperVideoProcessingState,
+	now: number = Date.now(),
 ): DeveloperVideoProcessingState | null {
-	if (state.hls.state !== "unavailable") return null;
-	return { ...state, hls: { state: "pending" } };
+	let next = state;
+	if (state.hls.state === "unavailable") {
+		next = { ...next, hls: { state: "pending" } };
+	}
+	for (const part of DEVELOPER_VIDEO_PARTS) {
+		const current = next[part];
+		if (
+			current.state === "running" &&
+			now - current.startedAt >= STALE_PROCESSING_MS
+		) {
+			next = { ...next, [part]: { state: "pending" } };
+		}
+	}
+	const states = DEVELOPER_VIDEO_PARTS.map((part) => state[part].state);
+	const waiting = states.includes("complete") && states.includes("pending");
+	if (next === state && !waiting) return null;
+	// Stamping the retry is what stops the next read from claiming it again
+	// before the workflow has picked the part up.
+	return { ...next, startedAt: now };
 }
 
 export function resolveDeveloperVideoStatus(
@@ -204,13 +239,13 @@ export function resolveDeveloperVideoStatus(
 ): { status: DeveloperVideoStatus; errorReason: string | null } {
 	if (previous === "ready") return { status: "ready", errorReason: null };
 	const parts = DEVELOPER_VIDEO_PARTS.map((part) => state[part]);
+	if (parts.some((part) => part.state === "complete")) {
+		return { status: "ready", errorReason: null };
+	}
 	if (
 		parts.some((part) => part.state === "pending" || part.state === "running")
 	) {
 		return { status: "processing", errorReason: null };
-	}
-	if (parts.some((part) => part.state === "complete")) {
-		return { status: "ready", errorReason: null };
 	}
 	const failure =
 		[state.mp4, state.hls].find((part) => part.state === "failed") ??
@@ -260,9 +295,14 @@ export function developerVideoRedrive(
 			? "start"
 			: null;
 	}
-	if (video.status === "ready") {
-		const hls = video.processing?.hls;
-		return hls?.state === "unavailable" && hls.retryAt <= now
+	if (video.status === "ready" && video.processing) {
+		const { hls, mp4 } = video.processing;
+		if (hls.state === "unavailable" && hls.retryAt <= now) return "retry-hls";
+		const lastStarted = Math.max(
+			video.updatedAt.getTime(),
+			video.processing.startedAt,
+		);
+		return [mp4, hls].some((part) => partWasLost(part, now, lastStarted))
 			? "retry-hls"
 			: null;
 	}

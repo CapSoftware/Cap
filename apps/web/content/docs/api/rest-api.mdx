@@ -85,7 +85,7 @@ Standard HTTP status codes are used:
 | `200` | Success |
 | `400` | Bad request -- missing or invalid parameters |
 | `401` | Unauthorized -- invalid, missing, or revoked API key |
-| `402` | Payment required -- insufficient credits |
+| `402` | Payment required -- the app is out of credit, or its balance does not cover 7 days of storage |
 | `403` | Forbidden -- origin not allowed (SDK API in production) |
 | `404` | Not found -- the requested resource does not exist |
 | `429` | Too many requests -- more than 60 per minute for this key; wait for `Retry-After` seconds |
@@ -215,7 +215,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
 
 ### Get Video Status
 
-Check whether a video is fully processed and ready for playback.
+Check whether a video can be played yet.
 
 ```
 GET /api/developer/v1/videos/:id/status
@@ -260,7 +260,9 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 
 The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
 
-The playback URLs are `null` until the video is ready. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted. `hlsUrl` can be `null` on a ready video when only the MP4 is available; it is filled in later without the video leaving `ready`.
+A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted.
+
+On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present.
 
 The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, or `NO_AUDIO`.
 
@@ -295,7 +297,7 @@ curl -X DELETE https://cap.so/api/developer/v1/videos/abc123def456 \
 
 ### Get Usage
 
-Retrieve your app's credit balance and aggregate video statistics.
+Retrieve your app's credit balance, video totals, standing, what it needs to take an upload and what storage costs per day.
 
 ```
 GET /api/developer/v1/usage
@@ -316,12 +318,45 @@ curl https://cap.so/api/developer/v1/usage \
     "balanceMicroCredits": 500000,
     "balanceDollars": "5.00",
     "totalVideos": 23,
-    "totalDurationMinutes": 87.5
+    "totalDurationMinutes": 87.5,
+    "standing": { "state": "active", "pausesAt": null },
+    "upload": {
+      "allowed": true,
+      "reason": null,
+      "requiredMicroCredits": 1736,
+      "shortfallMicroCredits": 0,
+      "message": null
+    },
+    "storage": {
+      "minutesByTier": { "1080p": 87.5, "1440p": 0, "2160p": 0 },
+      "dailyMicroCredits": 247,
+      "monthlyMicroCredits": 7438
+    }
   }
 }
 ```
 
-Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). Completed SDK uploads are billed at 5,000 micro-credits per minute using the validated duration with a file-size-based minimum. Billing duration is capped at four hours.
+Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
+
+**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days. The tier comes from the pixel count of the video.
+
+| Tier | Pixels | Storage per 1,000 minutes per month |
+|------|--------|-------------------------------------|
+| `1080p` | up to 2,073,600 | $0.85 |
+| `1440p` | up to 4,194,304 | $1.45 |
+| `2160p` | above 4,194,304 | $2.80 |
+
+**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
+
+**Standing.** `standing.state` is one of:
+
+| State | Meaning |
+|-------|---------|
+| `active` | In good standing. |
+| `grace` | A daily storage charge was more than the balance. The balance was taken to zero, uploads are blocked, and playback continues until `pausesAt`, 7 days after the app first fell short. |
+| `paused` | Playback is paused until credits are added. Videos stay stored. |
+
+Adding credits that cover one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
 
 ---
 
@@ -369,7 +404,22 @@ curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
 }
 ```
 
-Returns a `402` error if the app has insufficient credits (minimum 5,000 micro-credits required).
+Creating a video is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
+
+```json
+{
+  "error": "Insufficient credits",
+  "code": "insufficient_credits",
+  "message": "Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.15.",
+  "standing": "active",
+  "pausesAt": null,
+  "balanceMicroCredits": 5000,
+  "requiredMicroCredits": 19834,
+  "shortfallMicroCredits": 14834
+}
+```
+
+`code` is `insufficient_credits`, `out_of_credit` (the app is in `grace` or `paused`) or `no_account`.
 
 ### Multipart Upload
 
@@ -453,9 +503,20 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 }
 ```
 
-Credits are debited when the upload completes. Cap bills 5,000 micro-credits per minute using the greater of the submitted duration and a minimum based on the part sizes reported by storage, capped at four hours. The video's stored `duration` is that billed duration. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
+Completing an upload charges nothing. The video's stored `duration` is the greater of the submitted duration and a minimum based on the part sizes reported by storage, bounded by what the uploaded bytes could hold and capped at four hours. Storage for the video is billed daily from then on, by its length and resolution tier. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
 
-Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }` without charging again. Uploads for deleted videos return `404`. To upload a new file, create a new video.
+The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as create, and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
+
+Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }`.
+
+Complete can itself return `409` with a `code`:
+
+| `code` | Meaning | What to do |
+|--------|---------|------------|
+| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
+| `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new video and upload the file again. |
+
+Abort also returns `409` with `completion_in_progress` while a completion holds the video. Uploads for deleted videos return `404`. To upload a new file, create a new video.
 
 #### Abort Upload
 
@@ -512,8 +573,8 @@ The full video object returned by list and get endpoints:
 | `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
 | `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate`, `bytes` and `codecs` |
 | `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
-| `hlsUrl` | string \| null | Adaptive HLS master playlist (null until ready) |
-| `mp4Url` | string \| null | Progressive MP4 (null until ready) |
+| `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
+| `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
@@ -522,8 +583,8 @@ The full video object returned by list and get endpoints:
 ## Best Practices
 
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
-- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true` before displaying the video.
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true`, then play `hlsUrl` when it is present and `mp4Url` otherwise.
 - **Store your keys securely.** Use environment variables or a secrets manager.
 - **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
-- **Monitor your credit balance.** Use the usage endpoint to track remaining credits and top up from your app's Billing page in Cap Infra to avoid service interruptions.
+- **Monitor your credit balance.** Use the usage endpoint to track the balance, `standing` and `upload.allowed`, and top up from your app's Billing page in Cap Infra. Auto top-up on that page adds credits from a saved card when the balance runs low.
 - **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.

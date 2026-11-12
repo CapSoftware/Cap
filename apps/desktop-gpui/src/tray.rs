@@ -746,7 +746,7 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
             app_windows::open_onboarding(cx);
             cx.activate(true);
         }
-        TrayItem::Quit => menus::quit(cx),
+        TrayItem::Quit => menus::quit(menus::QuitSource::Tray, cx),
         TrayItem::PreviousItem(path) => open_previous_item(path, cx),
         TrayItem::ModeStudio => set_mode(Mode::Studio, cx),
         TrayItem::ModeInstant => set_mode(Mode::Instant, cx),

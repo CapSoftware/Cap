@@ -1,9 +1,18 @@
 import clsx from "clsx";
 import type { Metadata } from "next";
-import { STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/developer-pricing";
+import {
+	STORAGE_BILLING_DAYS_PER_MONTH,
+	storageMicroCreditsPerMinutePerMonth,
+} from "@/lib/developer-pricing";
+import {
+	INFRA_RESOLUTION_TIERS,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
+import { getAppStorageUsage } from "@/lib/infra-storage";
 import {
 	formatCharge,
 	formatMinutes,
+	INFRA_TIER_LABELS,
 	summarizeStorageMonth,
 	utcDaysAgoKey,
 	utcMonthStart,
@@ -20,11 +29,7 @@ import {
 	TH,
 	TR,
 } from "../../_components/ui";
-import {
-	getDeveloperUsageSummary,
-	getInfraStorageSnapshots,
-	requireInfraApp,
-} from "../../infra-data";
+import { getInfraStorageSnapshots, requireInfraApp } from "../../infra-data";
 
 export const metadata: Metadata = {
 	title: "Usage | Cap Infra",
@@ -62,9 +67,12 @@ export default async function InfraUsagePage({
 	const now = new Date();
 
 	const [usage, snapshots] = await Promise.all([
-		getDeveloperUsageSummary(app.id),
+		getAppStorageUsage(app.id),
 		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
 	]);
+	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
+		(tier) => usage.minutesByTier[tier] > 0,
+	);
 
 	const month = summarizeStorageMonth(snapshots, now);
 	const monthName = monthFormat.format(utcMonthStart(now));
@@ -77,18 +85,23 @@ export default async function InfraUsagePage({
 		<>
 			<PageHeader
 				title="Usage"
-				description={`Storage is billed once a day at $${STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH.toFixed(2)} per 1,000 minutes per month.`}
+				description="Storage is billed once a day, for each video at its resolution. Uploads and encoding are free."
 			/>
 
 			<Figures>
 				<Figure
 					label="Minutes stored now"
-					value={formatMinutes(usage.totalDurationMinutes)}
+					value={formatMinutes(usage.totalMinutes)}
 					lead
 				/>
 				<Figure
 					label="Videos"
-					value={usage.totalVideos.toLocaleString("en-US")}
+					value={usage.videoCount.toLocaleString("en-US")}
+				/>
+				<Figure
+					label="Storage per day"
+					hint="at what is stored now"
+					value={formatCharge(usage.dailyMicroCredits)}
 				/>
 				<Figure
 					label={`Storage in ${monthName}`}
@@ -133,6 +146,67 @@ export default async function InfraUsagePage({
 						<span>{shortDay.format(asDate(last.snapshotDate))}</span>
 					</div>
 				</figure>
+			)}
+
+			{storedTiers.length > 0 && (
+				<Block
+					title="Stored now"
+					description={`Minutes by resolution, with the rate for each. A month is billed as ${STORAGE_BILLING_DAYS_PER_MONTH} days, one day at a time.`}
+				>
+					<div className="relative overflow-x-auto">
+						<table className="w-full border-collapse">
+							<thead>
+								<tr className={TR}>
+									<th className={TH}>Resolution</th>
+									<th className={clsx(TH, "text-right")}>Minutes</th>
+									<th className={clsx(TH, "text-right")}>
+										Per 1,000 minutes a month
+									</th>
+									<th className={clsx(TH, "text-right")}>Per month</th>
+								</tr>
+							</thead>
+							<tbody>
+								{storedTiers.map((tier) => (
+									<tr key={tier} className={TR}>
+										<td className={clsx(TD, "text-[#E8ECF4]")}>
+											{INFRA_TIER_LABELS[tier]}
+										</td>
+										<td
+											className={clsx(
+												TD,
+												MONO,
+												"text-right text-[13px] tabular-nums",
+											)}
+										>
+											{formatMinutes(usage.minutesByTier[tier])}
+										</td>
+										<td
+											className={clsx(
+												TD,
+												MONO,
+												"text-right text-[13px] tabular-nums",
+											)}
+										>
+											{`$${INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH[tier].toFixed(2)}`}
+										</td>
+										<td
+											className={clsx(
+												TD,
+												MONO,
+												"text-right text-[13px] tabular-nums text-[#E8ECF4]",
+											)}
+										>
+											{formatCharge(
+												usage.minutesByTier[tier] *
+													storageMicroCreditsPerMinutePerMonth(tier),
+											)}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				</Block>
 			)}
 
 			<Block

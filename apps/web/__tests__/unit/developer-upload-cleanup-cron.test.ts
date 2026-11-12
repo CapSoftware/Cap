@@ -41,6 +41,10 @@ vi.mock("@cap/web-backend", async () => {
 
 type ApiLayer = EffectLayer.Layer<HttpApi.Api>;
 
+vi.mock("@/lib/infra-video-upload", () => ({
+	removeUnrecordedInfraFiles: async () => 3,
+}));
+
 vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Layer } = await import("effect");
@@ -131,6 +135,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 2,
 			failed: 0,
+			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
 		});
@@ -199,6 +204,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 2,
 			failed: 0,
+			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
 		});
@@ -272,6 +278,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 0,
 			failed: 0,
+			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
 		});

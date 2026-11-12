@@ -2,6 +2,8 @@ import { db } from "@cap/database";
 import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
 import { and, count, eq, isNull, sql } from "drizzle-orm";
 import { Hono } from "hono";
+import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
+import { getInfraBilling, infraBillingJson } from "@/lib/infra-standing";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 export const app = new Hono<{
@@ -14,7 +16,7 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[account], [videoStats]] = await Promise.all([
+	const [[account], [videoStats], billing] = await Promise.all([
 		db()
 			.select()
 			.from(developerCreditAccounts)
@@ -32,16 +34,18 @@ app.get("/", async (c) => {
 					isNull(developerVideos.deletedAt),
 				),
 			),
+		getInfraBilling(appId),
 	]);
 
 	return c.json({
 		data: {
 			balanceMicroCredits: account?.balanceMicroCredits ?? 0,
-			balanceDollars: ((account?.balanceMicroCredits ?? 0) / 100_000).toFixed(
-				2,
-			),
+			balanceDollars: (
+				(account?.balanceMicroCredits ?? 0) / MICRO_CREDITS_PER_DOLLAR
+			).toFixed(2),
 			totalVideos: videoStats?.totalVideos ?? 0,
 			totalDurationMinutes: videoStats?.totalDurationMinutes ?? 0,
+			...infraBillingJson(billing),
 		},
 	});
 });
