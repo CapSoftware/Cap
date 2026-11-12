@@ -452,12 +452,36 @@ describe("developer video redrive", () => {
 		expect(developerVideoRedrive(waiting(minutesAgo(3)), now)).toBe(
 			"retry-hls",
 		);
-		expect(
-			retryUnavailableHls(
-				waiting(minutesAgo(3)).processing ?? processingState(),
-				now,
-			)?.mp4,
-		).toEqual({ state: "pending" });
+		const stuck = waiting(minutesAgo(3));
+		const requeued = retryUnavailableHls(
+			stuck.processing ?? processingState(),
+			now,
+		);
+		expect(requeued?.mp4).toEqual({ state: "pending" });
+		expect(requeued?.startedAt).toBe(now);
+	});
+
+	it("does not claim a waiting output again on the next read", () => {
+		const stuck = developerVideo({
+			status: "ready",
+			updatedAt: minutesAgo(30),
+			processing: processingState({
+				hls: { state: "complete", output: "hls-out" },
+				mp4: { state: "pending" },
+			}),
+		});
+		expect(developerVideoRedrive(stuck, now)).toBe("retry-hls");
+
+		const requeued = retryUnavailableHls(
+			stuck.processing ?? processingState(),
+			now,
+		);
+		const claimed = { ...stuck, processing: requeued };
+
+		expect(requeued).not.toEqual(stuck.processing);
+		expect(developerVideoRedrive(claimed, now + 1_000)).toBeNull();
+		expect(developerVideoRedrive(claimed, now + 119_000)).toBeNull();
+		expect(developerVideoRedrive(claimed, now + 121_000)).toBe("retry-hls");
 	});
 
 	it("does not requeue a fresh job while adaptive streaming is retried", () => {

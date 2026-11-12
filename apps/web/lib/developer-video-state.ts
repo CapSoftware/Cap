@@ -195,12 +195,14 @@ export function failUnfinishedParts(
 function partWasLost(
 	part: DeveloperVideoPartState,
 	now: number,
-	updatedAt: number,
+	lastStarted: number,
 ): boolean {
 	if (part.state === "running") {
 		return now - part.startedAt >= STALE_PROCESSING_MS;
 	}
-	return part.state === "pending" && now - updatedAt >= NEVER_STARTED_GRACE_MS;
+	return (
+		part.state === "pending" && now - lastStarted >= NEVER_STARTED_GRACE_MS
+	);
 }
 
 // A ready video keeps playing from the output it has while the other one is
@@ -223,11 +225,12 @@ export function retryUnavailableHls(
 			next = { ...next, [part]: { state: "pending" } };
 		}
 	}
-	if (next !== state) return next;
 	const states = DEVELOPER_VIDEO_PARTS.map((part) => state[part].state);
-	return states.includes("complete") && states.includes("pending")
-		? state
-		: null;
+	const waiting = states.includes("complete") && states.includes("pending");
+	if (next === state && !waiting) return null;
+	// Stamping the retry is what stops the next read from claiming it again
+	// before the workflow has picked the part up.
+	return { ...next, startedAt: now };
 }
 
 export function resolveDeveloperVideoStatus(
@@ -295,8 +298,11 @@ export function developerVideoRedrive(
 	if (video.status === "ready" && video.processing) {
 		const { hls, mp4 } = video.processing;
 		if (hls.state === "unavailable" && hls.retryAt <= now) return "retry-hls";
-		const updatedAt = video.updatedAt.getTime();
-		return [mp4, hls].some((part) => partWasLost(part, now, updatedAt))
+		const lastStarted = Math.max(
+			video.updatedAt.getTime(),
+			video.processing.startedAt,
+		);
+		return [mp4, hls].some((part) => partWasLost(part, now, lastStarted))
 			? "retry-hls"
 			: null;
 	}
