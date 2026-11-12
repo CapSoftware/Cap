@@ -18,6 +18,8 @@ export interface CapPlayerAttachment {
 	setLevel: (index: number) => void;
 }
 
+export type CapPlayerPreload = "auto" | "metadata";
+
 export const AUTO_LEVEL = -1;
 
 export const resolutionLabel = (width: number, height: number) => {
@@ -112,11 +114,13 @@ export const attachSource = (
 	source: CapPlayerSource,
 	options: {
 		autoPlay: boolean;
+		preload?: CapPlayerPreload;
 		onFatal: () => void;
 		onLevels?: (levels: CapPlayerLevel[]) => void;
 	},
 ): CapPlayerAttachment => {
 	const { autoPlay, onFatal, onLevels } = options;
+	const eager = autoPlay || options.preload === "auto";
 	const mode = pickPlaybackMode(video, source);
 	let cancelled = false;
 	let detach = () => release(video);
@@ -228,9 +232,26 @@ export const attachSource = (
 				hls.destroy();
 				playFile(reached);
 			});
+			const resume = () => {
+				video.removeEventListener("play", resume);
+				video.removeEventListener("seeking", resume);
+				hls.startLoad();
+			};
+			if (!eager) {
+				hls.once(Hls.Events.FRAG_BUFFERED, () => {
+					if (!video.paused || video.seeking) return;
+					hls.stopLoad();
+					video.addEventListener("play", resume);
+					video.addEventListener("seeking", resume);
+				});
+			}
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);
-			detach = () => hls.destroy();
+			detach = () => {
+				video.removeEventListener("play", resume);
+				video.removeEventListener("seeking", resume);
+				hls.destroy();
+			};
 			setLevel = (index) => {
 				if (index === AUTO_LEVEL) hls.nextLevel = AUTO_LEVEL;
 				else hls.currentLevel = index;

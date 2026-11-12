@@ -15,6 +15,7 @@ import {
 	attachSource,
 	type CapPlayerAttachment,
 	type CapPlayerLevel,
+	type CapPlayerPreload,
 	type CapPlayerSource,
 	resolutionLabel,
 } from "./source";
@@ -35,6 +36,7 @@ export interface CapPlayerProps {
 	poster?: string;
 	aspectRatio?: string;
 	autoPlay?: boolean;
+	preload?: CapPlayerPreload;
 	muted?: boolean;
 	loop?: boolean;
 	focusOnMount?: boolean;
@@ -246,6 +248,7 @@ export const CapPlayer = ({
 	poster,
 	aspectRatio = "16 / 9",
 	autoPlay = false,
+	preload = "metadata",
 	muted: startMuted = false,
 	loop = false,
 	focusOnMount = false,
@@ -298,14 +301,19 @@ export const CapPlayer = ({
 		const attachment = attachSource(
 			video,
 			{ hls, mp4 },
-			{ autoPlay, onFatal: () => setFailed(true), onLevels: setLevels },
+			{
+				autoPlay,
+				preload,
+				onFatal: () => setFailed(true),
+				onLevels: setLevels,
+			},
 		);
 		attachmentRef.current = attachment;
 		return () => {
 			attachmentRef.current = null;
 			attachment.detach();
 		};
-	}, [hls, mp4, autoPlay]);
+	}, [hls, mp4, autoPlay, preload]);
 
 	useLayoutEffect(() => {
 		if (focusOnMount) playRef.current?.focus({ preventScroll: true });
@@ -814,7 +822,7 @@ export const CapPlayer = ({
 				ref={videoRef}
 				className={styles.video}
 				poster={poster}
-				preload="auto"
+				preload={autoPlay ? "auto" : preload}
 				playsInline
 				muted={startMuted}
 				loop={loop}
