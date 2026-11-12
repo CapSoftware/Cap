@@ -1,5 +1,4 @@
 import clsx from "clsx";
-import type { Metadata } from "next";
 import {
 	STORAGE_BILLING_DAYS_PER_MONTH,
 	storageMicroCreditsPerMinutePerMonth,
@@ -30,11 +29,13 @@ import {
 	TH,
 	TR,
 } from "../../_components/ui";
-import { getInfraStorageSnapshots, requireInfraApp } from "../../infra-data";
+import {
+	getInfraStorageSnapshots,
+	infraPageMetadata,
+	requireInfraApp,
+} from "../../infra-data";
 
-export const metadata: Metadata = {
-	title: "Usage | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Usage");
 
 const HISTORY_DAYS = 60;
 

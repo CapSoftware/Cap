@@ -421,6 +421,12 @@ describe("agent API contract", () => {
 		expect(columns).not.toContain("s3Key");
 		expect(columns).not.toContain("metadata");
 		expect(columns).not.toContain("storedBytes");
+		expect(listSource).toContain(
+			"eq(Db.developerVideos.externalUserId, externalUserId)",
+		);
+		expect(listSource).toContain("externalUserId} AS BINARY) = CAST(");
+		expect(listSource).not.toContain("s3Key:");
+		expect(listSource).not.toContain("metadata:");
 
 		const decoded = Schema.decodeUnknownSync(
 			Agent.AgentDeveloperVideosResponse,

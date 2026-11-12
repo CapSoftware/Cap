@@ -1,37 +1,25 @@
 import clsx from "clsx";
 import {
-	INFRA_VIDEO_STATE_LABELS,
-	type InfraVideoState,
+	INFRA_VIDEO_DISPLAY_LABELS,
+	type InfraVideoDisplayState,
 } from "@/lib/infra-video-view";
-
-export function videoStatusLabel(
-	state: InfraVideoState,
-	uploadingHere: boolean,
-) {
-	return state === "uploading" && !uploadingHere
-		? "Upload not finished"
-		: INFRA_VIDEO_STATE_LABELS[state];
-}
 
 export function VideoStatus({
 	state,
-	uploadingHere = false,
 	className,
 }: {
-	state: InfraVideoState;
-	uploadingHere?: boolean;
+	state: InfraVideoDisplayState;
 	className?: string;
 }) {
-	const working =
-		state === "processing" || (state === "uploading" && uploadingHere);
-	const stalled = state === "uploading" && !uploadingHere;
+	const working = state === "processing" || state === "uploading";
+	const unfinished = state === "unfinished";
 	return (
 		<span
 			className={clsx(
 				"inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] leading-none",
 				state === "ready" && "text-[#E8ECF4]",
 				state === "failed" && "text-[#F2A199]",
-				(working || stalled) && "text-[rgba(232,236,244,0.58)]",
+				(working || unfinished) && "text-[rgba(232,236,244,0.58)]",
 				className,
 			)}
 		>
@@ -44,10 +32,10 @@ export function VideoStatus({
 					state === "failed" && "bg-[#F2A199]",
 					working &&
 						"animate-pulse bg-[rgba(232,236,244,0.7)] motion-reduce:animate-none",
-					stalled && "shadow-[inset_0_0_0_1px_rgba(232,236,244,0.5)]",
+					unfinished && "shadow-[inset_0_0_0_1px_rgba(232,236,244,0.5)]",
 				)}
 			/>
-			{videoStatusLabel(state, uploadingHere)}
+			{INFRA_VIDEO_DISPLAY_LABELS[state]}
 		</span>
 	);
 }
