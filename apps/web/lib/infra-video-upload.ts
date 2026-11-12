@@ -341,6 +341,9 @@ export async function completeInfraUpload({
 		}
 
 		claim = await claimDeveloperVideoUpload(videoId);
+		if (!claim && (await releaseStaleUploadClaim(videoId, Date.now()))) {
+			claim = await claimDeveloperVideoUpload(videoId);
+		}
 		if (!claim) {
 			if (await videoIsRecorded(db(), videoId)) return ok({ success: true });
 			return fail(409, "This upload is already being completed");
@@ -542,6 +545,37 @@ export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
 		if (retired && (await removeStoredFile(s3Key))) removed++;
 	}
 	return removed;
+}
+
+const STALE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
+
+async function releaseStaleUploadClaim(videoId: string, now: number) {
+	return db().transaction(async (tx) => {
+		const [video] = await tx
+			.select({
+				status: developerVideos.status,
+				duration: developerVideos.duration,
+				updatedAt: developerVideos.updatedAt,
+				deletedAt: developerVideos.deletedAt,
+			})
+			.from(developerVideos)
+			.where(eq(developerVideos.id, videoId))
+			.for("update");
+		if (
+			!video ||
+			video.deletedAt ||
+			video.status !== "processing" ||
+			video.duration !== null ||
+			now - video.updatedAt.getTime() < STALE_UPLOAD_CLAIM_MS
+		) {
+			return false;
+		}
+		await tx
+			.update(developerVideos)
+			.set({ status: "uploading", processing: null })
+			.where(eq(developerVideos.id, videoId));
+		return true;
+	});
 }
 
 const ALREADY_RECORDED = { allowed: true } as const;
