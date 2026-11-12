@@ -92,12 +92,17 @@ const toPosition = (meter: Meter, value: number) => {
 	return Math.min(STEPS, Math.max(1, Math.round(position)));
 };
 
-const valueAfterMove = (meter: Meter, from: number, requested: number) => {
-	const direction = Math.sign(requested - from);
-	let position = requested;
+const KEY_DIRECTION: Record<string, number> = {
+	ArrowRight: 1,
+	ArrowUp: 1,
+	ArrowLeft: -1,
+	ArrowDown: -1,
+};
+
+const valueAfterKey = (meter: Meter, from: number, direction: number) => {
+	let position = Math.min(STEPS, Math.max(0, from + direction));
 	let value = toValue(meter, position);
 	while (
-		direction !== 0 &&
 		position > 0 &&
 		position < STEPS &&
 		toPosition(meter, value) === from
@@ -217,10 +222,14 @@ const MeterInput = ({
 					aria-label={meter.label}
 					aria-valuetext={`${grouped.format(value)} ${meter.unit === "hr" ? "hours" : "minutes"}`}
 					onChange={(event) =>
-						onChange(
-							valueAfterMove(meter, position, Number(event.target.value)),
-						)
+						onChange(toValue(meter, Number(event.target.value)))
 					}
+					onKeyDown={(event) => {
+						const direction = KEY_DIRECTION[event.key];
+						if (!direction) return;
+						event.preventDefault();
+						onChange(valueAfterKey(meter, position, direction));
+					}}
 					className={SLIDER}
 					style={trackStyle}
 				/>
