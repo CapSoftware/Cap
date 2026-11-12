@@ -185,10 +185,13 @@ describe("creating a video", () => {
 
 		expect(response.status).toBe(200);
 		const body = await response.json();
-		expect(body).toMatchObject({
-			videoId: "video-1",
-			s3Key: "developer/app-1/video-1/video",
-		});
+		expect(body).toMatchObject({ videoId: "video-1" });
+		expect(Object.keys(body).sort()).toEqual([
+			"embedUrl",
+			"playbackId",
+			"shareUrl",
+			"videoId",
+		]);
 		expect(mocks.inserts).toEqual([
 			expect.objectContaining({ id: "video-1", appId: "app-1", name: "Demo" }),
 		]);

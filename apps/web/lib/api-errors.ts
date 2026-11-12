@@ -28,11 +28,21 @@ export const apiNotFoundBody = (pathname: string) =>
 		`Check the method and path against the OpenAPI description at ${OPENAPI_SPEC_PATH}.`,
 	);
 
+export const API_RETRY_HINT =
+	"Retry with backoff. If the error persists, contact hello@cap.so.";
+
 export const apiInternalErrorBody = () =>
+	apiErrorBody("internal_error", "Internal server error", API_RETRY_HINT);
+
+export const apiMethodNotAllowedBody = (
+	method: string,
+	pathname: string,
+	allowed: readonly string[],
+) =>
 	apiErrorBody(
-		"internal_error",
-		"Internal server error",
-		"Retry with backoff. If the error persists, contact hello@cap.so.",
+		"method_not_allowed",
+		`${method} is not allowed for ${pathname}`,
+		`Use ${allowed.join(" or ")} for this path.`,
 	);
 
 export const withJsonNotFound =

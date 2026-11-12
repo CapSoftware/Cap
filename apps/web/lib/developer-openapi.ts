@@ -1,10 +1,24 @@
 import { API_DOCS_URL } from "@/lib/api-errors";
+import {
+	MICRO_CREDITS_PER_DOLLAR,
+	UPLOAD_ADMISSION_DAYS,
+} from "@/lib/developer-pricing";
+import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const response = (name: string) => ({ $ref: `#/components/responses/${name}` });
 
+const header = (name: string) => ({ $ref: `#/components/headers/${name}` });
+
+const rateLimitHeaders = {
+	"X-RateLimit-Limit": header("RateLimitLimit"),
+	"X-RateLimit-Remaining": header("RateLimitRemaining"),
+	"X-RateLimit-Reset": header("RateLimitReset"),
+};
+
 const json = (schema: object, description: string) => ({
 	description,
+	headers: rateLimitHeaders,
 	content: { "application/json": { schema } },
 });
 
@@ -142,13 +156,14 @@ const sdkErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
 	"404": response("NotFound"),
+	"415": response("UnsupportedMediaType"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
 
 const errorSchema = {
 	type: "object",
-	required: ["error"],
+	required: ["error", "code"],
 	properties: {
 		error: {
 			type: "string",
@@ -157,7 +172,7 @@ const errorSchema = {
 		code: {
 			type: "string",
 			description:
-				"Stable machine-readable error code, such as invalid_secret_key, rate_limited or not_found.",
+				"Stable machine-readable error code, such as invalid_secret_key, video_not_found, invalid_request or rate_limited. Switch on this, not on the error text.",
 		},
 		message: {
 			type: "string",
@@ -262,10 +277,6 @@ const developerVideoSchema = {
 			type: ["integer", "null"],
 			description: "Measured frames per second.",
 		},
-		s3Key: {
-			type: ["string", "null"],
-			description: "Storage key of the uploaded file.",
-		},
 		transcriptionStatus: {
 			type: ["string", "null"],
 			enum: ["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO", null],
@@ -320,7 +331,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/infra. Development apps accept any origin, so use one to test before switching to a production app with allowed domains.",
 			"",
-			"Authentication, origin, rate-limit, unknown-route and unexpected errors include `error`, `code`, `message`, `hint` and `docs` fields. Other handler errors may include only `error`; request-body validation errors return `success: false` with the failing fields. Each key is limited to 60 requests per minute; a 429 response carries Retry-After.",
+			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with three exceptions that say to wait and repeat it: 408, 429 and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
+			"",
+			"Each key is limited to 60 requests per minute across every operation. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset (seconds until the window resets), and a 429 also carries Retry-After. The counts are kept by the server that answers, so Remaining can differ between responses: treat it as a guide and a 429 with its Retry-After as the instruction.",
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },
@@ -351,7 +364,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listDeveloperVideos",
 				summary: "List videos",
 				description:
-					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset.",
+					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown query parameter or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [
@@ -359,7 +372,15 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						name: "userId",
 						in: "query",
 						required: false,
-						description: "Only return videos created with this userId.",
+						description:
+							"Only return videos created with this userId. Videos return it as externalUserId.",
+						schema: { type: "string", maxLength: 255 },
+					},
+					{
+						name: "externalUserId",
+						in: "query",
+						required: false,
+						description: "Another name for the userId filter.",
 						schema: { type: "string", maxLength: 255 },
 					},
 					{
@@ -388,6 +409,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						},
 						"The app's videos.",
 					),
+					"400": response("BadRequest"),
 					...restErrors,
 				},
 			},
@@ -410,7 +432,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "deleteDeveloperVideo",
 				summary: "Delete a video",
 				description:
-					"Deletes a video owned by the app. It stops appearing in list and get results.",
+					"Deletes a video owned by the app. It stops appearing in list and get results. Deleting a video this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [videoIdParam],
@@ -442,7 +464,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listTranscripts",
 				summary: "List transcripts",
 				description:
-					"Returns the app's transcripts, newest first, without their text. Paginate with limit and offset until pagination.hasMore is false.",
+					"Returns the app's transcripts, newest first, without their text. Paginate with limit and offset until pagination.hasMore is false. An unknown query parameter or an out-of-range limit or offset returns 400.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
@@ -502,6 +524,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"402": response("PaymentRequired"),
 					"403": response("Forbidden"),
 					"409": response("Conflict"),
+					"415": response("UnsupportedMediaType"),
 					"503": response("Unavailable"),
 					...restErrors,
 				},
@@ -526,6 +549,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"402": response("PaymentRequired"),
 					"403": response("Forbidden"),
 					"409": response("Conflict"),
+					"415": response("UnsupportedMediaType"),
 					"503": response("Unavailable"),
 					...restErrors,
 				},
@@ -600,7 +624,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperUsage",
 				summary: "Get usage",
 				description:
-					"Returns the app's remaining credit balance, the count and total minutes of its videos, its standing, what it needs to take an upload and what storage costs it per day.",
+					"Returns the app's remaining credit balance, the count and total minutes of its videos, its standing, what it needs to take an upload, what storage costs it per day and the rates those costs are worked out from.",
 				tags: ["Usage"],
 				security: secretAuth,
 				responses: {
@@ -620,7 +644,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				requestBody: jsonBody("CreateVideoRequest"),
 				responses: {
 					"200": json(ref("CreateVideoResponse"), "The created video."),
-					"402": response("PaymentRequired"),
+					"402": response("UploadPaymentRequired"),
 					...sdkErrors,
 				},
 			},
@@ -646,7 +670,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "presignSdkUploadPart",
 				summary: "Presign an upload part",
 				description:
-					"Returns a presigned URL. PUT the bytes for this part to it and keep the ETag response header for completeSdkUpload.",
+					"Returns a presigned URL. PUT the bytes for this part to it and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes).",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("PresignPartRequest"),
@@ -662,13 +686,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag) or part_too_small (a part other than the last is under 5 MB), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
 				responses: {
 					"200": json(ref("Success"), "The upload completed."),
-					"402": response("PaymentRequired"),
+					"402": response("UploadPaymentRequired"),
 					"409": response("CompletionInProgress"),
 					...sdkErrors,
 				},
@@ -678,7 +702,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			post: {
 				operationId: "abortSdkUpload",
 				summary: "Abort a multipart upload",
-				description: "Cancels an unfinished upload and discards its parts.",
+				description:
+					"Cancels an unfinished upload and discards its parts. Returns 404 with code upload_not_found when no open upload matches the uploadId, which means there is nothing left to abort.",
 				tags: ["SDK"],
 				security: publicAuth,
 				requestBody: jsonBody("AbortUploadRequest"),
@@ -710,14 +735,78 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 		schemas: {
 			Error: errorSchema,
 			ValidationError: {
-				type: "object",
-				required: ["success", "error"],
-				properties: {
-					success: { type: "boolean", const: false },
-					error: {
+				allOf: [
+					ref("Error"),
+					{
 						type: "object",
-						description: "Zod validation error describing the failing fields.",
-						additionalProperties: true,
+						required: ["issues"],
+						properties: {
+							code: { type: "string", const: "invalid_request" },
+							issues: {
+								type: "array",
+								description: "One entry for each failing field.",
+								items: {
+									type: "object",
+									required: ["path", "message"],
+									additionalProperties: true,
+									properties: {
+										path: {
+											type: "array",
+											items: { type: ["string", "number"] },
+											description: "Where the field is in the request.",
+										},
+										message: { type: "string" },
+										code: { type: "string" },
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+			UploadPaymentRequired: {
+				type: "object",
+				required: [
+					"error",
+					"code",
+					"message",
+					"standing",
+					"pausesAt",
+					"balanceMicroCredits",
+					"requiredMicroCredits",
+					"shortfallMicroCredits",
+				],
+				properties: {
+					error: { type: "string" },
+					code: {
+						type: "string",
+						enum: ["no_account", "out_of_credit", "insufficient_credits"],
+						description:
+							"out_of_credit when the app is not in good standing, insufficient_credits when the balance does not cover the upload rule, no_account when the app has no credit account.",
+					},
+					message: {
+						type: "string",
+						description: "Says how much to add before uploading.",
+					},
+					standing: { type: "string", enum: ["active", "grace", "paused"] },
+					pausesAt: {
+						type: ["string", "null"],
+						format: "date-time",
+						description: "When playback pauses. Null while active.",
+					},
+					balanceMicroCredits: { type: "integer" },
+					requiredMicroCredits: {
+						type: "integer",
+						description: "Balance needed before this upload is accepted.",
+					},
+					shortfallMicroCredits: {
+						type: "integer",
+						description: "How much to add: required minus balance.",
+					},
+					fileRemoved: {
+						type: "boolean",
+						description:
+							"Only on completeSdkUpload, and only true: the assembled file was removed, so upload it again after adding credit.",
 					},
 				},
 			},
@@ -855,10 +944,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"balanceMicroCredits",
 					"balanceDollars",
 					"totalVideos",
+					"uploadingVideos",
 					"totalDurationMinutes",
 					"standing",
 					"upload",
 					"storage",
+					"rates",
 				],
 				properties: {
 					balanceMicroCredits: {
@@ -869,7 +960,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						type: "string",
 						description: "Remaining balance in dollars, two decimals.",
 					},
-					totalVideos: { type: "integer" },
+					totalVideos: {
+						type: "integer",
+						description:
+							"Videos whose upload completed. Created videos still waiting for their file are counted in uploadingVideos.",
+					},
+					uploadingVideos: {
+						type: "integer",
+						description:
+							"Videos that were created and have not completed an upload.",
+					},
 					totalDurationMinutes: { type: "number" },
 					standing: {
 						type: "object",
@@ -955,6 +1055,45 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							},
 						},
 					},
+					rates: {
+						type: "object",
+						description:
+							"The prices and rules the other fields are built from.",
+						required: [
+							"microCreditsPerDollar",
+							"storageDollarsPer1000MinutesPerMonth",
+							"speechDollarsPerHour",
+							"uploadAdmissionDays",
+						],
+						properties: {
+							microCreditsPerDollar: {
+								type: "integer",
+								const: MICRO_CREDITS_PER_DOLLAR,
+							},
+							storageDollarsPer1000MinutesPerMonth: {
+								type: "object",
+								description:
+									"Dollars to store 1,000 minutes for a 30 day month, by resolution tier. Storage is charged daily.",
+								required: [...INFRA_RESOLUTION_TIERS],
+								properties: Object.fromEntries(
+									INFRA_RESOLUTION_TIERS.map((tier) => [
+										tier,
+										{ type: "number" },
+									]),
+								),
+							},
+							speechDollarsPerHour: {
+								type: "number",
+								description: "Dollars to transcribe one hour of audio.",
+							},
+							uploadAdmissionDays: {
+								type: "integer",
+								const: UPLOAD_ADMISSION_DAYS,
+								description:
+									"An upload is accepted when the balance covers this many days of storage for everything the app stores.",
+							},
+						},
+					},
 				},
 			},
 			CreateVideoRequest: {
@@ -981,11 +1120,10 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			},
 			CreateVideoResponse: {
 				type: "object",
-				required: ["videoId", "s3Key", "shareUrl", "embedUrl"],
+				required: ["videoId", "playbackId", "shareUrl", "embedUrl"],
 				properties: {
 					videoId: { type: "string" },
 					playbackId: { type: "string" },
-					s3Key: { type: "string" },
 					shareUrl: {
 						type: "string",
 						format: "uri",
@@ -1044,6 +1182,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					uploadId: { type: "string" },
 					parts: {
 						type: "array",
+						minItems: 1,
+						description:
+							"Every uploaded part. Each part except the last must be at least 5 MB.",
 						items: {
 							type: "object",
 							required: ["partNumber", "etag", "size"],
@@ -1074,21 +1215,21 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			},
 		},
 		responses: {
-			BadRequest: {
-				description: "The request body failed validation.",
-				content: {
-					"application/json": {
-						schema: { oneOf: [ref("ValidationError"), ref("Error")] },
-					},
-				},
-			},
+			BadRequest: json(
+				{ anyOf: [ref("ValidationError"), ref("Error")] },
+				"The request is malformed or failed validation. The code says which: invalid_json, invalid_request (with issues), or a code specific to the operation.",
+			),
 			Unauthorized: json(
 				ref("Error"),
 				"The API key is missing, invalid or revoked.",
 			),
 			PaymentRequired: json(
 				ref("Error"),
-				"The app is out of credit or its balance does not cover 7 days of storage. The body carries code, message, standing, pausesAt, balanceMicroCredits, requiredMicroCredits and shortfallMicroCredits. For transcripts the code is out_of_credit when the app is not in good standing and insufficient_credits when the available balance is under the minimum, and the message says how much to add.",
+				"The app cannot start a transcript. The code is out_of_credit when the app is not in good standing and insufficient_credits when the available balance is under the minimum, and the message says how much to add.",
+			),
+			UploadPaymentRequired: json(
+				ref("UploadPaymentRequired"),
+				"The app is out of credit or its balance does not cover 7 days of storage. The body says how much is needed.",
 			),
 			Forbidden: json(
 				ref("Error"),
@@ -1096,7 +1237,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			NotFound: json(
 				ref("Error"),
-				"The video, transcript or route does not exist.",
+				"The video, transcript, upload or route does not exist. The code is video_not_found, transcript_not_found, upload_not_found or not_found.",
+			),
+			UnsupportedMediaType: json(
+				ref("Error"),
+				"The body was sent without Content-Type: application/json (code unsupported_media_type).",
 			),
 			Conflict: json(
 				ref("Error"),
@@ -1112,24 +1257,41 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			UploadCompleted: json(
 				ref("Error"),
-				"The video's upload already completed. Create a new video to upload again.",
+				"The video's upload already completed (code upload_already_completed). Create a new video to upload again.",
 			),
 			RateLimited: {
 				...json(
 					ref("Error"),
-					"More than 60 requests in a minute for this key.",
+					"More than 60 requests in a minute for this key (code rate_limited).",
 				),
 				headers: {
+					...rateLimitHeaders,
 					"Retry-After": {
-						description: "Seconds until the limit resets.",
+						description:
+							"Seconds until the server that answered accepts this key again. Another server can still be counting an earlier window, so wait again if the retry is also limited.",
 						schema: { type: "integer" },
 					},
 				},
 			},
 			InternalError: json(
 				ref("Error"),
-				"Unexpected server error. Retry with backoff.",
+				"Unexpected server error (code internal_error). Retry with backoff.",
 			),
+		},
+		headers: {
+			RateLimitLimit: {
+				description: "Requests this key may make per minute.",
+				schema: { type: "integer" },
+			},
+			RateLimitRemaining: {
+				description:
+					"Requests left in the current window on the server that answered.",
+				schema: { type: "integer" },
+			},
+			RateLimitReset: {
+				description: "Seconds until the current window resets.",
+				schema: { type: "integer" },
+			},
 		},
 	},
 });
