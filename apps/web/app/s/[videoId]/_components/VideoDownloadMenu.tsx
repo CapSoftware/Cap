@@ -15,6 +15,7 @@ import { useVideoDownload } from "./use-video-download";
 export function VideoDownloadMenu({
 	videoId,
 	hasEdits,
+	showAudio = true,
 	align = "end",
 	triggerClassName,
 	triggerLabel = "Video options",
@@ -22,6 +23,7 @@ export function VideoDownloadMenu({
 }: {
 	videoId: Video.VideoId;
 	hasEdits: boolean;
+	showAudio?: boolean;
 	align?: "start" | "center" | "end";
 	triggerClassName?: string;
 	triggerLabel?: string;
@@ -78,14 +80,18 @@ export function VideoDownloadMenu({
 						<span className="text-sm text-gray-12">Download video</span>
 					</DropdownMenuItem>
 				)}
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					className="flex gap-2 items-center"
-					onClick={() => downloadAudio()}
-				>
-					<AudioLines className="size-3.5 shrink-0" aria-hidden />
-					<span className="text-sm text-gray-12">Download audio</span>
-				</DropdownMenuItem>
+				{showAudio && (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem
+							className="flex gap-2 items-center"
+							onClick={() => downloadAudio()}
+						>
+							<AudioLines className="size-3.5 shrink-0" aria-hidden />
+							<span className="text-sm text-gray-12">Download audio</span>
+						</DropdownMenuItem>
+					</>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

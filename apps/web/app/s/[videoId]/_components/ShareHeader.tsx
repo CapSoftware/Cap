@@ -1319,16 +1319,18 @@ export const ShareHeader = ({
 																	</p>
 																</DropdownMenuItem>
 															)}
-															<DropdownMenuItem
-																onClick={() => downloadAudio()}
-																disabled={isDownloading}
-																className="flex items-center gap-2 rounded-lg"
-															>
-																<AudioLines className="size-3.5" />
-																<p className="text-sm text-gray-12">
-																	Download audio
-																</p>
-															</DropdownMenuItem>
+															{!data.isScreenshot && (
+																<DropdownMenuItem
+																	onClick={() => downloadAudio()}
+																	disabled={isDownloading}
+																	className="flex items-center gap-2 rounded-lg"
+																>
+																	<AudioLines className="size-3.5" />
+																	<p className="text-sm text-gray-12">
+																		Download audio
+																	</p>
+																</DropdownMenuItem>
+															)}
 														</>
 													)}
 													<DropdownMenuSeparator />
@@ -1349,23 +1351,37 @@ export const ShareHeader = ({
 									{/* Space and org members can download someone else's
 									    Cap, and they never see "Manage Cap", so the action
 									    has to stand on its own for them. */}
-									{!isOwner && canDownload && (
-										<VideoDownloadMenu
-											videoId={data.id}
-											hasEdits={hasEdits}
-											triggerLabel="Download"
-											triggerClassName={clsx(
-												ACTION_BAR_BUTTON_CLASS,
-												"flex items-center justify-center border border-gray-5 bg-gray-3 text-gray-12 transition hover:bg-gray-6",
-											)}
-											trigger={
-												<>
-													<Download className="size-3.5" aria-hidden />
-													Download
-												</>
-											}
-										/>
-									)}
+									{!isOwner &&
+										canDownload &&
+										(hasEdits || !data.isScreenshot ? (
+											<VideoDownloadMenu
+												videoId={data.id}
+												hasEdits={hasEdits}
+												showAudio={!data.isScreenshot}
+												triggerLabel="Download"
+												triggerClassName={clsx(
+													ACTION_BAR_BUTTON_CLASS,
+													"flex items-center justify-center border border-gray-5 bg-gray-3 text-gray-12 transition hover:bg-gray-6",
+												)}
+												trigger={
+													<>
+														<Download className="size-3.5" aria-hidden />
+														Download
+													</>
+												}
+											/>
+										) : (
+											<Button
+												variant="gray"
+												size="xs"
+												className={ACTION_BAR_BUTTON_CLASS}
+												disabled={isDownloading}
+												onClick={() => download("current")}
+											>
+												<Download className="size-3.5 text-gray-12" />
+												Download
+											</Button>
+										))}
 								</div>
 							</div>
 						)}

@@ -1,5 +1,7 @@
 import type { VideosPolicy as VideosPolicyService } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
+import type { HttpApi } from "@effect/platform";
+import type { Layer as EffectLayer } from "effect";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	verifiedPasswords: [] as string[],
 	mediaServerConfigured: true,
 	audioRateLimited: false,
+	audioCheckRateLimited: false,
 	hasAudio: vi.fn(),
 	stream: vi.fn(),
 }));
@@ -103,12 +106,15 @@ vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: {
 		VIEWER_DOWNLOAD: "rl_viewer_download",
 		AUDIO_DOWNLOAD: "rl_audio_download",
+		AUDIO_DOWNLOAD_CHECK: "rl_audio_download_check",
 	},
 	isRateLimited: (ruleId: string) =>
 		Promise.resolve(
 			ruleId === "rl_audio_download"
 				? mocks.audioRateLimited
-				: mocks.rateLimited,
+				: ruleId === "rl_audio_download_check"
+					? mocks.audioCheckRateLimited
+					: mocks.rateLimited,
 		),
 }));
 vi.mock("@/lib/media-client", () => ({
@@ -118,7 +124,14 @@ vi.mock("@/lib/media-client", () => ({
 }));
 vi.mock("@/lib/server", async () => {
 	const backend = await import("@cap/web-backend");
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
 	return {
+		apiToHandler: (api: EffectLayer.Layer<HttpApi.Api>) =>
+			api.pipe(
+				Layer.merge(HttpServer.layerContext),
+				HttpApiBuilder.toWebHandler,
+			).handler,
 		runPromise: <A, E>(
 			effect: Effect.Effect<
 				A,
@@ -178,9 +191,7 @@ const setVideo = ({
 };
 
 const callRoute = (signal?: AbortSignal) =>
-	GET(new Request(`https://cap.example${AUDIO_URL}`, { signal }), {
-		params: Promise.resolve({ videoId: "video" }),
-	} as Parameters<typeof GET>[1]);
+	GET(new Request(`https://cap.example${AUDIO_URL}`, { signal }));
 
 const streamOf = (text: string) =>
 	new ReadableStream<Uint8Array>({
@@ -202,6 +213,7 @@ beforeEach(() => {
 	mocks.verifiedPasswords = [];
 	mocks.mediaServerConfigured = true;
 	mocks.audioRateLimited = false;
+	mocks.audioCheckRateLimited = false;
 	mocks.sign.mockReset();
 	mocks.access.mockReset();
 	mocks.hasAudio.mockReset();
@@ -302,6 +314,18 @@ describe("getVideoAudioDownloadInfo", () => {
 		expect(mocks.hasAudio).not.toHaveBeenCalled();
 	});
 
+	it("rate limits audio-track checks for owners and members", async () => {
+		mocks.viewer = member;
+		mocks.isMember = true;
+		mocks.audioCheckRateLimited = true;
+		setVideo();
+		expect(await getVideoAudioDownloadInfo(VIDEO)).toEqual({
+			success: false,
+			error: "Too many downloads. Please wait a moment and try again.",
+		});
+		expect(mocks.hasAudio).not.toHaveBeenCalled();
+	});
+
 	it("names the file after the video", async () => {
 		setVideo({ name: "Q4 planning: draft" });
 		expect(await getVideoAudioDownloadInfo(VIDEO)).toMatchObject({
@@ -340,7 +364,7 @@ describe("GET /api/videos/[videoId]/audio", () => {
 		mocks.stream.mockResolvedValue({ status: "no-audio" });
 		const response = await callRoute();
 		expect(response.status).toBe(422);
-		expect(await response.json()).toEqual({
+		expect(await response.json()).toMatchObject({
 			error: "This video has no audio to download.",
 		});
 	});

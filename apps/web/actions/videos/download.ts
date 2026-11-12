@@ -11,6 +11,7 @@ import {
 	checkHasAudioTrackViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { resolveVideoAudioSource } from "@/lib/video-audio-download";
 import {
@@ -240,6 +241,15 @@ export async function getVideoAudioDownloadInfo(
 	}
 
 	const user = await getCurrentUser();
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.AUDIO_DOWNLOAD_CHECK, { key: user?.id })
+	) {
+		return {
+			success: false,
+			error: "Too many downloads. Please wait a moment and try again.",
+		};
+	}
+
 	const source = await resolveVideoAudioSource(videoId, user);
 	if (!source.success) {
 		return { success: false, error: source.error };
