@@ -4,9 +4,7 @@ import { classNames } from "@cap/utils/helpers";
 import { type FormEvent, useState, useTransition } from "react";
 import { sendDownloadLink } from "@/actions/send-download-link";
 import { trackEvent } from "@/app/utils/analytics";
-import { AppleGlyph } from "@/components/pages/HomeTwo/glyphs";
-import { BTN_PRIMARY, BTN_SECONDARY } from "@/components/pages/HomeTwo/theme";
-import { APP_STORE_URL } from "@/lib/download";
+import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
 
 const INPUT =
 	"h-[48px] w-full rounded-[12px] border border-[#D3DCE6] bg-white px-4 text-[16px] text-[#111111] placeholder:text-[rgba(17,17,17,0.4)] focus:border-[#3F7FCD] focus:outline-none focus:ring-2 focus:ring-[rgba(63,127,205,0.25)]";
@@ -16,13 +14,7 @@ const HINT = "text-[14px] leading-[1.45] text-[rgba(17,17,17,0.6)]";
 const SEND_FAILED =
 	"We couldn't send that. Check your connection and try again.";
 
-const EmailDownloadLink = ({
-	sourcePage,
-	primary,
-}: {
-	sourcePage: string;
-	primary: boolean;
-}) => {
+const EmailDownloadLink = ({ sourcePage }: { sourcePage: string }) => {
 	const [email, setEmail] = useState("");
 	const [sentTo, setSentTo] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -79,7 +71,7 @@ const EmailDownloadLink = ({
 				type="submit"
 				disabled={pending}
 				className={classNames(
-					primary ? BTN_PRIMARY : BTN_SECONDARY,
+					BTN_PRIMARY,
 					"w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-60",
 				)}
 			>
@@ -96,11 +88,9 @@ const EmailDownloadLink = ({
 
 export const PhoneDownload = ({
 	sourcePage,
-	isIOS,
 	className,
 }: {
 	sourcePage: string;
-	isIOS: boolean;
 	className?: string;
 }) => (
 	<div
@@ -109,29 +99,9 @@ export const PhoneDownload = ({
 			className,
 		)}
 	>
-		{isIOS ? (
-			<a
-				href={APP_STORE_URL}
-				onClick={() =>
-					trackEvent("download_cta_clicked", {
-						source_page: sourcePage,
-						cta_location: "app_store",
-						target: "app_store",
-						target_url: APP_STORE_URL,
-						detected_platform: "ios",
-					})
-				}
-				className={classNames(BTN_PRIMARY, "w-full")}
-			>
-				<AppleGlyph className="mr-2.5 size-[19px]" />
-				Get Cap for iPhone
-			</a>
-		) : null}
 		<p className={`${HINT} text-center`}>
-			{isIOS
-				? "Recording on a computer? Send yourself the desktop app."
-				: "Cap runs on Mac, Windows and Linux. Send the link to your computer."}
+			Cap runs on Mac, Windows and Linux. Send the link to your computer.
 		</p>
-		<EmailDownloadLink sourcePage={sourcePage} primary={!isIOS} />
+		<EmailDownloadLink sourcePage={sourcePage} />
 	</div>
 );

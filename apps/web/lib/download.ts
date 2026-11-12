@@ -1,6 +1,3 @@
-export const APP_STORE_URL =
-	"https://apps.apple.com/app/cap-screen-recorder/id6793919856";
-
 export type DownloadFamily = "macos" | "windows" | "linux";
 
 export type DownloadTarget = {

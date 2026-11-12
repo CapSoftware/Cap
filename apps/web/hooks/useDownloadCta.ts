@@ -30,7 +30,6 @@ export const useDownloadCta = () => {
 	return {
 		detected,
 		isPhone,
-		isIOS,
 		family,
 		platformName: FAMILY_NAME[family],
 		installerUrl,

@@ -72,7 +72,6 @@ export const DownloadStartedPage = ({ platform }: { platform: string }) => {
 									</p>
 									<PhoneDownload
 										sourcePage="download_started"
-										isIOS={device.isIOS}
 										className="mt-9"
 									/>
 								</>

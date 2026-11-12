@@ -16,7 +16,6 @@ vi.mock("@/app/utils/analytics", () => ({
 }));
 
 import { PhoneDownload } from "@/components/download/PhoneDownload";
-import { APP_STORE_URL } from "@/lib/download";
 
 describe("PhoneDownload", () => {
 	let root: Root;
@@ -36,11 +35,9 @@ describe("PhoneDownload", () => {
 		vi.unstubAllGlobals();
 	});
 
-	const render = (isIOS: boolean) =>
+	const render = () =>
 		act(async () =>
-			root.render(
-				createElement(PhoneDownload, { sourcePage: "home_header", isIOS }),
-			),
+			root.render(createElement(PhoneDownload, { sourcePage: "home_header" })),
 		);
 
 	const submit = async (email: string) => {
@@ -62,19 +59,15 @@ describe("PhoneDownload", () => {
 		});
 	};
 
-	it("offers the App Store only on iOS", async () => {
-		await render(true);
-		expect(
-			container.querySelector(`a[href="${APP_STORE_URL}"]`),
-		).not.toBeNull();
-		await render(false);
-		expect(container.querySelector(`a[href="${APP_STORE_URL}"]`)).toBeNull();
+	it("offers the email form and no store link", async () => {
+		await render();
 		expect(container.querySelector("form")).not.toBeNull();
+		expect(container.querySelector("a")).toBeNull();
 	});
 
 	it("confirms where the link was sent", async () => {
 		sendDownloadLinkMock.mockResolvedValue({ success: true });
-		await render(false);
+		await render();
 		await submit("user@example.com");
 		expect(sendDownloadLinkMock).toHaveBeenCalledWith("user@example.com");
 		expect(container.querySelector("form")).toBeNull();
@@ -91,7 +84,7 @@ describe("PhoneDownload", () => {
 			success: false,
 			error: "You've sent too many requests. Please try again later.",
 		});
-		await render(false);
+		await render();
 		await submit("user@example.com");
 		expect(container.querySelector('[role="alert"]')?.textContent).toBe(
 			"You've sent too many requests. Please try again later.",
@@ -105,7 +98,7 @@ describe("PhoneDownload", () => {
 
 	it("asks for a retry when the request never reaches the server", async () => {
 		sendDownloadLinkMock.mockRejectedValue(new TypeError("Failed to fetch"));
-		await render(false);
+		await render();
 		await submit("user@example.com");
 		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
 			"try again",
@@ -119,7 +112,7 @@ describe("PhoneDownload", () => {
 			new TypeError("Failed to fetch"),
 		);
 		sendDownloadLinkMock.mockResolvedValueOnce({ success: true });
-		await render(false);
+		await render();
 		await submit("user@example.com");
 		expect(container.querySelector('[role="alert"]')).not.toBeNull();
 		await submit("user@example.com");

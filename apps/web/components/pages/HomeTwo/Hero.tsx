@@ -9,7 +9,6 @@ import { useRef } from "react";
 import { trackEvent } from "@/app/utils/analytics";
 import { PhoneDownload } from "@/components/download/PhoneDownload";
 import { LoomMark } from "@/components/icons/LoomMark";
-import { APP_STORE_URL } from "@/lib/download";
 import { CapRecorderWindow } from "./demo/CapRecorderWindow";
 import { LinkNotification } from "./demo/CapSurfaces";
 import { MenuBar } from "./demo/MacDesktop";
@@ -123,14 +122,12 @@ export const Hero = () => {
 				className="pointer-events-none absolute bottom-0 left-0 size-px"
 			/>
 			<div className="relative mx-auto flex max-w-[1020px] flex-col items-center text-center">
-				<a
-					href={APP_STORE_URL}
-					target="_blank"
-					rel="noopener noreferrer"
+				<Link
+					href="/blog/rebuilding-cap-in-gpui"
 					onClick={() =>
 						trackEvent("release_notice_clicked", {
 							source_page: "home_hero",
-							release: "ios-app",
+							release: "v0.6.1",
 						})
 					}
 					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
@@ -138,12 +135,12 @@ export const Hero = () => {
 					<span className="rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111]">
 						New
 					</span>
-					<span className="truncate">Cap for iPhone is here</span>
+					<span className="truncate">Cap's migration to GPUI</span>
 					<span className="hidden text-white/60 transition-colors duration-200 group-hover:text-white sm:inline">
-						Get it on the App Store
+						Read the deep dive
 					</span>
 					<ArrowRight className="size-3.5 text-white/70 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-white" />
-				</a>
+				</Link>
 				<HeroHeadline />
 
 				<p
@@ -162,7 +159,6 @@ export const Hero = () => {
 				>
 					<PhoneDownload
 						sourcePage="home_header"
-						isIOS={cta.isIOS}
 						className={classNames(
 							desktopOnly ? "hidden" : "",
 							phoneOnly ? "" : "sm:hidden",

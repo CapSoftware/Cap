@@ -11,7 +11,7 @@ import {
 	CAP_CHROME_EXTENSION_URL,
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
-import { APP_STORE_URL, getDownloadStartedUrl } from "@/lib/download";
+import { getDownloadStartedUrl } from "@/lib/download";
 import { LAST_TAURI_VERSION } from "@/utils/native-release";
 import {
 	getDownloadButtonText,
@@ -194,7 +194,7 @@ export const DownloadPage = ({
 				<div className="flex flex-col justify-center items-center space-y-4 fade-in-up animate-delay-2">
 					<div className="flex flex-col items-center space-y-4">
 						{isPhone ? (
-							<PhoneDownload sourcePage="download_page" isIOS={isIOS} />
+							<PhoneDownload sourcePage="download_page" />
 						) : (
 							<>
 								<div className="flex flex-col gap-3 justify-center items-center w-full sm:flex-row sm:gap-4">
@@ -290,19 +290,6 @@ export const DownloadPage = ({
 						Other download options:
 					</h3>
 					<div className="flex flex-col gap-3 justify-center items-center md:flex-row md:flex-wrap">
-						<a
-							href={APP_STORE_URL}
-							onClick={() =>
-								trackDownloadClick(
-									"other_option_app_store",
-									APP_STORE_URL,
-									"app_store",
-								)
-							}
-							className="text-sm transition-all text-gray-10 hover:underline"
-						>
-							iPhone (App Store)
-						</a>
 						{platform !== "windows" && (
 							<a
 								href="/download/windows"
