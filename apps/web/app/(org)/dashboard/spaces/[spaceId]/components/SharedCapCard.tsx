@@ -3,8 +3,12 @@
 import type { VideoMetadata } from "@cap/database/types";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 
@@ -78,6 +82,18 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 			? Math.max(cap.totalComments, cap.totalReactions)
 			: analytics;
 	const isOwner = userId === cap.ownerId;
+	const router = useRouter();
+	const rpc = useRpcClient();
+	const deleteCap = useEffectMutation({
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
+		onSuccess: () => {
+			toast.success("Cap deleted successfully");
+			router.refresh();
+		},
+		onError: () => {
+			toast.error("Failed to delete cap");
+		},
+	});
 
 	return (
 		<li className="list-none" onDragStart={onDragStart} onDragEnd={onDragEnd}>
@@ -94,6 +110,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				isSelected={isSelected}
 				anyCapSelected={anyCapSelected}
 				onSelectToggle={onSelectToggle}
+				onDelete={isOwner ? () => deleteCap.mutateAsync(cap.id) : undefined}
 			>
 				<div className="mb-2 space-y-1">
 					{cap.ownerName && (

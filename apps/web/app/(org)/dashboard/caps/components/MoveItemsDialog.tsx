@@ -108,7 +108,9 @@ export function MoveItemsDialog({
 						},
 					],
 		enabled: open,
-		staleTime: 30_000,
+		// Folders are created, renamed and deleted elsewhere on the page
+		// without touching this cache, so every open fetches them again.
+		staleTime: 0,
 	});
 
 	const selectedGroup = destinations.data?.find(

@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
 import { agentMarkdownResponse } from "@/lib/agent-markdown";
+import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
@@ -96,6 +97,10 @@ const rememberReferralClick = (
 
 const DUB_PROXY_PREFIX = "/_proxy/dub/";
 
+// Developer video pages are embedded on other sites, so they never set a
+// cookie, not even the referral click.
+const DEVELOPER_VIDEO_PREFIX = "/dev/";
+
 const dubProxyTarget = (path: string) => {
 	if (path === `${DUB_PROXY_PREFIX}script.js`) {
 		return "https://www.dubcdn.com/analytics/script.js";
@@ -120,6 +125,17 @@ const proxyDub = (request: NextRequest) => {
 	return NextResponse.rewrite(new URL(target), { request: { headers } });
 };
 
+// Server components cannot read the address they render for, and the Infra
+// console needs it to send a signed-out visitor back to the page they asked
+// for. The value is always set here, so one sent by a client is replaced.
+const serve = (request: NextRequest) => {
+	const { pathname, search } = request.nextUrl;
+	if (!isInfraPathname(pathname)) return NextResponse.next();
+	const headers = new Headers(request.headers);
+	headers.set(INFRA_PATH_HEADER, `${pathname}${search}`);
+	return NextResponse.next({ request: { headers } });
+};
+
 export async function proxy(request: NextRequest) {
 	const path = new URL(request.url).pathname;
 
@@ -130,6 +146,7 @@ export async function proxy(request: NextRequest) {
 	}
 
 	const response = await route(request);
+	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
 	return rememberReferralClick(
 		request,
 		isFrameProtectedPath(path) ? setFrameHeaders(response) : response,
@@ -180,6 +197,7 @@ async function route(request: NextRequest) {
 				path.startsWith("/terms") ||
 				path.startsWith("/verify-otp") ||
 				path.startsWith("/embed/") ||
+				path.startsWith(DEVELOPER_VIDEO_PREFIX) ||
 				path.startsWith("/.well-known/workflow/") ||
 				path.startsWith("/.well-known/oauth-") ||
 				path.startsWith("/.well-known/mcp") ||
@@ -189,12 +207,12 @@ async function route(request: NextRequest) {
 			process.env.NODE_ENV !== "development"
 		)
 			return NextResponse.redirect(new URL("/login", url.origin));
-		else return NextResponse.next();
+		else return serve(request);
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
 		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
-		if (!markdown) return NextResponse.next();
+		if (!markdown) return serve(request);
 		return new NextResponse(markdown.body, {
 			status: markdown.status,
 			headers: markdown.headers,

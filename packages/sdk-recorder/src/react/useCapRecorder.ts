@@ -4,10 +4,9 @@ import type { RecorderOptions, RecorderPhase, RecordingResult } from "../types";
 
 export function useCapRecorder(options: RecorderOptions) {
 	const {
-		publicKey,
+		createUpload,
 		apiBase,
 		mode,
-		userId,
 		camera,
 		microphone,
 		systemAudio,
@@ -18,16 +17,17 @@ export function useCapRecorder(options: RecorderOptions) {
 	const microphoneEnabled = microphone?.enabled;
 	const microphoneDeviceId = microphone?.deviceId;
 	const recorderRef = useRef<CapRecorder | null>(null);
+	const createUploadRef = useRef(createUpload);
+	createUploadRef.current = createUpload;
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
 	const [videoId, setVideoId] = useState<string | null>(null);
 	const [durationMs, setDurationMs] = useState(0);
 
 	useEffect(() => {
 		const recorder = new CapRecorder({
-			publicKey,
+			createUpload: () => createUploadRef.current(),
 			apiBase,
 			mode,
-			userId,
 			camera:
 				cameraEnabled !== undefined || cameraDeviceId !== undefined
 					? { enabled: cameraEnabled, deviceId: cameraDeviceId }
@@ -60,10 +60,8 @@ export function useCapRecorder(options: RecorderOptions) {
 			recorder.destroy();
 		};
 	}, [
-		publicKey,
 		apiBase,
 		mode,
-		userId,
 		cameraEnabled,
 		cameraDeviceId,
 		microphoneEnabled,

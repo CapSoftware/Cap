@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+Fixtures/media/

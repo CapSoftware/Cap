@@ -1,0 +1,154 @@
+---
+title: "Billing"
+summary: "What the Cap Developer API charges for, how credits work and what happens when they run out"
+tags: "API, Billing, Pricing"
+---
+
+The Cap Developer API is prepaid. Each app has its own credit balance, you add credit to it, and usage is drawn from it. Nothing is charged to a card unless you buy credit or switch on auto top-up.
+
+This page covers what is charged, when, and how to check it. The endpoints are in the [REST API](/docs/api/rest-api) reference.
+
+## What is charged
+
+Two things are charged: stored video and speech to text. Uploading and encoding are free.
+
+| | Price | Charged |
+|---|---|---|
+| Storage, up to 1080p | $0.85 per 1,000 minutes per month | Once a day |
+| Storage, 1440p | $1.45 per 1,000 minutes per month | Once a day |
+| Storage, 4K (2160p) | $2.80 per 1,000 minutes per month | Once a day |
+| Speech to text | $0.10 per audio hour | When a transcript completes |
+| Uploading and encoding | Free | |
+
+`GET /api/developer/v1/usage` returns the same rates in its `rates` field, so a client does not need to hard-code them.
+
+## Credits
+
+Balances are kept in micro-credits. 100,000 micro-credits are one dollar, so one micro-credit is $0.00001.
+
+Every amount in the console and the API is exact. A whole number of cents is shown with two decimals and anything else with five, so a balance of 2,999,901 micro-credits reads $29.99901 and never $30.00. Where a figure has to be rounded, what you have is rounded down and what you need is rounded up.
+
+Credit belongs to one app. It cannot be moved to another app, and deleting an app loses the credit left in it. The console shows the amount before you confirm.
+
+## Storage
+
+A video is charged for storage once it is ready to play. A video that is still uploading or encoding, or that failed, is not charged.
+
+Each video is billed by its length and its resolution tier:
+
+| Tier | Pixels (width times height) |
+|------|-----------------------------|
+| `1080p` | up to 2,073,600 |
+| `1440p` | up to 4,194,304 |
+| `2160p` | above 4,194,304 |
+
+A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`.
+
+### The daily charge
+
+A month is counted as 30 days and charged one day at a time. One day costs the monthly price of everything stored, divided by 30 and rounded down to a whole micro-credit.
+
+| Stored | Per month | Per day | Needed to upload |
+|--------|-----------|---------|------------------|
+| 2,000 minutes at 1080p | $1.70 | $0.05666 | $0.39667 |
+| 100 minutes at 1440p | $0.14500 | $0.00483 | $0.03384 |
+| 500 minutes at 4K | $1.40 | $0.04666 | $0.32667 |
+
+Days are UTC days. The charge runs at 00:41, 06:41, 12:41 and 18:41 UTC and bills each day once, on the first run that finds video stored. That one charge covers the whole day for what is stored at that moment. A video that becomes ready after the day's charge is first charged the next day, and a video deleted before the day's charge is not charged for that day.
+
+Because each day is charged separately, a 31 day month has 31 daily charges. A day that works out to less than one micro-credit is not charged.
+
+The console's Usage page lists every day billed, with the minutes and videos counted and the amount charged.
+
+### Credit needed to upload
+
+Creating or completing an upload needs an app in good standing and a balance that covers 7 days of storage for everything the app stores. Videos that are still encoding count, and when an upload completes the new video counts at its measured length. That amount is rounded up to a whole micro-credit and is never less than one, so an app with no credit cannot upload.
+
+Nothing is charged for it. It is a check, and the balance is only drawn down by the daily charge. `GET /api/developer/v1/usage` returns the amount as `upload.requiredMicroCredits` and what is missing as `upload.shortfallMicroCredits`.
+
+## Speech to text
+
+Transcription costs $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio itself, rounds its length to the nearest whole second with a minimum of one, and charges those seconds at the hourly rate, rounded down to a whole micro-credit and never less than one.
+
+| Audio | Billed as | Cost |
+|-------|-----------|------|
+| 0.4 seconds | 1 second | $0.00002 |
+| 11.76 seconds | 12 seconds | $0.00033 |
+| 754.2 seconds | 754 seconds | $0.02094 |
+| 1 hour | 3,600 seconds | $0.10 |
+| 4 hours | 14,400 seconds | $0.40 |
+
+Credit is taken once, when the transcript completes. Audio with no speech completes with empty text and is billed for its length. A transcript that fails or is deleted before it completes costs nothing.
+
+### The hold
+
+Starting a transcript needs an available balance of at least $0.01.
+
+While a transcript runs, Cap holds enough credit to pay for it: up to the cost of four hours ($0.40) until the audio is measured, then the real cost. The hold is sized from the file. A file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40.
+
+Nothing is charged for a hold. Held credit stays in your balance, and the available balance is your balance minus the holds. The daily storage charge leaves held credit alone. The full rules are under [Transcripts](/docs/api/rest-api#transcripts) in the REST API reference.
+
+## Adding credit
+
+Add credit from the app's Billing page in the console. One purchase is from $5 to $1,000, paid in US dollars, and the credit is added when the payment clears.
+
+### Codes
+
+A code is worth a fixed dollar amount. Choose "Have a code?" on the Billing page, enter it, and it lowers what you pay for that purchase. The credit you get is the amount you chose.
+
+A $5 code on a $25 purchase means you pay $20 and get $25 of credit. A code worth as much as the purchase covers it in full, and the ledger records it as "Code redeemed".
+
+A code that cannot be used is refused before checkout opens, and nothing is charged.
+
+### The Cap Pro credit
+
+Cap Pro includes $5 of credit every month. It is for any account with Cap Pro, whether you pay for it or your organization does.
+
+- It is one credit per account each calendar month, not one per app.
+- You claim it from an app's Billing page, and it goes to that app. It cannot be moved afterwards.
+- The next one can be claimed from the first day of the next month, UTC.
+- A month that is not claimed is not carried over.
+
+### Auto top-up
+
+Auto top-up adds credit from a saved card when an app's balance runs low. It is off until you switch it on, and saving a card charges nothing.
+
+- **When.** Cap checks at 00:41, 06:41, 12:41 and 18:41 UTC. If the available balance is under your threshold, the card is charged.
+- **How much.** The amount you set, from $5 to $1,000. The threshold is from $1 to $1,000. The console suggests $25 when the balance is under $5.
+- **How often.** At most one attempt in any 24 hours.
+- **How to stop.** Switch it off or remove the card on the Billing page. If a charge is declined, auto top-up switches itself off and no credit is added.
+
+## When credit runs out
+
+`GET /api/developer/v1/usage` reports the app's standing in `standing.state`.
+
+| State | What it means |
+|-------|---------------|
+| `active` | In good standing. |
+| `grace` | A daily storage charge was more than the balance. What was there was taken, uploads and new transcripts are refused, and playback continues until `standing.pausesAt`, 7 days after the app first fell short. |
+| `paused` | Playback is paused until credit is added. Videos stay stored. |
+
+Adding credit that covers one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
+
+An app that stores nothing owes nothing, so it stays `active` with a zero balance. It cannot upload or start a transcript until it has credit.
+
+## Checking what you were charged
+
+Every credit and charge is a row in the app's ledger, with the time in UTC, the amount, the balance it left and an ID you can quote.
+
+| Row | What it refers to |
+|-----|-------------------|
+| Top-up, Auto top-up | The payment |
+| Code redeemed | The checkout the code covered in full |
+| Cap Pro credit | The month it is for |
+| Storage | The UTC day it charges |
+| Transcription | The transcript ID |
+| Adjustment | A credit or correction applied by Cap |
+
+There are three ways to read it:
+
+- **Console.** The Billing page lists every row, 50 to a page.
+- **CSV.** "Export CSV" on the Billing page downloads the whole ledger for the app.
+- **API.** [`GET /api/developer/v1/transactions`](/docs/api/rest-api#list-transactions) returns the same rows with a secret key.
+
+Each row's amount and the balance beside it are exact, so the balance column adds up row by row.

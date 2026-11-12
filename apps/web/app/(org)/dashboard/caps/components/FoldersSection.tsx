@@ -6,19 +6,17 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
-import {
-	faArrowDownAZ,
-	faArrowDownWideShort,
-	faArrowUpWideShort,
-	faArrowUpZA,
-	faCheck,
-	faChevronDown,
-	faGrip,
-	faList,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowDownAZ } from "@fortawesome/free-solid-svg-icons/faArrowDownAZ";
+import { faArrowDownWideShort } from "@fortawesome/free-solid-svg-icons/faArrowDownWideShort";
+import { faArrowUpWideShort } from "@fortawesome/free-solid-svg-icons/faArrowUpWideShort";
+import { faArrowUpZA } from "@fortawesome/free-solid-svg-icons/faArrowUpZA";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
+import { faGrip } from "@fortawesome/free-solid-svg-icons/faGrip";
+import { faList } from "@fortawesome/free-solid-svg-icons/faList";
 import clsx from "clsx";
 import { useEffect, useMemo, useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import {
 	DEFAULT_FOLDER_SORT,
 	FOLDER_SORT_OPTIONS,
