@@ -710,9 +710,12 @@ export async function listTranscripts(
 			and(
 				eq(developerTranscripts.appId, appId),
 				isNull(developerTranscripts.deletedAt),
-				options.userId
-					? eq(developerTranscripts.externalUserId, options.userId)
-					: undefined,
+				options.userId === null || options.userId === undefined
+					? undefined
+					: and(
+							eq(developerTranscripts.externalUserId, options.userId),
+							sql`CAST(${developerTranscripts.externalUserId} AS BINARY) = CAST(${options.userId} AS BINARY)`,
+						),
 				options.status
 					? eq(developerTranscripts.status, options.status)
 					: undefined,

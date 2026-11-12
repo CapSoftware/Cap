@@ -63,8 +63,28 @@ function compile(condition: SQL | undefined): Predicate {
 		return params.shift();
 	};
 
+	const columnName = () => take().split(".").pop()?.replaceAll("`", "") ?? "";
+
+	const binaryComparison = (): Predicate => {
+		expect("cast");
+		expect("(");
+		const column = columnName();
+		expect("as");
+		expect("binary");
+		expect(")");
+		expect("=");
+		expect("cast");
+		expect("(");
+		const value = param();
+		expect("as");
+		expect("binary");
+		expect(")");
+		return (row) => row[column] === value;
+	};
+
 	const comparison = (): Predicate => {
-		const column = take().split(".").pop()?.replaceAll("`", "") ?? "";
+		if (peek() === "cast") return binaryComparison();
+		const column = columnName();
 		const operator = take().toLowerCase();
 		if (operator === "is") {
 			if (peek() === "not") {

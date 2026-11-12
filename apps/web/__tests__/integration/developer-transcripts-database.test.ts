@@ -619,6 +619,52 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(byOffset.length).toBe(4);
 	});
 
+	it("filters by the exact bytes of the user ID", async () => {
+		const appId = await makeApp(100_000);
+		const alice = await makeTranscript(appId, { externalUserId: "alice" });
+		await makeTranscript(appId, { externalUserId: "bob" });
+		await makeTranscript(appId, { externalUserId: null });
+
+		const listedFor = async (userId: string) =>
+			(await listTranscripts(appId, { limit: 10, userId })).transcripts.map(
+				(row) => row.id,
+			);
+
+		expect(await listedFor("alice")).toEqual([alice]);
+		for (const other of [
+			"ALICE",
+			"Alice",
+			"àlice",
+			"Alicé",
+			"alice ",
+			"alic",
+			"",
+		]) {
+			expect([other, await listedFor(other)]).toEqual([other, []]);
+		}
+	});
+
+	it("keeps user IDs that differ only by case or accent apart", async () => {
+		const appId = await makeApp(100_000);
+		const ids = ["k9Xq", "K9xQ", "k9xq", "élan", "elan"];
+		const created = new Map<string, string>();
+		for (const userId of ids) {
+			created.set(
+				userId,
+				await makeTranscript(appId, { externalUserId: userId }),
+			);
+		}
+
+		for (const userId of ids) {
+			const { transcripts, hasMore } = await listTranscripts(appId, {
+				limit: 1,
+				userId,
+			});
+			expect(transcripts.map((row) => row.id)).toEqual([created.get(userId)]);
+			expect(hasMore).toBe(false);
+		}
+	});
+
 	it("stores a long transcript and removes it on delete", async () => {
 		const appId = await makeApp(100_000);
 		const other = await makeApp(0);

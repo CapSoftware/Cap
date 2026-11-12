@@ -95,6 +95,14 @@ const idempotencyKeyParam = {
 	},
 };
 
+const uploadMaxBytes = {
+	type: "integer",
+	minimum: 1,
+	maximum: 36_000_000_000,
+	description:
+		"Largest file this token may upload, in bytes. A larger file is refused with code file_too_large, at initiateSdkUpload when it declares contentLength and at completeSdkUpload from the bytes in storage. Leave it out for no cap beyond the 36 GB limit.",
+};
+
 const transcriptOptionProperties = {
 	name: {
 		type: "string",
@@ -384,7 +392,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"The Cap Developer API lets your product record, upload and manage videos with Cap.",
 			"",
 			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos and read credit usage.",
-			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for each part, then completeSdkUpload.",
+			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for up to 50 parts at a time, then completeSdkUpload. If the token expires before the upload completes, renewUploadToken returns a new one for the same video and the upload continues with the same uploadId.",
 			"A public `cpk_` key cannot create or upload videos. Only an upload token made with the secret key can.",
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/infra.",
@@ -540,8 +548,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						name: "userId",
 						in: "query",
 						required: false,
-						description: "Only return transcripts created with this userId.",
-						schema: { type: "string", maxLength: 255 },
+						description:
+							"Only return transcripts created with exactly this userId. The match is case-sensitive and accent-sensitive. An empty value returns 400 with code invalid_user_id.",
+						schema: { type: "string", minLength: 1, maxLength: 255 },
 					},
 					{
 						name: "status",
@@ -578,7 +587,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
 				description:
-					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error.",
+					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. A field the request does not know returns 400 with code invalid_request.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -603,7 +612,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createTranscriptUpload",
 				summary: "Transcribe a file",
 				description:
-					"Creates a transcript in the uploading status and returns a signed URL. PUT the file to upload.url with a Content-Length equal to contentLength, then call startTranscript. Files can be up to 2 GB. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost.",
+					"Creates a transcript in the uploading status and returns a signed URL. PUT the file to upload.url with a Content-Length equal to contentLength, then call startTranscript. Files can be up to 2 GB. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A field the request does not know returns 400 with code invalid_request.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -738,7 +747,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createUpload",
 				summary: "Create an upload",
 				description:
-					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes or the video is deleted. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed.",
+					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes or the video is deleted. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
 				tags: ["Uploads"],
 				security: secretAuth,
 				requestBody: jsonBody("CreateUploadRequest"),
@@ -751,12 +760,35 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				},
 			},
 		},
+		"/api/developer/v1/uploads/{id}/token": {
+			post: {
+				operationId: "renewUploadToken",
+				summary: "Renew an upload token",
+				description:
+					"Returns a new upload token for a video whose upload has not completed. Call this from your server when an upload operation answers 401 with code upload_token_expired, then give the new token to the browser. The upload continues where it stopped: keep the uploadId and the ETags already collected, sign the remaining parts and call completeSdkUpload with the new token. A browser that lost its uploadId calls initiateSdkUpload, which returns the open upload again when it was opened in the last 6 hours. The new token carries only the options sent with this request, so send corsOrigin and maxBytes again if the first token had them. Earlier tokens keep working until their own expiresAt. Returns 404 with code video_not_found when the video is deleted or belongs to another app, and 409 with code upload_already_completed once the upload completed.",
+				tags: ["Uploads"],
+				security: secretAuth,
+				parameters: [videoIdParam],
+				requestBody: jsonBody("RenewUploadTokenRequest"),
+				responses: {
+					"200": json(
+						dataEnvelope(ref("UploadToken")),
+						"A new token for the same video.",
+					),
+					"400": response("BadRequest"),
+					"404": response("NotFound"),
+					"409": response("UploadCompleted"),
+					"415": response("UnsupportedMediaType"),
+					...restErrors,
+				},
+			},
+		},
 		"/api/developer/sdk/v1/upload/multipart/initiate": {
 			post: {
 				operationId: "initiateSdkUpload",
 				summary: "Start a multipart upload",
 				description:
-					"Starts an S3 multipart upload for the token's video and returns the uploadId used by the other upload operations.",
+					"Starts an S3 multipart upload for the token's video and returns the uploadId used by the other upload operations. Calling it again returns the upload that is already open when it was opened in the last 6 hours, so parts sent earlier are kept. Send contentLength to be refused before any byte is sent when the file is over the token's maxBytes or the 36 GB limit (400 with code file_too_large).",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("InitiateUploadRequest"),
@@ -770,14 +802,17 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 		"/api/developer/sdk/v1/upload/multipart/presign-part": {
 			post: {
 				operationId: "presignSdkUploadPart",
-				summary: "Presign an upload part",
+				summary: "Presign upload parts",
 				description:
-					"Returns a presigned URL. PUT the bytes for this part to it and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes).",
+					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("PresignPartRequest"),
 				responses: {
-					"200": json(ref("PresignPartResponse"), "The presigned part URL."),
+					"200": json(
+						ref("PresignPartResponse"),
+						"The presigned URL of one part, or of each part asked for.",
+					),
 					"409": response("UploadCompleted"),
 					...sdkErrors,
 				},
@@ -788,7 +823,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB or more than the token's maxBytes: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
@@ -1013,12 +1048,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			CreateTranscriptRequest: {
 				type: "object",
 				required: ["url"],
+				additionalProperties: false,
 				properties: {
 					url: {
 						type: "string",
 						format: "uri",
 						maxLength: 2048,
-						description: "Public http or https URL of an audio or video file.",
+						description:
+							"Public http or https URL of an audio or video file. The mp4Url of a ready video of this app works.",
 					},
 					...transcriptOptionProperties,
 				},
@@ -1026,6 +1063,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			CreateTranscriptUploadRequest: {
 				type: "object",
 				required: ["contentLength"],
+				additionalProperties: false,
 				properties: {
 					fileName: { type: "string", maxLength: 255 },
 					contentLength: {
@@ -1350,6 +1388,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			},
 			CreateUploadRequest: {
 				type: "object",
+				additionalProperties: false,
 				properties: {
 					name: { type: "string", maxLength: 255 },
 					userId: {
@@ -1379,7 +1418,61 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						maximum: 86400,
 						default: 3600,
 						description:
-							"How long the upload token works. The upload must complete within this time.",
+							"How long the upload token works. The upload must complete within this time, or the token must be renewed with renewUploadToken.",
+					},
+					maxBytes: uploadMaxBytes,
+				},
+			},
+			RenewUploadTokenRequest: {
+				type: "object",
+				additionalProperties: false,
+				description:
+					"Options for the new token. It carries only what is sent here, not the options of the token it replaces.",
+				properties: {
+					corsOrigin: {
+						type: "string",
+						description:
+							"Exact origin of the page that uploads. Leave it out to accept any origin.",
+					},
+					timeoutSeconds: {
+						type: "integer",
+						minimum: 60,
+						maximum: 86400,
+						default: 3600,
+						description: "How long the new token works.",
+					},
+					maxBytes: uploadMaxBytes,
+				},
+			},
+			UploadToken: {
+				type: "object",
+				required: [
+					"id",
+					"videoId",
+					"token",
+					"expiresAt",
+					"corsOrigin",
+					"maxBytes",
+					"status",
+					"uploadUrl",
+				],
+				properties: {
+					id: { type: "string", description: "Equals videoId." },
+					videoId: { type: "string" },
+					token: {
+						type: "string",
+						description:
+							"New upload token (`cut_...`) for this video. It is returned once.",
+					},
+					expiresAt: { type: "string", format: "date-time" },
+					corsOrigin: { type: ["string", "null"] },
+					maxBytes: { type: ["integer", "null"] },
+					status: { type: "string", const: "uploading" },
+					uploadUrl: {
+						type: "string",
+						format: "uri",
+						description:
+							"Base URL of the upload operations: append /initiate, /presign-part, /complete or /abort.",
 					},
 				},
 			},
@@ -1391,6 +1484,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"token",
 					"expiresAt",
 					"corsOrigin",
+					"maxBytes",
 					"status",
 					"uploadUrl",
 					"playbackId",
@@ -1411,6 +1505,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 					expiresAt: { type: "string", format: "date-time" },
 					corsOrigin: { type: ["string", "null"] },
+					maxBytes: {
+						type: ["integer", "null"],
+						description:
+							"The size cap the token carries, or null when it has none beyond the 36 GB limit.",
+					},
 					status: { type: "string", const: "uploading" },
 					uploadUrl: {
 						type: "string",
@@ -1451,6 +1550,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						],
 						default: "video/mp4",
 					},
+					contentLength: {
+						type: "integer",
+						minimum: 1,
+						description:
+							"Optional size of the whole file in bytes. When it is over the token's maxBytes or the 36 GB limit, the upload is refused here instead of at completeSdkUpload. The stored size is checked at completeSdkUpload either way.",
+					},
 				},
 			},
 			InitiateUploadResponse: {
@@ -1460,7 +1565,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			},
 			PresignPartRequest: {
 				type: "object",
-				required: ["uploadId", "partNumber"],
+				required: ["uploadId"],
+				oneOf: [{ required: ["partNumbers"] }, { required: ["partNumber"] }],
 				properties: {
 					videoId: {
 						type: "string",
@@ -1468,13 +1574,50 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"Optional. The token already names the video; a different videoId returns 403 with code video_mismatch.",
 					},
 					uploadId: { type: "string" },
-					partNumber: { type: "integer", minimum: 1, maximum: 10000 },
+					partNumbers: {
+						type: "array",
+						minItems: 1,
+						maxItems: 50,
+						items: { type: "integer", minimum: 1, maximum: 10000 },
+						description:
+							"Part numbers to sign in this request. The response has parts.",
+					},
+					partNumber: {
+						type: "integer",
+						minimum: 1,
+						maximum: 10000,
+						description:
+							"One part number to sign. The response has presignedUrl.",
+					},
 				},
 			},
 			PresignPartResponse: {
-				type: "object",
-				required: ["presignedUrl"],
-				properties: { presignedUrl: { type: "string", format: "uri" } },
+				oneOf: [
+					{
+						type: "object",
+						required: ["parts"],
+						description: "Answer to a request with partNumbers.",
+						properties: {
+							parts: {
+								type: "array",
+								items: {
+									type: "object",
+									required: ["partNumber", "presignedUrl"],
+									properties: {
+										partNumber: { type: "integer" },
+										presignedUrl: { type: "string", format: "uri" },
+									},
+								},
+							},
+						},
+					},
+					{
+						type: "object",
+						required: ["presignedUrl"],
+						description: "Answer to a request with partNumber.",
+						properties: { presignedUrl: { type: "string", format: "uri" } },
+					},
+				],
 			},
 			CompleteUploadRequest: {
 				type: "object",
@@ -1567,7 +1710,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			UploadCompleted: json(
 				ref("Error"),
-				"The video's upload already completed (code upload_already_completed), so its upload token no longer works. Create a new upload to upload again.",
+				"The video's upload already completed (code upload_already_completed), so its upload token no longer works and cannot be renewed. Create a new upload to upload again.",
 			),
 			RateLimited: {
 				...json(
