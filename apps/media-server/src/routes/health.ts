@@ -10,7 +10,7 @@ import { getRuntimeReport } from "../lib/runtime-report";
 const health = new Hono();
 
 health.get("/", async (c) => {
-	const mediaEngine = getMediaEngineStatus();
+	const { version, ...mediaEngine } = getMediaEngineStatus();
 	const [, loadAvg5m, loadAvg15m] = os.loadavg();
 	const totalMemoryBytes = os.totalmem();
 	const freeMemoryBytes = os.freemem();
@@ -30,10 +30,10 @@ health.get("/", async (c) => {
 				: mediaEngine.available && resources.effectiveMax > 0
 					? "ok"
 					: "degraded",
-			mediaEngine,
+			mediaEngine: { ...mediaEngine, ...(authenticated && { version }) },
 			["ff" + "mpeg"]: {
 				available: mediaEngine.available,
-				version: mediaEngine.version,
+				...(authenticated && { version }),
 			},
 			videoEncoder: getVideoEncoderStatus(process.env, authenticated),
 			system: {
