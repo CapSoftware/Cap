@@ -13,6 +13,7 @@ import {
 } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import { getAppStorageUsage } from "@/lib/infra-storage";
+import { formatCredits, formatNeed } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
@@ -202,12 +203,6 @@ export const getInfraAppStanding = cache(
 		(await appStanding(appId, new Date())).standing,
 );
 
-const dollarsUp = (microCredits: number) =>
-	`$${(Math.ceil(Math.max(0, microCredits) / 1000) / 100).toFixed(2)}`;
-
-const dollarsDown = (microCredits: number) =>
-	`$${(Math.floor(Math.max(0, microCredits) / 1000) / 100).toFixed(2)}`;
-
 export function uploadAdmission({
 	balanceMicroCredits,
 	standing,
@@ -239,7 +234,7 @@ export function uploadAdmission({
 			...base,
 			allowed: false,
 			reason: "out_of_credit",
-			message: `This app is out of credit, so uploads are blocked. Add at least ${dollarsUp(shortfallMicroCredits)} to upload again.`,
+			message: `This app is out of credit, so uploads are blocked. Add at least ${formatNeed(shortfallMicroCredits)} to upload again.`,
 		};
 	}
 	if (shortfallMicroCredits > 0 && balanceMicroCredits <= 0) {
@@ -249,7 +244,7 @@ export function uploadAdmission({
 			reason: "insufficient_credits",
 			message:
 				usage.monthlyMicroCredits > 0
-					? `This app has no credit. Add at least ${dollarsUp(shortfallMicroCredits)} to upload, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything it stores.`
+					? `This app has no credit. Add at least ${formatNeed(shortfallMicroCredits)} to upload, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything it stores.`
 					: "This app has no credit. Add credits to start uploading.",
 		};
 	}
@@ -258,7 +253,7 @@ export function uploadAdmission({
 			...base,
 			allowed: false,
 			reason: "insufficient_credits",
-			message: `Uploading needs ${dollarsUp(requiredMicroCredits)} of credit, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything this app stores. The balance is ${dollarsDown(balanceMicroCredits)}, so add at least ${dollarsUp(shortfallMicroCredits)}.`,
+			message: `Uploading needs ${formatNeed(requiredMicroCredits)} of credit, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything this app stores. The balance is ${formatCredits(balanceMicroCredits)}, so add at least ${formatNeed(shortfallMicroCredits)}.`,
 		};
 	}
 	return { ...base, allowed: true, reason: null, message: null };
@@ -311,6 +306,19 @@ export async function getInfraUploadAdmission(
 		.admission;
 }
 
+export function infraStorageJson(
+	usage: Pick<
+		StorageUsage,
+		"minutesByTier" | "dailyMicroCredits" | "monthlyMicroCredits"
+	>,
+) {
+	return {
+		minutesByTier: usage.minutesByTier,
+		dailyMicroCredits: usage.dailyMicroCredits,
+		monthlyMicroCredits: Math.round(usage.monthlyMicroCredits),
+	};
+}
+
 export function infraBillingJson({
 	standing,
 	usage,
@@ -328,11 +336,7 @@ export function infraBillingJson({
 			shortfallMicroCredits: admission.shortfallMicroCredits,
 			message: admission.message,
 		},
-		storage: {
-			minutesByTier: usage.minutesByTier,
-			dailyMicroCredits: usage.dailyMicroCredits,
-			monthlyMicroCredits: Math.round(usage.monthlyMicroCredits),
-		},
+		storage: infraStorageJson(usage),
 	};
 }
 
