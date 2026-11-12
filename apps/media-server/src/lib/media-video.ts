@@ -10,6 +10,7 @@ import {
 	remainingTimeoutMs,
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
+import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
 import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import {
 	type HdrColor,
@@ -20,6 +21,7 @@ import {
 } from "./hdr";
 import type { VideoMetadata } from "./job-manager";
 import {
+	createGuardedMediaFetch,
 	DOWNLOAD_TIMEOUT_MS,
 	decodeThreadsFromEnv,
 	normalizeLocalPath,
@@ -52,6 +54,7 @@ import {
 	selectedVideoEncoder,
 } from "./nvenc-encoder";
 import {
+	DownloadTooLargeError,
 	downloadUrlToPathParallel,
 	parallelDownloadOptionsFromEnv,
 } from "./parallel-download";
@@ -71,6 +74,9 @@ import { fetchAllowed } from "./url-policy";
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const SHORT_CLIP_START_ALLOWANCE_MS = 10 * 60 * 1000;
+const SHORT_CLIP_FRAMES_PER_SECOND = 60;
+const SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME = 500;
 // HLS/DASH sources are pulled as many sequential segment requests rather than
 // one streamed fetch, so per-request overhead scales with video length. A
 // flat 10-minute budget is enough for typical short recordings but not for a
@@ -95,6 +101,9 @@ const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
 const MAX_DASH_SEGMENTS = 200_000;
 export const LOOM_IMPORT_MAX_BYTES = 10 * 1024 ** 3;
+// Four hours, the longest source the web app accepts, at 70 Mbit/s. Without a
+// cap a source is bounded only by the download clock, on a disk every job shares.
+export const MAX_SOURCE_DOWNLOAD_BYTES = 128 * 1024 ** 3;
 
 export type StorageUploadTarget =
 	| {
@@ -1539,13 +1548,9 @@ export async function downloadVideoToTemp(
 		if (parallel.concurrency > 1 && maxBytes === undefined) {
 			await downloadUrlToPathParallel(videoUrl, tempFile.path, {
 				...parallel,
-				// Ranged parts go through the same URL policy as a single download.
-				fetchImpl: ((input, init) =>
-					fetchAllowed(
-						input instanceof Request ? input.url : input.toString(),
-						init,
-					)) as typeof fetch,
 				signal: combinedSignal,
+				maxBytes: MAX_SOURCE_DOWNLOAD_BYTES,
+				fetchImpl: createGuardedMediaFetch(videoUrl, { fetchImpl: fetch }),
 			});
 			if (file(tempFile.path).size === 0) {
 				throw new Error("Downloaded video is empty");
@@ -1568,9 +1573,14 @@ export async function downloadVideoToTemp(
 		if (!response.body) {
 			throw new Error("No response body");
 		}
-		if (maxBytes && Number(response.headers.get("content-length")) > maxBytes) {
+		const byteLimit = maxBytes ?? MAX_SOURCE_DOWNLOAD_BYTES;
+		const tooLarge = () =>
+			maxBytes
+				? new Error("Loom imports are limited to 10 GB")
+				: new DownloadTooLargeError(byteLimit);
+		if (Number(response.headers.get("content-length")) > byteLimit) {
 			await response.body.cancel();
-			throw new Error("Loom imports are limited to 10 GB");
+			throw tooLarge();
 		}
 
 		const reader = response.body.getReader();
@@ -1582,9 +1592,7 @@ export async function downloadVideoToTemp(
 				const { done, value } = await reader.read();
 				if (done) break;
 				downloadedBytes += value.byteLength;
-				if (maxBytes && downloadedBytes > maxBytes) {
-					throw new Error("Loom imports are limited to 10 GB");
-				}
+				if (downloadedBytes > byteLimit) throw tooLarge();
 				writer.write(value);
 			}
 			writerEnded = true;
@@ -1636,9 +1644,33 @@ function needsAudioTranscode(metadata: VideoMetadata): boolean {
 	return sourceHasAudio(metadata) && metadata.audioCodec !== "aac";
 }
 
+// With the frame size known, a short clip gets a deadline sized to its work
+// instead of the full base: ten minutes to start, then half a second for every
+// megapixel of every frame, counted at 60 frames a second because the probed
+// rate of a variable frame rate source can be far too low.
+function shortClipTimeoutMs(
+	durationSeconds: number,
+	frame: { width: number; height: number },
+): number {
+	const megapixels = (frame.width * frame.height) / 1_000_000;
+	if (!Number.isFinite(megapixels) || megapixels <= 0) {
+		return Number.POSITIVE_INFINITY;
+	}
+	return (
+		SHORT_CLIP_START_ALLOWANCE_MS +
+		Math.ceil(
+			durationSeconds *
+				SHORT_CLIP_FRAMES_PER_SECOND *
+				megapixels *
+				SHORT_CLIP_MS_PER_MEGAPIXEL_FRAME,
+		)
+	);
+}
+
 export function getProcessTimeoutMs(
 	durationSeconds: number,
 	baseTimeoutMs: number,
+	frame?: { width: number; height: number },
 ): number {
 	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
 		return baseTimeoutMs;
@@ -1647,7 +1679,9 @@ export function getProcessTimeoutMs(
 	return Math.min(
 		MAX_PROCESS_TIMEOUT_MS,
 		Math.max(
-			baseTimeoutMs,
+			frame
+				? Math.min(baseTimeoutMs, shortClipTimeoutMs(durationSeconds, frame))
+				: baseTimeoutMs,
 			Math.ceil(durationSeconds * PROCESS_TIMEOUT_PER_SECOND_MS),
 		),
 	);
@@ -1999,6 +2033,7 @@ export async function processVideo(
 	const processTimeoutMs = getProcessTimeoutMs(
 		metadata.duration,
 		opts.timeoutMs,
+		metadata,
 	);
 	const capcodec =
 		videoTranscode && !normalizeH264Level && hdr === null
@@ -2258,6 +2293,7 @@ export async function runTranscodeCommand(
 	processTimeoutMs: number,
 	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
+	stallWindows?: EncodeStallWindows,
 ): Promise<void> {
 	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
@@ -2278,6 +2314,12 @@ export async function runTranscodeCommand(
 	const stderrLines: string[] = [];
 	const maxStderrLines = 50;
 	const errorLines: string[] = [];
+	const progressWatch = watchEncodeProgress(outputPath, stallWindows);
+	let stallError: unknown;
+	progressWatch.stalled.catch((error: unknown) => {
+		stallError = error;
+		void terminateProcess(proc);
+	});
 
 	try {
 		await withTimeout(
@@ -2305,6 +2347,7 @@ export async function runTranscodeCommand(
 								stderrLines.shift();
 							}
 							collectFfmpegErrorLine(errorLines, line);
+							progressWatch.observe(line);
 							const progress = parseProgressFromStderr(line, totalDurationUs);
 							if (progress !== null && onProgress) {
 								onProgress(progress, `Encoding: ${Math.round(progress)}%`);
@@ -2331,7 +2374,10 @@ export async function runTranscodeCommand(
 			processTimeoutMs,
 			() => terminateProcess(proc),
 		);
+	} catch (error) {
+		throw stallError ?? error;
 	} finally {
+		progressWatch.stop();
 		if (abortCleanup) {
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}

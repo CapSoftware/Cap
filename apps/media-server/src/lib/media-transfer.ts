@@ -4,13 +4,13 @@ import { open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { createGuardedMediaFetch } from "./media-address-guard";
 import {
 	ensureInstanceDir,
 	getInstanceDir,
 	releaseInstanceDir,
 	sweepOrphanedInstanceDirs,
 } from "./temp-files";
-import { fetchAllowed } from "./url-policy";
 
 const targetSchema = z.object({
 	version: z.literal(1),
@@ -499,7 +499,8 @@ export async function fetchMedia(
 		init.signal ?? undefined,
 		headers.get("if-match") ?? undefined,
 	);
-	if (!local) return fetchAllowed(input, init);
+	if (!local)
+		return createGuardedMediaFetch(input, { fetchImpl: fetch })(input, init);
 	const range = headers.get("range");
 	const match = range?.match(/^bytes=(\d+)-(\d*)$/);
 	const start = match ? Number(match[1]) : 0;

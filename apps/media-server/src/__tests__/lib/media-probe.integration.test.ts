@@ -84,11 +84,9 @@ describe("mediaProbe integration tests", () => {
 			await expectRejected(probeVideo("file:///nonexistent/path/to/video.mp4"));
 		});
 
-		test("throws error for invalid URL", async () => {
+		test("throws error for an unresolvable host", async () => {
 			await expectRejected(
-				probeVideo(
-					"https://invalid-domain-that-does-not-exist.example/video.mp4",
-				),
+				probeVideo("https://unresolvable.invalid/video.mp4"),
 			);
 		});
 
@@ -464,7 +462,7 @@ describe("mediaProbe integration tests", () => {
 	describe("checkVideoAccessible", () => {
 		test("returns false for non-existent http URL", async () => {
 			const accessible = await checkVideoAccessible(
-				"https://invalid-domain-that-does-not-exist.example/video.mp4",
+				"https://unresolvable.invalid/video.mp4",
 			);
 			expect(accessible).toBe(false);
 		});

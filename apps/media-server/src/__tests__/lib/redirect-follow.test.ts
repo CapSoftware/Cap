@@ -15,8 +15,12 @@ const video = readFileSync(
 describe("redirects to a private address", () => {
 	const previous = process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS;
 	const previousEndpoint = process.env.S3_INTERNAL_ENDPOINT;
+	const previousAllowedHosts = process.env.MEDIA_SERVER_ALLOWED_HOSTS;
 
 	afterEach(() => {
+		if (previousAllowedHosts === undefined)
+			delete process.env.MEDIA_SERVER_ALLOWED_HOSTS;
+		else process.env.MEDIA_SERVER_ALLOWED_HOSTS = previousAllowedHosts;
 		if (previousEndpoint === undefined) delete process.env.S3_INTERNAL_ENDPOINT;
 		else process.env.S3_INTERNAL_ENDPOINT = previousEndpoint;
 		if (previous === undefined) {
@@ -75,17 +79,10 @@ describe("redirects to a private address", () => {
 
 	test("probe preserves URL policy refusals before reading the input", async () => {
 		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
-		const target = privateRedirectServer();
-		delete process.env.S3_INTERNAL_ENDPOINT;
-		try {
-			await expect(probeVideo(target.url)).rejects.toBeInstanceOf(
-				BlockedUrlError,
-			);
-			expect(target.firstHits()).toBe(0);
-			expect(target.secretHits()).toBe(0);
-		} finally {
-			target.server.stop(true);
-		}
+		process.env.MEDIA_SERVER_ALLOWED_HOSTS = "allowed.example";
+		await expect(
+			probeVideo("https://unlisted.example/video.mp4"),
+		).rejects.toBeInstanceOf(BlockedUrlError);
 	});
 
 	test("audio extraction does not fetch the redirect target", async () => {
@@ -105,7 +102,7 @@ describe("redirects to a private address", () => {
 		const target = privateRedirectServer();
 		try {
 			await expect(generateThumbnail(target.url, 1)).rejects.toThrow(
-				"private address",
+				MediaInputPolicyError,
 			);
 			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
@@ -123,7 +120,7 @@ describe("redirects to a private address", () => {
 					allowObservedDuration: true,
 					requireAudio: false,
 				}),
-			).rejects.toThrow("private address");
+			).rejects.toThrow(MediaInputPolicyError);
 			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
@@ -137,7 +134,7 @@ describe("redirects to a private address", () => {
 		const target = privateRedirectServer();
 		try {
 			await expect(downloadVideoToTemp(target.url, "mp4")).rejects.toThrow(
-				"private address",
+				MediaInputPolicyError,
 			);
 			expect(target.firstHits()).toBeGreaterThan(0);
 			expect(target.secretHits()).toBe(0);

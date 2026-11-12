@@ -65,7 +65,8 @@ function normalizeHost(host: string): string {
 	return host
 		.trim()
 		.toLowerCase()
-		.replace(/^\[|\]$/g, "");
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
 }
 
 export type TrustedOrigin = { host: string; port: string };
@@ -113,6 +114,18 @@ function hostMatches(host: string, pattern: string): boolean {
 		return host.endsWith(suffix) && host.length > suffix.length;
 	}
 	return host === pattern;
+}
+
+export function isUrlTrusted(url: URL, policy: UrlPolicy): boolean {
+	const host = normalizeHost(url.hostname);
+	const port = url.port || defaultPort(url.protocol);
+	return (
+		policy.allowPrivate ||
+		policy.allowedHosts.some((pattern) => hostMatches(host, pattern)) ||
+		policy.trustedOrigins.some(
+			(origin) => origin.host === host && origin.port === port,
+		)
+	);
 }
 
 export class BlockedUrlError extends Error {
@@ -167,14 +180,7 @@ async function checkedAddresses(
 		throw new BlockedUrlError(value, `scheme ${url.protocol} is not allowed`);
 	}
 	const host = normalizeHost(url.hostname);
-	const port = url.port || defaultPort(url.protocol);
-	const explicitlyAllowed = policy.allowedHosts.some((pattern) =>
-		hostMatches(host, pattern),
-	);
-	const trustedOrigin = policy.trustedOrigins.some(
-		(origin) => origin.host === host && origin.port === port,
-	);
-	if (explicitlyAllowed || trustedOrigin || policy.allowPrivate) return [];
+	if (isUrlTrusted(url, policy)) return [];
 	if (policy.strictHosts) {
 		throw new BlockedUrlError(
 			value,

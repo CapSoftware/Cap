@@ -45,7 +45,11 @@ import {
 	trackBackgroundTask,
 } from "../lib/lifecycle";
 import { logReason } from "../lib/log-redaction";
-import { PROCESS_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from "../lib/media-common";
+import {
+	createGuardedMediaFetch,
+	PROCESS_TIMEOUT_MS,
+	UPLOAD_TIMEOUT_MS,
+} from "../lib/media-common";
 import {
 	getTimeoutMs as getEditRenderTimeoutMs,
 	renderEditedVideo,
@@ -116,7 +120,7 @@ import {
 import { getRuntimeReport } from "../lib/runtime-report";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
-import { blockedUrlPayload, fetchAllowed } from "../lib/url-policy";
+import { blockedUrlPayload } from "../lib/url-policy";
 import {
 	getActiveDirectVideoProcessCount,
 	getMaxConcurrentDirectVideoProcesses,
@@ -1762,8 +1766,6 @@ async function editVideoAsync(
 		if (completedJob) {
 			await sendWebhook(completedJob);
 		}
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		if (!signal.aborted) {
 			console.error(`[video/edit] Error editing job ${jobId}:`, err);
@@ -1775,12 +1777,8 @@ async function editVideoAsync(
 			message: "Edit failed",
 		});
 
-		try {
-			if (updatedJob) {
-				await sendWebhook(updatedJob);
-			}
-		} finally {
-			setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+		if (updatedJob) {
+			await sendWebhook(updatedJob);
 		}
 	} finally {
 		await cleanupTempFiles([inputTempFile, outputTempFile]);
@@ -2135,8 +2133,6 @@ async function processVideoAsync(
 				webhookUrl: options.webhookUrl,
 				webhookSecret: options.webhookSecret,
 			});
-
-		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
 		await abortPendingUploads();
 		if (!signal.aborted) {
@@ -3175,7 +3171,9 @@ async function loadPreverifiedRuns(
 				const url = urls[next++];
 				if (!url) return;
 				try {
-					const response = await fetchAllowed(url, { signal: budget });
+					const response = await createGuardedMediaFetch(url, {
+						fetchImpl: fetch,
+					})(url, { signal: budget });
 					const text = response.ok
 						? await readBoundedText(response, MAX_PREVERIFIED_RUN_BYTES)
 						: null;

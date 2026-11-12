@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev:local": "bun --watch src/index.ts",
+		"dev:local": "MEDIA_SERVER_INTERNAL_MEDIA_HOSTS=${MEDIA_SERVER_INTERNAL_MEDIA_HOSTS:-localhost,127.0.0.1} bun --watch src/index.ts",
 		"start": "bun src/index.ts",
 		"build": "echo 'No build step needed for Bun'",
 		"test": "bun test",

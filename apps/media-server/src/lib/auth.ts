@@ -1,5 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+// Hashed first so the comparison takes the same time whatever was sent,
+// including its length.
+function sameSecret(given: string, secret: string): boolean {
+	const digest = (value: string) => createHash("sha256").update(value).digest();
+	return timingSafeEqual(digest(given), digest(secret));
+}
+
 type MediaServerContext = {
 	req: { header: (name: string) => string | undefined };
 };
@@ -12,11 +19,8 @@ export function validateMediaServerSecret(c: MediaServerContext): boolean {
 		);
 		return false;
 	}
-	const provided = c.req.header("x-media-server-secret");
-	if (!provided) return false;
-	const expectedDigest = createHash("sha256").update(secret).digest();
-	const providedDigest = createHash("sha256").update(provided).digest();
-	return timingSafeEqual(expectedDigest, providedDigest);
+	const given = c.req.header("x-media-server-secret");
+	return given !== undefined && sameSecret(given, secret);
 }
 
 export function hasMediaServerSecret(c: MediaServerContext): boolean {

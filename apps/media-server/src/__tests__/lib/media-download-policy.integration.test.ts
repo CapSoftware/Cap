@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -178,19 +178,17 @@ describe("localized media resources", () => {
 			const originalFetch = globalThis.fetch;
 			const slowSignals: AbortSignal[] = [];
 			let requestsStarted = 0;
-			const fetcher = spyOn(globalThis, "fetch").mockImplementation(
-				Object.assign(
-					(input: RequestInfo | URL, init?: RequestInit) => {
-						requestsStarted++;
-						const path = new URL(
-							input instanceof Request ? input.url : String(input),
-						).pathname;
-						if ((path === "/slow.m4s" || path === "/seg-2.m4s") && init?.signal)
-							slowSignals.push(init.signal);
-						return originalFetch(input, init);
-					},
-					{ preconnect: originalFetch.preconnect },
-				),
+			globalThis.fetch = Object.assign(
+				(input: RequestInfo | URL, init?: RequestInit) => {
+					requestsStarted++;
+					const path = new URL(
+						input instanceof Request ? input.url : String(input),
+					).pathname;
+					if ((path === "/slow.m4s" || path === "/seg-2.m4s") && init?.signal)
+						slowSignals.push(init.signal);
+					return originalFetch(input, init);
+				},
+				{ preconnect: originalFetch.preconnect },
 			);
 			try {
 				await expect(operation()).rejects.toThrow("404");
@@ -202,7 +200,7 @@ describe("localized media resources", () => {
 				expect(await readdir(directory)).toEqual(completedFiles);
 				expect(requestsStarted).toBe(requests);
 			} finally {
-				fetcher.mockRestore();
+				globalThis.fetch = originalFetch;
 			}
 		},
 		2000,
