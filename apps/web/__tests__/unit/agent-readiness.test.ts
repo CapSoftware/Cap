@@ -371,6 +371,15 @@ describe("developer OpenAPI spec", () => {
 		).toContain("Retry-After");
 	});
 
+	it("exempts the completion race from the advice not to repeat a 4xx", () => {
+		const advice = spec.info.description
+			.split("\n")
+			.find((line) => line.includes("will not succeed"));
+
+		expect(advice).toContain("408, 429 and 409");
+		expect(advice).toContain("completion_in_progress");
+	});
+
 	it("documents exactly the routes the developer API handlers serve", () => {
 		const apiRoot = resolve(__dirname, "../../app/api/developer");
 		const routeDirs = [
