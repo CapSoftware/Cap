@@ -18,6 +18,7 @@ const typeLabels: Record<string, string> = {
 
 function labelFor(tx: DeveloperTransaction) {
 	if (tx.referenceType === "auto_top_up") return "Auto top-up";
+	if (tx.referenceType === "stripe_checkout_session") return "Code redeemed";
 	if (tx.type === "storage_daily" && parseStorageCharge(tx).shortSince) {
 		return tx.amountMicroCredits === 0
 			? "Storage, unpaid"
