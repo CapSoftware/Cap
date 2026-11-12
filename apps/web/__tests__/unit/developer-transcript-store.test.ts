@@ -788,6 +788,22 @@ describe("reading and listing", () => {
 		});
 		expect(byStatus.transcripts.map((row) => row.id)).toEqual(["tr-2"]);
 	});
+
+	it("never treats an empty user filter as no filter", async () => {
+		seed("tr-1", { externalUserId: "user-1" });
+		seed("tr-2", { externalUserId: null });
+
+		const empty = await listTranscripts("app-1", { limit: 10, userId: "" });
+		expect(empty.transcripts).toEqual([]);
+
+		for (const userId of [null, undefined]) {
+			const all = await listTranscripts("app-1", { limit: 10, userId });
+			expect(all.transcripts.map((row) => row.id).sort()).toEqual([
+				"tr-1",
+				"tr-2",
+			]);
+		}
+	});
 });
 
 describe("deleting", () => {

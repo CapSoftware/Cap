@@ -23,6 +23,8 @@ export const state = {
 	presign: vi.fn(),
 	complete: vi.fn(),
 	abort: vi.fn(),
+	listUploads: vi.fn(),
+	listParts: vi.fn(),
 };
 
 const admitted = {
@@ -104,6 +106,9 @@ async function answer(query: string, params: unknown[]) {
 
 export function resetUploadHarness() {
 	vi.clearAllMocks();
+	state.listUploads.mockReset();
+	state.listParts.mockReset();
+	state.presign.mockReset();
 	state.videos.clear();
 	state.apps = new Set(["app1", "app2"]);
 	state.environment = "production";
@@ -147,9 +152,15 @@ export async function storageMock() {
 			storage(() => state.presign(...args) ?? "https://storage.test/part"),
 		complete: (...args: unknown[]) => storage(() => state.complete(...args)),
 		abort: (...args: unknown[]) => storage(() => state.abort(...args)),
-		listUploads: () => storage(() => ({ Uploads: [] })),
-		listParts: () =>
-			storage(() => [{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 }]),
+		listUploads: (...args: unknown[]) =>
+			storage(() => state.listUploads(...args) ?? { Uploads: [] }),
+		listParts: (...args: unknown[]) =>
+			storage(
+				() =>
+					state.listParts(...args) ?? [
+						{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 },
+					],
+			),
 	};
 	return {
 		provideOptionalAuth: <T>(effect: T) => effect,
