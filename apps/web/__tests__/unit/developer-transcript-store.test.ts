@@ -113,11 +113,13 @@ import {
 	expireStaleTranscripts,
 	getTranscript,
 	isTranscriptIdempotencyKey,
+	listConsoleTranscripts,
 	listTranscripts,
 	startTranscriptUpload,
 	transcriptIdForIdempotencyKey,
 	validateTranscriptOptions,
 } from "@/lib/developer-transcript-store";
+import { transcriptHasNoSpeech } from "@/lib/developer-transcripts";
 import { isBlockedS3Endpoint } from "@/lib/s3-endpoint-policy";
 
 const URL_A = "https://media.example.com/standup.mp3";
@@ -716,6 +718,38 @@ describe("reading and listing", () => {
 		expect(page.hasMore).toBe(false);
 	});
 
+	it("does not call an older transcript silent when it has text but no word count", async () => {
+		seed("tr-old-text", { status: "complete", wordCount: 0, text: "hello" });
+		seed("tr-silent", { status: "complete", wordCount: 0, text: "" });
+		seed("tr-never-set", { status: "complete", wordCount: 0, text: null });
+
+		const { transcripts: listed } = await listTranscripts("app-1", {
+			limit: 10,
+		});
+		const silent = Object.fromEntries(
+			listed.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+		);
+
+		expect(silent).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(listed.every((row) => !("text" in row))).toBe(true);
+
+		const { transcripts: shown } = await listConsoleTranscripts("app-1", 10);
+		expect(
+			Object.fromEntries(
+				shown.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+			),
+		).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(shown.every((row) => !("text" in row))).toBe(true);
+	});
+
 	it("pages by cursor without skipping or repeating", async () => {
 		const sameInstant = new Date("2026-11-11T12:00:00.000Z");
 		for (const id of ["tr-a", "tr-b", "tr-c"]) {
@@ -837,6 +871,35 @@ describe("expiring stale transcripts", () => {
 		expect(context.deleted).toContain("developer/_uploads/app-1/t-old-upload");
 		expect(context.deleted).not.toContain(
 			"developer/app-1/transcripts/done/result.json",
+		);
+	});
+});
+
+describe("a transcript that timed out", () => {
+	it("releases its hold and charges nothing", async () => {
+		setBalance(50_000);
+		const stuck = fake().seed(developerTranscripts, {
+			id: "stuck-held",
+			appId: "app-1",
+			status: "processing",
+			sourceType: "upload",
+			durationSeconds: 3_600,
+			reservedMicroCredits: 10_000,
+			queuedAt: new Date("2026-11-11T03:00:00Z"),
+			createdAt: new Date("2026-11-11T03:00:00Z"),
+			updatedAt: new Date("2026-11-11T03:00:00Z"),
+		});
+
+		await expireStaleTranscripts(new Date("2026-11-11T10:00:00Z"));
+
+		expect(stuck).toMatchObject({
+			status: "error",
+			errorCode: "timed_out",
+			reservedMicroCredits: 0,
+		});
+		expect(fake().rows(developerCreditTransactions)).toHaveLength(0);
+		expect(fake().rows(developerCreditAccounts)[0]?.balanceMicroCredits).toBe(
+			50_000,
 		);
 	});
 });

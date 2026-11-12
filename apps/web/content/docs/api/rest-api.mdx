@@ -608,7 +608,9 @@ Returns the transcript. Once the status is `complete` the response includes `tex
 }
 ```
 
-A failed transcript has the status `error` and an `error` object with one of these codes:
+Audio with no speech is not a failure. The transcript completes with `text` set to `""` and `wordCount` set to `0`, and it is billed for its length like any other transcript. A complete transcript with a `wordCount` of `0` is how you tell that no speech was found.
+
+A failed transcript has the status `error` and an `error` object with one of these codes. A failed transcript is never charged:
 
 | Code | Meaning |
 |------|---------|
@@ -619,7 +621,7 @@ A failed transcript has the status `error` and an `error` object with one of the
 | `source_missing` | The uploaded file was not found |
 | `no_audio_track` | The file has no audio |
 | `unsupported_format` | The file is not a self-contained audio or video file. Playlists and manifests are not accepted |
-| `no_speech` | No speech was found |
+| `no_speech` | No longer returned. Audio with no speech now completes with empty text. Transcripts that failed this way before the change keep the code |
 | `duration_too_long` | The audio is longer than 4 hours |
 | `upload_expired` | The file was not uploaded within 24 hours |
 | `timed_out` | The transcript did not finish in time |
@@ -652,7 +654,9 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 
 - The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio length itself and bills it to the nearest second, with a minimum of one second. A length sent by the client is never used.
 - Creating or starting a transcript needs an app in good standing and an available balance of at least 1,000 micro-credits ($0.01). Otherwise the API answers `402`, with `code` set to `out_of_credit` when the app is in `grace` or `paused` and `insufficient_credits` when the balance is under the minimum. The `message` says how much to add.
-- Credits are taken once, when the transcript completes. Failed and deleted transcripts cost nothing, and a transcript that is retried internally is never charged twice.
+- Credits are taken once, when the transcript completes. A transcript that is retried internally is never charged twice.
+- Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
+- Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before it completes.
 - Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. The available balance is your balance minus those holds.
 - If the available balance cannot cover the hold, the transcript ends with `insufficient_credits` before the file is downloaded or processed, and the error message says how much was needed. When other running transcripts hold the credit, it waits for them for up to 15 minutes first, so a batch started together runs through as holds are released.
 - Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.

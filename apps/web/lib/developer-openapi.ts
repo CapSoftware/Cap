@@ -115,16 +115,20 @@ const transcriptSchema = {
 			description: "Measured audio length. Set when the transcript finishes.",
 		},
 		language: { type: ["string", "null"] },
-		wordCount: { type: ["integer", "null"] },
+		wordCount: {
+			type: ["integer", "null"],
+			description:
+				"Words in the transcript. 0 on a complete transcript means no speech was found in the audio.",
+		},
 		text: {
 			type: ["string", "null"],
 			description:
-				"The transcript text. Returned by getTranscript once status is complete.",
+				"The transcript text. Returned by getTranscript once status is complete. An empty string when the audio has no speech.",
 		},
 		costMicroCredits: {
 			type: "integer",
 			description:
-				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second.",
+				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second. Audio with no speech is billed for its length and completes with empty text.",
 		},
 		costDollars: { type: "number" },
 		error: {
@@ -591,7 +595,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getTranscript",
 				summary: "Get a transcript",
 				description:
-					"Returns the transcript with its status and, once complete, its text. Add include=words or include=segments for timings in seconds.",
+					"Returns the transcript with its status and, once complete, its text. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
