@@ -375,6 +375,26 @@ describe("developer video measured facts", () => {
 		expect(video().errorReason).toContain("Not enough credit");
 	});
 
+	it("leaves the part running for a retry when the charge hits a temporary error", async () => {
+		mocks.store.video = unmeasured({}, 60);
+		mocks.charge.mockRejectedValue(new Error("connection reset"));
+
+		await expect(
+			applyDeveloperVideoProgress(
+				{ videoId: "video-1", phase: "complete", metadata: { duration: 480 } },
+				"mp4",
+				"t-mp4",
+			),
+		).rejects.toThrow("connection reset");
+
+		expect(video().status).toBe("processing");
+		expect(video().processing?.mp4).toMatchObject({
+			state: "running",
+			token: "t-mp4",
+		});
+		expect(video().processing?.hls.state).toBe("running");
+	});
+
 	it("fails the video when the output is longer than the length limit", async () => {
 		mocks.store.video = unmeasured({}, 60);
 

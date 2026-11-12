@@ -229,6 +229,12 @@ export async function releaseDeveloperVideoClaim(
 
 const PROBED_DURATION_TOLERANCE_SECONDS = 2;
 
+// A video the app can't pay for, or one over the length limit. Anything else
+// thrown while charging (a database blip) is left to the caller's retries.
+export class DeveloperVideoChargeRefused extends Error {
+	override name = "DeveloperVideoChargeRefused";
+}
+
 // The upload is billed on the length the client reported. Once the server has
 // measured the real length, anything beyond that is charged before encoding,
 // and a video the app can't pay for is not encoded.
@@ -238,7 +244,9 @@ export async function chargeForProbedDuration(
 ): Promise<void> {
 	if (probedDuration === null) return;
 	if (probedDuration > DEVELOPER_VIDEO_MAX_DURATION_SECONDS) {
-		throw new Error("Video is longer than the 4 hour limit");
+		throw new DeveloperVideoChargeRefused(
+			"Video is longer than the 4 hour limit",
+		);
 	}
 	const billed = video.duration ?? 0;
 	if (probedDuration <= billed + PROBED_DURATION_TOLERANCE_SECONDS) return;
@@ -253,7 +261,9 @@ export async function chargeForProbedDuration(
 		},
 	});
 	if (charged !== "charged") {
-		throw new Error("Not enough credit for the video's full length");
+		throw new DeveloperVideoChargeRefused(
+			"Not enough credit for the video's full length",
+		);
 	}
 }
 
@@ -648,9 +658,8 @@ export async function applyDeveloperVideoProgress(
 		try {
 			await chargeForProbedDuration(video, outcome.duration);
 		} catch (error) {
-			const reason =
-				error instanceof Error ? error.message : "Video processing failed";
-			await failDeveloperVideoProcessing(video.id, encodeId, reason);
+			if (!(error instanceof DeveloperVideoChargeRefused)) throw error;
+			await failDeveloperVideoProcessing(video.id, encodeId, error.message);
 			return { success: true, applied: true };
 		}
 	}
