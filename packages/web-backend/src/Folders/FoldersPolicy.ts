@@ -15,10 +15,12 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 			const spacesPolicy = yield* SpacesPolicy;
 			const orgsPolicy = yield* OrganisationsPolicy;
 			const spaces = yield* Spaces;
-			const canManageSpaceOrOrg = (spaceId: Space.SpaceIdOrOrganisationId) =>
+			const getManagedOrganizationId = (
+				spaceId: Space.SpaceIdOrOrganisationId,
+			) =>
 				Effect.gen(function* () {
 					const spaceOrOrg = yield* spaces.getSpaceOrOrg(spaceId);
-					if (!spaceOrOrg) return false;
+					if (!spaceOrOrg) return;
 
 					if (spaceOrOrg.variant === "space") {
 						yield* Policy.any(
@@ -29,7 +31,9 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 						yield* orgsPolicy.isAdminOrOwner(spaceOrOrg.organization.id);
 					}
 
-					return true;
+					return spaceOrOrg.variant === "space"
+						? spaceOrOrg.space.organizationId
+						: spaceOrOrg.organization.id;
 				});
 
 			const canEdit = (id: Folder.FolderId) =>
@@ -43,17 +47,18 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 
 						if (folder.spaceId === null) return folder.createdById === user.id;
 
-						const spaceOrOrg = yield* spaces.getSpaceOrOrg(folder.spaceId);
-						if (!spaceOrOrg) return false;
-
-						yield* canManageSpaceOrOrg(folder.spaceId);
-
-						return true;
+						return Boolean(yield* getManagedOrganizationId(folder.spaceId));
 					}),
 				);
 
 			const canCreateIn = (spaceId: Space.SpaceIdOrOrganisationId) =>
-				Policy.policy(() => canManageSpaceOrOrg(spaceId));
+				Policy.policy((user) =>
+					getManagedOrganizationId(spaceId).pipe(
+						Effect.map(
+							(organizationId) => organizationId === user.activeOrganizationId,
+						),
+					),
+				);
 
 			return { canEdit, canCreateIn };
 		}),
