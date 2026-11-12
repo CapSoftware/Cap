@@ -15,8 +15,17 @@ import {
 } from "@/actions/developers/transcripts";
 import { TRANSCRIPT_MAX_UPLOAD_BYTES } from "@/lib/developer-transcripts";
 import { infraAppPath } from "@/lib/infra-routes";
-import { isDefinitiveRejection, retryAfterMs } from "@/lib/infra-upload";
+import {
+	INFRA_TRANSCRIPT_LABELS,
+	infraTranscriptDisplayState,
+} from "@/lib/infra-transcript-view";
+import {
+	EMPTY_FILE_MESSAGE,
+	isDefinitiveRejection,
+	retryAfterMs,
+} from "@/lib/infra-upload";
 import { formatCharge, formatDuration } from "@/lib/infra-usage";
+import type { InfraLocalUpload } from "@/lib/infra-video-view";
 import { CopyButton, CopyTextButton } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
 import {
@@ -32,6 +41,7 @@ import {
 	TH,
 	TR,
 } from "../../_components/ui";
+import { usePageWork } from "../../_components/uploads";
 
 const POLL_INTERVAL_MS = 2500;
 const PAGE_STEP = 50;
@@ -40,6 +50,9 @@ const START_ATTEMPTS = 3;
 const RATE_LIMIT_ATTEMPTS = 6;
 const CANCELLED = "Upload cancelled";
 const NEEDS_CREDITS = "insufficient_credits";
+const LEAVE_DURING_UPLOAD =
+	"A file is still uploading. Leaving now cancels it.";
+const NO_SENT_UPLOADS: ReadonlySet<string> = new Set();
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
 	month: "short",
@@ -49,14 +62,6 @@ const dateFormat = new Intl.DateTimeFormat("en-US", {
 });
 
 const NONE = <span className="text-[rgba(232,236,244,0.3)]">none</span>;
-
-const STATUS_LABELS: Record<AudioTranscriptRow["status"], string> = {
-	uploading: "Waiting for file",
-	queued: "Queued",
-	processing: "Transcribing",
-	complete: "Complete",
-	error: "Failed",
-};
 
 class UploadError extends Error {
 	constructor(
@@ -166,6 +171,8 @@ export function AudioClient({
 	const [loadingMore, setLoadingMore] = useState(false);
 	const pageSize = useRef(Math.max(PAGE_STEP, initialTranscripts.length));
 	const [upload, setUpload] = useState<Upload>({ phase: "idle" });
+	const [sendingId, setSendingId] = useState<string | null>(null);
+	const [sentIds, setSentIds] = useState(NO_SENT_UPLOADS);
 	const [over, setOver] = useState(false);
 	const [reader, setReader] = useState<{
 		id: string;
@@ -179,6 +186,10 @@ export function AudioClient({
 	const [deleting, setDeleting] = useState(false);
 
 	useEffect(() => () => controller.current?.abort(), []);
+	usePageWork(upload.phase === "working" ? LEAVE_DURING_UPLOAD : null);
+
+	const localUpload = (id: string): InfraLocalUpload =>
+		sentIds.has(id) ? "sent" : id === sendingId ? "sending" : null;
 
 	const refresh = useCallback(async () => {
 		const result = await listAudioTranscripts(appId, pageSize.current).catch(
@@ -212,7 +223,7 @@ export function AudioClient({
 			setUpload({
 				phase: "failed",
 				needsCredits: false,
-				message: "That file is empty.",
+				message: EMPTY_FILE_MESSAGE,
 			});
 			return;
 		}
@@ -246,6 +257,7 @@ export function AudioClient({
 				throw new UploadError(created.message, 400, created.code);
 			}
 			transcriptId = created.transcript.id;
+			setSendingId(transcriptId);
 			stopIfCancelled();
 
 			for (let attempt = 1, limited = 0; ; ) {
@@ -288,6 +300,9 @@ export function AudioClient({
 					await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
 				}
 			}
+			const sentId = transcriptId;
+			setSentIds((sent) => new Set(sent).add(sentId));
+			setSendingId(null);
 			setUpload({ phase: "idle" });
 			toast.success(`Transcribing ${file.name}`);
 			await refresh();
@@ -323,6 +338,7 @@ export function AudioClient({
 			});
 			await refresh();
 		} finally {
+			setSendingId(null);
 			if (controller.current === abort) controller.current = null;
 		}
 	};
@@ -356,9 +372,18 @@ export function AudioClient({
 		}
 		if (reader?.id === pendingDelete.id) setReader(null);
 		setPendingDelete(null);
-		toast.success("Transcript deleted");
+		toast.success(
+			pendingDeleteUnfinished ? "Upload removed" : "Transcript deleted",
+		);
 		await refresh();
 	};
+
+	const pendingDeleteUnfinished =
+		pendingDelete !== null &&
+		infraTranscriptDisplayState(
+			pendingDelete.status,
+			localUpload(pendingDelete.id),
+		) === "unfinished";
 
 	const description = `Audio or video to text. ${pricePerHour} per audio hour, billed by the second.`;
 
@@ -530,115 +555,139 @@ export function AudioClient({
 					</Empty>
 				</div>
 			) : (
-				<div className="relative overflow-x-auto border-t border-[rgba(222,230,246,0.08)]">
-					<table className="w-full border-collapse">
+				<div className="relative -mx-1 overflow-x-auto px-1">
+					<table className="w-full border-collapse border-t border-[rgba(222,230,246,0.08)]">
 						<thead>
 							<tr className={TR}>
 								<th className={TH}>Name</th>
-								<th className={clsx(TH, "text-right")}>Duration</th>
-								<th className={TH}>Status</th>
+								<th className={clsx(TH, "hidden text-right sm:table-cell")}>
+									Duration
+								</th>
+								<th className={clsx(TH, "hidden sm:table-cell")}>Status</th>
 								<th className={clsx(TH, "text-right")}>Cost</th>
-								<th className={TH}>Created</th>
-								<th className={TH}>Transcript id</th>
+								<th className={clsx(TH, "hidden md:table-cell")}>Created</th>
+								<th className={clsx(TH, "hidden xl:table-cell")}>
+									Transcript id
+								</th>
 								<th className={TH}>
 									<span className="sr-only">Actions</span>
 								</th>
 							</tr>
 						</thead>
 						<tbody>
-							{transcripts.map((row) => (
-								<tr
-									key={row.id}
-									className={clsx(
-										TR,
-										"transition-colors duration-150 hover:bg-[rgba(222,230,246,0.025)]",
-									)}
-								>
-									<td className={clsx(TD, "max-w-[17rem] text-[#E8ECF4]")}>
-										{row.status === "complete" ? (
-											<button
-												type="button"
-												onClick={() => void open(row)}
-												disabled={opening === row.id}
-												className={clsx(
-													"block max-w-full truncate rounded-[4px] text-left transition-colors duration-200 hover:text-white hover:underline",
-													FOCUS,
-												)}
-												title={`Read ${row.name}`}
-											>
-												{row.name}
-											</button>
-										) : (
-											<span className="block truncate">{row.name}</span>
-										)}
-										{row.errorMessage && (
-											<span className="block truncate text-[12.5px] text-[rgba(232,236,244,0.42)]">
-												{row.errorMessage}
-											</span>
-										)}
-									</td>
-									<td
+							{transcripts.map((row) => {
+								const state = infraTranscriptDisplayState(
+									row.status,
+									localUpload(row.id),
+								);
+								const unfinished = state === "unfinished";
+								const note = unfinished
+									? "The file has not arrived. If the upload was interrupted, remove this and upload it again."
+									: row.errorMessage;
+								const status = (
+									<span
 										className={clsx(
-											TD,
-											MONO,
-											"text-right text-[13px] tabular-nums",
+											"whitespace-nowrap",
+											state === "error" && "text-[#F2A199]",
+											state === "complete" && "text-[#E8ECF4]",
 										)}
 									>
-										{formatDuration(row.durationSeconds) ??
-											(row.status === "error" ? NONE : "pending")}
-									</td>
-									<td className={TD}>
-										<span
+										{INFRA_TRANSCRIPT_LABELS[state]}
+									</span>
+								);
+								return (
+									<tr
+										key={row.id}
+										className={clsx(
+											TR,
+											"transition-colors duration-150 hover:bg-[rgba(222,230,246,0.025)]",
+										)}
+									>
+										<td className="w-full max-w-0 py-3 pr-6 text-[13.5px] text-[#E8ECF4]">
+											{state === "complete" ? (
+												<button
+													type="button"
+													onClick={() => void open(row)}
+													disabled={opening === row.id}
+													className={clsx(
+														"block max-w-full truncate rounded-[4px] text-left transition-colors duration-200 hover:text-white hover:underline",
+														FOCUS,
+													)}
+													title={`Read ${row.name}`}
+												>
+													{row.name}
+												</button>
+											) : (
+												<span className="block truncate">{row.name}</span>
+											)}
+											<span className="mt-1 block text-[12.5px] text-[rgba(232,236,244,0.72)] sm:hidden">
+												{status}
+											</span>
+											{note && (
+												<span className="mt-0.5 block text-pretty text-[12.5px] leading-[1.4] text-[rgba(232,236,244,0.46)]">
+													{note}
+												</span>
+											)}
+										</td>
+										<td
 											className={clsx(
-												row.status === "error" && "text-[#F2A199]",
-												row.status === "complete" && "text-[#E8ECF4]",
+												TD,
+												MONO,
+												"hidden text-right align-top text-[13px] tabular-nums sm:table-cell",
 											)}
 										>
-											{STATUS_LABELS[row.status]}
-										</span>
-									</td>
-									<td
-										className={clsx(
-											TD,
-											MONO,
-											"text-right text-[13px] tabular-nums",
-										)}
-									>
-										{row.status === "complete"
-											? formatCharge(row.costMicroCredits)
-											: row.status === "error"
-												? formatCharge(0)
-												: "pending"}
-									</td>
-									<td className={TD}>
-										{dateFormat.format(new Date(row.createdAt))}
-									</td>
-									<td className={clsx(TD, "py-1.5")}>
-										<span
+											{formatDuration(row.durationSeconds) ??
+												(state === "error" || unfinished ? NONE : "pending")}
+										</td>
+										<td className={clsx(TD, "hidden align-top sm:table-cell")}>
+											{status}
+										</td>
+										<td
 											className={clsx(
+												TD,
 												MONO,
-												"inline-flex items-center gap-1 text-[13px]",
+												"text-right align-top text-[13px] tabular-nums",
+											)}
+										>
+											{state === "complete"
+												? formatCharge(row.costMicroCredits)
+												: state === "error" || unfinished
+													? formatCharge(0)
+													: "pending"}
+										</td>
+										<td className={clsx(TD, "hidden align-top md:table-cell")}>
+											{dateFormat.format(new Date(row.createdAt))}
+										</td>
+										<td
+											className={clsx(
+												TD,
+												MONO,
+												"hidden align-top text-[13px] xl:table-cell",
 											)}
 										>
 											{row.id}
-											<CopyButton value={row.id} label="Copy transcript id" />
-										</span>
-									</td>
-									<td className={clsx(TD, "py-1.5 text-right")}>
-										<button
-											type="button"
-											onClick={() => setPendingDelete(row)}
-											aria-label={`Delete ${row.name}`}
-											className={clsx(
-												"inline-flex size-7 items-center justify-center rounded-[6px] text-[rgba(232,236,244,0.4)] transition-colors duration-200 hover:bg-[rgba(242,161,153,0.1)] hover:text-[#F2A199]",
-												FOCUS,
-											)}
-										>
-											<Trash2 size={14} />
-										</button>
-									</td>
-								</tr>
-							))}
+										</td>
+										<td className={clsx(TD, "py-1.5 text-right align-top")}>
+											<span className="inline-flex items-center gap-0.5">
+												<CopyButton value={row.id} label="Copy transcript id" />
+												<button
+													type="button"
+													onClick={() => setPendingDelete(row)}
+													disabled={state === "uploading"}
+													aria-label={`${unfinished ? "Remove" : "Delete"} ${row.name}`}
+													title={unfinished ? "Remove" : "Delete"}
+													className={clsx(
+														"inline-flex size-7 items-center justify-center rounded-[6px] text-[rgba(232,236,244,0.4)] transition-colors duration-200 hover:bg-[rgba(242,161,153,0.1)] hover:text-[#F2A199] disabled:pointer-events-none disabled:opacity-40",
+														FOCUS,
+													)}
+												>
+													<Trash2 size={14} />
+												</button>
+											</span>
+										</td>
+									</tr>
+								);
+							})}
 						</tbody>
 					</table>
 				</div>
@@ -659,13 +708,15 @@ export function AudioClient({
 
 			<ConfirmDialog
 				open={pendingDelete !== null}
-				title="Delete transcript"
+				title={pendingDeleteUnfinished ? "Remove upload" : "Delete transcript"}
 				description={
 					pendingDelete
-						? `Delete "${pendingDelete.name}"? The text is removed and disappears from the API.`
+						? pendingDeleteUnfinished
+							? `Remove "${pendingDelete.name}"? Its file has not arrived. An upload still running somewhere else will fail.`
+							: `Delete "${pendingDelete.name}"? The text is removed and disappears from the API.`
 						: undefined
 				}
-				confirmLabel="Delete"
+				confirmLabel={pendingDeleteUnfinished ? "Remove" : "Delete"}
 				loading={deleting}
 				onConfirm={() => void confirmDelete()}
 				onCancel={() => {

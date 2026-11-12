@@ -1,13 +1,10 @@
-import type { Metadata } from "next";
 import { listAudioTranscripts } from "@/actions/developers/transcripts";
 import { SPEECH_DOLLARS_PER_HOUR } from "@/lib/developer-pricing";
 import { TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS } from "@/lib/developer-transcripts";
-import { requireInfraApp } from "../../infra-data";
+import { infraPageMetadata, requireInfraApp } from "../../infra-data";
 import { AudioClient } from "./audio-client";
 
-export const metadata: Metadata = {
-	title: "Audio | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Audio");
 
 export default async function InfraAudioPage({
 	params,
