@@ -68,27 +68,32 @@ export function AppSwitcher({
 					<Menu.Content
 						align={compact ? "end" : "start"}
 						sideOffset={6}
-						className={`${infraSans.variable} ${infraMono.variable} z-[500] max-h-[60vh] w-[260px] overflow-y-auto rounded-[11px] bg-[#0B0C0E] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
+						className={`${infraSans.variable} ${infraMono.variable} z-[500] flex max-h-[min(60vh,var(--radix-dropdown-menu-content-available-height))] w-[260px] flex-col rounded-[11px] bg-[#0B0C0E] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
 					>
-						{apps.map((app) => (
-							<Menu.Item
-								key={app.id}
-								className={ITEM}
-								onSelect={() => selectApp(app.id)}
-							>
-								<span className="min-w-0 flex-1">
-									<span className="block truncate text-[#E8ECF4]">
-										{app.name}
+						<div className="min-h-0 overflow-y-auto">
+							{apps.map((app) => (
+								<Menu.Item
+									key={app.id}
+									className={ITEM}
+									onSelect={() => selectApp(app.id)}
+								>
+									<span className="min-w-0 flex-1">
+										<span className="block truncate text-[#E8ECF4]">
+											{app.name}
+										</span>
+										<EnvTag environment={app.environment} className="mt-1" />
 									</span>
-									<EnvTag environment={app.environment} className="mt-1" />
-								</span>
-								{app.id === current.id && (
-									<Check size={14} className="shrink-0 text-white" />
-								)}
-							</Menu.Item>
-						))}
+									{app.id === current.id && (
+										<Check size={14} className="shrink-0 text-white" />
+									)}
+								</Menu.Item>
+							))}
+						</div>
 						<Menu.Separator className="mx-1 my-1.5 h-px bg-[rgba(222,230,246,0.08)]" />
-						<Menu.Item className={ITEM} onSelect={() => setCreateOpen(true)}>
+						<Menu.Item
+							className={clsx(ITEM, "shrink-0")}
+							onSelect={() => setCreateOpen(true)}
+						>
 							<Plus size={14} className="shrink-0" />
 							New app
 						</Menu.Item>

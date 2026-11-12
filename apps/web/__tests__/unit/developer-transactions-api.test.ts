@@ -118,6 +118,8 @@ vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: vi.fn(),
 }));
 vi.mock("@/lib/infra-video-upload", () => ({
+	MAX_UPLOAD_BYTES: 36_000_000_000,
+	openUpload: vi.fn(),
 	createInfraVideo: vi.fn(),
 	initiateInfraUpload: vi.fn(),
 	presignInfraUploadParts: vi.fn(),

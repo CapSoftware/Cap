@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { renameDeveloperVideo } from "@/actions/developers/rename-video";
@@ -14,6 +14,7 @@ import { infraAppPath } from "@/lib/infra-routes";
 import { formatBytes, formatDuration } from "@/lib/infra-usage";
 import {
 	type InfraVideoDetail,
+	infraVideoDisplayState,
 	infraVideoIsChanging,
 } from "@/lib/infra-video-view";
 import { KeyRow } from "../../../_components/copy";
@@ -29,7 +30,7 @@ import {
 	MONO,
 	RULE,
 } from "../../../_components/ui";
-import { useUploadingVideoId } from "../../../_components/uploads";
+import { useLocalUpload } from "../../../_components/uploads";
 import { VideoStatus } from "../../../_components/video-status";
 
 const createdFormat = new Intl.DateTimeFormat("en-US", {
@@ -94,20 +95,30 @@ function Player({ video }: { video: InfraVideoDetail }) {
 	);
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+function Fact({
+	label,
+	note,
+	children,
+}: {
+	label: string;
+	note?: string;
+	children: ReactNode;
+}) {
 	return (
-		<div
-			className={clsx(
-				"flex items-baseline justify-between gap-6 border-b py-3",
-				RULE,
+		<div className={clsx("border-b py-3", RULE)}>
+			<div className="flex items-baseline justify-between gap-6">
+				<dt className="shrink-0 text-[13px] text-[rgba(232,236,244,0.5)]">
+					{label}
+				</dt>
+				<dd className="m-0 min-w-0 truncate text-right text-[13.5px] text-[#E8ECF4]">
+					{children}
+				</dd>
+			</div>
+			{note && (
+				<dd className="m-0 mt-1 text-pretty text-[12.5px] leading-[1.45] text-[rgba(232,236,244,0.42)]">
+					{note}
+				</dd>
 			)}
-		>
-			<dt className="shrink-0 text-[13px] text-[rgba(232,236,244,0.5)]">
-				{label}
-			</dt>
-			<dd className="m-0 min-w-0 truncate text-right text-[13.5px] text-[#E8ECF4]">
-				{children}
-			</dd>
 		</div>
 	);
 }
@@ -123,7 +134,10 @@ export function VideoClient({
 }) {
 	const router = useRouter();
 	const nameId = useId();
-	const uploadingHere = useUploadingVideoId() === video.id;
+	const state = infraVideoDisplayState(video.state, useLocalUpload()(video.id));
+	const uploadingHere = state === "uploading";
+	const renameButton = useRef<HTMLButtonElement>(null);
+	const wasRenaming = useRef(false);
 	const [renaming, setRenaming] = useState(false);
 	const [name, setName] = useState(video.name);
 	const [confirmDelete, setConfirmDelete] = useState(false);
@@ -133,6 +147,16 @@ export function VideoClient({
 		!uploadingHere &&
 			(infraVideoIsChanging(video, Date.now()) || video.stillEncoding),
 	);
+
+	useEffect(() => {
+		if (wasRenaming.current && !renaming) renameButton.current?.focus();
+		wasRenaming.current = renaming;
+	}, [renaming]);
+
+	const stopRenaming = () => {
+		setName(video.name);
+		setRenaming(false);
+	};
 
 	const rename = useEffectMutation({
 		mutationFn: () =>
@@ -189,6 +213,9 @@ export function VideoClient({
 						{renaming ? (
 							<form
 								className="flex flex-wrap items-center gap-2"
+								onKeyDown={(e) => {
+									if (e.key === "Escape" && !rename.isPending) stopRenaming();
+								}}
 								onSubmit={(e) => {
 									e.preventDefault();
 									if (!name.trim() || rename.isPending) return;
@@ -221,10 +248,7 @@ export function VideoClient({
 								<Button
 									variant="quiet"
 									disabled={rename.isPending}
-									onClick={() => {
-										setName(video.name);
-										setRenaming(false);
-									}}
+									onClick={stopRenaming}
 								>
 									Cancel
 								</Button>
@@ -234,15 +258,12 @@ export function VideoClient({
 								{video.name}
 							</h1>
 						)}
-						<VideoStatus
-							state={video.state}
-							uploadingHere={uploadingHere}
-							className="mt-3"
-						/>
+						<VideoStatus state={state} className="mt-3" />
 					</div>
 					{!renaming && (
 						<div className="flex shrink-0 gap-2">
 							<Button
+								ref={renameButton}
 								variant="ghost"
 								onClick={() => {
 									setName(video.name);
@@ -285,7 +306,7 @@ export function VideoClient({
 							This video was uploaded before Cap Infra encoded video, so it has
 							no playback links. Upload the file again to get them.
 						</Notice>
-					) : video.state === "processing" ? (
+					) : state === "processing" ? (
 						<Notice title="Processing">
 							Cap is encoding this video. The player appears here on its own as
 							soon as it is ready.
@@ -311,7 +332,14 @@ export function VideoClient({
 
 				<dl className={clsx("m-0 border-t", RULE)}>
 					{duration && <Fact label="Duration">{duration}</Fact>}
-					{size && <Fact label="Size">{size}</Fact>}
+					{size && (
+						<Fact
+							label="Stored size"
+							note="The original file plus every encoded size. Storage is billed by the minute, not by size."
+						>
+							{size}
+						</Fact>
+					)}
 					{video.width && video.height ? (
 						<Fact label="Resolution">
 							{video.width}×{video.height}
@@ -398,9 +426,13 @@ export function VideoClient({
 
 			<ConfirmDialog
 				open={confirmDelete}
-				title="Delete video"
-				description={`Delete "${video.name}"? Its links stop playing within about a minute, its files are removed and it stops counting toward storage.`}
-				confirmLabel="Delete"
+				title={state === "unfinished" ? "Remove upload" : "Delete video"}
+				description={
+					state === "unfinished"
+						? `Remove "${video.name}"? Its file has not arrived. An upload still running somewhere else will fail.`
+						: `Delete "${video.name}"? Its links stop playing within about a minute, its files are removed and it stops counting toward storage.`
+				}
+				confirmLabel={state === "unfinished" ? "Remove" : "Delete"}
 				loading={remove.isPending}
 				onConfirm={() => remove.mutate()}
 				onCancel={() => {

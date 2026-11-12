@@ -7,6 +7,7 @@ import {
 	partBytesFor,
 	presignBatch,
 	retryAfterMs,
+	startsLikeAnImageOrDocument,
 } from "@/lib/infra-upload";
 
 const MB = 1024 * 1024;
@@ -117,5 +118,28 @@ describe("a completion another request is already running", () => {
 			waitMs: 3000,
 		});
 		expect(completeRetryPlan(3, null, 3).retry).toBe(false);
+	});
+});
+
+describe("a file that is plainly not a video", () => {
+	const bytes = (...values: number[]) => new Uint8Array(values);
+
+	it.each([
+		["PNG", bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)],
+		["JPEG", bytes(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46)],
+		["GIF", bytes(0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00)],
+		["PDF", bytes(0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37)],
+	])("recognises a %s whatever it is named", (_name, head) => {
+		expect(startsLikeAnImageOrDocument(head)).toBe(true);
+	});
+
+	it.each([
+		["MP4", bytes(0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70)],
+		["WebM", bytes(0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81)],
+		["AVI", bytes(0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00)],
+		["a short file", bytes(0x89, 0x50)],
+		["nothing", bytes()],
+	])("does not rule out %s", (_name, head) => {
+		expect(startsLikeAnImageOrDocument(head)).toBe(false);
 	});
 });

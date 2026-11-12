@@ -17,7 +17,6 @@ import { useMayLeave } from "./uploads";
 export type Environment = "development" | "production";
 export type CreatedApp = {
 	appId: string;
-	publicKey: string;
 	secretKey: string;
 };
 
@@ -88,18 +87,19 @@ export function useCreateApp(
 	});
 }
 
-export function KeysReveal({ app }: { app: CreatedApp }) {
-	const dotenv = `CAP_PUBLIC_KEY=${app.publicKey}\nCAP_SECRET_KEY=${app.secretKey}\n`;
+export function KeysReveal({ secretKey }: { secretKey: string }) {
 	return (
 		<div>
 			<div className="border-t border-[rgba(222,230,246,0.07)]">
-				<KeyRow label="Public key" value={app.publicKey} />
-				<KeyRow label="Secret key" value={app.secretKey} sensitive />
+				<KeyRow label="Secret key" value={secretKey} sensitive />
 			</div>
 			<div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-				<CopyTextButton value={dotenv} label="Copy both as .env" />
+				<CopyTextButton
+					value={`CAP_SECRET_KEY=${secretKey}\n`}
+					label="Copy as .env"
+				/>
 				<p className="m-0 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
-					The secret key is shown once. Keep it on your server.
+					Shown once. It belongs on your server, never in a browser.
 				</p>
 			</div>
 		</div>
@@ -175,8 +175,12 @@ export function NewAppModal({
 	onOpenChange: (open: boolean) => void;
 }) {
 	const router = useRouter();
-	const [created, setCreated] = useState<CreatedApp | null>(null);
-	const create = useCreateApp((app) => setCreated(app));
+	const [created, setCreated] = useState<
+		(CreatedApp & { name: string }) | null
+	>(null);
+	const create = useCreateApp((app, input) =>
+		setCreated({ ...app, name: input.name.trim() }),
+	);
 	const mayLeave = useMayLeave();
 
 	const close = (next: boolean) => {
@@ -192,14 +196,22 @@ export function NewAppModal({
 		<Modal
 			open={open}
 			onOpenChange={close}
-			title={created ? "Copy your keys" : "New app"}
+			dismissible={!created}
+			title={created ? "Copy your secret key" : "New app"}
 			description={
-				created ? undefined : "Each app has its own keys, videos and credits."
+				created ? (
+					<>
+						<span className="[overflow-wrap:anywhere]">{created.name}</span> is
+						ready. This is the only time its secret key is shown.
+					</>
+				) : (
+					"Each app has its own key, videos and credits."
+				)
 			}
 		>
 			{created ? (
 				<div className="flex flex-col gap-6">
-					<KeysReveal app={created} />
+					<KeysReveal secretKey={created.secretKey} />
 					<div className="flex justify-end">
 						<Button onClick={() => close(false)}>Open app</Button>
 					</div>

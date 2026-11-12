@@ -109,12 +109,24 @@ const partsMismatch = () =>
 		"Send each uploaded part once, with its partNumber and the ETag header its PUT returned. Upload any missing part again first.",
 	);
 
-const fileTooLarge = () =>
+const uploadByteLimit = (maxBytes: number | null | undefined) =>
+	Math.min(maxBytes ?? MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES);
+
+const fileTooLarge = (limit: number = MAX_UPLOAD_BYTES, discarded = true) =>
 	fail(
 		400,
 		"file_too_large",
-		`The file is larger than the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit`,
-		"The upload was discarded and the video can take a new one. Export the video at a lower bitrate or split it, then call initiate again and upload the smaller file.",
+		limit < MAX_UPLOAD_BYTES
+			? `The file is larger than the ${limit} byte limit set for this upload`
+			: `The file is larger than the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit`,
+		[
+			discarded
+				? "The upload was discarded and the video can take a new one."
+				: "No upload was opened.",
+			limit < MAX_UPLOAD_BYTES
+				? "Upload a smaller file, or get a token with a larger maxBytes from your server, then call initiate again."
+				: "Export the video at a lower bitrate or split it, then call initiate again and upload the smaller file.",
+		].join(" "),
 	);
 
 const MIN_PART_BYTES = 5 * 1024 * 1024;
@@ -273,7 +285,7 @@ async function findAppVideo(appId: string, videoId: string) {
 	return video && video.appId === appId ? video : null;
 }
 
-async function openUpload(appId: string, videoId: string) {
+export async function openUpload(appId: string, videoId: string) {
 	const video = await findAppVideo(appId, videoId);
 	if (!video || video.deletedAt) return videoNotFound();
 	if (video.duration !== null) {
@@ -360,14 +372,22 @@ export async function initiateInfraUpload({
 	appId,
 	videoId,
 	contentType,
+	contentLength,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
 	contentType?: string;
+	contentLength?: number;
+	maxBytes?: number | null;
 }): Promise<UploadResult<{ uploadId: string }>> {
 	const upload = await openUpload(appId, videoId);
 	if (upload.status !== 200) return upload;
 	const { s3Key } = upload;
+	const byteLimit = uploadByteLimit(maxBytes);
+	if (contentLength !== undefined && contentLength > byteLimit) {
+		return fileTooLarge(byteLimit, false);
+	}
 
 	const resolvedContentType =
 		contentType && ALLOWED_CONTENT_TYPES.includes(contentType)
@@ -529,6 +549,7 @@ export async function completeInfraUpload({
 	width,
 	height,
 	fps,
+	maxBytes,
 }: {
 	appId: string;
 	videoId: string;
@@ -538,6 +559,7 @@ export async function completeInfraUpload({
 	width?: number;
 	height?: number;
 	fps?: number;
+	maxBytes?: number | null;
 }): Promise<UploadResult<{ success: true }>> {
 	const video = await findAppVideo(appId, videoId);
 	if (!video || video.deletedAt) return videoNotFound();
@@ -581,10 +603,11 @@ export async function completeInfraUpload({
 
 		const { totalBytes } = measured;
 		if (totalBytes === null) return partsMismatch();
-		const tooLarge = totalBytes > MAX_UPLOAD_BYTES;
+		const byteLimit = uploadByteLimit(maxBytes);
+		const tooLarge = totalBytes > byteLimit;
 		if (tooLarge && !measured.assembled) {
 			await discardOpenUpload(s3Key, uploadId);
-			return fileTooLarge();
+			return fileTooLarge(byteLimit);
 		}
 		const storedDuration = recordedUploadDuration(durationInSecs, totalBytes);
 		const upload = {
@@ -617,7 +640,7 @@ export async function completeInfraUpload({
 			await removeStoredFile(s3Key);
 			await releaseDeveloperVideoUpload(videoId, claim);
 			claim = null;
-			return fileTooLarge();
+			return fileTooLarge(byteLimit);
 		}
 
 		if (!measured.assembled) {

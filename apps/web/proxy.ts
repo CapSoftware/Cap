@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
 import { agentMarkdownResponse } from "@/lib/agent-markdown";
+import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
@@ -124,6 +125,17 @@ const proxyDub = (request: NextRequest) => {
 	return NextResponse.rewrite(new URL(target), { request: { headers } });
 };
 
+// Server components cannot read the address they render for, and the Infra
+// console needs it to send a signed-out visitor back to the page they asked
+// for. The value is always set here, so one sent by a client is replaced.
+const serve = (request: NextRequest) => {
+	const { pathname, search } = request.nextUrl;
+	if (!isInfraPathname(pathname)) return NextResponse.next();
+	const headers = new Headers(request.headers);
+	headers.set(INFRA_PATH_HEADER, `${pathname}${search}`);
+	return NextResponse.next({ request: { headers } });
+};
+
 export async function proxy(request: NextRequest) {
 	const path = new URL(request.url).pathname;
 
@@ -195,12 +207,12 @@ async function route(request: NextRequest) {
 			process.env.NODE_ENV !== "development"
 		)
 			return NextResponse.redirect(new URL("/login", url.origin));
-		else return NextResponse.next();
+		else return serve(request);
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
 		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
-		if (!markdown) return NextResponse.next();
+		if (!markdown) return serve(request);
 		return new NextResponse(markdown.body, {
 			status: markdown.status,
 			headers: markdown.headers,
