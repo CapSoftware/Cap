@@ -192,16 +192,42 @@ export function failUnfinishedParts(
 	return next;
 }
 
-// Puts adaptive streaming back in the queue for a video that already plays:
-// either the media server could not make it earlier, or its job was lost.
-// developerVideoRedrive decides when that is due.
+function partWasLost(
+	part: DeveloperVideoPartState,
+	now: number,
+	updatedAt: number,
+): boolean {
+	if (part.state === "running") {
+		return now - part.startedAt >= STALE_PROCESSING_MS;
+	}
+	return part.state === "pending" && now - updatedAt >= NEVER_STARTED_GRACE_MS;
+}
+
+// A ready video keeps playing from the output it has while the other one is
+// retried: adaptive streaming the media server could not make earlier, or a
+// job that stopped reporting. developerVideoRedrive decides when that is due.
 export function retryUnavailableHls(
 	state: DeveloperVideoProcessingState,
+	now: number = Date.now(),
 ): DeveloperVideoProcessingState | null {
-	if (state.hls.state !== "unavailable" && state.hls.state !== "running") {
-		return null;
+	let next = state;
+	if (state.hls.state === "unavailable") {
+		next = { ...next, hls: { state: "pending" } };
 	}
-	return { ...state, hls: { state: "pending" } };
+	for (const part of DEVELOPER_VIDEO_PARTS) {
+		const current = next[part];
+		if (
+			current.state === "running" &&
+			now - current.startedAt >= STALE_PROCESSING_MS
+		) {
+			next = { ...next, [part]: { state: "pending" } };
+		}
+	}
+	if (next !== state) return next;
+	const states = DEVELOPER_VIDEO_PARTS.map((part) => state[part].state);
+	return states.includes("complete") && states.includes("pending")
+		? state
+		: null;
 }
 
 export function resolveDeveloperVideoStatus(
@@ -210,8 +236,6 @@ export function resolveDeveloperVideoStatus(
 ): { status: DeveloperVideoStatus; errorReason: string | null } {
 	if (previous === "ready") return { status: "ready", errorReason: null };
 	const parts = DEVELOPER_VIDEO_PARTS.map((part) => state[part]);
-	// A video is ready as soon as one output can be played. The other output
-	// keeps encoding and its URL appears when it is done.
 	if (parts.some((part) => part.state === "complete")) {
 		return { status: "ready", errorReason: null };
 	}
@@ -268,15 +292,11 @@ export function developerVideoRedrive(
 			? "start"
 			: null;
 	}
-	if (video.status === "ready") {
-		const hls = video.processing?.hls;
-		if (hls?.state === "unavailable") {
-			return hls.retryAt <= now ? "retry-hls" : null;
-		}
-		// The video went ready on its MP4 while adaptive streaming was still
-		// encoding. If that job has been running for hours it was lost.
-		return hls?.state === "running" &&
-			now - hls.startedAt >= STALE_PROCESSING_MS
+	if (video.status === "ready" && video.processing) {
+		const { hls, mp4 } = video.processing;
+		if (hls.state === "unavailable" && hls.retryAt <= now) return "retry-hls";
+		const updatedAt = video.updatedAt.getTime();
+		return [mp4, hls].some((part) => partWasLost(part, now, updatedAt))
 			? "retry-hls"
 			: null;
 	}

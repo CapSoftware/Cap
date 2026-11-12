@@ -385,17 +385,19 @@ describe("developer video redrive", () => {
 		expect(developerVideoRedrive(parked(now), now)).toBe("retry-hls");
 	});
 
+	const lostPart = (hoursAgo: number) => ({
+		state: "running" as const,
+		token: "t",
+		jobId: "job-1",
+		startedAt: now - hoursAgo * 3_600_000,
+	});
+
 	it("retries adaptive streaming whose job was lost after the MP4 made the video ready", () => {
 		const encoding = (hoursAgo: number) =>
 			developerVideo({
 				status: "ready",
 				processing: processingState({
-					hls: {
-						state: "running",
-						token: "h",
-						jobId: "job-1",
-						startedAt: now - hoursAgo * 3_600_000,
-					},
+					hls: lostPart(hoursAgo),
 					mp4: { state: "complete", output: "mp4-out" },
 				}),
 			});
@@ -405,20 +407,88 @@ describe("developer video redrive", () => {
 
 		const requeued = retryUnavailableHls(
 			encoding(7).processing ?? processingState(),
+			now,
 		);
 		expect(requeued?.hls).toEqual({ state: "pending" });
 		expect(requeued?.mp4).toEqual({ state: "complete", output: "mp4-out" });
 	});
 
-	it("does not requeue adaptive streaming that finished or failed", () => {
+	it("retries an MP4 whose job was lost after adaptive streaming made the video ready", () => {
+		const encoding = (hoursAgo: number) =>
+			developerVideo({
+				status: "ready",
+				processing: processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: lostPart(hoursAgo),
+				}),
+			});
+
+		expect(developerVideoRedrive(encoding(1), now)).toBeNull();
+		expect(developerVideoRedrive(encoding(7), now)).toBe("retry-hls");
+
+		const requeued = retryUnavailableHls(
+			encoding(7).processing ?? processingState(),
+			now,
+		);
+		expect(requeued?.mp4).toEqual({ state: "pending" });
+		expect(requeued?.hls).toEqual({ state: "complete", output: "hls-out" });
+		expect(
+			retryUnavailableHls(encoding(1).processing ?? processingState(), now),
+		).toBeNull();
+	});
+
+	it("picks up an output left waiting on a ready video with no workflow", () => {
+		const waiting = (updatedAt: Date) =>
+			developerVideo({
+				status: "ready",
+				updatedAt,
+				processing: processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: { state: "pending" },
+				}),
+			});
+
+		expect(developerVideoRedrive(waiting(minutesAgo(1)), now)).toBeNull();
+		expect(developerVideoRedrive(waiting(minutesAgo(3)), now)).toBe(
+			"retry-hls",
+		);
 		expect(
 			retryUnavailableHls(
-				processingState({ hls: { state: "complete", output: "hls-out" } }),
+				waiting(minutesAgo(3)).processing ?? processingState(),
+				now,
+			)?.mp4,
+		).toEqual({ state: "pending" });
+	});
+
+	it("does not requeue a fresh job while adaptive streaming is retried", () => {
+		const state = processingState({
+			hls: { state: "unavailable", reason: "not deployed", retryAt: now },
+			mp4: lostPart(1),
+		});
+
+		const requeued = retryUnavailableHls(state, now);
+
+		expect(requeued?.hls).toEqual({ state: "pending" });
+		expect(requeued?.mp4).toEqual(lostPart(1));
+	});
+
+	it("does not requeue outputs that finished or failed", () => {
+		expect(
+			retryUnavailableHls(
+				processingState({
+					hls: { state: "complete", output: "hls-out" },
+					mp4: { state: "complete", output: "mp4-out" },
+				}),
+				now,
 			),
 		).toBeNull();
 		expect(
 			retryUnavailableHls(
-				processingState({ hls: { state: "failed", reason: "bad file" } }),
+				processingState({
+					hls: { state: "failed", reason: "bad file" },
+					mp4: { state: "complete", output: "mp4-out" },
+				}),
+				now,
 			),
 		).toBeNull();
 	});
