@@ -69,7 +69,7 @@ export interface DeveloperVideoClaim {
 	encodeId: string;
 }
 
-export type DeveloperVideoPreparation = "ready" | "retry" | "stale";
+export type DeveloperVideoPreparation = "ready" | "retry" | "stale" | "probing";
 
 export type DeveloperVideoDispatch =
 	| "dispatched"
@@ -321,6 +321,40 @@ export async function chargeForProbedDuration(
 	}
 }
 
+const PROBE_CLAIM_MS = 60_000;
+
+// The request that completes an upload and the workflow both prepare a video.
+// Whoever takes this claim probes the file; the other waits for the result
+// and never asks the media server for the same probe. A claim left behind by
+// a caller that stopped can be taken over after a minute.
+async function claimProbe(
+	videoId: string,
+	encodeId: string,
+	token: string,
+): Promise<DeveloperVideoRow | null> {
+	return mutateEncode(videoId, encodeId, (processing) => {
+		if (processing.probe) return null;
+		const held = processing.probing;
+		const now = Date.now();
+		if (held && now - held.startedAt < PROBE_CLAIM_MS) return null;
+		return {
+			processing: { ...processing, probing: { token, startedAt: now } },
+		};
+	});
+}
+
+async function releaseProbe(
+	videoId: string,
+	encodeId: string,
+	token: string,
+): Promise<void> {
+	await mutateEncode(videoId, encodeId, (processing) => {
+		if (processing.probing?.token !== token) return null;
+		const { probing: _probing, ...rest } = processing;
+		return { processing: rest };
+	});
+}
+
 export async function prepareDeveloperVideoProcessing(
 	videoId: string,
 	encodeId: string,
@@ -328,55 +362,71 @@ export async function prepareDeveloperVideoProcessing(
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode) return "stale";
 	if (encode.processing.probe) return "ready";
-	const { video } = encode;
-	if (!video.s3Key) throw new Error("Video has no uploaded file");
 
-	const source = await headDeveloperVideoObject(video.s3Key);
-	if (!source) throw new Error("Uploaded video was not found in storage");
-	const probed = await tryProbeVideoViaMediaServer(
-		await internalDeveloperVideoUrl(
-			video.s3Key,
-			MEDIA_SERVER_URL_EXPIRES_SECONDS,
-		),
-	);
-	if (probed.status === "unreachable") return "retry";
-	if (probed.status === "rejected") throw new Error(probed.message);
-	const { metadata } = probed;
-	if (!(metadata.width > 0) || !(metadata.height > 0)) {
-		throw new Error("Uploaded file has no video track");
+	const token = newAttemptToken();
+	const video = await claimProbe(videoId, encodeId, token);
+	if (!video) {
+		const latest = await findEncode(videoId, encodeId);
+		if (!latest) return "stale";
+		return latest.processing.probe ? "ready" : "probing";
 	}
-	const probedDuration =
-		Number.isFinite(metadata.duration) && metadata.duration > 0
-			? metadata.duration
-			: null;
-	const updated = await underAccountLock(video.appId, async (tx) => {
-		await chargeForProbedDuration(
-			video,
-			probedDuration,
-			{ width: metadata.width, height: metadata.height },
-			tx,
+
+	try {
+		if (!video.s3Key) throw new Error("Video has no uploaded file");
+
+		const source = await headDeveloperVideoObject(video.s3Key);
+		if (!source) throw new Error("Uploaded video was not found in storage");
+		const probed = await tryProbeVideoViaMediaServer(
+			await internalDeveloperVideoUrl(
+				video.s3Key,
+				MEDIA_SERVER_URL_EXPIRES_SECONDS,
+			),
 		);
-		return mutateEncode(
-			videoId,
-			encodeId,
-			(processing, current) =>
-				processingUpdate(current, {
-					...processing,
-					probe: {
-						duration: probedDuration,
-						width: metadata.width,
-						height: metadata.height,
-						fps:
-							Number.isFinite(metadata.fps) && metadata.fps > 0
-								? Math.round(metadata.fps)
-								: null,
-					},
-					bytes: { ...processing.bytes, source: source.bytes },
-				}),
-			tx,
-		);
-	});
-	return updated ? "ready" : "stale";
+		if (probed.status === "unreachable") {
+			await releaseProbe(videoId, encodeId, token);
+			return "retry";
+		}
+		if (probed.status === "rejected") throw new Error(probed.message);
+		const { metadata } = probed;
+		if (!(metadata.width > 0) || !(metadata.height > 0)) {
+			throw new Error("Uploaded file has no video track");
+		}
+		const probedDuration =
+			Number.isFinite(metadata.duration) && metadata.duration > 0
+				? metadata.duration
+				: null;
+		const updated = await underAccountLock(video.appId, async (tx) => {
+			await chargeForProbedDuration(
+				video,
+				probedDuration,
+				{ width: metadata.width, height: metadata.height },
+				tx,
+			);
+			return mutateEncode(
+				videoId,
+				encodeId,
+				({ probing: _probing, ...processing }, current) =>
+					processingUpdate(current, {
+						...processing,
+						probe: {
+							duration: probedDuration,
+							width: metadata.width,
+							height: metadata.height,
+							fps:
+								Number.isFinite(metadata.fps) && metadata.fps > 0
+									? Math.round(metadata.fps)
+									: null,
+						},
+						bytes: { ...processing.bytes, source: source.bytes },
+					}),
+				tx,
+			);
+		});
+		return updated ? "ready" : "stale";
+	} catch (error) {
+		await releaseProbe(videoId, encodeId, token).catch(() => {});
+		throw error;
+	}
 }
 
 export async function readDeveloperVideoParts(
