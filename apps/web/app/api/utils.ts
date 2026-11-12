@@ -209,6 +209,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 		developerAppId: string;
 		developerVideoId: string;
 		developerUploadCompleted: boolean;
+		developerUploadMaxBytes: number | null;
 	};
 }>(async (c, next) => {
 	const credential = bearerCredential(c);
@@ -218,7 +219,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 
 	const check = verifyDeveloperUploadToken(credential);
 	if (!check.ok) return c.json(uploadTokenRefusal(check.reason), 401);
-	const { appId, videoId, corsOrigin } = check.token;
+	const { appId, videoId, corsOrigin, maxBytes } = check.token;
 
 	if (corsOrigin !== null && c.req.header("origin") !== corsOrigin) {
 		return c.json(
@@ -263,6 +264,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 	c.set("developerAppId", appId);
 	c.set("developerVideoId", videoId);
 	c.set("developerUploadCompleted", video.duration !== null);
+	c.set("developerUploadMaxBytes", maxBytes ?? null);
 	await next();
 });
 
