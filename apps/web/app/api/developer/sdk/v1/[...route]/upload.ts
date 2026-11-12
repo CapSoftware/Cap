@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -287,10 +287,21 @@ app.post(
 			if (height !== undefined) updates.height = height;
 			if (fps !== undefined) updates.fps = fps;
 
+			// Two overlapping completions can claim different lengths. The charge
+			// already took the longer one (it charges what the video hasn't paid
+			// yet), so a shorter claim that lands last must not overwrite it.
 			await db()
 				.update(developerVideos)
 				.set(updates)
-				.where(eq(developerVideos.id, videoId));
+				.where(
+					and(
+						eq(developerVideos.id, videoId),
+						or(
+							isNull(developerVideos.duration),
+							lt(developerVideos.duration, billingDuration),
+						),
+					),
+				);
 
 			await startDeveloperVideoProcessing(videoId);
 

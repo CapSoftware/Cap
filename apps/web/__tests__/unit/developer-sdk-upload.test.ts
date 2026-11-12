@@ -217,6 +217,19 @@ describe("developer SDK multipart upload", () => {
 		);
 	});
 
+	it("never shortens a length an overlapping completion already recorded", async () => {
+		await post("/complete", completeBody);
+
+		const [update, params] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).toContain(
+			"(`developer_videos`.`duration` is null or `developer_videos`.`duration` < ?)",
+		);
+		expect(params).toEqual(expect.arrayContaining([12]));
+	});
+
 	it("keeps an existing playback id on completion", async () => {
 		const response = await post("/complete", completeBody);
 
