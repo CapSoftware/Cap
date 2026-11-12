@@ -323,6 +323,27 @@ describe("developer routes of the agent API", () => {
 		expect(serialized).not.toContain("processing");
 	});
 
+	it("reports a video uploaded before encoding existed as ready", async () => {
+		state.apps = [{ id: APP }];
+		const legacy = {
+			status: "uploading",
+			playbackId: null,
+			processing: null,
+			renditions: null,
+		};
+		const path = `/developer/apps/${APP}/videos/video0000000001`;
+
+		state.videos = [videoRow(legacy)];
+		const finished = await call("GET", path);
+		state.videos = [
+			videoRow({ ...legacy, duration: null, width: null, height: null }),
+		];
+		const waiting = await call("GET", path);
+
+		expect(finished.body.video.status).toBe("ready");
+		expect(waiting.body.video.status).toBe("uploading");
+	});
+
 	it("answers video not found inside an app the caller owns", async () => {
 		state.apps = [{ id: APP }];
 		const result = await call(

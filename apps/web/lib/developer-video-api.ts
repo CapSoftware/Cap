@@ -76,13 +76,14 @@ export type AgentDeveloperVideoRow = Pick<
 >;
 
 export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
+	const status = developerVideoIsReady(video) ? "ready" : video.status;
 	return {
 		id: video.id,
 		appId: video.appId,
 		externalUserId: video.externalUserId,
 		name: video.name,
-		status: video.status,
-		errorReason: video.status === "errored" ? video.errorReason : null,
+		status,
+		errorReason: status === "errored" ? video.errorReason : null,
 		playbackId: video.playbackId,
 		durationSeconds: video.duration,
 		width: video.width,
