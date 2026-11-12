@@ -53,7 +53,7 @@ const videoIdParam = {
 };
 
 const USER_SCOPE_RULES =
-	"The match is exact: case, accents and spaces all count, so send the value as the video returns it in externalUserId. A value that is empty or only spaces returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
+	"The match is exact: case and accents count. Spaces around the value are ignored. A value that is empty or only spaces returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
 
 const videoUserScopeParams = [
 	{
@@ -436,7 +436,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listDeveloperVideos",
 				summary: "List videos",
 				description:
-					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown or repeated query parameter, an empty userId or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
+					"Lists the app's videos, newest first, in an order that stays the same between calls. Filter by your own user ID and page with limit and offset until pagination.hasMore is false. An unknown or repeated query parameter, an empty userId or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [
@@ -471,16 +471,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					},
 				],
 				responses: {
-					"200": json(
-						{
-							type: "object",
-							required: ["data"],
-							properties: {
-								data: { type: "array", items: ref("DeveloperVideo") },
-							},
-						},
-						"The app's videos.",
-					),
+					"200": json(ref("DeveloperVideoList"), "The app's videos."),
 					"400": response("BadRequest"),
 					...restErrors,
 				},
@@ -953,6 +944,22 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: { success: { type: "boolean", const: true } },
 			},
 			DeveloperVideo: developerVideoSchema,
+			DeveloperVideoList: {
+				type: "object",
+				required: ["data", "pagination"],
+				properties: {
+					data: { type: "array", items: ref("DeveloperVideo") },
+					pagination: {
+						type: "object",
+						required: ["limit", "offset", "hasMore"],
+						properties: {
+							limit: { type: "integer" },
+							offset: { type: "integer" },
+							hasMore: { type: "boolean" },
+						},
+					},
+				},
+			},
 			Transcript: transcriptSchema,
 			TranscriptList: {
 				type: "object",
