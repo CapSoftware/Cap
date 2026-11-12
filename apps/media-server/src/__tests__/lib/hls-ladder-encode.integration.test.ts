@@ -28,6 +28,7 @@ import {
 } from "../../lib/media-operations";
 import { probeVideoFile } from "../../lib/media-probe";
 import { generateThumbnail } from "../../lib/media-video";
+import { getActiveSubprocessCount } from "../../lib/subprocess";
 
 const SOURCE_SECONDS = 26;
 
@@ -339,6 +340,7 @@ describe("HLS ladder encode", () => {
 
 	test("fails instead of guessing the frame rate when the probe pool is full", async () => {
 		const metadata = await probeVideoFile(source);
+		const subprocesses = getActiveSubprocessCount();
 		const running = Array.from(
 			{ length: getMaxConcurrentProbeOperations() },
 			() => registerMediaOperation("probe", () => {}),
@@ -347,6 +349,7 @@ describe("HLS ladder encode", () => {
 			await expect(encodeHlsLadder(source, metadata)).rejects.toThrow(
 				"Server is busy",
 			);
+			expect(getActiveSubprocessCount()).toBe(subprocesses);
 		} finally {
 			for (const operation of running) unregisterMediaOperation(operation);
 		}

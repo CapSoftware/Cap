@@ -86,22 +86,34 @@ export async function encodeHlsLadder(
 	abortSignal?: AbortSignal,
 ): Promise<EncodedHlsLadder> {
 	abortSignal?.throwIfAborted();
-	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
-		requireVideoSourceTraits(inputPath, abortSignal),
-		probeFastestFrameRate(inputPath, abortSignal).catch((error) => {
+	const probing = new AbortController();
+	const probeSignal = abortSignal
+		? AbortSignal.any([abortSignal, probing.signal])
+		: probing.signal;
+	const traits = requireVideoSourceTraits(inputPath, probeSignal);
+	const frameTiming = probeFastestFrameRate(inputPath, probeSignal).catch(
+		(error) => {
 			// A full probe pool fails the job, as it does for the probe before
 			// this one. Falling back would quietly encode a variable frame rate
 			// source on its opening rate whenever the server is busy.
 			if (error instanceof ProbeBusyError) throw error;
-			if (!abortSignal?.aborted) {
+			if (!probeSignal.aborted) {
 				console.warn(
 					"[hls-ladder] Could not read frame timing, using the probed frame rate:",
 					error,
 				);
 			}
 			return null;
-		}),
-	]);
+		},
+	);
+	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
+		traits,
+		frameTiming,
+	]).catch(async (error) => {
+		probing.abort();
+		await Promise.allSettled([traits, frameTiming]);
+		throw error;
+	});
 	abortSignal?.throwIfAborted();
 	const rungs = planHlsLadder(
 		{ width: metadata.width, height: metadata.height },
