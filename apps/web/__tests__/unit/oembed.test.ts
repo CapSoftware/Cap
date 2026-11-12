@@ -1,4 +1,5 @@
 import { Video } from "@cap/web-domain";
+import { JSDOM } from "jsdom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOEmbedVideo, parseCapShareUrl } from "@/lib/oembed";
 import type { PublicShareVideo } from "@/lib/public-share-video";
@@ -93,7 +94,7 @@ describe("Cap oEmbed", () => {
 		});
 		expect(result.html).toContain('src="https://cap.so/embed/abc123"');
 		expect(result.html).toContain(
-			'style="border:0;width:100%;aspect-ratio:640/360"',
+			'style="border:0;width:100%;height:auto;aspect-ratio:640/360"',
 		);
 		expect(result.thumbnail_url).toBeUndefined();
 	});
@@ -123,4 +124,34 @@ describe("Cap oEmbed", () => {
 		expect(result.thumbnail_width).toBe(1200);
 		expect(result.thumbnail_height).toBe(630);
 	});
+});
+
+describe("oEmbed iframe sizing", () => {
+	it.each([
+		{ width: 1920, height: 1080, maxWidth: "640", expectedHeight: 360 },
+		{ width: 1080, height: 1920, maxWidth: "360", expectedHeight: 640 },
+		{ width: 1080, height: 1080, maxWidth: "480", expectedHeight: 480 },
+	])(
+		"lets the iframe height follow its width for $width x $height videos",
+		({ width, height, maxWidth, expectedHeight }) => {
+			const result = buildOEmbedVideo({
+				video: { ...video, width, height },
+				webUrl: "https://cap.so",
+				maxWidth,
+			});
+			const dom = new JSDOM(result.html);
+			try {
+				const iframe = dom.window.document.querySelector("iframe");
+				expect(iframe?.width).toBe(maxWidth);
+				expect(iframe?.height).toBe(String(expectedHeight));
+				expect(iframe?.style.width).toBe("100%");
+				expect(iframe?.style.height).toBe("auto");
+				expect(iframe?.style.aspectRatio).toBe(
+					`${result.width}/${result.height}`,
+				);
+			} finally {
+				dom.window.close();
+			}
+		},
+	);
 });
