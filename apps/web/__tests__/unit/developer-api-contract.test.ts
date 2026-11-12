@@ -75,6 +75,8 @@ vi.mock("@/lib/infra-standing", async (original) => ({
 	infraBillingJson: (billing: Record<string, unknown>) => billing,
 }));
 vi.mock("@/lib/infra-video-upload", () => ({
+	MAX_UPLOAD_BYTES: 36_000_000_000,
+	openUpload: vi.fn(),
 	createInfraVideo: mocks.createVideo,
 	initiateInfraUpload: mocks.initiate,
 	presignInfraUploadParts: vi.fn(),
