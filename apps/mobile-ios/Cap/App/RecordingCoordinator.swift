@@ -68,7 +68,8 @@ final class RecordingCoordinator {
 
     func collectFinishedScreenRecording(showHome: Bool) {
         guard let session, let entry = RecordingHandoff.take(), CapID(entry.capId) != nil else { return }
-        Usage.track("recording_completed", ["mode": "screen"])
+        // One the extension handed over is counted when its upload completes here.
+        if entry.uploaded == true { Usage.track("recording_completed", ["mode": "screen"]) }
         refreshLibrary(session)
         RecentRecordings.shared.finishedElsewhere(capId: entry.capId, shareUrl: entry.shareUrl)
         if showHome { self.showHome() }
