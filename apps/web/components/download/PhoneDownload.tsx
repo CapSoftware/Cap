@@ -13,6 +13,9 @@ const INPUT =
 
 const HINT = "text-[14px] leading-[1.45] text-[rgba(17,17,17,0.6)]";
 
+const SEND_FAILED =
+	"We couldn't send that. Check your connection and try again.";
+
 const EmailDownloadLink = ({
 	sourcePage,
 	primary,
@@ -35,12 +38,16 @@ const EmailDownloadLink = ({
 			target_url: "/download",
 		});
 		startTransition(async () => {
-			const result = await sendDownloadLink(email);
-			if (result.success) {
-				trackEvent("download_link_emailed", { source_page: sourcePage });
-				setSentTo(email.trim());
-			} else {
-				setError(result.error ?? "Something went wrong. Please try again.");
+			try {
+				const result = await sendDownloadLink(email);
+				if (result.success) {
+					trackEvent("download_link_emailed", { source_page: sourcePage });
+					setSentTo(email.trim());
+				} else {
+					setError(result.error ?? SEND_FAILED);
+				}
+			} catch {
+				setError(SEND_FAILED);
 			}
 		});
 	};
