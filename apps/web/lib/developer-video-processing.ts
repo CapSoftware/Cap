@@ -9,6 +9,10 @@ import type {
 import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import {
+	chargeDeveloperVideoUpload,
+	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
+} from "./developer-video-charge";
+import {
 	createDeveloperEncodeId,
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_MASTER_PLAYLIST,
@@ -22,6 +26,7 @@ import {
 import {
 	beginPart,
 	createDeveloperVideoProcessingState,
+	DEVELOPER_VIDEO_PARTS,
 	type DeveloperVideoPartAction,
 	type DeveloperVideoPartOutcome,
 	type DeveloperVideoRedrive,
@@ -36,6 +41,8 @@ import {
 	settlePart,
 } from "./developer-video-state";
 import {
+	deleteDeveloperVideoObjects,
+	developerVideoPrefix,
 	developerVideoUploadUrl,
 	headDeveloperVideoObject,
 	internalDeveloperVideoUrl,
@@ -220,6 +227,36 @@ export async function releaseDeveloperVideoClaim(
 	});
 }
 
+const PROBED_DURATION_TOLERANCE_SECONDS = 2;
+
+// The upload is billed on the length the client reported. Once the server has
+// measured the real length, anything beyond that is charged before encoding,
+// and a video the app can't pay for is not encoded.
+export async function chargeForProbedDuration(
+	video: Pick<DeveloperVideoRow, "id" | "appId" | "duration">,
+	probedDuration: number | null,
+): Promise<void> {
+	if (probedDuration === null) return;
+	if (probedDuration > DEVELOPER_VIDEO_MAX_DURATION_SECONDS) {
+		throw new Error("Video is longer than the 4 hour limit");
+	}
+	const billed = video.duration ?? 0;
+	if (probedDuration <= billed + PROBED_DURATION_TOLERANCE_SECONDS) return;
+	const charged = await chargeDeveloperVideoUpload({
+		appId: video.appId,
+		videoId: video.id,
+		durationSeconds: probedDuration,
+		metadata: {
+			durationSeconds: probedDuration,
+			reportedDurationSeconds: billed,
+			source: "probe",
+		},
+	});
+	if (charged !== "charged") {
+		throw new Error("Not enough credit for the video's full length");
+	}
+}
+
 export async function prepareDeveloperVideoProcessing(
 	videoId: string,
 	encodeId: string,
@@ -244,15 +281,17 @@ export async function prepareDeveloperVideoProcessing(
 	if (!(metadata.width > 0) || !(metadata.height > 0)) {
 		throw new Error("Uploaded file has no video track");
 	}
+	const probedDuration =
+		Number.isFinite(metadata.duration) && metadata.duration > 0
+			? metadata.duration
+			: null;
+	await chargeForProbedDuration(video, probedDuration);
 
 	const updated = await mutateEncode(videoId, encodeId, (processing, current) =>
 		processingUpdate(current, {
 			...processing,
 			probe: {
-				duration:
-					Number.isFinite(metadata.duration) && metadata.duration > 0
-						? metadata.duration
-						: null,
+				duration: probedDuration,
 				width: metadata.width,
 				height: metadata.height,
 				fps:
@@ -610,4 +649,29 @@ export async function applyDeveloperVideoProgress(
 		renditions,
 	);
 	return { success: true, applied };
+}
+
+// A part that was dispatched twice (its first start was never confirmed)
+// leaves the losing attempt's files inside the encode's folder. Once the
+// encode has finished, only the outputs it settled on are kept.
+export async function sweepSupersededDeveloperVideoOutputs(
+	videoId: string,
+	encodeId: string,
+): Promise<number> {
+	const encode = await findEncode(videoId, encodeId);
+	if (!encode) return 0;
+	const { video, processing } = encode;
+	const parts = DEVELOPER_VIDEO_PARTS.map((part) => processing[part]);
+	if (
+		parts.some((part) => part.state === "pending" || part.state === "running")
+	) {
+		return 0;
+	}
+	const encodePrefix = `${developerVideoPrefix(video)}${encodeId}/`;
+	const kept = parts.flatMap((part) =>
+		part.state === "complete" ? [`${encodePrefix}${part.output}/`] : [],
+	);
+	return deleteDeveloperVideoObjects(encodePrefix, (key) =>
+		kept.some((prefix) => key.startsWith(prefix)),
+	);
 }

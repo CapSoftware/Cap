@@ -43,6 +43,7 @@ export function developerVideo(
 		errorReason: null,
 		processing: processingState(),
 		deletedAt: null,
+		filesDeletedAt: null,
 		createdAt: new Date("2026-11-01T00:00:00Z"),
 		updatedAt: new Date("2026-11-01T00:00:00Z"),
 		...overrides,

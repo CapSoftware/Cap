@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "827b0291-1d0e-4ad6-8e50-7c28a3601d1a",
+	"id": "c9875b66-8528-4189-85b8-cde881af0fff",
 	"prevId": "f231f465-a0b5-4669-928d-444ffc2ac65a",
 	"tables": {
 		"accounts": {
@@ -1063,6 +1063,11 @@
 					"name": "app_id_unique",
 					"columns": ["appId"],
 					"isUnique": true
+				},
+				"owner_idx": {
+					"name": "owner_idx",
+					"columns": ["ownerId"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1157,6 +1162,11 @@
 				"account_type_created_idx": {
 					"name": "account_type_created_idx",
 					"columns": ["accountId", "type", "createdAt"],
+					"isUnique": false
+				},
+				"account_created_idx": {
+					"name": "account_created_idx",
+					"columns": ["accountId", "createdAt"],
 					"isUnique": false
 				},
 				"account_ref_dedup_idx": {
@@ -1414,6 +1424,13 @@
 					"notNull": false,
 					"autoincrement": false
 				},
+				"filesDeletedAt": {
+					"name": "filesDeletedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"createdAt": {
 					"name": "createdAt",
 					"type": "timestamp",
@@ -1452,6 +1469,11 @@
 					"name": "playback_id_idx",
 					"columns": ["playbackId"],
 					"isUnique": true
+				},
+				"files_pending_idx": {
+					"name": "files_pending_idx",
+					"columns": ["filesDeletedAt", "deletedAt"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {

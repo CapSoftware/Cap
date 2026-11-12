@@ -126,3 +126,63 @@ export async function headDeveloperVideoObject(
 		? failure
 		: new Error("Storage request failed", { cause: failure });
 }
+
+export function developerVideoPrefix(video: {
+	appId: string;
+	id: string;
+}): string {
+	return `developer/${video.appId}/${video.id}/`;
+}
+
+const DELETE_BATCH = 1000;
+const DEVELOPER_PREFIX = /^developer\/[^/]+\/[^/]+\/(?:[^/]+\/)?$/;
+
+// Deletes every object under `prefix` (a video's folder, or one encode inside
+// it) that `keep` does not claim. Returns how many objects were removed and
+// throws if any delete fails, so the caller can try again later.
+export function deleteDeveloperVideoObjects(
+	prefix: string,
+	keep: (key: string) => boolean = () => false,
+): Promise<number> {
+	if (!DEVELOPER_PREFIX.test(prefix)) {
+		return Promise.reject(new Error(`Refusing to delete under ${prefix}`));
+	}
+	return StorageRuntime.runPromise(
+		Effect.gen(function* () {
+			const access = yield* bucket;
+			let removed = 0;
+			let continuationToken: string | undefined;
+			do {
+				const page = yield* access.listObjects({
+					prefix,
+					maxKeys: DELETE_BATCH,
+					continuationToken,
+				});
+				const doomed = (page.Contents ?? [])
+					.map((object) => object.Key)
+					.filter(
+						(key): key is string =>
+							typeof key === "string" && key.startsWith(prefix) && !keep(key),
+					);
+				if (doomed.length > 0) {
+					const result = yield* access.deleteObjects(
+						doomed.map((Key) => ({ Key })),
+					);
+					const errors = Option.getOrNull(result)?.Errors ?? [];
+					if (errors.length > 0) {
+						return yield* Effect.fail(
+							new Error(
+								`Failed to delete ${errors.length} developer video objects`,
+							),
+						);
+					}
+					removed += doomed.length;
+				}
+				continuationToken = page.IsTruncated
+					? page.NextContinuationToken
+					: undefined;
+			} while (continuationToken);
+			return removed;
+		}),
+	);
+}

@@ -1905,6 +1905,7 @@ export const developerVideos = mysqlTable(
 		errorReason: varchar("errorReason", { length: 512 }),
 		processing: json("processing").$type<DeveloperVideoProcessingState>(),
 		deletedAt: timestamp("deletedAt"),
+		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -1913,6 +1914,7 @@ export const developerVideos = mysqlTable(
 		index("app_user_idx").on(table.appId, table.externalUserId),
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
 		uniqueIndex("playback_id_idx").on(table.playbackId),
+		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
 	],
 );
 
@@ -1943,7 +1945,10 @@ export const developerCreditAccounts = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
-	(table) => [uniqueIndex("app_id_unique").on(table.appId)],
+	(table) => [
+		uniqueIndex("app_id_unique").on(table.appId),
+		index("owner_idx").on(table.ownerId),
+	],
 );
 
 export type DeveloperCreditTransactionType =
@@ -2009,6 +2014,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.type,
 			table.createdAt,
 		),
+		index("account_created_idx").on(table.accountId, table.createdAt),
 		index("account_ref_dedup_idx").on(
 			table.accountId,
 			table.referenceId,

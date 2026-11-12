@@ -150,6 +150,36 @@ describe("developer video API", () => {
 		});
 	});
 
+	it("keeps a video uploaded before encoding existed ready", async () => {
+		mocks.store.video = developerVideo({
+			status: "uploading",
+			playbackId: null,
+			processing: null,
+		});
+
+		const { body } = await get("/video-1/status");
+
+		expect(body.data).toMatchObject({
+			ready: true,
+			status: "uploading",
+			hlsUrl: null,
+			mp4Url: null,
+		});
+	});
+
+	it("does not call an unfinished upload ready", async () => {
+		mocks.store.video = developerVideo({
+			status: "uploading",
+			playbackId: "playback-id-0123456789ab",
+			duration: null,
+			processing: null,
+		});
+
+		const { body } = await get("/video-1/status");
+
+		expect(body.data.ready).toBe(false);
+	});
+
 	it("offers no URLs until the video is ready", async () => {
 		mocks.store.video = developerVideo({
 			status: "processing",

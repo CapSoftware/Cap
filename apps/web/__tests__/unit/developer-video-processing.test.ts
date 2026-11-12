@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
 	readText: vi.fn(),
 	probe: vi.fn(),
 	startJob: vi.fn(),
+	charge: vi.fn(),
+	deleteObjects: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -29,9 +31,16 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/developer-video-storage", () => ({
 	headDeveloperVideoObject: mocks.head,
 	readDeveloperVideoText: mocks.readText,
+	deleteDeveloperVideoObjects: mocks.deleteObjects,
+	developerVideoPrefix: (video: { appId: string; id: string }) =>
+		`developer/${video.appId}/${video.id}/`,
 	internalDeveloperVideoUrl: async (key: string) => `https://storage/${key}`,
 	developerVideoUploadUrl: async (key: string, contentType: string) =>
 		`https://storage/put/${key}?type=${contentType}`,
+}));
+vi.mock("@/lib/developer-video-charge", () => ({
+	DEVELOPER_VIDEO_MAX_DURATION_SECONDS: 4 * 60 * 60,
+	chargeDeveloperVideoUpload: mocks.charge,
 }));
 vi.mock("@/lib/media-client", () => ({
 	tryProbeVideoViaMediaServer: mocks.probe,
@@ -46,6 +55,7 @@ const {
 	prepareDeveloperVideoProcessing,
 	readDeveloperVideoParts,
 	releaseDeveloperVideoClaim,
+	sweepSupersededDeveloperVideoOutputs,
 } = await import("@/lib/developer-video-processing");
 
 const ENCODE = "developer/app-1/video-1/encode-1";
@@ -109,6 +119,8 @@ beforeEach(() => {
 		return { bytes: 1_000, contentType: "video/quicktime" };
 	});
 	mocks.readText.mockResolvedValue(master);
+	mocks.charge.mockResolvedValue("charged");
+	mocks.deleteObjects.mockResolvedValue(0);
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -469,6 +481,76 @@ describe("developer video dispatch", () => {
 		});
 	});
 
+	it("charges for the probed length when the client under-reported it", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 480, width: 1920, height: 1080, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			duration: 120,
+			processing: processingState({ probe: null }),
+		});
+
+		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+			"ready",
+		);
+		expect(mocks.charge).toHaveBeenCalledWith(
+			expect.objectContaining({
+				appId: "app-1",
+				videoId: "video-1",
+				durationSeconds: 480,
+			}),
+		);
+		expect(video().duration).toBe(480);
+	});
+
+	it("does not encode a video the app cannot pay for in full", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 480, width: 1920, height: 1080, fps: 30 },
+		});
+		mocks.charge.mockResolvedValue("insufficient");
+		mocks.store.video = developerVideo({
+			duration: 120,
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).rejects.toThrow("Not enough credit");
+		expect(video().processing?.probe).toBeNull();
+	});
+
+	it("charges nothing more when the reported length was right", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 121.5, width: 1920, height: 1080, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			duration: 120,
+			processing: processingState({ probe: null }),
+		});
+
+		await prepareDeveloperVideoProcessing("video-1", "encode-1");
+		expect(mocks.charge).not.toHaveBeenCalled();
+	});
+
+	it("refuses a video longer than the length limit", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 5 * 60 * 60, width: 1920, height: 1080, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			duration: 60,
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).rejects.toThrow("4 hour limit");
+		expect(mocks.charge).not.toHaveBeenCalled();
+	});
+
 	it("fails preparation when the upload has no video track", async () => {
 		mocks.probe.mockResolvedValue({
 			status: "ok",
@@ -708,5 +790,49 @@ describe("developer video dispatch", () => {
 			status: "errored",
 			errorReason: "Video processing timed out",
 		});
+	});
+});
+
+describe("superseded output sweep", () => {
+	it("keeps only the outputs the finished encode settled on", async () => {
+		mocks.store.video = developerVideo({
+			status: "ready",
+			processing: processingState({
+				hls: { state: "complete", output: "hls-out" },
+				mp4: { state: "complete", output: "mp4-out" },
+			}),
+		});
+
+		await sweepSupersededDeveloperVideoOutputs("video-1", "encode-1");
+
+		const [prefix, keep] = mocks.deleteObjects.mock.calls[0] ?? [];
+		expect(prefix).toBe("developer/app-1/video-1/encode-1/");
+		expect(keep(`${prefix}hls-out/hls/master.m3u8`)).toBe(true);
+		expect(keep(`${prefix}mp4-out/video.mp4`)).toBe(true);
+		expect(keep(`${prefix}lost-attempt/hls/1080p.m4s`)).toBe(false);
+	});
+
+	it("leaves an encode alone while a part is still running", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({ hls: runningPart("t1") }),
+		});
+
+		expect(
+			await sweepSupersededDeveloperVideoOutputs("video-1", "encode-1"),
+		).toBe(0);
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+	});
+
+	it("does nothing for an encode that has been replaced", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				encodeId: "encode-2",
+				hls: { state: "complete", output: "hls-out" },
+				mp4: { state: "complete", output: "mp4-out" },
+			}),
+		});
+
+		await sweepSupersededDeveloperVideoOutputs("video-1", "encode-1");
+		expect(mocks.deleteObjects).not.toHaveBeenCalled();
 	});
 });

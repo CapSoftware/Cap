@@ -8,6 +8,7 @@ import {
 	failDeveloperVideoProcessing,
 	prepareDeveloperVideoProcessing,
 	readDeveloperVideoParts,
+	sweepSupersededDeveloperVideoOutputs,
 } from "@/lib/developer-video-processing";
 import { DEVELOPER_VIDEO_PARTS } from "@/lib/developer-video-state";
 
@@ -69,6 +70,7 @@ export async function processDeveloperVideoWorkflow(
 			);
 		}
 
+		await sweepOutputs(videoId, encodeId);
 		return { success: true };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -113,4 +115,17 @@ async function failVideo(
 	"use step";
 
 	await failDeveloperVideoProcessing(videoId, encodeId, reason);
+}
+
+async function sweepOutputs(videoId: string, encodeId: string): Promise<void> {
+	"use step";
+
+	try {
+		await sweepSupersededDeveloperVideoOutputs(videoId, encodeId);
+	} catch (error) {
+		console.error("[developer-video] Failed to sweep superseded outputs", {
+			videoId,
+			error,
+		});
+	}
 }

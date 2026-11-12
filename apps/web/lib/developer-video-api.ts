@@ -47,12 +47,30 @@ export function developerVideoPlaybackUrls(
 }
 
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
-	const { processing: _processing, ...fields } = video;
+	const {
+		processing: _processing,
+		filesDeletedAt: _filesDeletedAt,
+		...fields
+	} = video;
 	return {
 		...fields,
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
 	};
+}
+
+// Videos uploaded before encoding existed have no playback id and no
+// processing state. They were ready as soon as their upload completed, and
+// they stay ready rather than reading as still uploading.
+export function developerVideoIsReady(
+	video: Pick<
+		DeveloperVideoRow,
+		"status" | "playbackId" | "processing" | "duration" | "width"
+	>,
+): boolean {
+	if (video.status === "ready") return true;
+	const legacy = video.playbackId === null && video.processing === null;
+	return legacy && video.duration !== null && video.width !== null;
 }
 
 export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
@@ -62,7 +80,7 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		width: video.width,
 		height: video.height,
 		transcriptionStatus: video.transcriptionStatus,
-		ready: video.status === "ready",
+		ready: developerVideoIsReady(video),
 		status: video.status,
 		errorReason: video.errorReason,
 		playbackId: video.playbackId,
