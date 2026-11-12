@@ -920,33 +920,43 @@ Safari plays HLS by itself. Every other browser needs [hls.js](https://github.co
   const video = document.getElementById("player");
   const hlsUrl = "HLS_URL";
   const mp4Url = "MP4_URL";
+  let hls = null;
 
-  if (window.Hls && Hls.isSupported()) {
-    const hls = new Hls({ capLevelToPlayerSize: true });
+  function fallBackToMp4() {
+    const position = video.currentTime;
+    const wasPlaying = !video.paused;
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+    if (!mp4Url) return;
+    video.src = mp4Url;
+    video.currentTime = position;
+    if (wasPlaying) video.play();
+  }
+
+  if (hlsUrl && window.Hls && Hls.isSupported()) {
+    hls = new Hls({ capLevelToPlayerSize: true });
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.ERROR, (event, data) => {
-      if (!data.fatal) return;
-      const position = video.currentTime;
-      const wasPlaying = !video.paused;
-      hls.destroy();
-      video.src = mp4Url;
-      video.currentTime = position;
-      if (wasPlaying) video.play();
+      if (data.fatal) fallBackToMp4();
     });
-  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+  } else if (hlsUrl && video.canPlayType("application/vnd.apple.mpegurl")) {
     video.src = hlsUrl;
-  } else {
+    video.addEventListener("error", fallBackToMp4, { once: true });
+  } else if (mp4Url) {
     video.src = mp4Url;
   }
 </script>
 ```
 
-Replace `HLS_URL`, `MP4_URL` and `POSTER_URL` with the video's `hlsUrl`, `mp4Url` and `posterUrl`.
+Replace `HLS_URL`, `MP4_URL` and `POSTER_URL` with the video's `hlsUrl`, `mp4Url` and `posterUrl`. A ready video can still have `hlsUrl` or `mp4Url` set to `null` while that output finishes encoding. Pass `null` for that one and the page plays the other.
 
 - hls.js runs wherever the browser supports Media Source Extensions. A browser without them that plays HLS itself gets the playlist directly, and anything else gets the MP4.
 - Keep the checks in that order. `canPlayType` is not a test for Safari by itself, because Chrome answers it for HLS too.
 - If hls.js hits an error it cannot recover from, the page switches to the MP4 at the same position and keeps playing.
+- If the browser's own HLS player fails, the page loads the MP4 in its place. A viewer who had already pressed play may have to press it again.
 - `capLevelToPlayerSize` stops hls.js from loading a rendition larger than the player. Without it, a small player on a fast connection climbs to the largest rendition.
 - There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
 
@@ -958,6 +968,8 @@ A page that only has to work in Safari needs no script:
 <video src="HLS_URL" poster="POSTER_URL" controls playsinline></video>
 ```
 
+If the video's `hlsUrl` is still `null`, use its `mp4Url` as the `src`.
+
 ### Stable URLs, Redirects and Caching
 
 - `hlsUrl`, `mp4Url` and `posterUrl` are stable. Store them and reuse them for as long as the video exists.
@@ -965,17 +977,20 @@ A page that only has to work in Safari needs no script:
 - The playlists behind `hlsUrl` list signed media URLs on the same host. A signed URL works for 12 hours. A player left paused for longer than that has to load the playlist again before it can fetch more of the video.
 - Playback answers are cached for 60 seconds by browsers and shared caches, so a change such as a delete or a top-up can take up to a minute to show.
 
-The page above recovers from expired media URLs by itself, by switching to the MP4. To stay on HLS, load the playlist again and return to the same position:
+The page above recovers from expired media URLs by itself, by switching to the MP4. To stay on HLS, add this function to the same script. It loads the playlist again and returns to the same position:
 
 ```js
-const position = video.currentTime;
-hls.once(Hls.Events.MANIFEST_PARSED, () => {
-  video.currentTime = position;
-});
-hls.loadSource(hlsUrl);
+function reloadPlaylist() {
+  if (!hls) return;
+  const position = video.currentTime;
+  hls.once(Hls.Events.MANIFEST_PARSED, () => {
+    video.currentTime = position;
+  });
+  hls.loadSource(hlsUrl);
+}
 ```
 
-In Safari, set `video.src` to the `hlsUrl` again and then set `video.currentTime`.
+Call it when a viewer comes back to a player that loaded its playlist more than 12 hours ago, then call `video.play()`. It does nothing once the page has switched to the MP4. In Safari, set `video.src` to the `hlsUrl` again and then set `video.currentTime`.
 
 ### Content Security Policy
 
@@ -995,7 +1010,9 @@ worker-src blob:;
 | `img-src` | The poster is loaded from `cap.so` and redirects to `v.cap.so`, so both are needed |
 | `worker-src` | hls.js does its work in a worker created from a `blob:` URL. Without this it still plays, on the main thread, and the browser logs a violation |
 
-Add the origin you load hls.js from to `script-src`. A page that plays HLS in Safari without hls.js needs only `media-src` and `img-src` with the two hosts. To use `embedUrl` in an iframe, allow `frame-src https://cap.so`.
+The scripts need allowing too. Add the origin you load hls.js from to `script-src`. The page above also starts the player from an inline script, which a `script-src` without `'unsafe-inline'` blocks, so the video never gets a source. Move that script into a file your policy allows, or give the tag a nonce or a hash that the policy lists.
+
+A page that plays HLS in Safari without hls.js needs only `media-src` and `img-src` with the two hosts. To use `embedUrl` in an iframe, allow `frame-src https://cap.so`.
 
 If you self-host Cap, use your own web origin and the host your playback URLs redirect to.
 
