@@ -4,6 +4,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 	developerTranscripts,
+	developerVideos,
 } from "@cap/database/schema";
 import { User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
@@ -23,6 +24,7 @@ const fixture = vi.hoisted(() => ({
 	database: undefined as MySql2Database | undefined,
 	start: vi.fn(),
 	objectSize: null as number | null,
+	copies: [] as string[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -49,8 +51,24 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	presignDeveloperUpload: async (key: string) =>
 		`https://storage.example/${key}`,
 	developerObjectSize: async () => fixture.objectSize,
+	developerObjectUrl: async (key: string) => `https://internal.example/${key}`,
+	copyDeveloperObject: async (_from: string, to: string) => {
+		fixture.copies.push(to);
+	},
 	getDeveloperObjectText: async () => null,
 	deleteDeveloperObjects: async () => {},
+}));
+vi.mock("@/workflows/process-developer-video", () => ({
+	processDeveloperVideoWorkflow: "developer-video-workflow",
+}));
+vi.mock("@/lib/media-client", () => ({
+	isMediaServerConfigured: () => false,
+}));
+vi.mock("@/lib/developer-video-storage", () => ({}));
+vi.mock("@/lib/server", () => ({ runPromise: async () => undefined }));
+vi.mock("@cap/web-backend", () => ({
+	provideOptionalAuth: <T>(effect: T) => effect,
+	S3Buckets: {},
 }));
 
 const { debitDeveloperUsage } = await import("@/lib/developer-credits");
@@ -62,6 +80,14 @@ const {
 const { claimTranscriptRun, failTranscriptRun } = await import(
 	"@/lib/developer-transcript-run"
 );
+const { completeDeveloperVideoUpload, createDeveloperVideoUpload } =
+	await import("@/lib/developer-video-upload");
+const { availableBalance } = await import("@/lib/infra-balance");
+const { getInfraAppStanding, getInfraUploadAdmission } = await import(
+	"@/lib/infra-standing"
+);
+const { getAppStorageUsage } = await import("@/lib/infra-storage");
+const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const {
 	createTranscriptFromUrl,
 	createTranscriptUpload,
@@ -143,6 +169,67 @@ const ledgerOf = async (appId: string) =>
 		)
 		.where(eq(developerCreditAccounts.appId, appId));
 
+const accountOf = async (appId: string) => {
+	const [account] = await database()
+		.select({ id: developerCreditAccounts.id })
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, appId));
+	if (!account) throw new Error("Fixture app has no credit account.");
+	return account.id;
+};
+
+const setBalance = (appId: string, balanceMicroCredits: number) =>
+	database()
+		.update(developerCreditAccounts)
+		.set({ balanceMicroCredits })
+		.where(eq(developerCreditAccounts.appId, appId));
+
+async function makeStoredVideo(
+	appId: string,
+	overrides: Partial<typeof developerVideos.$inferInsert> = {},
+) {
+	const videoId = id();
+	await database()
+		.insert(developerVideos)
+		.values({
+			id: videoId,
+			appId,
+			name: "Stored fixture",
+			status: "ready",
+			duration: 7200,
+			width: 1920,
+			height: 1080,
+			maxResolutionTier: "1080p",
+			...overrides,
+		});
+	return videoId;
+}
+
+const videoOf = async (videoId: string) => {
+	const [video] = await database()
+		.select()
+		.from(developerVideos)
+		.where(eq(developerVideos.id, videoId));
+	return video;
+};
+
+const chargeStorage = async (appId: string, day: string) =>
+	chargeStorageDay({
+		appId,
+		accountId: await accountOf(appId),
+		usage: await getAppStorageUsage(appId),
+		dateKey: day,
+		now: new Date(),
+	});
+
+const videoStarts = () =>
+	fixture.start.mock.calls.filter(
+		([workflow]) => workflow === "developer-video-workflow",
+	);
+
+const STORAGE_DAY_OF_TWO_HOURS = 340;
+const ADMISSION_FOR_TWO_HOURS = 2_380;
+
 const settle = (transcriptId: string, durationSeconds: number) =>
 	settleTranscript({
 		transcriptId,
@@ -182,6 +269,7 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		fixture.start.mockReset();
 		fixture.start.mockResolvedValue(undefined);
 		fixture.objectSize = null;
+		fixture.copies = [];
 	});
 
 	it("charges a transcript exactly once when settle attempts race", async () => {
@@ -632,5 +720,229 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		expect(await statusOf(stuckJob)).toEqual(["error", "timed_out"]);
 		expect(await statusOf(liveJob)).toEqual(["processing", null]);
 		expect(await statusOf(done)).toEqual(["complete", null]);
+	});
+
+	it("takes credit held for a running transcript out of the shared balance and upload admission", async () => {
+		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS + 10_000);
+		await makeStoredVideo(appId);
+		const transcriptId = await makeTranscript(appId);
+
+		expect(await availableBalance(appId)).toBe(
+			ADMISSION_FOR_TWO_HOURS + 10_000,
+		);
+		expect((await getInfraUploadAdmission(appId)).allowed).toBe(true);
+
+		await reserveTranscriptCredits({ transcriptId, durationSeconds: 3601 });
+
+		expect(await availableBalance(appId)).toBe(ADMISSION_FOR_TWO_HOURS - 2);
+		expect(await getInfraUploadAdmission(appId)).toMatchObject({
+			allowed: false,
+			reason: "insufficient_credits",
+			balanceMicroCredits: ADMISSION_FOR_TWO_HOURS - 2,
+			requiredMicroCredits: ADMISSION_FOR_TWO_HOURS,
+			shortfallMicroCredits: 2,
+		});
+
+		await settle(transcriptId, 3601);
+		expect(await availableBalance(appId)).toBe(ADMISSION_FOR_TWO_HOURS - 2);
+		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS - 2);
+	});
+
+	it("leaves held credit alone in the daily storage charge, and the held transcript still settles", async () => {
+		const appId = await makeApp(10_100);
+		await makeStoredVideo(appId);
+		const transcriptId = await makeTranscript(appId);
+		await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+		expect(await chargeStorage(appId, "2026-11-10")).toMatchObject({
+			state: "billed",
+			owedMicroCredits: STORAGE_DAY_OF_TWO_HOURS,
+			chargedMicroCredits: 100,
+			balanceMicroCredits: 10_000,
+			fellShort: true,
+		});
+		expect(await balanceOf(appId)).toBe(10_000);
+
+		expect(await settle(transcriptId, 3600)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(await balanceOf(appId)).toBe(0);
+	});
+
+	it("never lets the storage charge and a settle racing each other overdraw or fail the settle", async () => {
+		for (let round = 0; round < 6; round++) {
+			const appId = await makeApp(10_200);
+			await makeStoredVideo(appId);
+			const transcriptId = await makeTranscript(appId);
+			await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+			const [settled, charged] = await Promise.all([
+				settle(transcriptId, 3600),
+				chargeStorage(appId, "2026-11-10"),
+			]);
+
+			expect(settled).toMatchObject({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+			});
+			expect(charged).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 200,
+			});
+			expect(await balanceOf(appId)).toBe(0);
+		}
+	});
+
+	it("refuses a new transcript for an app that is out of credit and says how much to add", async () => {
+		const appId = await makeApp(100);
+		await makeStoredVideo(appId);
+		expect(await chargeStorage(appId, "2026-11-10")).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 100,
+			fellShort: true,
+		});
+		expect((await getInfraAppStanding(appId)).state).toBe("grace");
+		await setBalance(appId, 1_200);
+		expect((await getInfraAppStanding(appId)).state).toBe("active");
+		await setBalance(appId, 150);
+
+		expect(
+			await createTranscriptFromUrl(appId, { url: URL_A }, guards),
+		).toMatchObject({
+			ok: false,
+			status: 402,
+			code: "out_of_credit",
+			message:
+				"This app is out of credit, so new transcripts are blocked. Add at least $0.01 to start transcripts again.",
+		});
+		const upload = await createTranscriptUpload(appId, {
+			fileName: "standup.mp3",
+			contentLength: 1_000,
+		});
+		expect(upload).toMatchObject({ ok: false, status: 402 });
+		expect(fixture.start).not.toHaveBeenCalled();
+
+		await setBalance(appId, 1_000);
+		expect(
+			(await createTranscriptFromUrl(appId, { url: URL_A }, guards)).ok,
+		).toBe(true);
+	});
+
+	it("creates an agent video with a playback id and admits it without charging", async () => {
+		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS);
+		const created = await createDeveloperVideoUpload(appId, {
+			fileName: "demo.mp4",
+			contentLength: 5_000_000,
+		});
+		if (!created.ok) throw new Error("create failed");
+		expect(await videoOf(created.video.id)).toMatchObject({
+			status: "uploading",
+			playbackId: created.video.playbackId,
+			maxResolutionTier: "1080p",
+			duration: null,
+		});
+		expect(created.video.playbackId).toMatch(/^[A-Za-z0-9_-]{24}$/);
+
+		fixture.objectSize = 5_000_000;
+		const completed = await completeDeveloperVideoUpload(
+			appId,
+			created.video.id,
+			{ durationSeconds: 7200, width: 3840, height: 2160, fps: 30 },
+		);
+
+		expect(completed).toMatchObject({
+			ok: true,
+			video: {
+				status: "processing",
+				playbackId: created.video.playbackId,
+				durationSeconds: 5_000,
+				width: 3840,
+				height: 2160,
+			},
+		});
+		const stored = await videoOf(created.video.id);
+		expect(stored?.s3Key).toBe(fixture.copies[0]);
+		expect(stored?.processing?.encodeId).toBeTruthy();
+		expect(videoStarts()).toHaveLength(1);
+		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+		expect(await ledgerOf(appId)).toHaveLength(0);
+	});
+
+	it("admits a 4K agent upload at the capped price and refuses one the balance cannot store", async () => {
+		const appId = await makeApp(ADMISSION_FOR_TWO_HOURS - 1);
+		const created = await createDeveloperVideoUpload(appId, {
+			fileName: "demo.mp4",
+			contentLength: 20_000_000,
+		});
+		if (!created.ok) throw new Error("create failed");
+		fixture.objectSize = 20_000_000;
+		const complete = () =>
+			completeDeveloperVideoUpload(appId, created.video.id, {
+				durationSeconds: 7200,
+				width: 3840,
+				height: 2160,
+			});
+
+		expect(await complete()).toMatchObject({
+			ok: false,
+			status: 402,
+			code: "insufficient_credits",
+			shortfallMicroCredits: 1,
+		});
+		expect(await videoOf(created.video.id)).toMatchObject({
+			status: "uploading",
+			duration: null,
+			processing: null,
+		});
+		expect(videoStarts()).toHaveLength(0);
+
+		await setBalance(appId, ADMISSION_FOR_TWO_HOURS);
+		expect(await complete()).toMatchObject({
+			ok: true,
+			video: { status: "processing", durationSeconds: 7200 },
+		});
+		expect(videoStarts()).toHaveLength(1);
+		expect(await balanceOf(appId)).toBe(ADMISSION_FOR_TWO_HOURS);
+	});
+
+	it("records an agent upload once and starts it once when completions race", async () => {
+		for (let round = 0; round < 6; round++) {
+			fixture.start.mockClear();
+			fixture.copies = [];
+			const appId = await makeApp(100_000);
+			const created = await createDeveloperVideoUpload(appId, {
+				fileName: "demo.mp4",
+				contentLength: 1_000_000,
+			});
+			if (!created.ok) throw new Error("create failed");
+			fixture.objectSize = 1_000_000;
+
+			const results = await Promise.all(
+				Array.from({ length: 8 }, (_, index) =>
+					completeDeveloperVideoUpload(appId, created.video.id, {
+						durationSeconds: 60 + index,
+					}),
+				),
+			);
+
+			const stored = await videoOf(created.video.id);
+			expect(results.some((result) => result.ok)).toBe(true);
+			for (const result of results) {
+				if (result.ok) {
+					expect(result.video.durationSeconds).toBe(stored?.duration);
+				} else {
+					expect(result).toMatchObject({
+						status: 409,
+						code: "completion_in_progress",
+					});
+				}
+			}
+			expect(videoStarts()).toHaveLength(1);
+			expect(fixture.copies).toContain(stored?.s3Key);
+			expect(stored?.status).toBe("processing");
+			expect(await balanceOf(appId)).toBe(100_000);
+			expect(await ledgerOf(appId)).toHaveLength(0);
+		}
 	});
 });
