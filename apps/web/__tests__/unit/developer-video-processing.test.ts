@@ -161,7 +161,7 @@ describe("developer video webhook", () => {
 		expect(mocks.store.updates).toHaveLength(0);
 	});
 
-	it("records the MP4 and keeps processing while renditions encode", async () => {
+	it("makes the video ready on the MP4 while renditions still encode", async () => {
 		mocks.store.video = developerVideo({
 			processing: processingState({
 				hls: runningPart("t-hls"),
@@ -176,7 +176,9 @@ describe("developer video webhook", () => {
 		);
 
 		expect(result.applied).toBe(true);
-		expect(video().status).toBe("processing");
+		expect(video().status).toBe("ready");
+		expect(video().processing?.hls.state).toBe("running");
+		expect(video().renditions).toBeNull();
 		expect(video().processing?.mp4).toEqual({
 			state: "complete",
 			output: "t-mp4",
@@ -245,7 +247,7 @@ describe("developer video webhook", () => {
 		);
 
 		expect(video().processing?.hls).toEqual({ state: "pending" });
-		expect(video().status).toBe("processing");
+		expect(video().status).toBe("ready");
 		expect(video().renditions).toBeNull();
 	});
 

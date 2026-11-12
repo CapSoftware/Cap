@@ -177,7 +177,7 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &HideSelf, cx: &mut App| cx.hide());
     cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
-    cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
+    cx.on_action(|_: &Quit, cx: &mut App| quit(QuitSource::AppMenu, cx));
     cx.on_action(|_: &OpenFile, cx: &mut App| {
         let (files, directories) = if cfg!(target_os = "macos") {
             (true, false)
@@ -581,6 +581,21 @@ pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
 
 const QUIT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+#[derive(Clone, Copy, Debug)]
+pub enum QuitSource {
+    AppMenu,
+    Tray,
+    #[cfg(target_os = "macos")]
+    NativeTermination,
+    #[cfg(target_os = "macos")]
+    NativeQuitHandlerUnavailable,
+    #[cfg(target_os = "windows")]
+    MainWindowClose,
+    UpdateInstaller,
+    UpdateRelaunchFailed,
+    Relaunch,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QuitAction {
     Wait,
@@ -696,7 +711,8 @@ fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
     }
 }
 
-pub fn quit(cx: &mut App) {
+pub fn quit(source: QuitSource, cx: &mut App) {
+    tracing::info!(?source, "quit requested");
     let session = RecordingSession::global(cx);
     if !cx.has_global::<QuitCoordinator>() {
         cx.set_global(QuitCoordinator::default());

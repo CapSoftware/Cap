@@ -62,12 +62,10 @@ export async function processDeveloperVideoWorkflow(
 				break;
 			}
 
-			let busy = false;
-			for (const part of pending) {
-				if ((await dispatchPart(videoId, encodeId, part)) === "busy") {
-					busy = true;
-				}
-			}
+			const dispatched = await Promise.all(
+				pending.map((part) => dispatchPart(videoId, encodeId, part)),
+			);
+			const busy = dispatched.includes("busy");
 			await sleep(
 				`${busy ? RETRY_SECONDS : Math.min(MAX_POLL_SECONDS, 2 + poll * 2)}s`,
 			);
