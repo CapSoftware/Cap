@@ -8,8 +8,11 @@ const mocks = vi.hoisted(() => ({
 	prepare: vi.fn(),
 	readParts: vi.fn(),
 	dispatch: vi.fn(),
+	fail: vi.fn(),
 	order: [] as string[],
 }));
+
+class Refused extends Error {}
 
 vi.mock("next/server", () => ({ after: mocks.after }));
 vi.mock("workflow/api", () => ({ start: mocks.start }));
@@ -22,6 +25,8 @@ vi.mock("@/lib/developer-video-processing", () => ({
 	prepareDeveloperVideoProcessing: mocks.prepare,
 	readDeveloperVideoParts: mocks.readParts,
 	dispatchDeveloperVideoPart: mocks.dispatch,
+	failDeveloperVideoProcessing: mocks.fail,
+	isDeveloperVideoRefusal: (error: unknown) => error instanceof Refused,
 }));
 
 const {
@@ -47,6 +52,7 @@ beforeEach(() => {
 		mocks.order.push("prepare");
 		return "ready";
 	});
+	mocks.fail.mockResolvedValue(undefined);
 	mocks.readParts.mockResolvedValue({ hls: "dispatch", mp4: "dispatch" });
 	mocks.dispatch.mockImplementation(async (_video, _encode, part) => {
 		mocks.order.push(`dispatch:${part}`);
@@ -129,15 +135,31 @@ describe("developer video start", () => {
 		},
 	);
 
-	it("leaves a failed first pass to the workflow, which records it", async () => {
+	it("fails a refused upload straight away with the reason it was given", async () => {
 		mocks.prepare.mockRejectedValue(
-			new Error("Uploaded file has no video track"),
+			new Refused("This file has no video track."),
 		);
 
 		await expect(
 			kickStartDeveloperVideo("video-1", "encode-1"),
 		).resolves.toBeUndefined();
+
+		expect(mocks.fail).toHaveBeenCalledWith(
+			"video-1",
+			"encode-1",
+			"This file has no video track.",
+		);
 		expect(mocks.dispatch).not.toHaveBeenCalled();
+	});
+
+	it("leaves any other failed first pass to the workflow, which records it", async () => {
+		mocks.prepare.mockRejectedValue(new Error("connection reset"));
+
+		await expect(
+			kickStartDeveloperVideo("video-1", "encode-1"),
+		).resolves.toBeUndefined();
+		expect(mocks.dispatch).not.toHaveBeenCalled();
+		expect(mocks.fail).not.toHaveBeenCalled();
 
 		mocks.prepare.mockResolvedValue("ready");
 		mocks.dispatch.mockRejectedValue(new Error("storage unavailable"));
@@ -145,6 +167,7 @@ describe("developer video start", () => {
 		await expect(
 			kickStartDeveloperVideo("video-1", "encode-1"),
 		).resolves.toBeUndefined();
+		expect(mocks.fail).not.toHaveBeenCalled();
 	});
 
 	it("gives the claim back and starts nothing when the workflow cannot start", async () => {

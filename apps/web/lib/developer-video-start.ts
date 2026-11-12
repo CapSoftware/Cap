@@ -5,6 +5,8 @@ import {
 	claimDeveloperVideoProcessing,
 	type DeveloperVideoClaim,
 	dispatchDeveloperVideoPart,
+	failDeveloperVideoProcessing,
+	isDeveloperVideoRefusal,
 	prepareDeveloperVideoProcessing,
 	readDeveloperVideoParts,
 	releaseDeveloperVideoClaim,
@@ -53,8 +55,17 @@ export async function kickStartDeveloperVideo(
 				(part) => dispatchDeveloperVideoPart(videoId, encodeId, part),
 			),
 		);
-	} catch {
-		// The workflow runs the same steps and records a failure against the video.
+	} catch (error) {
+		// A refused upload is failed here, so the customer hears within a second
+		// or two. Anything else is left to the workflow, which runs the same
+		// steps and records the failure.
+		if (isDeveloperVideoRefusal(error)) {
+			await failDeveloperVideoProcessing(
+				videoId,
+				encodeId,
+				error.message,
+			).catch(() => {});
+		}
 	}
 }
 
