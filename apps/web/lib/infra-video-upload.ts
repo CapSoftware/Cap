@@ -8,7 +8,7 @@ import {
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
 import type { User } from "@cap/web-domain";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { billableVideo } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
@@ -367,7 +367,16 @@ export async function completeInfraUpload({
 		});
 
 		if (!admission.allowed) {
-			return { status: 402, body: uploadAdmissionError(admission) };
+			await removeStoredFile(s3Key);
+			const refusal = uploadAdmissionError(admission);
+			return {
+				status: 402,
+				body: {
+					...refusal,
+					message: `${refusal.message} The uploaded file was removed, so upload it again once credit is added.`,
+					fileRemoved: true,
+				},
+			};
 		}
 
 		return ok({ success: true });
@@ -375,6 +384,60 @@ export async function completeInfraUpload({
 		console.error("Error completing multipart upload:", error);
 		return fail(500, "Failed to complete upload");
 	}
+}
+
+async function removeStoredFile(s3Key: string) {
+	try {
+		await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+			yield* bucket.deleteObject(s3Key);
+		}).pipe(provideOptionalAuth, runPromise);
+		return true;
+	} catch (error) {
+		console.error("Error removing an unrecorded upload:", s3Key, error);
+		return false;
+	}
+}
+
+const UNRECORDED_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const UNRECORDED_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const UNRECORDED_BATCH = 500;
+
+export async function removeUnrecordedInfraFiles(now: Date = new Date()) {
+	const rows = await db()
+		.select({ s3Key: developerVideos.s3Key })
+		.from(developerVideos)
+		.where(
+			and(
+				isNull(developerVideos.duration),
+				isNotNull(developerVideos.s3Key),
+				lt(
+					developerVideos.createdAt,
+					new Date(now.getTime() - UNRECORDED_FILE_MAX_AGE_MS),
+				),
+				gt(
+					developerVideos.createdAt,
+					new Date(now.getTime() - UNRECORDED_LOOKBACK_MS),
+				),
+			),
+		)
+		.limit(UNRECORDED_BATCH);
+
+	let removed = 0;
+	for (const row of rows) {
+		const s3Key = row.s3Key;
+		if (!s3Key) continue;
+		const stale = await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+			const object = yield* bucket.headObject(s3Key);
+			const modified = object.LastModified?.getTime() ?? 0;
+			return modified <= now.getTime() - UNRECORDED_FILE_MAX_AGE_MS;
+		})
+			.pipe(provideOptionalAuth, runPromise)
+			.catch(() => false);
+		if (stale && (await removeStoredFile(s3Key))) removed++;
+	}
+	return removed;
 }
 
 const ALREADY_RECORDED = { allowed: true } as const;

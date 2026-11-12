@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 	complete: vi.fn(),
 	listParts: vi.fn(),
 	headObject: vi.fn(),
+	deleteObject: vi.fn(),
+	unrecorded: [] as { s3Key: string | null }[],
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
 	admission: vi.fn(),
@@ -45,6 +47,9 @@ vi.mock("@cap/database", async () => {
 		}
 		if (keys === "id") {
 			return [{ id: "video-1" }];
+		}
+		if (keys === "s3Key") {
+			return mocks.unrecorded;
 		}
 		if (keys === "duration") {
 			return [{ duration: mocks.recordedReads.shift() ?? null }];
@@ -143,6 +148,7 @@ vi.mock("@cap/web-backend", async () => {
 				Effect.succeed([
 					{
 						headObject: mocks.headObject,
+						deleteObject: mocks.deleteObject,
 						multipart: {
 							complete: mocks.complete,
 							listParts: mocks.listParts,
@@ -173,6 +179,7 @@ vi.mock("@/app/api/utils", () => ({
 }));
 
 import { app } from "@/app/api/developer/sdk/v1/[...route]/upload";
+import { removeUnrecordedInfraFiles } from "@/lib/infra-video-upload";
 
 type RequestPart = { partNumber: number; etag: string; size: number };
 
@@ -251,6 +258,9 @@ describe("developer SDK multipart completion", () => {
 		mocks.headObject.mockImplementation(() =>
 			Effect.fail(new Error("not found")),
 		);
+		mocks.deleteObject.mockReset();
+		mocks.deleteObject.mockImplementation(() => Effect.succeed({}));
+		mocks.unrecorded = [];
 	});
 
 	it("charges nothing when an upload completes", async () => {
@@ -284,35 +294,55 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.admission.mock.calls[1]?.[2]).toBeDefined();
 	});
 
-	it("refuses when a parallel upload took the allowance, then records the assembled file on retry without completing storage again", async () => {
+	it("removes the assembled file and says to upload again when a parallel upload took the allowance", async () => {
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
 		mocks.admission
 			.mockResolvedValueOnce(admitted)
 			.mockResolvedValueOnce(refused);
 
-		const first = await complete({ durationInSecs: 60 });
+		const response = await complete({ durationInSecs: 60 });
 
-		expect(first.status).toBe(402);
+		expect(response.status).toBe(402);
+		const body = await response.json();
+		expect(body).toMatchObject({
+			code: "insufficient_credits",
+			fileRemoved: true,
+			shortfallMicroCredits: 19_734,
+		});
+		expect(body.message).toContain("upload it again once credit is added");
 		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);
+		expect(mocks.deleteObject).toHaveBeenCalledWith(S3_KEY);
 		expect(mocks.videoUpdates).toEqual([]);
 		expect(mocks.storedDuration).toBe(null);
+	});
 
-		mocks.listPartsFails = true;
-		mocks.headObject.mockImplementation(() =>
-			Effect.succeed({ ContentLength: 10_000_000 }),
+	it("keeps the file when the upload is refused before storage assembles it", async () => {
+		mocks.admission.mockResolvedValue(refused);
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(402);
+		await expect(response.json()).resolves.not.toHaveProperty("fileRemoved");
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
+	});
+
+	it("still answers 402 when the refused file cannot be removed", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		mocks.admission
+			.mockResolvedValueOnce(admitted)
+			.mockResolvedValueOnce(refused);
+		mocks.deleteObject.mockImplementation(() =>
+			Effect.fail(new Error("storage down")),
 		);
-		mocks.admission.mockReset();
-		mocks.admission.mockResolvedValue(admitted);
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		const retry = await complete({ durationInSecs: 60 });
+		const response = await complete({ durationInSecs: 60 });
 
-		expect(retry.status).toBe(200);
-		expect(mocks.complete).toHaveBeenCalledTimes(1);
-		expect(mocks.admission).toHaveBeenCalledTimes(1);
-		expect(mocks.admission.mock.calls[0]?.[2]).toBeDefined();
-		expect(mocks.videoUpdates).toEqual([
-			{ duration: 60, width: 1920, height: 1080 },
-		]);
+		expect(response.status).toBe(402);
+		expect(mocks.videoUpdates).toEqual([]);
+		errors.mockRestore();
 	});
 
 	it("measures an assembled file from its size in storage, not from the request", async () => {
@@ -555,6 +585,65 @@ describe("developer SDK multipart completion", () => {
 			{ duration: 60, width: 1920, height: 1080 },
 		]);
 		expect(mocks.storedDuration).toBe(60);
+		errors.mockRestore();
+	});
+});
+
+describe("removing files that were assembled but never recorded", () => {
+	const now = new Date("2026-11-12T12:00:00Z");
+	const hoursAgo = (hours: number) =>
+		new Date(now.getTime() - hours * 60 * 60 * 1000);
+
+	beforeEach(() => {
+		mocks.deleteObject.mockReset();
+		mocks.deleteObject.mockImplementation(() => Effect.succeed({}));
+		mocks.headObject.mockReset();
+	});
+
+	it("deletes an assembled file that has gone a day without a record", async () => {
+		mocks.unrecorded = [{ s3Key: "developer/app-1/old/video" }];
+		mocks.headObject.mockImplementation(() =>
+			Effect.succeed({ LastModified: hoursAgo(25) }),
+		);
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
+		expect(mocks.deleteObject).toHaveBeenCalledWith(
+			"developer/app-1/old/video",
+		);
+	});
+
+	it("leaves a file assembled within the last day, and a video with no file", async () => {
+		mocks.unrecorded = [
+			{ s3Key: "developer/app-1/fresh/video" },
+			{ s3Key: "developer/app-1/none/video" },
+			{ s3Key: null },
+		];
+		mocks.headObject.mockImplementation((key: string) =>
+			key.includes("fresh")
+				? Effect.succeed({ LastModified: hoursAgo(2) })
+				: Effect.fail(new Error("not found")),
+		);
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.deleteObject).not.toHaveBeenCalled();
+	});
+
+	it("counts only the files it removed", async () => {
+		mocks.unrecorded = [
+			{ s3Key: "developer/app-1/a/video" },
+			{ s3Key: "developer/app-1/b/video" },
+		];
+		mocks.headObject.mockImplementation(() =>
+			Effect.succeed({ LastModified: hoursAgo(48) }),
+		);
+		mocks.deleteObject.mockImplementation((key: string) =>
+			key.includes("/b/")
+				? Effect.fail(new Error("storage down"))
+				: Effect.succeed({}),
+		);
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
 		errors.mockRestore();
 	});
 });

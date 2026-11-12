@@ -9,6 +9,7 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { Effect, Layer, Option, Schema } from "effect";
+import { removeUnrecordedInfraFiles } from "@/lib/infra-video-upload";
 import { apiToHandler } from "@/lib/server";
 
 const DEVELOPER_UPLOAD_PREFIX = "developer/";
@@ -21,6 +22,7 @@ class Api extends HttpApi.make("DeveloperUploadCleanupApi").add(
 				Schema.Struct({
 					aborted: Schema.Number,
 					failed: Schema.Number,
+					removed: Schema.Number,
 				}),
 			)
 			.addError(HttpApiError.Unauthorized)
@@ -105,9 +107,22 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						),
 						Effect.mapError(() => new HttpApiError.InternalServerError()),
 					);
+					const removed = yield* Effect.tryPromise(() =>
+						removeUnrecordedInfraFiles(),
+					).pipe(
+						Effect.tapError((error) =>
+							Effect.sync(() =>
+								console.error(
+									"[developer-upload-cleanup] Failed to remove unrecorded files",
+									error,
+								),
+							),
+						),
+						Effect.mapError(() => new HttpApiError.InternalServerError()),
+					);
 					if (result.failed > 0)
 						return yield* new HttpApiError.InternalServerError();
-					return result;
+					return { ...result, removed };
 				}),
 			),
 		),

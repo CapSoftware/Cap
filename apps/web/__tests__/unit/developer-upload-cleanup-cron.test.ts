@@ -36,6 +36,10 @@ vi.mock("@cap/web-backend", async () => {
 
 type ApiLayer = EffectLayer.Layer<HttpApi.Api>;
 
+vi.mock("@/lib/infra-video-upload", () => ({
+	removeUnrecordedInfraFiles: async () => 3,
+}));
+
 vi.mock("@/lib/server", async () => {
 	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
 	const { Layer } = await import("effect");
@@ -121,7 +125,11 @@ describe("developer upload cleanup cron", () => {
 		const response = await runCron();
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 2,
+			failed: 0,
+			removed: 3,
+		});
 		expect(mocks.listUploads).toHaveBeenCalledWith({
 			prefix: "developer/",
 			keyMarker: undefined,
@@ -160,7 +168,11 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 2,
+			failed: 0,
+			removed: 3,
+		});
 		expect(mocks.listUploads.mock.calls).toEqual([
 			[
 				{
@@ -228,7 +240,11 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({ aborted: 0, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 0,
+			failed: 0,
+			removed: 3,
+		});
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 });
