@@ -1,85 +1,59 @@
-import { db } from "@cap/database";
-import { developerApps, developerCreditAccounts } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
-import { and, eq, isNull } from "drizzle-orm";
-import { Hono } from "hono";
-import { handle } from "hono/vercel";
-import { z } from "zod";
-import { ensureDeveloperStripeCustomer } from "@/lib/developer-stripe-customer";
-import { canUseInfra } from "@/lib/infra-access";
-import { infraAppPath } from "@/lib/infra-routes";
-import { zValidator } from "@/utils/zod-validator";
-import { corsMiddleware, withAuth } from "../../../utils";
+import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiError,
+	HttpApiGroup,
+} from "@effect/platform";
+import { Effect, Layer, Schema } from "effect";
+import { createDeveloperCardCheckout } from "@/lib/developer-card-checkout";
+import { apiToHandler } from "@/lib/server";
 
-const app = new Hono()
-	.basePath("/api/developer/credits/card")
-	.use(corsMiddleware)
-	.use(withAuth);
+class Api extends HttpApi.make("DeveloperCardApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("saveCard")`/api/developer/credits/card`
+			.setPayload(Schema.Struct({ appId: Schema.String }))
+			.addSuccess(Schema.Struct({ url: Schema.String }))
+			.addError(HttpApiError.Forbidden)
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.InternalServerError)
+			.middleware(HttpAuthMiddleware),
+	),
+) {}
 
-app.post(
-	"/",
-	zValidator("json", z.object({ appId: z.string() })),
-	async (c) => {
-		const user = c.get("user");
-		const { appId } = c.req.valid("json");
-
-		if (!canUseInfra(user.email)) {
-			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
-		}
-
-		const [account] = await db()
-			.select({
-				id: developerCreditAccounts.id,
-				stripeCustomerId: developerCreditAccounts.stripeCustomerId,
-			})
-			.from(developerCreditAccounts)
-			.innerJoin(
-				developerApps,
-				eq(developerCreditAccounts.appId, developerApps.id),
-			)
-			.where(
-				and(
-					eq(developerApps.id, appId),
-					eq(developerApps.ownerId, user.id),
-					isNull(developerApps.deletedAt),
-				),
-			)
-			.limit(1);
-
-		if (!account) {
-			return c.json({ error: "App not found" }, 404);
-		}
-
-		try {
-			const customerId = await ensureDeveloperStripeCustomer({ user, account });
-			const metadata = {
-				type: "developer_card",
-				appId,
-				accountId: account.id,
-				userId: user.id,
-			};
-			const session = await stripe().checkout.sessions.create({
-				customer: customerId,
-				mode: "setup",
-				payment_method_types: ["card"],
-				success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?card=saved`,
-				cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
-				metadata,
-				setup_intent_data: { metadata },
-			});
-
-			if (session.url) {
-				return c.json({ url: session.url });
-			}
-
-			return c.json({ error: "Failed to create checkout session" }, 500);
-		} catch (error) {
-			console.error("Error creating developer card checkout:", error);
-			return c.json({ error: "Failed to create checkout session" }, 500);
-		}
-	},
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("saveCard", ({ payload }) =>
+				Effect.gen(function* () {
+					const user = yield* CurrentUser;
+					const result = yield* Effect.tryPromise(() =>
+						createDeveloperCardCheckout({
+							user: { id: user.id, email: user.email },
+							appId: payload.appId,
+						}),
+					).pipe(
+						Effect.catchAll((error) =>
+							Effect.logError(error).pipe(
+								Effect.andThen(() =>
+									Effect.fail(new HttpApiError.InternalServerError()),
+								),
+							),
+						),
+					);
+					if (result.status === "ok") return { url: result.url };
+					if (result.status === "forbidden") {
+						return yield* new HttpApiError.Forbidden();
+					}
+					if (result.status === "not_found") {
+						return yield* new HttpApiError.NotFound();
+					}
+					return yield* new HttpApiError.InternalServerError();
+				}),
+			),
+		),
+	),
 );
 
-export const POST = handle(app);
-export const OPTIONS = handle(app);
+export const POST = apiToHandler(ApiLive);

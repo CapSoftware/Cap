@@ -45,6 +45,7 @@ vi.mock("@cap/database/schema", () => ({
 	developerCreditAccounts: { id: "id", appId: "appId" },
 	developerCreditTransactions: {},
 	developerVideos: {},
+	users: { id: "id", stripeCustomerId: "stripeCustomerId" },
 }));
 vi.mock("drizzle-orm", () => ({
 	and: (...args: unknown[]) => args,
@@ -101,8 +102,8 @@ vi.mock("@/app/api/utils", async () => {
 
 import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card";
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
-import { POST as saveCard } from "@/app/api/developer/credits/card/route";
 import { app as videoCreate } from "@/app/api/developer/sdk/v1/[...route]/video-create";
+import { createDeveloperCardCheckout } from "@/lib/developer-card-checkout";
 
 const preview = { id: "user-1", email: "richie@cap.so" };
 const outsider = { id: "user-2", email: "someone@example.com" };
@@ -116,14 +117,11 @@ const account = (extra: Record<string, unknown> = {}) => ({
 	...extra,
 });
 
-const postCard = () =>
-	saveCard(
-		new Request("https://cap.test/api/developer/credits/card", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ appId: "app-1" }),
-		}),
-	);
+const cardCheckout = () =>
+	createDeveloperCardCheckout({
+		user: mocks.user as never,
+		appId: "app-1",
+	});
 
 beforeEach(() => {
 	mocks.user = preview;
@@ -186,35 +184,28 @@ describe("saving a card", () => {
 	it("refuses an account outside the preview list before reaching the payment provider", async () => {
 		mocks.user = outsider;
 
-		const response = await postCard();
-
-		expect(response.status).toBe(403);
+		expect(await cardCheckout()).toEqual({ status: "forbidden" });
 		expect(mocks.ensureCustomer).not.toHaveBeenCalled();
-		expect(mocks.createSession).not.toHaveBeenCalled();
-	});
-
-	it("refuses a signed-out request", async () => {
-		mocks.user = null;
-
-		expect((await postCard()).status).toBe(401);
 		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 
 	it("refuses an app the user does not own", async () => {
 		mocks.selects = [[]];
 
-		expect((await postCard()).status).toBe(404);
+		expect(await cardCheckout()).toEqual({ status: "not_found" });
 		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 
 	it("opens a setup checkout that keeps the card for this account", async () => {
-		mocks.selects = [[account()]];
+		mocks.selects = [[account({ userStripeCustomerId: "cus_user" })]];
 
-		const response = await postCard();
-
-		expect(response.status).toBe(200);
-		await expect(response.json()).resolves.toEqual({
+		expect(await cardCheckout()).toEqual({
+			status: "ok",
 			url: "https://checkout.test/s",
+		});
+		expect(mocks.ensureCustomer).toHaveBeenCalledWith({
+			user: { ...preview, stripeCustomerId: "cus_user" },
+			account: expect.objectContaining({ id: "account-1" }),
 		});
 		const metadata = {
 			type: "developer_card",
@@ -233,6 +224,15 @@ describe("saving a card", () => {
 					"https://cap.test/dashboard/infra/app-1/billing?card=saved",
 			}),
 		);
+	});
+
+	it("reports a failure when the payment provider refuses", async () => {
+		mocks.selects = [[account()]];
+		mocks.createSession.mockRejectedValue(new Error("provider down"));
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(await cardCheckout()).toEqual({ status: "failed" });
+		errors.mockRestore();
 	});
 });
 
