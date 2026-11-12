@@ -579,6 +579,7 @@ describe("browser access", () => {
 		"/api/developer/v1/videos/video-1/status",
 		"/api/developer/v1/uploads",
 		"/api/developer/v1/transcripts",
+		"/api/developer/v1/transactions",
 		"/api/developer/v1/usage",
 		"/api/developer/v1/nope",
 	])("refuses a preflight for %s", async (path) => {
