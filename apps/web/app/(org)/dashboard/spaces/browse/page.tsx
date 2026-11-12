@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { getSpaceMemberIds } from "@/actions/organization/get-space-member-ids";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
@@ -26,14 +27,10 @@ import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
 
 export default function BrowseSpacesPage() {
-	const { spacesData, user, activeOrganization } = useDashboardContext();
+	const { spacesData } = useDashboardContext();
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
 	const [editSpace, setEditSpace] = useState<NewSpaceFormProps["space"]>(null);
 	const [searchQuery, setSearchQuery] = useState("");
-
-	const trueActiveOrgMembers = activeOrganization?.members.filter(
-		(m) => m.user?.id !== user?.id,
-	);
 
 	const filteredSpaces = spacesData?.filter((space: Spaces) =>
 		space.name.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -171,14 +168,23 @@ export default function BrowseSpacesPage() {
 													variant="gray"
 													className="size-8 p-0 min-w-[unset]"
 													size="sm"
-													onClick={(e) => {
+													onClick={async (e) => {
 														e.stopPropagation();
+														// Saving replaces the space's members with this
+														// list, so it must start from the real ones.
+														const members = await getSpaceMemberIds(
+															space.id,
+														).catch(() => null);
+														if (!members) {
+															toast.error(
+																"Could not load this space's members",
+															);
+															return;
+														}
 														setEditSpace({
 															id: space.id,
 															name: space.name,
-															members: (trueActiveOrgMembers || []).map(
-																(m: { user: { id: string } }) => m.user.id,
-															),
+															members,
 															iconUrl: space.iconUrl ?? undefined,
 															settings: space.settings,
 															hasPassword: space.hasPassword,
