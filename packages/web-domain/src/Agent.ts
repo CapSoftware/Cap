@@ -64,6 +64,7 @@ const ErrorFields = {
 	retryable: Schema.Boolean,
 	retryAfterMs: Schema.NullOr(Schema.Number),
 	requestId: Schema.String,
+	hint: Schema.optional(Schema.String),
 };
 
 export class AgentBadRequestError extends Schema.TaggedError<AgentBadRequestError>()(
@@ -89,6 +90,7 @@ export class AgentForbiddenError extends Schema.TaggedError<AgentForbiddenError>
 	{
 		...ErrorFields,
 		code: Schema.Literal("FORBIDDEN", "PASSWORD_REQUIRED", "CONTENT_DISABLED"),
+		requiredScopes: Schema.optional(Schema.Array(AgentScope)),
 	},
 	HttpApiSchema.annotations({ status: 403 }),
 ) {}
@@ -983,18 +985,25 @@ export const AgentDeveloperAutoTopUpInput = Schema.Struct({
 	amountCents: Schema.optional(Schema.Number),
 });
 
-export const AgentDeveloperApp = Schema.Struct({
+const AgentDeveloperAppFields = {
 	id: Schema.String,
 	name: Schema.String,
 	environment: Schema.Literal("development", "production"),
 	logoUrl: Schema.NullOr(Schema.String),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
+};
+
+export const AgentDeveloperAppSummary = Schema.Struct(AgentDeveloperAppFields);
+
+export const AgentDeveloperApp = Schema.Struct({
+	...AgentDeveloperAppFields,
 	capabilities: AgentActionCapabilities,
 });
 
 export const AgentDeveloperAppsResponse = Schema.Struct({
-	apps: Schema.Array(AgentDeveloperApp),
+	apps: Schema.Array(AgentDeveloperAppSummary),
+	capabilities: AgentActionCapabilities,
 	requestId: Schema.String,
 });
 
@@ -1083,19 +1092,43 @@ export const AgentDeveloperVideo = Schema.Struct({
 	appId: Schema.String,
 	externalUserId: Schema.NullOr(Schema.String),
 	name: Schema.String,
+	status: Schema.Literal("uploading", "processing", "ready", "errored"),
+	errorReason: Schema.NullOr(Schema.String),
+	playbackId: Schema.NullOr(Schema.String),
 	durationSeconds: Schema.NullOr(Schema.Number),
 	width: Schema.NullOr(Schema.Number),
 	height: Schema.NullOr(Schema.Number),
 	fps: Schema.NullOr(Schema.Number),
+	maxResolutionTier: Schema.String,
+	renditions: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			width: Schema.Number,
+			height: Schema.Number,
+			bitrate: Schema.Number,
+			bytes: Schema.Number,
+			codecs: Schema.NullOr(Schema.String),
+		}),
+	),
 	transcriptionStatus: Schema.NullOr(Schema.String),
+	hlsUrl: Schema.NullOr(Schema.String),
+	mp4Url: Schema.NullOr(Schema.String),
+	posterUrl: Schema.NullOr(Schema.String),
+	shareUrl: Schema.NullOr(Schema.String),
+	embedUrl: Schema.NullOr(Schema.String),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
-	capabilities: AgentActionCapabilities,
 });
 
 export const AgentDeveloperVideosResponse = Schema.Struct({
 	videos: Schema.Array(AgentDeveloperVideo),
+	capabilities: AgentActionCapabilities,
 	nextCursor: Schema.NullOr(Schema.String),
+	requestId: Schema.String,
+});
+
+export const AgentDeveloperVideoResponse = Schema.Struct({
+	video: AgentDeveloperVideo,
 	requestId: Schema.String,
 });
 
@@ -1237,20 +1270,7 @@ export const AgentDeveloperVideoCompleteInput = Schema.Struct({
 	fps: Schema.optional(Schema.Number),
 });
 
-export const AgentDeveloperVideoCompleteResponse = Schema.Struct({
-	video: Schema.Struct({
-		id: Schema.String,
-		appId: Schema.String,
-		name: Schema.String,
-		status: Schema.String,
-		playbackId: Schema.NullOr(Schema.String),
-		durationSeconds: Schema.Number,
-		width: Schema.NullOr(Schema.Number),
-		height: Schema.NullOr(Schema.Number),
-		fps: Schema.NullOr(Schema.Number),
-	}),
-	requestId: Schema.String,
-});
+export const AgentDeveloperVideoCompleteResponse = AgentDeveloperVideoResponse;
 
 export const AgentMutationResponse = Schema.Struct({
 	resource: Schema.Struct({
@@ -1730,6 +1750,16 @@ export class AgentManagementHttpApi extends HttpApiGroup.make("agentManagement")
 			.setPath(AgentDeveloperAppPath)
 			.setUrlParams(AgentDeveloperVideoParams)
 			.addSuccess(AgentDeveloperVideosResponse),
+	)
+	.add(
+		withReadErrors(
+			HttpApiEndpoint.get(
+				"getDeveloperVideo",
+				"/developer/apps/:appId/videos/:videoId",
+			),
+		)
+			.setPath(AgentDeveloperVideoPath)
+			.addSuccess(AgentDeveloperVideoResponse),
 	)
 	.add(
 		withReadErrors(

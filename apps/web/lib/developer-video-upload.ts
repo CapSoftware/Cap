@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
+import { developerIdFromKey } from "@/lib/developer-ids";
 import {
 	copyDeveloperObject,
 	deleteDeveloperObjects,
@@ -105,10 +105,7 @@ export function developerVideoUploadKey(appId: string, videoId: string) {
 }
 
 export function developerVideoIdForIdempotencyKey(appId: string, key: string) {
-	return createHash("sha256")
-		.update(["developer-video", appId, key].join("\0"), "utf8")
-		.digest("base64url")
-		.slice(0, 15);
+	return developerIdFromKey("developer-video", appId, key);
 }
 
 export function developerVideoRecordedSeconds(input: {

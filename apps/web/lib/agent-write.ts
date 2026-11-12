@@ -182,6 +182,7 @@ export const runAgentMutation = <A>(input: {
 	requestId: string;
 	decodeReplay: (value: unknown) => A;
 	execute: (tx: Transaction) => Promise<AgentMutationOutcome<NoInfer<A>>>;
+	notFound?: (requestId: string) => Agent.AgentNotFoundError;
 }): Effect.Effect<
 	A,
 	| Agent.AgentBadRequestError
@@ -243,7 +244,9 @@ export const runAgentMutation = <A>(input: {
 		if (result.state === "unavailable" || result.state === "pending") {
 			return yield* temporarilyUnavailable(input.requestId);
 		}
-		if (result.state === "not_found") return yield* notFound(input.requestId);
+		if (result.state === "not_found") {
+			return yield* (input.notFound ?? notFound)(input.requestId);
+		}
 		if (result.state === "forbidden") {
 			return yield* new Agent.AgentForbiddenError({
 				...commonError(input.requestId, "Access is not allowed"),
