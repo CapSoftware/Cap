@@ -17,6 +17,8 @@ const context = vi.hoisted(() => ({
 	objectSize: null as number | null,
 	deleted: [] as string[],
 	presigned: [] as { key: string; contentLength: number }[],
+	failSigning: false,
+	onDelete: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -89,6 +91,7 @@ vi.mock("@/lib/developer-transcript-speech", () => ({
 
 vi.mock("@/lib/developer-transcript-storage", () => ({
 	presignDeveloperUpload: async (key: string, contentLength: number) => {
+		if (context.failSigning) throw new Error("signing unavailable");
 		context.presigned.push({ key, contentLength });
 		return `https://storage.example/${key}?signed=${context.presigned.length}`;
 	},
@@ -96,6 +99,9 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	getDeveloperObjectText: async () => null,
 	deleteDeveloperObjects: async (keys: string[]) => {
 		context.deleted.push(...keys);
+		const hook = context.onDelete;
+		context.onDelete = null;
+		await hook?.();
 	},
 }));
 
@@ -164,6 +170,8 @@ beforeEach(() => {
 	context.objectSize = null;
 	context.deleted = [];
 	context.presigned = [];
+	context.failSigning = false;
+	context.onDelete = null;
 	fake().seed(developerCreditAccounts, {
 		id: "account-1",
 		appId: "app-1",
@@ -824,6 +832,29 @@ describe("creating a transcript from an upload", () => {
 		}
 	});
 
+	it("leaves the upload expiry alone when a new URL cannot be issued", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-11-12T14:28:41.400Z"));
+			const first = await upload(1024, "upload-key-0004");
+			if (!first.ok || !first.upload) throw new Error("create failed");
+
+			vi.setSystemTime(new Date("2026-11-12T15:10:00.000Z"));
+			context.failSigning = true;
+			await expect(upload(1024, "upload-key-0004")).rejects.toThrow(
+				"signing unavailable",
+			);
+
+			const stored = await getTranscript("app-1", first.transcript.id);
+			if (!stored) throw new Error("missing");
+			expect(transcriptUploadExpiry(stored).toISOString()).toBe(
+				first.upload.expiresAt,
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("tells a caller whose upload URL expired how to get a new one", async () => {
 		const created = await upload(1024, "upload-key-0003");
 		if (!created.ok) throw new Error("create failed");
@@ -1144,6 +1175,30 @@ describe("expiring stale transcripts", () => {
 			createdAt: at(updatedAt),
 			updatedAt: at(updatedAt),
 		});
+
+	it("leaves an upload alone when its URL was renewed while cleanup ran", async () => {
+		seed("first-old-upload", "uploading", "2026-11-10T09:00:00Z");
+		seed("renewed-upload", "uploading", "2026-11-10T09:00:00Z");
+		const now = at("2026-11-11T10:00:00Z");
+		context.onDelete = async () => {
+			const renewed = transcripts().find((row) => row.id === "renewed-upload");
+			if (renewed) renewed.updatedAt = now;
+		};
+
+		const result = await expireStaleTranscripts(now);
+
+		expect(result).toEqual({ expired: 1, redispatched: 0 });
+		const byId = Object.fromEntries(
+			transcripts().map((row) => [row.id, [row.status, row.errorCode]]),
+		);
+		expect(byId).toEqual({
+			"first-old-upload": ["error", "upload_expired"],
+			"renewed-upload": ["uploading", null],
+		});
+		expect(context.deleted.some((key) => key.includes("renewed-upload"))).toBe(
+			false,
+		);
+	});
 
 	it("fails uploads never sent and jobs that never finished", async () => {
 		seed("old-upload", "uploading", "2026-11-10T09:00:00Z");

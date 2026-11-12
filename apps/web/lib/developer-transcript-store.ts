@@ -475,6 +475,7 @@ async function issueUploadTarget(
 	key: string,
 	contentLength: number,
 ): Promise<{ target: TranscriptUploadTarget; issuedAt: Date }> {
+	const url = await presignDeveloperUpload(key, contentLength);
 	const issuedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db()
 		.update(developerTranscripts)
@@ -489,7 +490,7 @@ async function issueUploadTarget(
 		issuedAt,
 		target: {
 			method: "PUT",
-			url: await presignDeveloperUpload(key, contentLength),
+			url,
 			headers: { "Content-Length": String(contentLength) },
 			expiresAt: transcriptUploadExpiry({ updatedAt: issuedAt }).toISOString(),
 		},
@@ -849,6 +850,9 @@ export async function expireStaleTranscripts(now = new Date()) {
 				and(
 					eq(developerTranscripts.id, row.id),
 					eq(developerTranscripts.status, row.status),
+					uploading
+						? lt(developerTranscripts.updatedAt, uploadCutoff)
+						: undefined,
 				),
 			);
 		if (affectedRows(result) === 0) continue;
