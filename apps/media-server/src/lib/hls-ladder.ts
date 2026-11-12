@@ -1,4 +1,9 @@
-import { type HdrTransfer, hdrToSdrFilter, SDR_COLOR_ARGS } from "./hdr";
+import {
+	type HdrColor,
+	type HdrTransfer,
+	hdrToSdrFilter,
+	SDR_COLOR_ARGS,
+} from "./hdr";
 import { NVENC_HWACCEL_INPUT_ARGS, type NvencOptions } from "./nvenc-encoder";
 
 export const HLS_LADDER_MASTER_PLAYLIST = "master.m3u8";
@@ -164,6 +169,38 @@ export function hlsLadderFrameRate(sourceFps: number): string {
 	return String(Math.round(sourceFps * 1000) / 1000);
 }
 
+const COMMON_FRAME_RATES = [10, 12, 15, 20, 24, 25, 30, 48, 50, 60];
+// Capture timestamps wander by a few milliseconds, so a short stretch of a
+// steady recording measures a little faster than its real rate.
+const FRAME_TIMING_JITTER = 0.05;
+
+// The probe's frame rate is an average over the opening packets. A recording
+// that starts on a still screen and then moves is faster than its opening, and
+// a grid at the opening rate would drop most of its frames. The grid follows
+// the fastest stretch instead. A source whose opening already covers its
+// fastest stretch keeps the opening rate, so a constant frame rate source gets
+// exactly the grid it always had.
+export function hlsLadderSourceFps(
+	openingFps: number,
+	fastestFps: number | null,
+): number {
+	const opening =
+		Number.isFinite(openingFps) && openingFps > 0 ? openingFps : 0;
+	if (
+		fastestFps === null ||
+		!Number.isFinite(fastestFps) ||
+		fastestFps <= opening * (1 + FRAME_TIMING_JITTER)
+	) {
+		return openingFps;
+	}
+	return (
+		COMMON_FRAME_RATES.find(
+			(rate) =>
+				rate >= fastestFps / (1 + FRAME_TIMING_JITTER) && rate <= fastestFps,
+		) ?? fastestFps
+	);
+}
+
 export interface HlsLadderArgsInput {
 	inputPath: string;
 	outputDir: string;
@@ -176,6 +213,7 @@ export interface HlsLadderArgsInput {
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
 	range?: HlsLadderRange | null;
 	hdr?: HdrTransfer | null;
+	hdrColor?: HdrColor | null;
 }
 
 // An HDR source is converted on the CPU, so it is never decoded on the GPU.
@@ -200,6 +238,12 @@ const SLICE_OUTPUT_ARGS = ["-hls_segment_options", "movflags=+frag_discont"];
 // timestamp to zero so seeking, trimming and the audio all share one origin.
 const SOURCE_CLOCK_ARGS = ["-copyts", "-start_at_zero"];
 const SLICE_SEEK_MARGIN_SECONDS = 2;
+// An accurate seek throws away every frame before the seek point. A slice that
+// starts inside a still stretch then has no earlier frame to repeat and begins
+// at the next source frame, short of its start. Keeping the frames from the
+// keyframe before the seek point gives the frame grid one to hold; the trim
+// filter still cuts the start exactly.
+const SLICE_SEEK_ARGS = ["-noaccurate_seek"];
 
 function sliceSeekSeconds(range: HlsLadderRange): number {
 	return Math.max(0, range.startSeconds - SLICE_SEEK_MARGIN_SECONDS);
@@ -209,6 +253,7 @@ function sliceInputArgs(range: HlsLadderRange | null | undefined): string[] {
 	if (!range) return [];
 	const seek = sliceSeekSeconds(range);
 	return [
+		...SLICE_SEEK_ARGS,
 		"-ss",
 		String(seek),
 		...(range.durationSeconds === undefined
@@ -239,7 +284,9 @@ function sliceTrimFilter(range: HlsLadderRange | null | undefined): string {
 
 function ladderFilterGraph(input: HlsLadderArgsInput): string {
 	const { rungs, nvenc } = input;
-	const toSdr = input.hdr ? `${hdrToSdrFilter(input.hdr, rungs[0])},` : "";
+	const toSdr = input.hdr
+		? `${hdrToSdrFilter(input.hdr, rungs[0], input.hdrColor)},`
+		: "";
 	const fpsFilter = `fps=${hlsLadderFrameRate(input.sourceFps)},${sliceTrimFilter(input.range)}${toSdr}`;
 	const head = nvenc
 		? decodesOnGpu(input)

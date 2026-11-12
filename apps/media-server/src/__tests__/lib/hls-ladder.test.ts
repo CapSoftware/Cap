@@ -4,6 +4,7 @@ import {
 	buildHlsLadderArgs,
 	type HlsLadderArgsInput,
 	hlsLadderFrameRate,
+	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
 	planHlsLadder,
@@ -183,6 +184,60 @@ describe("hlsLadderFrameRate", () => {
 	});
 });
 
+describe("hlsLadderSourceFps", () => {
+	const grid = (openingFps: number, fastestFps: number | null) =>
+		hlsLadderFrameRate(hlsLadderSourceFps(openingFps, fastestFps));
+
+	test("keeps the probed rate of a constant frame rate source", () => {
+		expect(hlsLadderSourceFps(30, 30)).toBe(30);
+		expect(hlsLadderSourceFps(60, 60)).toBe(60);
+		expect(hlsLadderSourceFps(17.33, 17.33)).toBe(17.33);
+		expect(grid(29.97, 29.97)).toBe("30000/1001");
+		expect(grid(23.98, 23.98)).toBe("24000/1001");
+		expect(grid(120, 120)).toBe("60");
+	});
+
+	test("keeps the probed rate of a recording with millisecond timestamps", () => {
+		expect(hlsLadderSourceFps(30, 30.08)).toBe(30);
+		expect(hlsLadderSourceFps(29.97, 30.08)).toBe(29.97);
+	});
+
+	test("keeps the probed rate when capture jitter makes a stretch look faster", () => {
+		expect(hlsLadderSourceFps(29.95, 31.01)).toBe(29.95);
+		expect(hlsLadderSourceFps(24.96, 25.97)).toBe(24.96);
+	});
+
+	test("keeps the probed rate when the opening is the fastest part", () => {
+		expect(hlsLadderSourceFps(60, 30)).toBe(60);
+	});
+
+	test("follows the fastest stretch of a source that starts slowly", () => {
+		expect(grid(5.29, 30)).toBe("30");
+		expect(grid(12.03, 30.19)).toBe("30");
+		expect(grid(34.29, 60)).toBe("60");
+		expect(grid(7.03, 25.6)).toBe("25");
+		expect(grid(5, 29.97)).toBe("30000/1001");
+		expect(grid(5, 59.94)).toBe("60000/1001");
+	});
+
+	test("never picks a rate slower than the fastest stretch needs", () => {
+		expect(grid(10, 38.8)).toBe("38.8");
+		expect(grid(10, 47.5)).toBe("47.5");
+		expect(grid(20.05, 125)).toBe("60");
+	});
+
+	test("uses the probed rate when the frames could not be timed", () => {
+		expect(hlsLadderSourceFps(30, null)).toBe(30);
+		expect(hlsLadderSourceFps(30, Number.NaN)).toBe(30);
+		expect(grid(0, null)).toBe("30");
+	});
+
+	test("uses the fastest stretch when the probe has no rate", () => {
+		expect(grid(0, 24)).toBe("24");
+		expect(grid(Number.NaN, 30)).toBe("30");
+	});
+});
+
 function argsInput(overrides: Partial<HlsLadderArgsInput> = {}) {
 	return {
 		inputPath: "/tmp/in.mp4",
@@ -280,6 +335,64 @@ describe("buildHlsLadderArgs", () => {
 		);
 	});
 
+	test("converts an HDR source from the colours it declares", () => {
+		const filter = (hdrColor: HlsLadderArgsInput["hdrColor"]) =>
+			valueAfter(
+				buildHlsLadderArgs(
+					argsInput({ videoCodec: "hevc", hdr: "arib-std-b67", hdrColor }),
+				),
+				"-filter_complex",
+			);
+		const head = (primaries: string, matrix: string) =>
+			`[0:v]fps=30,zscale=w=1920:h=1080:tin=arib-std-b67:pin=${primaries}:min=${matrix}:t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,`;
+		expect(filter({ primaries: "bt709", matrix: "bt709" })).toStartWith(
+			head("bt709", "bt709"),
+		);
+		expect(filter({ primaries: "smpte432", matrix: "bt2020nc" })).toStartWith(
+			head("smpte432", "bt2020nc"),
+		);
+		expect(filter({ primaries: "bt2020", matrix: "ictcp" })).toStartWith(
+			head("bt2020", "ictcp"),
+		);
+	});
+
+	test("treats missing or unusable HDR colour tags as BT.2020", () => {
+		const filter = (hdrColor: HlsLadderArgsInput["hdrColor"]) =>
+			valueAfter(
+				buildHlsLadderArgs(
+					argsInput({ videoCodec: "hevc", hdr: "smpte2084", hdrColor }),
+				),
+				"-filter_complex",
+			);
+		const tagged = filter({ primaries: "bt2020", matrix: "bt2020nc" });
+		expect(tagged).toContain(
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:min=bt2020nc:t=linear:npl=203,",
+		);
+		expect(filter(undefined)).toBe(tagged);
+		expect(filter(null)).toBe(tagged);
+		expect(filter({ primaries: "bt2020", matrix: null })).toBe(tagged);
+		expect(filter({ primaries: "bt2020", matrix: "smpte2085" })).toBe(tagged);
+
+		const untagged = filter({ primaries: null, matrix: null });
+		expect(untagged).toContain(
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:p=bt2020:min=bt2020nc:t=linear:npl=203,",
+		);
+		expect(untagged.replace(":p=bt2020", "")).toBe(tagged);
+		expect(filter({})).toBe(untagged);
+		expect(filter({ primaries: "unknown", matrix: "unknown" })).toBe(untagged);
+		expect(filter({ primaries: "reserved", matrix: "bt2020nc" })).toBe(
+			untagged,
+		);
+	});
+
+	test("ignores declared colours on a standard range source", () => {
+		expect(
+			buildHlsLadderArgs(
+				argsInput({ hdrColor: { primaries: "bt709", matrix: "bt709" } }),
+			),
+		).toEqual(buildHlsLadderArgs(argsInput()));
+	});
+
 	test("leaves a standard range source exactly as it was", () => {
 		for (const nvenc of [
 			null,
@@ -371,6 +484,18 @@ describe("buildHlsLadderArgs", () => {
 		expect(valueAfter(args, "-hls_segment_options")).toBe(
 			"movflags=+frag_discont",
 		);
+	});
+
+	test("keeps the frames before a slice's seek point for the grid to hold", () => {
+		const slice = buildHlsLadderArgs(
+			argsInput({
+				hasAudio: false,
+				range: { startSeconds: 112, durationSeconds: 112 },
+			}),
+		);
+		expect(slice.indexOf("-noaccurate_seek")).toBe(slice.indexOf("-ss") - 1);
+		expect(slice.indexOf("-ss")).toBeLessThan(slice.indexOf("-i"));
+		expect(buildHlsLadderArgs(argsInput())).not.toContain("-noaccurate_seek");
 	});
 
 	test("starts the first slice at the beginning of the source", () => {
