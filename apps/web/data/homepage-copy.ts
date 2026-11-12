@@ -73,6 +73,12 @@ export interface PricingCopy {
 	title: string;
 	subtitle: string;
 	lovedBy: string;
+	free: {
+		title: string;
+		description: string;
+		features: string[];
+		cta: string;
+	};
 	commercial: {
 		title: string;
 		description: string;
@@ -302,6 +308,18 @@ export const homepageCopy: HomePageCopy = {
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
 		lovedBy: "Trusted by 80,000+ users",
+		free: {
+			title: "Free",
+			description:
+				"The full recorder and editor for personal use, with shareable links included.",
+			features: [
+				"Studio Mode with the full editor",
+				"4K export at 60fps",
+				"25 shareable links a month, up to 5 minutes each",
+				"Apps for Mac, Windows and Linux",
+			],
+			cta: "Download free",
+		},
 		commercial: {
 			title: "Desktop License",
 			description:
