@@ -7303,6 +7303,9 @@ impl EditorWindow {
         self.name_input
             .update(cx, |input, cx| input.set_text(draft.clone(), cx));
         tracing::info!(name = %draft, "renamed project");
+        // The main window, Settings and the tray list recordings by name, and
+        // closing the editor refreshes them only when the thumbnail changed.
+        cx.defer(crate::app_windows::refresh_library_after_delete);
         cx.notify();
         Ok(())
     }
