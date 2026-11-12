@@ -15,13 +15,13 @@ import {
 const capabilities = developerCapabilities(new Set(agentScopeProfiles.full));
 
 const row = (index: number): AgentDeveloperVideoRow => ({
-	id: `zJYHFLQC3rM_B${String(index).padStart(2, "0")}`,
-	appId: "htxq6qghf6n90a2",
+	id: `video0000000_${String(index).padStart(2, "0")}`,
+	appId: "app000000000001",
 	externalUserId: null,
 	name: "talk-720p",
 	status: "ready",
 	errorReason: null,
-	playbackId: `Qm3vX9pLr2TfY8sKdW1nZb${String(index).padStart(2, "0")}`,
+	playbackId: `playback0000000000000_${String(index).padStart(2, "0")}`,
 	duration: 11.7551,
 	width: 1280,
 	height: 720,
