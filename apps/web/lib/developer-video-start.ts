@@ -2,13 +2,26 @@ import { start } from "workflow/api";
 import { processDeveloperVideoWorkflow } from "@/workflows/process-developer-video";
 import {
 	claimDeveloperVideoProcessing,
+	type DeveloperVideoClaim,
 	releaseDeveloperVideoClaim,
 } from "./developer-video-processing";
 
+export function claimDeveloperVideoUpload(videoId: string) {
+	return claimDeveloperVideoProcessing(videoId, { uploadCompleted: true });
+}
+
+export function releaseDeveloperVideoUpload(
+	videoId: string,
+	claim: DeveloperVideoClaim,
+) {
+	return releaseDeveloperVideoClaim(videoId, claim);
+}
+
 export function startDeveloperVideoProcessing(
 	videoId: string,
+	claim?: DeveloperVideoClaim,
 ): Promise<boolean> {
-	return claimAndStart(videoId, { uploadCompleted: true });
+	return claimAndStart(videoId, { uploadCompleted: true }, claim);
 }
 
 export function redriveDeveloperVideoProcessing(
@@ -20,9 +33,11 @@ export function redriveDeveloperVideoProcessing(
 async function claimAndStart(
 	videoId: string,
 	options: { uploadCompleted?: boolean },
+	held?: DeveloperVideoClaim,
 ): Promise<boolean> {
 	try {
-		const claimed = await claimDeveloperVideoProcessing(videoId, options);
+		const claimed =
+			held ?? (await claimDeveloperVideoProcessing(videoId, options));
 		if (!claimed) return false;
 		try {
 			await start(processDeveloperVideoWorkflow, [

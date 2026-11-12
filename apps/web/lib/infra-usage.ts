@@ -1,4 +1,11 @@
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
+import type { InfraResolutionTier } from "@/lib/infra-pricing";
+
+export const INFRA_TIER_LABELS: Record<InfraResolutionTier, string> = {
+	"1080p": "Up to 1080p",
+	"1440p": "1440p",
+	"2160p": "4K",
+};
 
 export type InfraStorageSnapshot = {
 	snapshotDate: string;
