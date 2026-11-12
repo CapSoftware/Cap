@@ -35,10 +35,14 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type {
-	VideoCallToAction,
-	VideoEditSpec,
-	VideoMetadata,
+import {
+	DEVELOPER_VIDEO_RESOLUTION_TIERS,
+	DEVELOPER_VIDEO_STATUSES,
+	type DeveloperVideoProcessingState,
+	type DeveloperVideoRendition,
+	type VideoCallToAction,
+	type VideoEditSpec,
+	type VideoMetadata,
 } from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
@@ -1883,7 +1887,25 @@ export const developerVideos = mysqlTable(
 			enum: ["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"],
 		}),
 		metadata: json("metadata"),
+		status: varchar("status", {
+			length: 16,
+			enum: DEVELOPER_VIDEO_STATUSES,
+		})
+			.notNull()
+			.default("uploading"),
+		playbackId: varchar("playbackId", { length: 64 }),
+		maxResolutionTier: varchar("maxResolutionTier", {
+			length: 8,
+			enum: DEVELOPER_VIDEO_RESOLUTION_TIERS,
+		})
+			.notNull()
+			.default("1080p"),
+		renditions: json("renditions").$type<DeveloperVideoRendition[]>(),
+		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
+		errorReason: varchar("errorReason", { length: 512 }),
+		processing: json("processing").$type<DeveloperVideoProcessingState>(),
 		deletedAt: timestamp("deletedAt"),
+		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -1891,6 +1913,8 @@ export const developerVideos = mysqlTable(
 		index("app_created_idx").on(table.appId, table.createdAt),
 		index("app_user_idx").on(table.appId, table.externalUserId),
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
+		uniqueIndex("playback_id_idx").on(table.playbackId),
+		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
 	],
 );
 
@@ -1921,7 +1945,10 @@ export const developerCreditAccounts = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
-	(table) => [uniqueIndex("app_id_unique").on(table.appId)],
+	(table) => [
+		uniqueIndex("app_id_unique").on(table.appId),
+		index("owner_idx").on(table.ownerId),
+	],
 );
 
 export type DeveloperCreditTransactionType =
@@ -1929,12 +1956,14 @@ export type DeveloperCreditTransactionType =
 	| "video_create"
 	| "storage_daily"
 	| "refund"
-	| "adjustment";
+	| "adjustment"
+	| "pro_credit";
 
 export type DeveloperCreditReferenceType =
 	| "developer_video"
 	| "stripe_payment_intent"
-	| "manual";
+	| "manual"
+	| "pro_monthly_credit";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -1943,7 +1972,14 @@ export const developerCreditTransactions = mysqlTable(
 		accountId: nanoId("accountId").notNull(),
 		type: varchar("type", {
 			length: 16,
-			enum: ["topup", "video_create", "storage_daily", "refund", "adjustment"],
+			enum: [
+				"topup",
+				"video_create",
+				"storage_daily",
+				"refund",
+				"adjustment",
+				"pro_credit",
+			],
 		})
 			.notNull()
 			.$type<DeveloperCreditTransactionType>(),
@@ -1957,7 +1993,12 @@ export const developerCreditTransactions = mysqlTable(
 		referenceId: varchar("referenceId", { length: 255 }),
 		referenceType: varchar("referenceType", {
 			length: 32,
-			enum: ["developer_video", "stripe_payment_intent", "manual"],
+			enum: [
+				"developer_video",
+				"stripe_payment_intent",
+				"manual",
+				"pro_monthly_credit",
+			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1973,6 +2014,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.type,
 			table.createdAt,
 		),
+		index("account_created_idx").on(table.accountId, table.createdAt),
 		index("account_ref_dedup_idx").on(
 			table.accountId,
 			table.referenceId,

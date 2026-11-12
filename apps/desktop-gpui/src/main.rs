@@ -41,6 +41,7 @@ mod editor_shapes;
 mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
+mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
 mod encoder_recovery;

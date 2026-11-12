@@ -2119,6 +2119,20 @@ impl EditorWindow {
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
         let generating = snapshot.generating;
+        let outdated = !downloaded && model.name == "best" && snapshot.recommended_outdated;
+        let (title, description) = if outdated {
+            (
+                tr::editor::tabs::captions::model_updated(),
+                tr::editor::tabs::captions::model_updated_description(),
+            )
+        } else if snapshot.no_speech {
+            (tr::editor::transcript::no_speech(), "")
+        } else {
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::empty_description(),
+            )
+        };
 
         let action: AnyElement = if !has_audio {
             div()
@@ -2172,8 +2186,8 @@ impl EditorWindow {
         crate::editor_side_panel::panel_empty_state(
             &theme,
             "icons/scan-text.svg",
-            tr::editor::transcript::empty_title(),
-            tr::editor::transcript::empty_description(),
+            title,
+            description,
         )
         .child(div().pt(px(6.)).child(action))
         .children(snapshot.generation_error.map(|error| {

@@ -1,10 +1,15 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
+import { DEVELOPER_VIDEO_RESOLUTION_TIERS } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import {
+	createDeveloperPlaybackId,
+	DEVELOPER_VIDEO_DEFAULT_TIER,
+} from "@/lib/developer-video-plan";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
@@ -24,6 +29,7 @@ app.post(
 		z.object({
 			name: z.string().max(255).optional(),
 			userId: z.string().max(255).optional(),
+			maxResolutionTier: z.enum(DEVELOPER_VIDEO_RESOLUTION_TIERS).optional(),
 			metadata: z
 				.record(z.string(), z.unknown())
 				.optional()
@@ -50,6 +56,7 @@ app.post(
 		}
 
 		const videoId = nanoId();
+		const playbackId = createDeveloperPlaybackId();
 		const s3Key = `developer/${appId}/${videoId}/video`;
 
 		await db()
@@ -61,12 +68,16 @@ app.post(
 				name: body.name ?? "Untitled",
 				s3Key,
 				metadata: body.metadata,
+				playbackId,
+				maxResolutionTier:
+					body.maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 			});
 
 		const webUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
 
 		return c.json({
 			videoId,
+			playbackId,
 			s3Key,
 			shareUrl: `${webUrl}/dev/${videoId}`,
 			embedUrl: `${webUrl}/embed/${videoId}?sdk=1`,

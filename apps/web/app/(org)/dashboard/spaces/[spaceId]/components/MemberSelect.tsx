@@ -186,6 +186,8 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 								}}
 								sideOffset={8}
 								align="start"
+								collisionPadding={16}
+								className="max-h-[min(20rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto"
 							>
 								{orgMemberOptions.map((opt) => (
 									<DropdownMenuItem
