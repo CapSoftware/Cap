@@ -1070,6 +1070,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"storage_daily",
 		"refund",
 		"adjustment",
+		"pro_credit",
 	),
 	amountMicroCredits: Schema.Number,
 	balanceAfterMicroCredits: Schema.Number,

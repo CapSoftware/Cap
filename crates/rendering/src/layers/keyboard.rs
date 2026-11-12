@@ -418,8 +418,12 @@ impl KeyboardLayer {
         let background_alpha =
             ((settings.background_opacity as f32 / 100.0) * fade_opacity).clamp(0.0, 1.0);
 
-        let font_size_base = active.segment.font_size_override.unwrap_or(settings.size) as f32;
-        let font_size = font_size_base * (height as f32 / 1080.0);
+        let Some(font_size) = super::captions::scaled_font_size(
+            active.segment.font_size_override.unwrap_or(settings.size),
+            height,
+        ) else {
+            return;
+        };
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
 
         let font_family = match settings.font.as_str() {
@@ -1064,6 +1068,39 @@ mod gpu_tests {
         let pixels = readback.slice(..).get_mapped_range().to_vec();
         readback.unmap();
         pixels
+    }
+
+    /// A size of 0, from the settings or one segment's override, draws
+    /// nothing; cosmic-text asserts on the zero line height it would give.
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn a_zero_size_keyboard_overlay_draws_nothing() {
+        let size = XY::new(512, 288);
+        let constants = constants(size);
+        let frames = frames(size);
+        let mut overridden = typed_segment("typed", 0.2, "git push", 90.0);
+        overridden.font_size_override = Some(0);
+        for (settings_size, segment, drawn) in [
+            (
+                KeyboardSettings::default().size,
+                typed_segment("typed", 0.2, "git push", 90.0),
+                true,
+            ),
+            (0, typed_segment("typed", 0.2, "git push", 90.0), false),
+            (KeyboardSettings::default().size, overridden, false),
+        ] {
+            let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
+            std::sync::Arc::make_mut(&mut uniforms.project)
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .settings
+                .size = settings_size;
+            uniforms.frame_number = FPS;
+            let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+            layer.prepare(&uniforms, &frames, size, &constants, None);
+            assert_eq!(layer.has_content(), drawn, "size {settings_size}");
+        }
     }
 
     #[test]

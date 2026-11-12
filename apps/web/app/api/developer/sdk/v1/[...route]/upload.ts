@@ -1,22 +1,23 @@
 import { db } from "@cap/database";
-import { nanoId } from "@cap/database/helpers";
-import {
-	developerCreditAccounts,
-	developerCreditTransactions,
-	developerVideos,
-} from "@cap/database/schema";
+import { developerVideos } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import {
+	chargeDeveloperVideoUpload,
+	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
+} from "@/lib/developer-video-charge";
+import { createDeveloperPlaybackId } from "@/lib/developer-video-plan";
+import { startDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { runPromise } from "@/lib/server";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
-const MICRO_CREDITS_PER_MINUTE = 5_000;
-const MAX_DURATION_SECS = 4 * 60 * 60;
+const MAX_DURATION_SECS = DEVELOPER_VIDEO_MAX_DURATION_SECONDS;
 const BILLED_BYTES_PER_SECOND = 2_500_000;
+const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 
 type StoredPart = { PartNumber?: number; ETag?: string; Size?: number };
 
@@ -29,8 +30,11 @@ function storedBytesForParts(
 	const storedByNumber = new Map(
 		storedParts.map((part) => [part.PartNumber, part]),
 	);
+	const seen = new Set<number>();
 	let totalBytes = 0;
 	for (const requested of requestedParts) {
+		if (seen.has(requested.partNumber)) return null;
+		seen.add(requested.partNumber);
 		const stored = storedByNumber.get(requested.partNumber);
 		if (
 			stored?.Size === undefined ||
@@ -49,6 +53,7 @@ async function findAppVideo(appId: string, videoId: string) {
 			appId: developerVideos.appId,
 			s3Key: developerVideos.s3Key,
 			duration: developerVideos.duration,
+			playbackId: developerVideos.playbackId,
 			deletedAt: developerVideos.deletedAt,
 		})
 		.from(developerVideos)
@@ -231,107 +236,26 @@ app.post(
 					400,
 				);
 			}
+			const plausibleDuration = Math.min(
+				clampedDuration,
+				totalBytes / MIN_PLAUSIBLE_BYTES_PER_SECOND,
+			);
 			const sizeBasedMinDuration = totalBytes / BILLED_BYTES_PER_SECOND;
 			const billingDuration = Math.min(
-				Math.max(clampedDuration, sizeBasedMinDuration),
+				Math.max(plausibleDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
 			);
-			const durationMinutes = billingDuration / 60;
-			const microCreditsToDebit = Math.floor(
-				durationMinutes * MICRO_CREDITS_PER_MINUTE,
-			);
-
-			if (microCreditsToDebit > 0) {
-				const debited = await db().transaction(async (tx) => {
-					await tx
-						.select({ id: developerVideos.id })
-						.from(developerVideos)
-						.where(eq(developerVideos.id, videoId))
-						.for("update");
-
-					const [account] = await tx
-						.select({
-							id: developerCreditAccounts.id,
-							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-						})
-						.from(developerCreditAccounts)
-						.where(eq(developerCreditAccounts.appId, appId))
-						.limit(1);
-
-					if (!account) return null;
-
-					const [paid] = await tx
-						.select({
-							total: sql<number>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
-						})
-						.from(developerCreditTransactions)
-						.where(
-							and(
-								eq(developerCreditTransactions.accountId, account.id),
-								eq(developerCreditTransactions.referenceId, videoId),
-								eq(
-									developerCreditTransactions.referenceType,
-									"developer_video",
-								),
-								eq(developerCreditTransactions.type, "video_create"),
-							),
-						);
-
-					const remainingMicroCredits =
-						microCreditsToDebit - Number(paid?.total ?? 0);
-					if (remainingMicroCredits <= 0) return true;
-
-					const [result] = await tx
-						.update(developerCreditAccounts)
-						.set({
-							balanceMicroCredits: sql`${developerCreditAccounts.balanceMicroCredits} - ${remainingMicroCredits}`,
-						})
-						.where(
-							and(
-								eq(developerCreditAccounts.id, account.id),
-								sql`${developerCreditAccounts.balanceMicroCredits} >= ${remainingMicroCredits}`,
-							),
-						);
-
-					const affectedRows =
-						(result as unknown as { affectedRows?: number })?.affectedRows ?? 0;
-					if (affectedRows === 0) {
-						return false;
-					}
-
-					const [updated] = await tx
-						.select({
-							balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-						})
-						.from(developerCreditAccounts)
-						.where(eq(developerCreditAccounts.id, account.id))
-						.limit(1);
-
-					if (!updated) return false;
-
-					await tx.insert(developerCreditTransactions).values({
-						id: nanoId(),
-						accountId: account.id,
-						type: "video_create",
-						amountMicroCredits: -remainingMicroCredits,
-						balanceAfterMicroCredits: updated.balanceMicroCredits,
-						referenceId: videoId,
-						referenceType: "developer_video",
-						metadata: {
-							durationSeconds: billingDuration,
-							totalBytes,
-						},
-					});
-
-					return true;
-				});
-
-				if (debited === null) {
-					return c.json({ error: "Credit account not found" }, 402);
-				}
-				if (!debited) {
-					return c.json({ error: "Insufficient credits" }, 402);
-				}
+			const charged = await chargeDeveloperVideoUpload({
+				appId,
+				videoId,
+				durationSeconds: billingDuration,
+				metadata: { durationSeconds: billingDuration, totalBytes },
+			});
+			if (charged === "no-account") {
+				return c.json({ error: "Credit account not found" }, 402);
+			}
+			if (charged === "insufficient") {
+				return c.json({ error: "Insufficient credits" }, 402);
 			}
 
 			await Effect.gen(function* () {
@@ -352,15 +276,34 @@ app.post(
 
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
 				duration: billingDuration,
+				// A video created before playback ids existed gets one here, so a
+				// failed processing start can't leave it looking like a legacy row
+				// that is never encoded.
+				...(video.playbackId
+					? {}
+					: { playbackId: createDeveloperPlaybackId() }),
 			};
 			if (width !== undefined) updates.width = width;
 			if (height !== undefined) updates.height = height;
 			if (fps !== undefined) updates.fps = fps;
 
+			// Two overlapping completions can claim different lengths. The charge
+			// already took the longer one (it charges what the video hasn't paid
+			// yet), so a shorter claim that lands last must not overwrite it.
 			await db()
 				.update(developerVideos)
 				.set(updates)
-				.where(eq(developerVideos.id, videoId));
+				.where(
+					and(
+						eq(developerVideos.id, videoId),
+						or(
+							isNull(developerVideos.duration),
+							lt(developerVideos.duration, billingDuration),
+						),
+					),
+				);
+
+			await startDeveloperVideoProcessing(videoId);
 
 			return c.json({ success: true });
 		} catch (error) {

@@ -72,6 +72,7 @@ struct NotificationSettingsView: View {
                 Section { ErrorText(error) }
             }
         }
+        .readableWidth()
         .refreshable { await load() }
         .task { await push.refreshStatus() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in

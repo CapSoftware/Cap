@@ -253,6 +253,12 @@ function createServerEnv() {
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
+			INFRA_PLAYBACK_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for developer video playback links. Defaults to WEB_URL/api/developer/playback; set it to a hostname that forwards to that path",
+				),
 			LOOM_IMPORTER_URL: z
 				.string()
 				.optional()

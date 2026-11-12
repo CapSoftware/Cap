@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
 	failingAborts: new Set<string>(),
 	listUploads: vi.fn(),
 	abort: vi.fn(),
+	purge: vi.fn(),
+}));
+
+vi.mock("@/lib/developer-video-purge", () => ({
+	purgeDeletedDeveloperVideos: mocks.purge,
 }));
 
 vi.mock("@cap/web-backend", async () => {
@@ -74,6 +79,8 @@ describe("developer upload cleanup cron", () => {
 		mocks.listUploads.mockImplementation(() =>
 			Effect.succeed(mocks.pages.shift() ?? { Uploads: [] }),
 		);
+		mocks.purge.mockReset();
+		mocks.purge.mockResolvedValue({ purged: 0, failed: 0 });
 		mocks.abort.mockReset();
 		mocks.abort.mockImplementation((key: string, uploadId: string) =>
 			mocks.failingAborts.has(uploadId)
@@ -121,7 +128,12 @@ describe("developer upload cleanup cron", () => {
 		const response = await runCron();
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 2,
+			failed: 0,
+			purged: 0,
+			purgeFailed: 0,
+		});
 		expect(mocks.listUploads).toHaveBeenCalledWith({
 			prefix: "developer/",
 			keyMarker: undefined,
@@ -131,6 +143,30 @@ describe("developer upload cleanup cron", () => {
 			["developer/app-1/video-1/video", "stale"],
 			["developer/app-1/video-3/video", "boundary"],
 		]);
+	});
+
+	it("purges the files of deleted videos on every run", async () => {
+		mocks.purge.mockResolvedValue({ purged: 3, failed: 0 });
+
+		const response = await runCron();
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ purged: 3, purgeFailed: 0 });
+		expect(mocks.purge).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a failure when a deleted video's files could not be removed", async () => {
+		mocks.purge.mockResolvedValue({ purged: 1, failed: 1 });
+
+		const response = await runCron();
+
+		expect(response.status).toBe(500);
+	});
+
+	it("does not purge without the cron secret", async () => {
+		await runCron("Bearer wrong-secret-value");
+
+		expect(mocks.purge).not.toHaveBeenCalled();
 	});
 
 	it("follows listing pages", async () => {
@@ -160,7 +196,12 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({ aborted: 2, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 2,
+			failed: 0,
+			purged: 0,
+			purgeFailed: 0,
+		});
 		expect(mocks.listUploads.mock.calls).toEqual([
 			[
 				{
@@ -228,7 +269,12 @@ describe("developer upload cleanup cron", () => {
 
 		const response = await runCron();
 
-		expect(await response.json()).toEqual({ aborted: 0, failed: 0 });
+		expect(await response.json()).toEqual({
+			aborted: 0,
+			failed: 0,
+			purged: 0,
+			purgeFailed: 0,
+		});
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});
 });
