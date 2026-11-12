@@ -5,11 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
 	developerApiKeys,
-	developerAppDomains,
 	developerApps,
+	developerVideos,
 	users,
 } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
@@ -22,6 +22,15 @@ import {
 	apiNotFoundBody,
 } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
+import {
+	CREATE_UPLOAD_PATH,
+	isDeveloperPublicKey,
+	missingUploadTokenRefusal,
+	publicKeyRefusal,
+	UPLOAD_TOKEN_PREFIX,
+	uploadTokenRefusal,
+	verifyDeveloperUploadToken,
+} from "@/lib/developer-upload-token";
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 60;
@@ -185,107 +194,75 @@ export const developerSdkCors = cors({
 	],
 });
 
-function isOwnOrigin(origin: string) {
-	try {
-		return new URL(serverEnv().WEB_URL).origin === origin;
-	} catch {
-		return false;
-	}
-}
+const bearerCredential = (c: Context) =>
+	c.req.header("authorization")?.trim().split(/\s+/)[1];
 
-export const withDeveloperPublicAuth = createMiddleware<{
+export const refuseDeveloperPublicKey = createMiddleware(async (c, next) => {
+	if (isDeveloperPublicKey(bearerCredential(c))) {
+		return c.json(publicKeyRefusal(), 403);
+	}
+	await next();
+});
+
+export const withDeveloperUploadToken = createMiddleware<{
 	Variables: {
 		developerAppId: string;
-		developerKeyType: "public";
+		developerVideoId: string;
+		developerUploadCompleted: boolean;
 	};
 }>(async (c, next) => {
-	const authHeader = c.req.header("authorization")?.split(" ")[1];
-	if (!authHeader?.startsWith("cpk_")) {
+	const credential = bearerCredential(c);
+	if (!credential?.startsWith(UPLOAD_TOKEN_PREFIX)) {
+		return c.json(missingUploadTokenRefusal(credential), 401);
+	}
+
+	const check = verifyDeveloperUploadToken(credential);
+	if (!check.ok) return c.json(uploadTokenRefusal(check.reason), 401);
+	const { appId, videoId, corsOrigin } = check.token;
+
+	if (corsOrigin !== null && c.req.header("origin") !== corsOrigin) {
 		return c.json(
 			apiErrorBody(
-				"invalid_public_key",
-				"Invalid public key",
-				"Send Authorization: Bearer cpk_... with a public key from https://cap.so/dashboard/infra.",
+				"origin_not_allowed",
+				"Origin not allowed for this upload token",
+				`This token only works from ${corsOrigin}. Create the upload with the corsOrigin of the page that uploads, or leave corsOrigin out.`,
 			),
-			401,
+			403,
 		);
 	}
 
-	const keyHash = await hashKey(authHeader);
-	const [row] = await db()
+	const [video] = await db()
 		.select({
-			appId: developerApps.id,
-			environment: developerApps.environment,
+			duration: developerVideos.duration,
+			deletedAt: developerVideos.deletedAt,
 		})
-		.from(developerApiKeys)
+		.from(developerVideos)
 		.innerJoin(
 			developerApps,
 			and(
-				eq(developerApiKeys.appId, developerApps.id),
+				eq(developerVideos.appId, developerApps.id),
 				isNull(developerApps.deletedAt),
 			),
 		)
 		.where(
-			and(
-				eq(developerApiKeys.keyHash, keyHash),
-				eq(developerApiKeys.keyType, "public"),
-				isNull(developerApiKeys.revokedAt),
-			),
+			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
 		)
 		.limit(1);
 
-	if (!row) {
+	if (!video || video.deletedAt) {
 		return c.json(
 			apiErrorBody(
-				"invalid_public_key",
-				"Invalid or revoked public key",
-				"Copy the current public key for your app from https://cap.so/dashboard/infra. Regenerating keys revokes the previous pair.",
+				"video_not_found",
+				"The video for this upload token no longer exists",
+				`Create a new upload with POST ${CREATE_UPLOAD_PATH}.`,
 			),
-			401,
+			404,
 		);
 	}
 
-	const origin = c.req.header("origin");
-	if (row.environment === "production") {
-		if (!origin) {
-			return c.json(
-				apiErrorBody(
-					"origin_required",
-					"Origin header required for production apps",
-					"Call the SDK API from a browser on an allowed domain, or use a development app for server-side testing.",
-				),
-				403,
-			);
-		}
-		const [allowedDomain] = isOwnOrigin(origin)
-			? [{ id: "self" }]
-			: await db()
-					.select({ id: developerAppDomains.id })
-					.from(developerAppDomains)
-					.where(
-						and(
-							eq(developerAppDomains.appId, row.appId),
-							eq(developerAppDomains.domain, origin),
-						),
-					)
-					.limit(1);
-
-		if (!allowedDomain) {
-			return c.json(
-				apiErrorBody(
-					"origin_not_allowed",
-					"Origin not allowed",
-					"Add this origin to the app's allowed domains at https://cap.so/dashboard/infra.",
-				),
-				403,
-			);
-		}
-	}
-
-	debouncedLastUsedUpdate(keyHash);
-
-	c.set("developerAppId", row.appId);
-	c.set("developerKeyType", "public" as const);
+	c.set("developerAppId", appId);
+	c.set("developerVideoId", videoId);
+	c.set("developerUploadCompleted", video.duration !== null);
 	await next();
 });
 

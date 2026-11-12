@@ -134,10 +134,7 @@ export default async function InfraOverviewPage({
 							balanceMicroCredits={balance}
 							proCredit={proCredit}
 						/>
-						<ApiGuide
-							publicKey={publicKeyValue}
-							isProduction={app.environment === "production"}
-						/>
+						<ApiGuide />
 					</section>
 				) : (
 					<Block

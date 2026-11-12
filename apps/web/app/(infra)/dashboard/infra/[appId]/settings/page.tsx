@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { requireInfraApp } from "../../infra-data";
 import { AppSettingsClient } from "./app-settings-client";
-import { DomainsSection } from "./domains-section";
 
 export const metadata: Metadata = {
 	title: "Settings | Cap Infra",
@@ -23,13 +22,6 @@ export default async function InfraSettingsPage({
 			environment={app.environment}
 			balanceMicroCredits={app.creditAccount?.balanceMicroCredits ?? 0}
 			videoCount={app.videoCount}
-			domains={
-				<DomainsSection
-					appId={app.id}
-					environment={app.environment}
-					domains={app.domains.map((d) => ({ id: d.id, domain: d.domain }))}
-				/>
-			}
 		/>
 	);
 }

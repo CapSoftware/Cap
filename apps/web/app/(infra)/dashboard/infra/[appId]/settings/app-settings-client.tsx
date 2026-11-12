@@ -24,14 +24,12 @@ export function AppSettingsClient({
 	environment: initialEnvironment,
 	balanceMicroCredits,
 	videoCount,
-	domains,
 }: {
 	appId: string;
 	name: string;
 	environment: Environment;
 	balanceMicroCredits: number;
 	videoCount: number;
-	domains: React.ReactNode;
 }) {
 	const router = useRouter();
 	const nameId = useId();
@@ -69,7 +67,10 @@ export function AppSettingsClient({
 			<PageHeader title="Settings" />
 
 			<div>
-				<Split title="General" description="The name and where its keys work.">
+				<Split
+					title="General"
+					description="The name, and whether it is for testing or live traffic."
+				>
 					<form
 						className="flex flex-col gap-5"
 						onSubmit={(e) => {
@@ -104,8 +105,6 @@ export function AppSettingsClient({
 						</Button>
 					</form>
 				</Split>
-
-				{domains}
 
 				<Split
 					title="Delete app"

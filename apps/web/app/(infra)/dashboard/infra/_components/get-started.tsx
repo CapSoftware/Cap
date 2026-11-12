@@ -3,7 +3,7 @@ import Link from "next/link";
 import { infraAppPath } from "@/lib/infra-routes";
 import type { InfraProCredit } from "../infra-data";
 import { CodeBlock } from "./copy";
-import { createVideoCurl } from "./infra-examples";
+import { createUploadCurl } from "./infra-examples";
 import { ProCredit } from "./pro-credit";
 import { Step, StepNote, Steps } from "./steps";
 import { ButtonLink, Disclosure, MONO, TEXT_LINK } from "./ui";
@@ -41,37 +41,32 @@ export function FirstCredit({
 	);
 }
 
-export function ApiGuide({
-	publicKey,
-	isProduction,
-}: {
-	publicKey: string;
-	isProduction: boolean;
-}) {
+export function ApiGuide() {
 	return (
 		<Disclosure
 			summary="Using the API"
 			note="Create and read videos from your own code."
 		>
 			<div className="max-w-[640px]">
-				<Steps reached={0} total={2}>
-					<Step title="Create a video" state="current">
+				<Steps reached={0} total={3}>
+					<Step title="Create an upload on your server" state="current">
 						<div className="flex flex-col gap-3">
-							<CodeBlock
-								code={createVideoCurl(publicKey, isProduction)}
-								label="create request"
-							/>
+							<CodeBlock code={createUploadCurl()} label="create request" />
 							<StepNote>
-								{isProduction
-									? "Production apps check the Origin header, so replace it with one of this app's allowed domains."
-									: "Development apps accept this from anywhere, including your terminal."}{" "}
-								Then send the file with{" "}
-								<Endpoint>upload/multipart/initiate</Endpoint>,{" "}
-								<Endpoint>presign-part</Endpoint> and{" "}
-								<Endpoint>complete</Endpoint>, passing the duration, width and
-								height to <Endpoint>complete</Endpoint>.
+								Send this with your secret key. It creates the video and returns
+								a <Endpoint>token</Endpoint> that uploads that one video and
+								expires after an hour.
 							</StepNote>
 						</div>
+					</Step>
+					<Step title="Send the file from the browser" state="current">
+						<StepNote>
+							Give the browser the token, never a key. With it as the Bearer
+							credential, call <Endpoint>upload/multipart/initiate</Endpoint>,{" "}
+							<Endpoint>presign-part</Endpoint> and{" "}
+							<Endpoint>complete</Endpoint>, passing the duration, width and
+							height to <Endpoint>complete</Endpoint>.
+						</StepNote>
 					</Step>
 					<Step title="Read it from your server" state="current">
 						<StepNote>
