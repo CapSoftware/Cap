@@ -603,7 +603,7 @@ export function AudioClient({
 											"transition-colors duration-150 hover:bg-[rgba(222,230,246,0.025)]",
 										)}
 									>
-										<td className="w-full max-w-0 py-3 pr-6 text-[13.5px] text-[#E8ECF4]">
+										<td className="w-full max-w-0 py-3 pr-6 align-baseline text-[13.5px] text-[#E8ECF4]">
 											{state === "complete" ? (
 												<button
 													type="button"
@@ -633,20 +633,25 @@ export function AudioClient({
 											className={clsx(
 												TD,
 												MONO,
-												"hidden text-right align-top text-[13px] tabular-nums sm:table-cell",
+												"hidden text-right align-baseline text-[13px] tabular-nums sm:table-cell",
 											)}
 										>
 											{formatDuration(row.durationSeconds) ??
 												(state === "error" || unfinished ? NONE : "pending")}
 										</td>
-										<td className={clsx(TD, "hidden align-top sm:table-cell")}>
+										<td
+											className={clsx(
+												TD,
+												"hidden align-baseline sm:table-cell",
+											)}
+										>
 											{status}
 										</td>
 										<td
 											className={clsx(
 												TD,
 												MONO,
-												"text-right align-top text-[13px] tabular-nums",
+												"text-right align-baseline text-[13px] tabular-nums",
 											)}
 										>
 											{state === "complete"
@@ -655,14 +660,19 @@ export function AudioClient({
 													? formatCharge(0)
 													: "pending"}
 										</td>
-										<td className={clsx(TD, "hidden align-top md:table-cell")}>
+										<td
+											className={clsx(
+												TD,
+												"hidden align-baseline md:table-cell",
+											)}
+										>
 											{dateFormat.format(new Date(row.createdAt))}
 										</td>
 										<td
 											className={clsx(
 												TD,
 												MONO,
-												"hidden align-top text-[13px] xl:table-cell",
+												"hidden align-baseline text-[13px] xl:table-cell",
 											)}
 										>
 											{row.id}

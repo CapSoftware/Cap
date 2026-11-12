@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement, type ReactNode } from "react";
+import { createElement, type FunctionComponent, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AudioTranscriptRow } from "@/actions/developers/transcripts";
 import {
@@ -55,6 +55,25 @@ vi.mock("@/lib/developer-transcripts", () => ({
 const { AudioClient } = await import(
 	"@/app/(infra)/dashboard/infra/[appId]/audio/audio-client"
 );
+const { UploadsProvider, useMayLeave, useMayLeavePage } = await import(
+	"@/app/(infra)/dashboard/infra/_components/uploads"
+);
+
+const Provider = UploadsProvider as FunctionComponent<{
+	appId: string;
+	balanceMicroCredits: number;
+}>;
+
+const leave = {
+	page: () => true,
+	app: () => true,
+};
+
+function LeaveProbe() {
+	leave.page = useMayLeavePage();
+	leave.app = useMayLeave();
+	return null;
+}
 
 const transcript = (
 	id: string,
@@ -180,6 +199,54 @@ describe("leaving the Audio page during an upload", () => {
 
 		expect(leaving()).toBe(false);
 		expect(mocks.remove).toHaveBeenCalledExactlyOnceWith("a1", "t-new");
+	});
+});
+
+describe("moving around the console during an Audio upload", () => {
+	it("asks before a link that would cancel it, and not otherwise", async () => {
+		const confirm = vi.fn(() => false);
+		vi.stubGlobal("confirm", confirm);
+		const sent = stubStorageUploads({ finish: false });
+		await stage.render(
+			createElement(
+				Provider,
+				{ appId: "a1", balanceMicroCredits: 5_000_000 },
+				createElement(AudioClient, {
+					appId: "a1",
+					initialTranscripts: [],
+					initialHasMore: false,
+					available: true,
+					canTranscribe: true,
+					pricePerHour: "$0.10",
+				}),
+				createElement(LeaveProbe),
+			),
+		);
+
+		expect(leave.page()).toBe(true);
+		expect(leave.app()).toBe(true);
+		expect(confirm).not.toHaveBeenCalled();
+
+		await chooseFiles([audio("interview.mp3")]);
+		await until(() => sent.length === 1, "the upload to start");
+		await flush();
+
+		expect(leave.page()).toBe(false);
+		expect(leave.app()).toBe(false);
+		expect(confirm).toHaveBeenCalledTimes(2);
+		expect(confirm).toHaveBeenCalledWith(
+			"A file is still uploading. Leaving now cancels it.",
+		);
+
+		await click(button("Cancel"));
+		await until(
+			() => text().includes("Drop an audio or video file here"),
+			"the upload to stop",
+		);
+		await flush();
+
+		expect(leave.page()).toBe(true);
+		expect(confirm).toHaveBeenCalledTimes(2);
 	});
 });
 
