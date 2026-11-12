@@ -1,4 +1,3 @@
-import { gunzipSync } from "node:zlib";
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -229,7 +228,7 @@ describe("developer video playback route", () => {
 		expect(await (await play("master.m3u8")).text()).toBe(stored);
 	});
 
-	it("compresses a long playlist for a player that accepts gzip", async () => {
+	it("sends a long playlist as plain text whatever the player accepts", async () => {
 		const long = [
 			"#EXTM3U",
 			'#EXT-X-MAP:URI="1080p.m4s",BYTERANGE="800@0"',
@@ -242,49 +241,22 @@ describe("developer video playback route", () => {
 		].join("\n");
 		mocks.readText.mockResolvedValue(long);
 
-		const plain = await play("1080p.m3u8");
-		const compressed = await play(
-			"1080p.m3u8",
-			PLAYBACK_ID,
-			accepting("br;q=1.0, gzip;q=0.8, *;q=0.1"),
-		);
-		const bytes = Buffer.from(await compressed.arrayBuffer());
-		const expected = await plain.text();
-
-		expect(plain.headers.get("content-encoding")).toBeNull();
-		expect(plain.headers.get("vary")).toBe("Accept-Encoding");
-		expect(compressed.headers.get("content-encoding")).toBe("gzip");
-		expect(compressed.headers.get("vary")).toBe("Accept-Encoding");
-		expect(compressed.headers.get("content-type")).toBe(
-			"application/vnd.apple.mpegurl",
-		);
-		expect(gunzipSync(bytes).toString("utf8")).toBe(expected);
-		expect(bytes.byteLength * 10).toBeLessThan(expected.length);
-	});
-
-	it.each(["identity", "gzip;q=0, br", "br", "xgzip"])(
-		"does not compress for a player that sends Accept-Encoding: %s",
-		async (encodings) => {
-			mocks.readText.mockResolvedValue(
-				`${rendition}\n${"#EXT-X-DISCONTINUITY\n".repeat(100)}`,
-			);
-
+		for (const encodings of ["gzip, deflate, br", "gzip", "identity"]) {
 			const response = await play(
 				"1080p.m3u8",
 				PLAYBACK_ID,
 				accepting(encodings),
 			);
+			const body = await response.text();
 
 			expect(response.headers.get("content-encoding")).toBeNull();
-			expect(await response.text()).toContain("#EXT-X-ENDLIST");
-		},
-	);
-
-	it("leaves a short playlist uncompressed", async () => {
-		const response = await play("master.m3u8", PLAYBACK_ID, accepting("gzip"));
-
-		expect(response.headers.get("content-encoding")).toBeNull();
-		expect(await response.text()).toBe(master);
+			expect(response.headers.get("content-type")).toBe(
+				"application/vnd.apple.mpegurl",
+			);
+			expect(body.startsWith("#EXTM3U\n")).toBe(true);
+			expect(body.endsWith("#EXT-X-ENDLIST")).toBe(true);
+			expect(body.split("\n")).toHaveLength(long.split("\n").length);
+		}
 	});
 
 	it("signs every media reference in a rendition playlist", async () => {
