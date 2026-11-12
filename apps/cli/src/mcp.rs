@@ -882,13 +882,21 @@ impl CapMcpServer {
         id_field: &str,
         created: &developer_media::Created,
         resume: &str,
+        unfinished: &str,
     ) -> AgentApiError {
         let error = Self::invalid("The MCP request was cancelled");
         match created.get() {
-            Some((id, status)) => error
-                .with_detail(id_field, id)
-                .with_detail("status", status)
-                .with_hint(resume),
+            Some((id, status)) => {
+                let hint = if status == "uploading" {
+                    unfinished
+                } else {
+                    resume
+                };
+                error
+                    .with_detail(id_field, id)
+                    .with_detail("status", status)
+                    .with_hint(hint)
+            }
             None => error,
         }
     }
@@ -2713,6 +2721,7 @@ impl CapMcpServer {
                     "videoId",
                     &created,
                     "The video is stored. Continue with developer_video_wait, or remove it with developer_video_delete.",
+                    "The file did not finish uploading. Remove the video with developer_video_delete, then upload it again.",
                 )
             })
             .await,
@@ -2791,6 +2800,7 @@ impl CapMcpServer {
                     "transcriptId",
                     &tracked,
                     "The transcript exists. Continue with developer_transcript_wait, or remove it with developer_transcript_delete.",
+                    "The file did not finish uploading. Remove the transcript with developer_transcript_delete, then create it again.",
                 )
             })
             .await,
@@ -4151,7 +4161,12 @@ mod tests {
             std::future::pending::<Result<(), AgentApiError>>().await
         };
         let error = CapMcpServer::until_cancelled(&cancellation, work, || {
-            CapMcpServer::cancelled("videoId", &created, "Continue with developer_video_wait.")
+            CapMcpServer::cancelled(
+                "videoId",
+                &created,
+                "Continue with developer_video_wait.",
+                "Upload it again.",
+            )
         })
         .await
         .unwrap_err();
@@ -4163,6 +4178,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_during_the_upload_does_not_say_the_file_is_stored() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let created = Created::default();
+        let work = async {
+            created.record("vid000000000001", "uploading");
+            cancellation.cancel();
+            std::future::pending::<Result<(), AgentApiError>>().await
+        };
+        let error = CapMcpServer::until_cancelled(&cancellation, work, || {
+            CapMcpServer::cancelled(
+                "videoId",
+                &created,
+                "Continue with developer_video_wait.",
+                "Upload it again.",
+            )
+        })
+        .await
+        .unwrap_err();
+        let error = serde_json::to_value(&error).unwrap();
+        assert_eq!(error["videoId"], "vid000000000001");
+        assert_eq!(error["status"], "uploading");
+        assert_eq!(error["hint"], "Upload it again.");
+    }
+
+    #[tokio::test]
     async fn cancelling_before_anything_is_created_reports_no_id() {
         let cancellation = tokio_util::sync::CancellationToken::new();
         cancellation.cancel();
@@ -4170,7 +4210,7 @@ mod tests {
         let error = CapMcpServer::until_cancelled(
             &cancellation,
             std::future::pending::<Result<(), AgentApiError>>(),
-            || CapMcpServer::cancelled("videoId", &created, "unused"),
+            || CapMcpServer::cancelled("videoId", &created, "unused", "unused"),
         )
         .await
         .unwrap_err();
