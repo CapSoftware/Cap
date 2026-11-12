@@ -1,3 +1,4 @@
+import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
 import { API_DOCS_URL } from "@/lib/api-errors";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -8,6 +9,11 @@ import {
 	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
 } from "@/lib/developer-rate-limits";
+import {
+	TRANSCRIPT_FAILURE_CODES,
+	transcriptFailureCodesText,
+	transcriptRequestErrorsText,
+} from "@/lib/developer-transcript-errors";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -80,8 +86,13 @@ const idempotencyKeyParam = {
 	in: "header",
 	required: false,
 	description:
-		"8 to 128 characters. Repeating a create request with the same key returns the same transcript instead of creating and billing a second one.",
-	schema: { type: "string", minLength: 8, maxLength: 128 },
+		"8 to 128 characters from letters, digits, dot, dash and underscore. Repeating a create request with the same key and the same body returns the same transcript instead of creating and billing a second one, and returns a new upload URL while the transcript still waits for its file. The same key with a different body is refused with 409 idempotency_conflict.",
+	schema: {
+		type: "string",
+		minLength: 8,
+		maxLength: 128,
+		pattern: "^[A-Za-z0-9._-]+$",
+	},
 };
 
 const uploadMaxBytes = {
@@ -100,8 +111,10 @@ const transcriptOptionProperties = {
 	},
 	language: {
 		type: "string",
+		enum: ["auto", ...AI_GENERATION_LANGUAGE_CODES],
+		default: "auto",
 		description:
-			'Two-letter language code such as "en", or "auto" to detect it. Defaults to "auto".',
+			"The language of the audio, if you know it. With a code, Cap skips language detection, uses its model for that language and reports that code as the transcript's language. It does not translate, and audio in another language is still transcribed as spoken. Leave it out or send auto to have Cap detect the language.",
 	},
 	userId: {
 		type: "string",
@@ -141,14 +154,22 @@ const transcriptSchema = {
 			required: ["type"],
 			properties: {
 				type: { type: "string", enum: ["upload", "url"] },
-				url: { type: ["string", "null"] },
+				url: {
+					type: ["string", "null"],
+					description:
+						"The URL the transcript was created from, without its query string or fragment. null for an upload.",
+				},
 			},
 		},
 		durationSeconds: {
 			type: ["number", "null"],
 			description: "Measured audio length. Set when the transcript finishes.",
 		},
-		language: { type: ["string", "null"] },
+		language: {
+			type: ["string", "null"],
+			description:
+				"The language of the audio: the code sent in the request, or the one Cap detected when the request left it out or sent auto. null until the transcript completes, and null when no speech was found.",
+		},
 		wordCount: {
 			type: ["integer", "null"],
 			description:
@@ -168,7 +189,11 @@ const transcriptSchema = {
 		error: {
 			type: ["object", "null"],
 			properties: {
-				code: { type: "string" },
+				code: {
+					type: "string",
+					enum: TRANSCRIPT_FAILURE_CODES.map((failure) => failure.code),
+					description: transcriptFailureCodesText(),
+				},
 				message: { type: "string" },
 			},
 		},
@@ -390,7 +415,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 		},
 		{
 			name: "Transcripts",
-			description: "Turn audio or video into text (secret key).",
+			description: `Turn audio or video into text (secret key). Requests can be refused with these codes. ${transcriptRequestErrorsText()}`,
 		},
 		{
 			name: "Usage",
@@ -553,7 +578,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
 				description:
-					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. A field the request does not know returns 400 with code invalid_request.",
+					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. A field the request does not know returns 400 with code invalid_request.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -637,12 +662,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						in: "query",
 						required: false,
 						description:
-							"Comma-separated extras to return with a complete transcript: words, segments.",
+							"Comma-separated extras to return with a complete transcript: words, segments. Any other value is refused with 400 invalid_include.",
 						schema: { type: "string" },
 					},
 				],
 				responses: {
 					"200": json(dataEnvelope(ref("TranscriptDetail")), "The transcript."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -957,8 +983,23 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					{
 						type: "object",
 						properties: {
+							upload: {
+								type: "object",
+								description:
+									"Present while status is uploading. To get a new upload URL after this time, repeat the create request with the same Idempotency-Key.",
+								required: ["expiresAt"],
+								properties: {
+									expiresAt: {
+										type: "string",
+										format: "date-time",
+										description: "When the latest upload URL stops working.",
+									},
+								},
+							},
 							words: {
 								type: ["array", "null"],
+								description:
+									"Each word with its start and end in seconds. Timings are in steps of 0.08 seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
 								items: {
 									type: "object",
 									required: ["text", "start", "end"],
@@ -966,7 +1007,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 										text: { type: "string" },
 										start: { type: "number" },
 										end: { type: "number" },
-										confidence: { type: ["number", "null"] },
 									},
 								},
 							},
@@ -1157,6 +1197,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: [
 					"balanceMicroCredits",
 					"balanceDollars",
+					"availableMicroCredits",
+					"heldMicroCredits",
+					"speech",
 					"totalVideos",
 					"uploadingVideos",
 					"totalDurationMinutes",
@@ -1169,6 +1212,41 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					balanceMicroCredits: {
 						type: "integer",
 						description: "Remaining balance. 100,000 micro-credits = $1.",
+					},
+					availableMicroCredits: {
+						type: "integer",
+						description:
+							"The balance minus credit held by running transcripts. This is what a new transcript or upload is checked against.",
+					},
+					heldMicroCredits: {
+						type: "integer",
+						description:
+							"Credit held by transcripts that are running now. A hold is not a charge and is released when the transcript finishes or fails.",
+					},
+					speech: {
+						type: "object",
+						description:
+							"Speech to text charged in the current calendar month (UTC). Deleted transcripts stay counted.",
+						required: ["periodStart", "seconds", "microCredits", "transcripts"],
+						properties: {
+							periodStart: {
+								type: "string",
+								format: "date-time",
+								description: "Start of the month, 00:00 UTC on the 1st.",
+							},
+							seconds: {
+								type: "number",
+								description: "Measured audio seconds of completed transcripts.",
+							},
+							microCredits: {
+								type: "integer",
+								description: "Micro-credits charged for them.",
+							},
+							transcripts: {
+								type: "integer",
+								description: "How many transcripts completed.",
+							},
+						},
 					},
 					balanceDollars: {
 						type: "string",
