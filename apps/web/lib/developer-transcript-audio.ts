@@ -52,6 +52,11 @@ const pastLimit = (
 const LOCAL_NO_AUDIO_PATTERN =
 	/does not contain any stream|matches no streams/i;
 
+export const probeShowsNoAudio = (probe: {
+	audioCodec?: string | null;
+	audioChannels?: number | null;
+}) => !probe.audioCodec && probe.audioChannels === null;
+
 const isTooLong = (seconds: number | null) =>
 	seconds !== null && seconds > TRANSCRIPT_AUDIO_MAX_SECONDS;
 
@@ -59,15 +64,14 @@ async function extractViaMediaServer(
 	sourceUrl: string,
 	limitSeconds: number,
 ): Promise<ExtractedTranscriptAudio> {
-	const probedSeconds = await probeVideoViaMediaServer(sourceUrl, {
+	const probe = await probeVideoViaMediaServer(sourceUrl, {
 		maxRetries: 0,
-	}).then(
-		(probe) =>
-			Number.isFinite(probe.duration) && probe.duration > 0
-				? probe.duration
-				: null,
-		() => null,
-	);
+	}).catch(() => null);
+	if (probe && probeShowsNoAudio(probe)) return { state: "no_audio" };
+	const probedSeconds =
+		probe && Number.isFinite(probe.duration) && probe.duration > 0
+			? probe.duration
+			: null;
 	if (isTooLong(probedSeconds)) return { state: "too_long" };
 	if (probedSeconds !== null && probedSeconds > limitSeconds) {
 		return pastLimit(limitSeconds, probedSeconds);

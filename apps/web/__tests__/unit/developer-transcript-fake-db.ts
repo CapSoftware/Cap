@@ -147,6 +147,12 @@ function compile(condition: SQL | undefined): Predicate {
 const isSql = (value: unknown): value is SQL =>
 	typeof value === "object" && value !== null && "queryChunks" in value;
 
+const isQuery = (value: unknown): value is PromiseLike<Row[]> =>
+	typeof value === "object" &&
+	value !== null &&
+	"then" in value &&
+	typeof value.then === "function";
+
 const columnName = (value: unknown) =>
 	typeof value === "object" && value !== null && "name" in value
 		? String((value as { name: unknown }).name)
@@ -241,7 +247,24 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							: String(b.id).localeCompare(String(a.id));
 					});
 				}
-				const projected = project(rows, fields);
+				const scalars: Row = {};
+				for (const [alias, field] of Object.entries(fields ?? {})) {
+					const inner = isSql(field)
+						? field.queryChunks.find(isQuery)
+						: undefined;
+					if (!inner) continue;
+					const [first] = await inner;
+					scalars[alias] = Object.values(first ?? {})[0] ?? null;
+				}
+				const selected = fields
+					? Object.fromEntries(
+							Object.entries(fields).filter(([alias]) => !(alias in scalars)),
+						)
+					: fields;
+				const projected = project(rows, selected).map((row) => ({
+					...row,
+					...scalars,
+				}));
 				return projected.slice(
 					state.offset,
 					state.limit === undefined ? undefined : state.offset + state.limit,
@@ -318,7 +341,7 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							row[key] = value;
 						}
 					}
-					row.updatedAt = now();
+					if (!("updatedAt" in values)) row.updatedAt = now();
 				}
 				return [{ affectedRows: matches.length }];
 			},
