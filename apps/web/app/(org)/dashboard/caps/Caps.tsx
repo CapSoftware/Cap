@@ -147,12 +147,15 @@ export const Caps = ({
 				);
 			}
 		}),
-		onMutate: (ids: Video.VideoId[]) => {
+		onMutate: (ids: Video.VideoId[]) =>
 			toast.loading(
 				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-			);
-		},
-		onSuccess: (data: { success: number; error?: number }) => {
+			),
+		onSuccess: (
+			data: { success: number; error?: number },
+			_ids: Video.VideoId[],
+			toastId: string | number | undefined,
+		) => {
 			setSelectedCaps([]);
 			router.refresh();
 			if (data.error) {
@@ -162,21 +165,27 @@ export const Caps = ({
 					}, but failed to delete ${data.error} cap${
 						data.error === 1 ? "" : "s"
 					}`,
+					{ id: toastId },
 				);
 			} else {
 				toast.success(
 					`Successfully deleted ${data.success} cap${
 						data.success === 1 ? "" : "s"
 					}`,
+					{ id: toastId },
 				);
 			}
 		},
-		onError: (error: unknown) => {
+		onError: (
+			error: unknown,
+			_ids: Video.VideoId[],
+			toastId: string | number | undefined,
+		) => {
 			const message =
 				error instanceof Error
 					? error.message
 					: "An error occurred while deleting caps";
-			toast.error(message);
+			toast.error(message, { id: toastId });
 		},
 	});
 
