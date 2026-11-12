@@ -20,6 +20,8 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import { developerVideoPlaybackUrls } from "@/lib/developer-video-api";
+import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
+import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
 import {
@@ -201,10 +203,7 @@ export async function getDeveloperAppVideos(
 	);
 }
 
-export async function getDeveloperAppVideo(
-	appId: string,
-	videoId: string,
-): Promise<InfraVideoDetail | null> {
+async function findDeveloperAppVideo(appId: string, videoId: string) {
 	const [row] = await db()
 		.select({
 			id: developerVideos.id,
@@ -214,6 +213,7 @@ export async function getDeveloperAppVideo(
 			width: developerVideos.width,
 			height: developerVideos.height,
 			createdAt: developerVideos.createdAt,
+			updatedAt: developerVideos.updatedAt,
 			status: developerVideos.status,
 			errorReason: developerVideos.errorReason,
 			storedBytes: developerVideos.storedBytes,
@@ -230,8 +230,24 @@ export async function getDeveloperAppVideo(
 			),
 		)
 		.limit(1);
+	return row ?? null;
+}
 
+// Reading a video through the API restarts encoding that stalled or is due a
+// retry. A customer who only uses the console has no other read, so opening
+// the video's page does the same.
+export async function getDeveloperAppVideo(
+	appId: string,
+	videoId: string,
+): Promise<InfraVideoDetail | null> {
+	let row = await findDeveloperAppVideo(appId, videoId);
 	if (!row) return null;
+	if (
+		developerVideoRedrive({ ...row, deletedAt: null }, Date.now()) &&
+		(await redriveDeveloperVideoProcessing(videoId))
+	) {
+		row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
+	}
 	return toInfraVideoDetail(
 		{ ...row, legacy: row.playbackId === null && row.processing === null },
 		developerVideoPlaybackUrls(row),

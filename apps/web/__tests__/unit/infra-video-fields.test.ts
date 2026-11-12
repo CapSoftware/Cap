@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 	rows: [] as Record<string, unknown>[][],
 	selections: [] as Record<string, unknown>[],
 	conditions: [] as unknown[],
+	redrive: vi.fn(async (_videoId: string) => false),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -43,6 +44,9 @@ vi.mock("@cap/env", () => ({
 	}),
 }));
 vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
+vi.mock("@/lib/developer-video-start", () => ({
+	redriveDeveloperVideoProcessing: mocks.redrive,
+}));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => null }) }));
 vi.mock("next/navigation", () => ({
 	redirect: (path: string) => {
@@ -77,6 +81,8 @@ beforeEach(() => {
 	mocks.rows = [];
 	mocks.selections = [];
 	mocks.conditions = [];
+	mocks.redrive.mockReset();
+	mocks.redrive.mockResolvedValue(false);
 });
 
 describe("console video list", () => {
@@ -208,6 +214,81 @@ describe("console video page", () => {
 			mp4Url: null,
 			posterUrl: null,
 		});
+	});
+});
+
+describe("opening a video restarts encoding that is due", () => {
+	const mp4Only = (retryAt: number) =>
+		developerVideo({
+			status: "ready",
+			processing: processingState({
+				mp4: { state: "complete", output: "out-mp4" },
+				hls: { state: "unavailable", reason: "not yet", retryAt },
+			}),
+		});
+
+	it("retries adaptive streaming once its wait is over and shows the new state", async () => {
+		mocks.redrive.mockResolvedValue(true);
+		mocks.rows = [
+			[mp4Only(Date.now() - 1_000)],
+			[
+				developerVideo({
+					status: "ready",
+					processing: processingState({
+						mp4: { state: "complete", output: "out-mp4" },
+						hls: { state: "pending" },
+					}),
+				}),
+			],
+		];
+
+		const video = await getDeveloperAppVideo("app-1", "video-1");
+
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
+		expect(mocks.selections).toHaveLength(2);
+		expect(video).toMatchObject({ state: "ready", stillEncoding: true });
+	});
+
+	it("keeps the row it read when another request took the retry", async () => {
+		mocks.rows = [[mp4Only(Date.now() - 1_000)]];
+
+		const video = await getDeveloperAppVideo("app-1", "video-1");
+
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
+		expect(mocks.selections).toHaveLength(1);
+		expect(video?.mp4Url).toBeTruthy();
+	});
+
+	it("leaves a video alone while nothing is due", async () => {
+		for (const row of [
+			mp4Only(Date.now() + 60 * 60 * 1000),
+			developerVideo({ status: "uploading", duration: null }),
+			developerVideo({ status: "errored" }),
+			developerVideo({
+				status: "processing",
+				processing: processingState({ startedAt: Date.now() }),
+			}),
+		]) {
+			mocks.rows = [[row]];
+			await getDeveloperAppVideo("app-1", "video-1");
+		}
+
+		expect(mocks.redrive).not.toHaveBeenCalled();
+	});
+
+	it("starts a video whose upload finished but never began encoding", async () => {
+		mocks.rows = [
+			[
+				developerVideo({
+					status: "uploading",
+					updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+				}),
+			],
+		];
+
+		await getDeveloperAppVideo("app-1", "video-1");
+
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
 	});
 });
 
