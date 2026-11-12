@@ -135,6 +135,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 2,
 			failed: 0,
+			moreToAbort: false,
 			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
@@ -204,6 +205,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 2,
 			failed: 0,
+			moreToAbort: false,
 			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
@@ -224,6 +226,107 @@ describe("developer upload cleanup cron", () => {
 				},
 			],
 		]);
+	});
+
+	const stalePage = (
+		count: number,
+		from: number,
+		truncated: boolean,
+	): Page => ({
+		Uploads: Array.from({ length: count }, (_, index) => ({
+			Key: `developer/app-1/video-${from + index}/video`,
+			UploadId: `upload-${from + index}`,
+			Initiated: hoursAgo(48),
+		})),
+		IsTruncated: truncated,
+		NextKeyMarker: `developer/app-1/video-${from + count - 1}/video`,
+		NextUploadIdMarker: `upload-${from + count - 1}`,
+	});
+
+	it("aborts several uploads at a time", async () => {
+		mocks.pages = [stalePage(100, 0, false)];
+		let running = 0;
+		let most = 0;
+		mocks.abort.mockImplementation(() =>
+			Effect.promise(async () => {
+				running++;
+				most = Math.max(most, running);
+				await Promise.resolve();
+				await Promise.resolve();
+				running--;
+				return {};
+			}),
+		);
+
+		const response = await runCron();
+
+		expect(await response.json()).toMatchObject({
+			aborted: 100,
+			moreToAbort: false,
+		});
+		expect(most).toBeGreaterThan(1);
+		expect(most).toBeLessThanOrEqual(16);
+	});
+
+	it("stops at its budget and says there is more", async () => {
+		mocks.pages = Array.from({ length: 7 }, (_, index) =>
+			stalePage(1000, index * 1000, index < 6),
+		);
+
+		const response = await runCron();
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			aborted: 5000,
+			failed: 0,
+			moreToAbort: true,
+		});
+		expect(mocks.abort).toHaveBeenCalledTimes(5000);
+		expect(mocks.listUploads).toHaveBeenCalledTimes(5);
+	});
+
+	it("lets the aborts in flight finish once its time is up, starts no more and says there is more", async () => {
+		mocks.pages = [stalePage(100, 0, true), stalePage(10, 100, true)];
+		mocks.abort.mockImplementation(() =>
+			Effect.sync(() => {
+				vi.setSystemTime(new Date(Date.now() + 15_000));
+				return {};
+			}),
+		);
+
+		const response = await runCron();
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			aborted: 16,
+			failed: 0,
+			moreToAbort: true,
+		});
+		expect(mocks.abort).toHaveBeenCalledTimes(16);
+		expect(mocks.listUploads).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives up on an abort that hangs and counts it as failed", async () => {
+		vi.useRealTimers();
+		vi.useFakeTimers();
+		vi.setSystemTime(NOW);
+		mocks.pages = [stalePage(2, 0, false)];
+		mocks.abort.mockImplementation((_key: string, uploadId: string) =>
+			uploadId === "upload-0" ? Effect.never : Effect.succeed({}),
+		);
+
+		const pending = runCron();
+		await vi.advanceTimersByTimeAsync(11_000);
+		const response = await pending;
+
+		expect(response.status).toBe(500);
+		expect(mocks.abort).toHaveBeenCalledTimes(2);
+	});
+
+	it("allows itself five minutes", async () => {
+		const route = await import("@/app/api/cron/developer-upload-cleanup/route");
+
+		expect(route.maxDuration).toBe(300);
 	});
 
 	it("keeps going when one abort fails and reports it", async () => {
@@ -278,6 +381,7 @@ describe("developer upload cleanup cron", () => {
 		expect(await response.json()).toEqual({
 			aborted: 0,
 			failed: 0,
+			moreToAbort: false,
 			removed: 3,
 			purged: 0,
 			purgeFailed: 0,
