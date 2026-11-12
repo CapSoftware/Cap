@@ -1,17 +1,13 @@
 import { db } from "@cap/database";
-import {
-	developerApps,
-	developerCreditAccounts,
-	users,
-} from "@cap/database/schema";
+import { developerApps, developerCreditAccounts } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { and, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
-import type Stripe from "stripe";
 import { z } from "zod";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import { ensureDeveloperStripeCustomer } from "@/lib/developer-stripe-customer";
 import { canUseInfra } from "@/lib/infra-access";
 import { infraAppPath } from "@/lib/infra-routes";
 import { zValidator } from "@/utils/zod-validator";
@@ -66,44 +62,10 @@ app.post(
 		}
 
 		try {
-			let customerId = account.stripeCustomerId ?? user.stripeCustomerId;
-
-			if (!customerId) {
-				const existingCustomers = await stripe().customers.list({
-					email: user.email,
-					limit: 1,
-				});
-
-				let customer: Stripe.Customer;
-				if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-					customer = existingCustomers.data[0];
-					customer = await stripe().customers.update(customer.id, {
-						metadata: {
-							...customer.metadata,
-							userId: user.id,
-						},
-					});
-				} else {
-					customer = await stripe().customers.create({
-						email: user.email,
-						metadata: {
-							userId: user.id,
-						},
-					});
-				}
-
-				await db()
-					.update(users)
-					.set({ stripeCustomerId: customer.id })
-					.where(eq(users.id, user.id));
-
-				await db()
-					.update(developerCreditAccounts)
-					.set({ stripeCustomerId: customer.id })
-					.where(eq(developerCreditAccounts.id, account.id));
-
-				customerId = customer.id;
-			}
+			const customerId = await ensureDeveloperStripeCustomer({
+				user,
+				account,
+			});
 
 			const checkoutSession = await stripe().checkout.sessions.create({
 				customer: customerId,
