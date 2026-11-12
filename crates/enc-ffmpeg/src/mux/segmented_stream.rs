@@ -1239,6 +1239,7 @@ impl SegmentedPacketMuxer {
             segment_tx: SegmentSender::default(),
             init_notified: false,
             initial_manifest_pending: true,
+            encoder_tail_lost: false,
         };
         mux.write_initial_manifest();
 

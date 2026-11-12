@@ -310,9 +310,12 @@ impl EncoderBackend {
     ) -> anyhow::Result<()> {
         match self {
             Self::Ffmpeg(encoder) => match encoder.lock() {
-                Ok(mut encoder) => {
-                    finish_and_report_flush_failure(&mut encoder, timestamp, finish_label, health_tx)
-                }
+                Ok(mut encoder) => finish_and_report_flush_failure(
+                    &mut encoder,
+                    timestamp,
+                    finish_label,
+                    health_tx,
+                ),
                 Err(_) => Err(anyhow!(
                     "{finish_label}: encoder mutex poisoned - recording may be corrupt or incomplete"
                 )),
