@@ -19,7 +19,10 @@ import { and, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
-import { developerVideoPlaybackUrls } from "@/lib/developer-video-api";
+import {
+	developerVideoPageUrls,
+	developerVideoPlaybackUrls,
+} from "@/lib/developer-video-api";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { canUseInfra } from "@/lib/infra-access";
@@ -251,6 +254,7 @@ export async function getDeveloperAppVideo(
 	return toInfraVideoDetail(
 		{ ...row, legacy: row.playbackId === null && row.processing === null },
 		developerVideoPlaybackUrls(row),
+		row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
 	);
 }
 
