@@ -4,6 +4,7 @@ import {
 	buildHlsLadderArgs,
 	type HlsLadderArgsInput,
 	hlsLadderFrameRate,
+	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
 	planHlsLadder,
@@ -180,6 +181,60 @@ describe("hlsLadderFrameRate", () => {
 		expect(hlsLadderFrameRate(1000)).toBe("60");
 		expect(hlsLadderFrameRate(0)).toBe("30");
 		expect(hlsLadderFrameRate(Number.NaN)).toBe("30");
+	});
+});
+
+describe("hlsLadderSourceFps", () => {
+	const grid = (openingFps: number, fastestFps: number | null) =>
+		hlsLadderFrameRate(hlsLadderSourceFps(openingFps, fastestFps));
+
+	test("keeps the probed rate of a constant frame rate source", () => {
+		expect(hlsLadderSourceFps(30, 30)).toBe(30);
+		expect(hlsLadderSourceFps(60, 60)).toBe(60);
+		expect(hlsLadderSourceFps(17.33, 17.33)).toBe(17.33);
+		expect(grid(29.97, 29.97)).toBe("30000/1001");
+		expect(grid(23.98, 23.98)).toBe("24000/1001");
+		expect(grid(120, 120)).toBe("60");
+	});
+
+	test("keeps the probed rate of a recording with millisecond timestamps", () => {
+		expect(hlsLadderSourceFps(30, 30.08)).toBe(30);
+		expect(hlsLadderSourceFps(29.97, 30.08)).toBe(29.97);
+	});
+
+	test("keeps the probed rate when capture jitter makes a stretch look faster", () => {
+		expect(hlsLadderSourceFps(29.95, 31.01)).toBe(29.95);
+		expect(hlsLadderSourceFps(24.96, 25.97)).toBe(24.96);
+	});
+
+	test("keeps the probed rate when the opening is the fastest part", () => {
+		expect(hlsLadderSourceFps(60, 30)).toBe(60);
+	});
+
+	test("follows the fastest stretch of a source that starts slowly", () => {
+		expect(grid(5.29, 30)).toBe("30");
+		expect(grid(12.03, 30.19)).toBe("30");
+		expect(grid(34.29, 60)).toBe("60");
+		expect(grid(7.03, 25.6)).toBe("25");
+		expect(grid(5, 29.97)).toBe("30000/1001");
+		expect(grid(5, 59.94)).toBe("60000/1001");
+	});
+
+	test("never picks a rate slower than the fastest stretch needs", () => {
+		expect(grid(10, 38.8)).toBe("38.8");
+		expect(grid(10, 47.5)).toBe("47.5");
+		expect(grid(20.05, 125)).toBe("60");
+	});
+
+	test("uses the probed rate when the frames could not be timed", () => {
+		expect(hlsLadderSourceFps(30, null)).toBe(30);
+		expect(hlsLadderSourceFps(30, Number.NaN)).toBe(30);
+		expect(grid(0, null)).toBe("30");
+	});
+
+	test("uses the fastest stretch when the probe has no rate", () => {
+		expect(grid(0, 24)).toBe("24");
+		expect(grid(Number.NaN, 30)).toBe("30");
 	});
 });
 

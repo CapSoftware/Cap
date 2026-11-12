@@ -9,6 +9,7 @@ import {
 	type HlsLadderRange,
 	type HlsLadderRendition,
 	type HlsLadderTierName,
+	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
 	planHlsLadder,
@@ -19,6 +20,7 @@ import {
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 } from "./media-common";
+import { probeFastestFrameRate } from "./media-probe";
 import {
 	getProcessTimeoutMs,
 	probeVideoSourceTraits,
@@ -81,10 +83,18 @@ export async function encodeHlsLadder(
 	abortSignal?: AbortSignal,
 ): Promise<EncodedHlsLadder> {
 	abortSignal?.throwIfAborted();
-	const { rotation, hdr } = await probeVideoSourceTraits(
-		inputPath,
-		abortSignal,
-	);
+	const [{ rotation, hdr }, fastestFps] = await Promise.all([
+		probeVideoSourceTraits(inputPath, abortSignal),
+		probeFastestFrameRate(inputPath, abortSignal).catch((error) => {
+			if (!abortSignal?.aborted) {
+				console.warn(
+					"[hls-ladder] Could not read frame timing, using the probed frame rate:",
+					error,
+				);
+			}
+			return null;
+		}),
+	]);
 	abortSignal?.throwIfAborted();
 	const rungs = planHlsLadder(
 		{ width: metadata.width, height: metadata.height },
@@ -120,7 +130,7 @@ export async function encodeHlsLadder(
 		outputDir: dir,
 		videoCodec: metadata.videoCodec,
 		hasAudio: muxAudioWithVideo,
-		sourceFps: metadata.fps,
+		sourceFps: hlsLadderSourceFps(metadata.fps, fastestFps),
 		rungs,
 		range,
 		hdr,

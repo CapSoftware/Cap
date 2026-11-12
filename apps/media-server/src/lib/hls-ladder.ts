@@ -164,6 +164,38 @@ export function hlsLadderFrameRate(sourceFps: number): string {
 	return String(Math.round(sourceFps * 1000) / 1000);
 }
 
+const COMMON_FRAME_RATES = [10, 12, 15, 20, 24, 25, 30, 48, 50, 60];
+// Capture timestamps wander by a few milliseconds, so a short stretch of a
+// steady recording measures a little faster than its real rate.
+const FRAME_TIMING_JITTER = 0.05;
+
+// The probe's frame rate is an average over the opening packets. A recording
+// that starts on a still screen and then moves is faster than its opening, and
+// a grid at the opening rate would drop most of its frames. The grid follows
+// the fastest stretch instead. A source whose opening already covers its
+// fastest stretch keeps the opening rate, so a constant frame rate source gets
+// exactly the grid it always had.
+export function hlsLadderSourceFps(
+	openingFps: number,
+	fastestFps: number | null,
+): number {
+	const opening =
+		Number.isFinite(openingFps) && openingFps > 0 ? openingFps : 0;
+	if (
+		fastestFps === null ||
+		!Number.isFinite(fastestFps) ||
+		fastestFps <= opening * (1 + FRAME_TIMING_JITTER)
+	) {
+		return openingFps;
+	}
+	return (
+		COMMON_FRAME_RATES.find(
+			(rate) =>
+				rate >= fastestFps / (1 + FRAME_TIMING_JITTER) && rate <= fastestFps,
+		) ?? fastestFps
+	);
+}
+
 export interface HlsLadderArgsInput {
 	inputPath: string;
 	outputDir: string;

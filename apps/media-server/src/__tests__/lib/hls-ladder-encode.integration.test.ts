@@ -303,6 +303,34 @@ describe("HLS ladder encode", () => {
 			.length;
 	}
 
+	test("keeps every frame of a source that starts slowly and speeds up", async () => {
+		const variable = join(directory, "variable.mp4");
+		writeFiltered(variable, 20, "if(lt(t,12),not(mod(n,15)),1)");
+		const sourceFrames = videoFrameTimes(variable);
+		expect(framesBetween(sourceFrames, 0, 12)).toBe(24);
+		expect(framesBetween(sourceFrames, 12, 20)).toBe(240);
+		expect((await probeVideoFile(variable)).fps).toBeLessThan(10);
+
+		const whole = await encode(undefined, true, variable);
+		for (const rendition of whole.result.renditions) {
+			const frames = videoFrameTimes(fileNamed(whole, rendition.playlist).path);
+			expect(framesBetween(frames, 12, 20)).toBe(240);
+			expect(frames.length).toBe(600);
+		}
+
+		const slices = await Promise.all(
+			planHlsLadderSlices(20, 2, 8).map((range) =>
+				encode(range, false, variable),
+			),
+		);
+		const sliced = slices.flatMap((slice) =>
+			videoFrameTimes(fileNamed(slice, "360p.m3u8").path),
+		);
+		expect(sliced.length).toBe(600);
+		expect(new Set(sliced.map((time) => Math.round(time * 30))).size).toBe(600);
+		expect(framesBetween(sliced, 12, 20)).toBe(240);
+	}, 180_000);
+
 	test("starts a slice on time when it begins inside a still stretch", async () => {
 		const still = join(directory, "still.mp4");
 		writeFiltered(still, SOURCE_SECONDS, "not(between(t,13,20))");
