@@ -56,6 +56,14 @@ vi.mock("@/lib/developer-credits", () => ({
 	addCreditsToAccount: (...args: unknown[]) => mockAddCredits(...args),
 }));
 
+const mockSaveCard = vi.fn();
+const mockSettleAutoTopUp = vi.fn();
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	saveCardFromCheckout: (...args: unknown[]) => mockSaveCard(...args),
+	settleAutoTopUpPaymentIntent: (...args: unknown[]) =>
+		mockSettleAutoTopUp(...args),
+}));
+
 vi.mock("@cap/web-domain", () => ({
 	Organisation: { OrganisationId: { make: (v: string) => v } },
 	User: { UserId: { make: (v: string) => v } },
@@ -300,5 +308,64 @@ describe("Stripe webhook — developer credits", () => {
 		await POST(makeWebhookRequest());
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 		expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("stores the card from a setup checkout and grants nothing", async () => {
+		const session = makeCheckoutSession({
+			mode: "setup",
+			payment_status: "no_payment_required",
+			payment_intent: null,
+			setup_intent: "seti_test",
+			metadata: { type: "developer_card", accountId: "account-001" },
+		});
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSaveCard).toHaveBeenCalledWith(session);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("settles an auto top-up payment that succeeded", async () => {
+		const paymentIntent = {
+			id: "pi_auto",
+			status: "succeeded",
+			metadata: { type: "developer_auto_top_up", accountId: "account-001" },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "payment_intent.succeeded",
+			data: { object: paymentIntent },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSettleAutoTopUp).toHaveBeenCalledWith(
+			paymentIntent,
+			"succeeded",
+		);
+		expect(mockAddCredits).not.toHaveBeenCalled();
+	});
+
+	it("settles an auto top-up payment that failed", async () => {
+		const paymentIntent = {
+			id: "pi_auto",
+			status: "requires_payment_method",
+			metadata: { type: "developer_auto_top_up", accountId: "account-001" },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "payment_intent.payment_failed",
+			data: { object: paymentIntent },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockSettleAutoTopUp).toHaveBeenCalledWith(paymentIntent, "failed");
 	});
 });
