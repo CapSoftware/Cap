@@ -1,5 +1,4 @@
 import clsx from "clsx";
-import type { Metadata } from "next";
 import Link from "next/link";
 import { infraAppPath } from "@/lib/infra-routes";
 import { getInfraBilling } from "@/lib/infra-standing";
@@ -31,12 +30,11 @@ import {
 	getDeveloperAppVideos,
 	getInfraProCredit,
 	getInfraStorageChargesSince,
+	infraPageMetadata,
 	requireInfraApp,
 } from "../infra-data";
 
-export const metadata: Metadata = {
-	title: "Overview | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Overview");
 
 const monthFormat = new Intl.DateTimeFormat("en-US", {
 	month: "long",
@@ -70,11 +68,7 @@ export default async function InfraOverviewPage({
 		]);
 
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
-	const publicKey = app.apiKeys.find((k) => k.keyType === "public");
 	const secretKey = app.apiKeys.find((k) => k.keyType === "secret");
-	const publicKeyValue = publicKey
-		? (publicKey.fullKey ?? `${publicKey.keyPrefix}...`)
-		: "cpk_...";
 	const empty = recentVideos.length === 0;
 
 	return (
@@ -216,7 +210,7 @@ export default async function InfraOverviewPage({
 
 				<div className="flex min-w-0 flex-col gap-10">
 					<Block
-						title="Keys"
+						title="Secret key"
 						action={
 							<Link
 								href={infraAppPath(app.id, "keys")}
@@ -225,19 +219,18 @@ export default async function InfraOverviewPage({
 									"text-[13px] text-[rgba(232,236,244,0.58)]",
 								)}
 							>
-								Manage keys
+								Manage key
 							</Link>
 						}
 					>
-						<KeyRow label="Public key" value={publicKeyValue} />
 						<KeyRow
 							label="Secret key"
 							value={`${secretKey?.keyPrefix ?? "csk_"}${"•".repeat(24)}`}
 							copyable={false}
 						/>
 						<p className="m-0 mt-3 text-pretty text-[13px] leading-[1.55] text-[rgba(232,236,244,0.46)]">
-							The secret key was shown once when it was created. Lost it?
-							Generate a new pair.
+							It belongs on your server and was shown once, when it was created.
+							Lost it? Generate a new one.
 						</p>
 					</Block>
 					<Block title="Use it with your agent">
