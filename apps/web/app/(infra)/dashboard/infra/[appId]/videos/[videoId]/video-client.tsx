@@ -251,7 +251,11 @@ export function VideoClient({
 							>
 								Rename
 							</Button>
-							<Button variant="danger" onClick={() => setConfirmDelete(true)}>
+							<Button
+								variant="danger"
+								disabled={uploadingHere}
+								onClick={() => setConfirmDelete(true)}
+							>
 								Delete
 							</Button>
 						</div>
