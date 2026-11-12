@@ -722,6 +722,56 @@ describe("web recording upload recovery", () => {
 		expect(recorder.completedShareUrl).toBeNull();
 	});
 
+	it.each(["capture", "video creation"])(
+		"keeps a completed recording when the next take fails during %s",
+		async (failure) => {
+			await start();
+			await act(async () => recorder.stopRecording());
+			expect(recorder.phase).toBe("completed");
+			expect(recorder.canStartRecording).toBe(true);
+
+			const nextTrack = new Track();
+			if (failure === "capture") {
+				mocks.acquire.mockRejectedValueOnce(
+					new DOMException("Cancelled", "NotAllowedError"),
+				);
+			} else {
+				mocks.acquire.mockResolvedValueOnce(new Stream([nextTrack]));
+				mocks.create.mockRejectedValueOnce(new Error("Network failed"));
+			}
+			await act(async () => recorder.startRecording());
+
+			expect(mocks.delete).not.toHaveBeenCalled();
+			expect(recorder.phase).toBe("idle");
+			expect(recorder.canStartRecording).toBe(true);
+			if (failure === "video creation") {
+				expect(nextTrack.stop).toHaveBeenCalled();
+			}
+		},
+	);
+
+	it("deletes only the unfinished take when its upload setup fails after a completed recording", async () => {
+		await start();
+		await act(async () => recorder.stopRecording());
+		const nextTrack = new Track();
+		mocks.acquire.mockResolvedValueOnce(new Stream([nextTrack]));
+		mocks.create.mockResolvedValueOnce(
+			Exit.succeed({
+				id: "next-video",
+				shareUrl: "https://cap.so/s/next-video",
+				upload: {},
+			}),
+		);
+		mocks.initiate.mockRejectedValueOnce(new Error("Network failed"));
+
+		await act(async () => recorder.startRecording());
+
+		expect(mocks.delete).toHaveBeenCalledExactlyOnceWith("next-video");
+		expect(nextTrack.stop).toHaveBeenCalled();
+		expect(recorder.phase).toBe("idle");
+		expect(recorder.canStartRecording).toBe(true);
+	});
+
 	it("waits for pending local writes before finalizing", async () => {
 		await start();
 		const flushed = deferred<void>();

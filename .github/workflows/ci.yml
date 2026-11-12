@@ -192,6 +192,7 @@ jobs:
           __tests__/unit/video-settings-action.test.ts
           __tests__/unit/viewer-download-action.test.ts
           __tests__/unit/voice-note-playback.test.ts
+          __tests__/unit/web-recorder-reliability.test.ts
 
       - name: Typecheck
         run: bun run typecheck
