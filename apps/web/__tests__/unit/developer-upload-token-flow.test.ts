@@ -178,6 +178,28 @@ describe("creating an upload with the secret key", () => {
 		expect(state.admission).toHaveBeenCalledExactlyOnceWith("app1");
 	});
 
+	it.each([
+		["  user_42  ", "user_42"],
+		["user_42\n", "user_42"],
+	])("stores the user id %j without its padding", async (sent, stored) => {
+		await created({ name: "Demo", userId: sent });
+
+		const [, params] = inserts()[0] ?? [];
+		expect(params).toContain(stored);
+		expect(params).not.toContain(sent);
+	});
+
+	it.each(["", "   "])("stores no user id for %j", async (sent) => {
+		await created({ name: "Demo", userId: sent });
+
+		const [query, params] = inserts()[0] ?? [];
+		expect(params).not.toContain(sent);
+		expect(String(query)).toMatch(/^insert/);
+		expect(
+			(params as unknown[]).filter((value) => typeof value === "string"),
+		).not.toContain("");
+	});
+
 	it("refuses with 402 and makes neither a video nor a token when the app cannot take an upload", async () => {
 		state.admission.mockResolvedValue({
 			allowed: false,
