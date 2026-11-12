@@ -143,15 +143,15 @@ fn persist_segment_input_events(
     if let Some(path) = cursor_path {
         #[derive(serde::Serialize)]
         struct CursorEventsRef<'a> {
-            clicks: &'a [CursorClickEvent],
-            moves: &'a [CursorMoveEvent],
+            clicks: &'a [cap_project::CursorClickEvent],
+            moves: &'a [cap_project::CursorMoveEvent],
         }
 
         let result = crate::cursor::write_atomically_with(path, |target| {
             use std::io::Write;
             let file = std::fs::File::create(target)?;
             let mut writer = std::io::BufWriter::new(file);
-            serde_json::to_writer(
+            serde_json::to_writer_pretty(
                 &mut writer,
                 &CursorEventsRef {
                     clicks: &response.clicks,

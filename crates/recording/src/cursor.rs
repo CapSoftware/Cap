@@ -35,10 +35,10 @@ pub struct CursorActorResponse {
     pub keyboard_presses: Vec<KeyPressEvent>,
 }
 
-/// Minimum squared delta in normalized coordinates (~0.316 sub-pixel on 1080p)
-/// required to push a new cursor move event, preventing unbounded heap growth from
-/// sub-pixel sensor noise and high-polling mice during long recordings.
-pub const MIN_CURSOR_MOVE_DELTA_SQ: f64 = 1e-7;
+/// Minimum squared delta in normalized coordinates required to push a new cursor
+/// move event, preventing unbounded heap growth from sub-pixel sensor noise while
+/// preserving 1-pixel moves on 4K+ displays (1px on 4K is ~6.78e-8).
+pub const MIN_CURSOR_MOVE_DELTA_SQ: f64 = 1e-8;
 
 impl CursorActorResponse {
     pub fn push_move_deduped(&mut self, event: CursorMoveEvent) -> bool {
@@ -2449,7 +2449,6 @@ mod cursor_image_tests {
     fn cursor_subpixel_moves_are_deduplicated() {
         let mut response = empty_response();
 
-        // Initial position
         let pushed_first = response.push_move_deduped(CursorMoveEvent {
             active_modifiers: vec![],
             cursor_id: "0".to_string(),
@@ -2460,40 +2459,34 @@ mod cursor_image_tests {
         assert!(pushed_first);
         assert_eq!(response.moves.len(), 1);
 
-        // Subpixel jitter (< 1e-7 squared distance: ~0.0001 distance)
         let pushed_jitter = response.push_move_deduped(CursorMoveEvent {
             active_modifiers: vec![],
             cursor_id: "0".to_string(),
             time_ms: 16.0,
-            x: 0.50005,
-            y: 0.50005,
+            x: 0.50002,
+            y: 0.50002,
         });
-        assert!(!pushed_jitter, "Sub-pixel jitter should be deduplicated");
+        assert!(!pushed_jitter);
         assert_eq!(response.moves.len(), 1);
 
-        // Meaningful move (> 1e-7 squared distance: ~0.005 distance)
         let pushed_move = response.push_move_deduped(CursorMoveEvent {
             active_modifiers: vec![],
             cursor_id: "0".to_string(),
             time_ms: 32.0,
-            x: 0.505,
-            y: 0.505,
+            x: 0.501,
+            y: 0.501,
         });
-        assert!(pushed_move, "Meaningful move should be recorded");
+        assert!(pushed_move);
         assert_eq!(response.moves.len(), 2);
 
-        // Cursor shape change triggers move event even if position is unchanged
         let pushed_shape_change = response.push_move_deduped(CursorMoveEvent {
             active_modifiers: vec![],
             cursor_id: "1".to_string(),
             time_ms: 48.0,
-            x: 0.505,
-            y: 0.505,
+            x: 0.501,
+            y: 0.501,
         });
-        assert!(
-            pushed_shape_change,
-            "Cursor ID/shape change must force a move event"
-        );
+        assert!(pushed_shape_change);
         assert_eq!(response.moves.len(), 3);
     }
 
@@ -2503,20 +2496,16 @@ mod cursor_image_tests {
         let total_samples = 10_000;
         let mut raw_events_count = 0;
 
-        // Simulate 10,000 samples of high-polling cursor with optical micro-jitter
-        // interspersed with genuine movements.
         let mut current_x = 0.5f64;
         let mut current_y = 0.5f64;
 
         for i in 0..total_samples {
             raw_events_count += 1;
-            // Every 100 ticks, introduce genuine cursor motion; otherwise optical subpixel noise
             if i % 100 == 0 {
                 current_x += 0.005;
                 current_y += 0.005;
             } else {
-                // Jitter around current position (0.00005)
-                let jitter = ((i % 5) as f64 - 2.0) * 0.00002;
+                let jitter = ((i % 5) as f64 - 2.0) * 0.00001;
                 current_x += jitter;
                 current_y += jitter;
             }
