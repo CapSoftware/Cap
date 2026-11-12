@@ -1,4 +1,3 @@
-import { gzipSync } from "node:zlib";
 import { db } from "@cap/database";
 import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
@@ -28,7 +27,6 @@ const CACHE_SECONDS = 60;
 
 const START_MAX_BANDWIDTH = 2_600_000;
 const START_MAX_SHORT_SIDE = 1080;
-const GZIP_MIN_BYTES = 1024;
 
 export const PLAYBACK_CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
@@ -167,35 +165,16 @@ export function leadWithStartRendition(master: string): string {
 	].join("\n")}\n`;
 }
 
-function acceptsGzip(request: Request): boolean {
-	return (request.headers.get("accept-encoding") ?? "")
-		.split(",")
-		.some((entry) => {
-			const [name, ...parameters] = entry.trim().toLowerCase().split(";");
-			if (name?.trim() !== "gzip") return false;
-			const quality = parameters
-				.map((parameter) => parameter.trim().match(/^q=([\d.]+)$/)?.[1])
-				.find((value) => value !== undefined);
-			return quality === undefined || Number(quality) > 0;
-		});
-}
-
-// A rendition playlist repeats one long signed address for every segment, so a
-// long video's playlist is hundreds of kilobytes that compress to a few. The
-// platform does not compress this content type by itself.
-function playlistResponse(playlist: string, request: Request): Response {
-	const headers = {
-		...PLAYBACK_CORS_HEADERS,
-		...CACHEABLE,
-		"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
-		Vary: "Accept-Encoding",
-	};
-	const body = Buffer.from(playlist, "utf8");
-	if (body.byteLength < GZIP_MIN_BYTES || !acceptsGzip(request)) {
-		return new Response(body, { headers });
-	}
-	return new Response(gzipSync(body), {
-		headers: { ...headers, "Content-Encoding": "gzip" },
+// Sent as it is. The platform does not compress this content type, and a body
+// compressed here reaches the viewer without its Content-Encoding header, so a
+// player cannot read it.
+function playlistResponse(playlist: string): Response {
+	return new Response(playlist, {
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			...CACHEABLE,
+			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
+		},
 	});
 }
 
@@ -272,6 +251,5 @@ export async function developerPlaybackResponse(
 						request,
 					),
 				),
-		request,
 	);
 }
