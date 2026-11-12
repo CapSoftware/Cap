@@ -311,12 +311,7 @@ export function UploadDrop({
 			setUpload({
 				phase: "failed",
 				needsCredits: status === 402,
-				message:
-					status === 402
-						? "This app needs credits before it can take an upload."
-						: error instanceof Error
-							? error.message
-							: "The upload failed",
+				message: error instanceof Error ? error.message : "The upload failed",
 			});
 		} finally {
 			if (controller.current === abort) controller.current = null;
@@ -429,7 +424,8 @@ export function UploadDrop({
 							</p>
 						) : (
 							<p className="m-0 mt-1 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
-								MP4, MOV or WebM, billed at the upload rate.
+								MP4, MOV or WebM. Uploads are free, and stored video is billed
+								by the minute.
 							</p>
 						)}
 					</div>

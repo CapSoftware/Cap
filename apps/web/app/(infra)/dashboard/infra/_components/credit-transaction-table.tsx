@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { parseStorageCharge } from "@/lib/infra-standing";
 import { formatCharge, formatCredits } from "@/lib/infra-usage";
 import type { DeveloperTransaction } from "../infra-data";
 import { Empty, MONO, TD, TH, TR } from "./ui";
@@ -10,7 +11,18 @@ const typeLabels: Record<string, string> = {
 	refund: "Refund",
 	adjustment: "Adjustment",
 	pro_credit: "Cap Pro credit",
+	topup_failed: "Auto top-up declined",
 };
+
+function labelFor(tx: DeveloperTransaction) {
+	if (tx.referenceType === "auto_top_up") return "Auto top-up";
+	if (tx.type === "storage_daily" && parseStorageCharge(tx).shortSince) {
+		return tx.amountMicroCredits === 0
+			? "Storage, unpaid"
+			: "Storage, part paid";
+	}
+	return typeLabels[tx.type] ?? tx.type;
+}
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
 	month: "short",
@@ -41,15 +53,14 @@ export function CreditTransactionTable({
 				</thead>
 				<tbody>
 					{transactions.map((tx) => {
-						const credit = tx.amountMicroCredits >= 0;
+						const credit = tx.amountMicroCredits > 0;
+						const sign = tx.amountMicroCredits === 0 ? "" : credit ? "+" : "-";
 						return (
 							<tr key={tx.id} className={TR}>
 								<td className={TD}>
 									{dateFormat.format(new Date(tx.createdAt))}
 								</td>
-								<td className={clsx(TD, "text-[#E8ECF4]")}>
-									{typeLabels[tx.type] ?? tx.type}
-								</td>
+								<td className={clsx(TD, "text-[#E8ECF4]")}>{labelFor(tx)}</td>
 								<td
 									className={clsx(
 										TD,
@@ -58,7 +69,7 @@ export function CreditTransactionTable({
 										credit ? "text-white" : "text-[rgba(232,236,244,0.72)]",
 									)}
 								>
-									{credit ? "+" : "-"}
+									{sign}
 									{formatCharge(tx.amountMicroCredits)}
 								</td>
 								<td
