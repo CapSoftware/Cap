@@ -283,8 +283,11 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
       );
       if (!created.ok) throw new Error("the server could not create an upload");
       const upload = await created.json();
+      let furthest = 0;
+      progress.value = 0;
       await uploadVideo(file, upload, (fraction) => {
-        progress.value = fraction;
+        furthest = Math.max(furthest, fraction);
+        progress.value = furthest;
       });
       status.textContent = "Processing";
       const video = await waitForVideo(upload.videoId);
@@ -304,7 +307,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 - **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
 - **File size.** Initiate takes the file's size as `contentLength`, so a file over the token's `maxBytes` is refused with the code `file_too_large` before any of it is sent.
-- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`.
+- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
 - **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload.
 - **An expired token.** A call that answers `upload_token_expired` gets a new token from your server and is sent again. Nothing already uploaded is lost.
 - **Resuming.** Calling initiate again returns the same `uploadId` when the upload was opened in the last 6 hours, with the same token or a renewed one. Keep each finished part's `partNumber`, `etag` and `size`, upload only the parts that are missing, then list every part in complete.
@@ -476,6 +479,8 @@ When your backend already has the file, it can do the whole upload itself. It cr
 
 A server has no `<video>` element to read the duration with. Send the real `durationInSecs`, `width` and `height` if you have them, for example from `ffprobe`. Otherwise send `durationInSecs: 1`, as these examples do, and Cap replaces it with the measured length.
 
+Both examples ask for a token that works for 24 hours, the longest allowed. The token never leaves your server, so a long life costs nothing, and a large file on a slow connection has time to finish. An upload that could take longer than that needs a new token part way through: see [Renew Upload Token](/docs/api/rest-api#renew-upload-token).
+
 Both examples send a part once more when its upload fails, and wait and send the request again when the API answers `429`.
 
 ### Node
@@ -519,7 +524,11 @@ export const capApi = (method, path, body) =>
   request(CAP_API + path, method, SECRET_KEY, body);
 
 export async function createUpload({ name, userId }) {
-  const { data } = await capApi("POST", "/uploads", { name, userId });
+  const { data } = await capApi("POST", "/uploads", {
+    name,
+    userId,
+    timeoutSeconds: 86400,
+  });
   return data;
 }
 
@@ -654,7 +663,7 @@ def cap_api(method, path, body=None):
 
 
 def create_upload(name, user_id=None):
-    body = {"name": name}
+    body = {"name": name, "timeoutSeconds": 86400}
     if user_id is not None:
         body["userId"] = user_id
     return cap_api("POST", "/uploads", body)["data"]
