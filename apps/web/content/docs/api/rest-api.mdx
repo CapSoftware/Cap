@@ -4,7 +4,7 @@ summary: "Programmatic access to Cap via the REST API"
 tags: "API, Integration"
 ---
 
-The Cap Developer API provides programmatic access to videos created through your developer apps. It is designed for server-to-server integrations, automated workflows, and building custom recording experiences on top of Cap.
+The Cap Developer API lets your product host video with Cap. You upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player.
 
 There are two APIs:
 
@@ -13,13 +13,20 @@ There are two APIs:
 
 These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with `CAP_API_KEY` in headless environments, see [Set Up Your Agent](/docs/agents/setup#headless-environments-ci-containers-and-remote-sandboxes).
 
+A video goes through four steps:
+
+1. [Create Video](/docs/api/rest-api#create-video) with the public key.
+2. Upload the file with [Multipart Upload](/docs/api/rest-api#multipart-upload).
+3. Poll [Get Video Status](/docs/api/rest-api#get-video-status) with the secret key until `status` is `ready` or `errored`.
+4. Play it. See [Play a Video](/docs/api/rest-api#play-a-video).
+
 ## Authentication
 
 ### Getting Your API Keys
 
 API keys are managed in Cap Infra, not the general Settings page.
 
-1. Go to [cap.so/dashboard/infra](https://cap.so/dashboard/infra).
+1. Go to [cap.so/dashboard/infra](/dashboard/infra).
 2. Create an app and give it a name and environment (development or production).
 3. Two keys are generated for each app:
    - **Public key** (`cpk_...`) -- Safe to use in client-side code. Used with the SDK API.
@@ -44,7 +51,7 @@ Keep your secret key private. Never expose it in client-side code, commit it to 
 
 ## OpenAPI
 
-A machine-readable OpenAPI 3.1 description of both APIs is published at [Cap.so/openapi.json](https://cap.so/openapi.json). Import it into an API client, generate a typed SDK, or give it to an agent as tool definitions.
+A machine-readable OpenAPI 3.1 description of both APIs is published at [cap.so/openapi.json](/openapi.json). Import it into an API client, generate a typed client, or give it to an agent as tool definitions.
 
 ## Base URL
 
@@ -60,11 +67,11 @@ https://cap.so/api/developer/v1
 https://cap.so/api/developer/sdk/v1
 ```
 
-If you are self-hosting Cap, replace `Cap.so` with your custom domain.
+If you are self-hosting Cap, replace `cap.so` with your custom domain.
 
 ## Error Handling
 
-All error responses return a JSON object with an `error` string. Authentication, rate-limit, unknown-route, and unexpected errors also include a stable `code`, a `hint` describing what to change, and a link to these docs:
+Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text.
 
 ```json
 {
@@ -76,29 +83,73 @@ All error responses return a JSON object with an `error` string. Authentication,
 }
 ```
 
-Request bodies that fail validation return `400` with `success: false` and the failing fields.
+A request body that fails validation returns `400` with the code `invalid_request` and an `issues` array that names each failing field:
 
-Standard HTTP status codes are used:
+```json
+{
+  "error": "Invalid request: maxResolutionTier: Invalid option: expected one of \"1080p\"|\"1440p\"|\"2160p\"",
+  "code": "invalid_request",
+  "message": "Invalid request: maxResolutionTier: Invalid option: expected one of \"1080p\"|\"1440p\"|\"2160p\"",
+  "hint": "Fix the fields listed in issues, then send the request again.",
+  "docs": "https://cap.so/docs/api/rest-api",
+  "issues": [
+    {
+      "code": "invalid_value",
+      "values": ["1080p", "1440p", "2160p"],
+      "path": ["maxResolutionTier"],
+      "message": "Invalid option: expected one of \"1080p\"|\"1440p\"|\"2160p\""
+    }
+  ]
+}
+```
+
+A `402` from Create Video or Complete Upload is the one exception to the shape: it has `error`, `code` and `message`, and carries the balance fields shown under [Create Video](/docs/api/rest-api#create-video) in place of `hint` and `docs`.
+
+Send request bodies as JSON with the header `Content-Type: application/json`. Malformed JSON returns `400` with the code `invalid_json`, and a body sent with any other content type returns `415` with the code `unsupported_media_type`.
 
 | Status Code | Description |
 |-------------|-------------|
 | `200` | Success |
-| `400` | Bad request -- missing or invalid parameters |
-| `401` | Unauthorized -- invalid, missing, or revoked API key |
-| `402` | Payment required -- the app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
-| `403` | Forbidden -- origin not allowed (SDK API in production) |
-| `404` | Not found -- the requested resource does not exist |
-| `429` | Too many requests -- more than 60 per minute for this key; wait for `Retry-After` seconds |
-| `500` | Internal server error |
+| `400` | Bad request. The `code` says what was wrong, for example `invalid_request`, `invalid_json`, `invalid_limit` or `unknown_parameter` |
+| `401` | Unauthorized. The API key is missing, invalid or revoked |
+| `402` | Payment required. The app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
+| `403` | Forbidden. A production app was called without an allowed `Origin` (SDK API), or the account cannot use this feature yet |
+| `404` | Not found. The video, transcript or upload does not exist (`video_not_found`, `transcript_not_found`, `upload_not_found`), or no route matches the path (`not_found`) |
+| `405` | Method not allowed. The path exists but not with this method (`method_not_allowed`). The `Allow` header lists the methods it takes |
+| `409` | Conflict with the current state, for example an upload that already completed. The `code` says which |
+| `415` | Unsupported media type. The body was not sent as `application/json` |
+| `429` | Too many requests. See [Rate Limits](/docs/api/rest-api#rate-limits) |
+| `500` | Internal server error (`internal_error`). Retry with backoff |
+| `503` | Transcription is temporarily unavailable. Retry later |
+
+A `4xx` response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: `429`, and `409` with the code `completion_in_progress`.
+
+## Rate Limits
+
+Each key allows 60 requests per minute, counted across every endpoint. Playback URLs need no key and are not counted.
+
+Every response carries three headers:
+
+| Header | Meaning |
+|--------|---------|
+| `X-RateLimit-Limit` | Requests the key may make per minute |
+| `X-RateLimit-Remaining` | Requests left in the current window |
+| `X-RateLimit-Reset` | Seconds until the window resets |
+
+Past the limit the API answers `429` with the code `rate_limited` and a `Retry-After` header in seconds. The count is kept by the server that answers, so `X-RateLimit-Remaining` can differ from one response to the next. Treat it as a guide, and treat a `429` with its `Retry-After` as the instruction.
+
+The public key has its own count, shared by every browser that uses your app, and each uploaded part spends one presign request from it.
 
 ## Pagination
 
 List endpoints support pagination via query parameters:
 
-| Parameter | Type | Default | Max | Description |
-|-----------|------|---------|-----|-------------|
-| `limit` | integer | 50 | 100 | Number of items to return |
-| `offset` | integer | 0 | -- | Number of items to skip |
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `limit` | integer | 50 | 1 to 100 | Number of items to return |
+| `offset` | integer | 0 | 0 and up | Number of items to skip |
+
+Lists are strict about their query string. A `limit` or `offset` that is not a whole number in range returns `400` with the code `invalid_limit` or `invalid_offset`, and a query parameter the list does not know returns `400` with the code `unknown_parameter`. Parameter names are case-sensitive. Nothing is clamped or ignored, so a mistyped filter never returns an unfiltered list.
 
 Video lists do not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`. Transcript lists also return `pagination.hasMore`.
 
@@ -110,7 +161,7 @@ All REST API endpoints require a secret key (`csk_`) in the `Authorization` head
 
 ### List Videos
 
-Retrieve videos created by your app.
+Retrieve videos created by your app, newest first. Deleted videos are not returned.
 
 ```
 GET /api/developer/v1/videos
@@ -120,18 +171,23 @@ GET /api/developer/v1/videos
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `userId` | string | No | Filter by external user ID |
-| `limit` | integer | No | Number of results (default 50, max 100) |
+| `userId` | string | No | Only return videos created with this `userId`. Videos return it as `externalUserId` |
+| `externalUserId` | string | No | Another name for the `userId` filter. Sending both with different values returns `400` with the code `conflicting_parameters` |
+| `limit` | integer | No | Number of results, 1 to 100 (default 50) |
 | `offset` | integer | No | Number of results to skip (default 0) |
+
+Any other query parameter returns `400`. See [Pagination](/docs/api/rest-api#pagination).
 
 **Example request:**
 
 ```bash
-curl https://cap.so/api/developer/v1/videos?limit=10 \
+curl "https://cap.so/api/developer/v1/videos?limit=10" \
   -H "Authorization: Bearer csk_your_secret_key_here"
 ```
 
 **Example response:**
+
+Each item is the full [video object](/docs/api/rest-api#video-object-reference), the same one Get Video returns. This example holds a ready video and one that was created and is still waiting for its file.
 
 ```json
 {
@@ -145,11 +201,52 @@ curl https://cap.so/api/developer/v1/videos?limit=10 \
       "width": 1920,
       "height": 1080,
       "fps": 30,
-      "transcriptionStatus": "COMPLETE",
+      "transcriptionStatus": null,
       "metadata": null,
+      "status": "ready",
+      "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+      "maxResolutionTier": "1080p",
+      "renditions": [
+        { "name": "1080p", "width": 1920, "height": 1080, "bitrate": 3565000, "bytes": 55480000, "codecs": "avc1.640028,mp4a.40.2" },
+        { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
+        { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
+      ],
+      "storedBytes": 142300000,
+      "errorReason": null,
       "deletedAt": null,
       "createdAt": "2025-06-15T10:30:00.000Z",
-      "updatedAt": "2025-06-15T10:32:00.000Z"
+      "updatedAt": "2025-06-15T10:32:00.000Z",
+      "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
+      "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
+      "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+      "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+      "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
+    },
+    {
+      "id": "def456ghi789",
+      "appId": "app_789",
+      "externalUserId": "user_42",
+      "name": "Untitled",
+      "duration": null,
+      "width": null,
+      "height": null,
+      "fps": null,
+      "transcriptionStatus": null,
+      "metadata": null,
+      "status": "uploading",
+      "playbackId": "Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M",
+      "maxResolutionTier": "1080p",
+      "renditions": [],
+      "storedBytes": null,
+      "errorReason": null,
+      "deletedAt": null,
+      "createdAt": "2025-06-15T10:20:00.000Z",
+      "updatedAt": "2025-06-15T10:20:00.000Z",
+      "hlsUrl": null,
+      "mp4Url": null,
+      "posterUrl": null,
+      "shareUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M",
+      "embedUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M/embed"
     }
   ]
 }
@@ -189,7 +286,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "transcriptionStatus": "COMPLETE",
+    "transcriptionStatus": null,
     "metadata": null,
     "status": "ready",
     "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
@@ -243,13 +340,15 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     "duration": 124.5,
     "width": 1920,
     "height": 1080,
-    "transcriptionStatus": "COMPLETE",
+    "transcriptionStatus": null,
     "ready": true,
     "status": "ready",
     "errorReason": null,
     "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
     "renditions": [
-      { "name": "1080p", "width": 1920, "height": 1080, "bitrate": 3565000, "bytes": 55480000, "codecs": "avc1.640028,mp4a.40.2" }
+      { "name": "1080p", "width": 1920, "height": 1080, "bitrate": 3565000, "bytes": 55480000, "codecs": "avc1.640028,mp4a.40.2" },
+      { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
+      { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
     ],
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
@@ -260,15 +359,19 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 
 The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
 
-A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted.
+Poll this endpoint every few seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 60 requests per minute.
+
+A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present.
 
-The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, or `NO_AUDIO`.
+`transcriptionStatus` is `null`. Uploaded videos are not transcribed automatically. To get text, send the file to [Transcripts](/docs/api/rest-api#transcripts).
 
 ### Delete Video
 
 Delete a video. It is excluded from every query straight away, and its playback URLs stop answering new viewers within about a minute. Its files (the upload and every encoded output) are removed within about five minutes, and links that were already handed out stop working within about ten minutes of the delete. If the video was still being encoded when it was deleted, anything the encoder writes afterwards is removed within four hours.
+
+Deleting a video this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 
 ```
 DELETE /api/developer/v1/videos/:id
@@ -299,7 +402,7 @@ curl -X DELETE https://cap.so/api/developer/v1/videos/abc123def456 \
 
 Send an audio or video file and get text back. Transcription costs $0.10 per audio hour, billed by the second from the app's credit balance.
 
-A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](#get-transcript) every few seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
+A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every few seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
 
 Creating or starting a transcript can be refused. The response carries a `code` and a `message`:
 
@@ -477,7 +580,7 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 
 ### Get Usage
 
-Retrieve your app's credit balance, video totals, standing, what it needs to take an upload and what storage costs per day.
+Retrieve your app's credit balance, video totals, standing, what it needs to take an upload, what storage costs per day and the rates those costs are worked out from.
 
 ```
 GET /api/developer/v1/usage
@@ -498,6 +601,7 @@ curl https://cap.so/api/developer/v1/usage \
     "balanceMicroCredits": 500000,
     "balanceDollars": "5.00",
     "totalVideos": 23,
+    "uploadingVideos": 1,
     "totalDurationMinutes": 87.5,
     "standing": { "state": "active", "pausesAt": null },
     "upload": {
@@ -511,6 +615,12 @@ curl https://cap.so/api/developer/v1/usage \
       "minutesByTier": { "1080p": 87.5, "1440p": 0, "2160p": 0 },
       "dailyMicroCredits": 247,
       "monthlyMicroCredits": 7438
+    },
+    "rates": {
+      "microCreditsPerDollar": 100000,
+      "storageDollarsPer1000MinutesPerMonth": { "1080p": 0.85, "1440p": 1.45, "2160p": 2.8 },
+      "speechDollarsPerHour": 0.1,
+      "uploadAdmissionDays": 7
     }
   }
 }
@@ -518,13 +628,19 @@ curl https://cap.so/api/developer/v1/usage \
 
 Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
 
-**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days. The tier comes from the pixel count of the video.
+**Totals.** `totalVideos` counts videos whose upload completed, and `totalDurationMinutes` is their combined length. `uploadingVideos` counts videos that were created and have not completed an upload.
 
-| Tier | Pixels | Storage per 1,000 minutes per month |
-|------|--------|-------------------------------------|
+**Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
+
+**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days.
+
+| Tier | Pixels (width times height) | Storage per 1,000 minutes per month |
+|------|-----------------------------|-------------------------------------|
 | `1080p` | up to 2,073,600 | $0.85 |
 | `1440p` | up to 4,194,304 | $1.45 |
 | `2160p` | above 4,194,304 | $2.80 |
+
+A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
 **Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 
@@ -544,7 +660,7 @@ Adding credits that cover one day of storage returns the app to `active` at once
 
 The SDK API is designed for client-side use in browsers and apps. All SDK API endpoints require a public key (`cpk_`) in the `Authorization` header.
 
-For production apps, the `Origin` header must match one of the allowed domains configured in your app settings. Development apps skip origin validation.
+For production apps, the `Origin` header must match one of the allowed domains configured in your app settings. A browser sends it by itself. A request with no `Origin` returns `403` with the code `origin_required`, and one from a domain that is not on the list returns `403` with the code `origin_not_allowed`. Development apps skip origin validation, so use one to try the examples below from a terminal.
 
 ### Create Video
 
@@ -558,10 +674,12 @@ POST /api/developer/sdk/v1/videos/create
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | No | Video name (defaults to "Untitled") |
-| `userId` | string | No | Your external user ID for filtering |
+| `name` | string | No | Video name, up to 255 characters (defaults to "Untitled") |
+| `userId` | string | No | Your external user ID for filtering, up to 255 characters. Videos return it as `externalUserId` |
 | `maxResolutionTier` | string | No | Highest resolution to encode: `1080p` (default), `1440p` or `2160p` |
-| `metadata` | object | No | Arbitrary metadata to store with the video |
+| `metadata` | object | No | Your own JSON object to store with the video, under 8KB |
+
+The body is optional. A request with no body creates a video with the defaults.
 
 **Example request:**
 
@@ -583,8 +701,7 @@ curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
 }
 ```
 
-`shareUrl` and `embedUrl` are a hosted player for the video. See [Share and Embed](#share-and-embed).
-
+`shareUrl` and `embedUrl` are a hosted player for the video. See [Share and Embed](/docs/api/rest-api#share-and-embed). To build your own player, see [Play a Video](/docs/api/rest-api#play-a-video).
 Creating a video is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
 
 ```json
@@ -604,7 +721,12 @@ Creating a video is free. It returns `402` if the app is out of credit or its ba
 
 ### Multipart Upload
 
-After creating a video, use multipart upload to upload the video file. This is a multi-step process.
+After creating a video, upload its file in parts:
+
+1. Initiate the upload to get an `uploadId`.
+2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts.
+3. For each part, get a presigned URL, `PUT` the bytes to it and keep the `ETag` response header.
+4. Complete the upload with the list of parts.
 
 #### Initiate Upload
 
@@ -617,7 +739,16 @@ POST /api/developer/sdk/v1/upload/multipart/initiate
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `videoId` | string | Yes | The video ID from the create step |
-| `contentType` | string | No | MIME type (defaults to "video/mp4") |
+| `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska`, `video/avi` or `application/octet-stream`. Any other value is stored as `video/mp4` |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/initiate \
+  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"videoId": "abc123def456", "contentType": "video/mp4"}'
+```
 
 **Example response:**
 
@@ -641,17 +772,32 @@ POST /api/developer/sdk/v1/upload/multipart/presign-part
 |-------|------|----------|-------------|
 | `videoId` | string | Yes | The video ID |
 | `uploadId` | string | Yes | The upload ID from the initiate step |
-| `partNumber` | number | Yes | Part number (starting from 1) |
+| `partNumber` | integer | Yes | Part number, from 1 to 10,000 |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
+  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"videoId": "abc123def456", "uploadId": "multipart-upload-id", "partNumber": 1}'
+```
 
 **Example response:**
 
 ```json
 {
-  "presignedUrl": "https://s3.amazonaws.com/..."
+  "presignedUrl": "https://..."
 }
 ```
 
-Upload the part data by sending a `PUT` request to the returned `presignedUrl`. Save the `ETag` header from the response for the completion step.
+The URL is valid for one hour. Upload the part by sending a `PUT` request to it with the bytes as the body and no extra headers:
+
+```bash
+curl -X PUT -T part-1.bin -D - "$PRESIGNED_URL"
+```
+
+Save the `ETag` header from the response for the completion step. Send it as it was returned. The quotes around it are optional.
 
 #### Complete Upload
 
@@ -667,14 +813,31 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 |-------|------|----------|-------------|
 | `videoId` | string | Yes | The video ID |
 | `uploadId` | string | Yes | The upload ID |
-| `parts` | array | Yes | Array of uploaded parts |
-| `parts[].partNumber` | number | Yes | The part number |
+| `parts` | array | Yes | Every uploaded part, at least one. A part left out of the list is left out of the video |
+| `parts[].partNumber` | integer | Yes | The part number, from 1 to 10,000 |
 | `parts[].etag` | string | Yes | The ETag returned when the part was uploaded |
 | `parts[].size` | number | Yes | The size of the part in bytes |
-| `durationInSecs` | number | Yes | Positive video duration in seconds (validated and used for billing) |
+| `durationInSecs` | number | Yes | Positive video duration in seconds. It is replaced by the measured duration once processing has read the file |
 | `width` | number | No | Video width in pixels |
 | `height` | number | No | Video height in pixels |
 | `fps` | number | No | Video frame rate |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/complete \
+  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "videoId": "abc123def456",
+    "uploadId": "multipart-upload-id",
+    "parts": [
+      { "partNumber": 1, "etag": "\"9b2cf535f27731c974343645a3985328\"", "size": 5242880 },
+      { "partNumber": 2, "etag": "\"3858f62230ac3c915f300c664312c63f\"", "size": 1048576 }
+    ],
+    "durationInSecs": 12.5
+  }'
+```
 
 **Example response:**
 
@@ -684,11 +847,20 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 }
 ```
 
-Completing an upload charges nothing. The video's stored `duration` is the greater of the submitted duration and a minimum based on the part sizes reported by storage, bounded by what the uploaded bytes could hold and capped at four hours. Storage for the video is billed daily from then on, by its length and resolution tier. Each listed part must already be uploaded with the ETag you send, otherwise the request returns `400`.
+Completing an upload charges nothing. The video's stored `duration` is the greater of the submitted duration and a minimum based on the part sizes reported by storage, bounded by what the uploaded bytes could hold and capped at four hours. Storage for the video is billed daily from then on, by its length and resolution tier.
+
+A mistake in the request returns one of these:
+
+| Status | `code` | Meaning | What to do |
+|--------|--------|---------|------------|
+| `400` | `parts_required` | `parts` is empty. | Send the `partNumber` and ETag of every part you uploaded. |
+| `400` | `parts_mismatch` | A listed part is missing from storage, is listed twice or has a different ETag. | Upload the missing part again, then send each part once with the ETag its `PUT` returned. |
+| `400` | `part_too_small` | A part other than the last is under 5 MB. | Initiate again and upload the file in larger parts. |
+| `404` | `upload_not_found` | No open upload matches the `uploadId`. It was aborted or the ID is wrong. | Initiate again and upload the parts again. |
 
 The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as create, and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
 
-Each video accepts one completed upload. Once it completes, initiate and presign-part return `409`, and repeating complete returns `{ "success": true }`.
+Each video accepts one completed upload. Once it completes, initiate and presign-part return `409` with the code `upload_already_completed`, and repeating complete returns `{ "success": true }`.
 
 Complete can itself return `409` with a `code`:
 
@@ -697,11 +869,11 @@ Complete can itself return `409` with a `code`:
 | `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
 | `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new video and upload the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video. Uploads for deleted videos return `404`. To upload a new file, create a new video.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video. Initiate, presign-part and complete return `404` with the code `video_not_found` for a deleted video. To upload a new file, create a new video.
 
 #### Abort Upload
 
-Cancel an in-progress multipart upload.
+Cancel an in-progress multipart upload and discard its parts. If no open upload matches the `uploadId`, abort returns `404` with the code `upload_not_found`, which means there is nothing left to abort.
 
 ```
 POST /api/developer/sdk/v1/upload/multipart/abort
@@ -724,6 +896,125 @@ POST /api/developer/sdk/v1/upload/multipart/abort
 
 ---
 
+## Play a Video
+
+A ready video has three playback URLs, and a hosted player for when you do not want to build one.
+
+| Field | Use it for | What it is |
+|-------|------------|------------|
+| `hlsUrl` | Playback | An adaptive HLS master playlist. The player picks a rendition for the viewer's connection and switches as it changes |
+| `mp4Url` | The fallback, and downloads | One progressive MP4 file |
+| `posterUrl` | The image shown before playback starts | A JPEG frame from the video |
+| `shareUrl`, `embedUrl` | No player to build | A hosted player page and an iframe embed. See [Share and Embed](/docs/api/rest-api#share-and-embed) |
+
+The playback URLs need no API key and answer any origin, so there is no CORS setup to do.
+
+### Play with hls.js
+
+Safari plays HLS by itself. Every other browser needs [hls.js](https://github.com/video-dev/hls.js). This page plays the video everywhere, with the MP4 as the fallback:
+
+```html
+<video id="player" controls playsinline poster="POSTER_URL"></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script>
+  const video = document.getElementById("player");
+  const hlsUrl = "HLS_URL";
+  const mp4Url = "MP4_URL";
+
+  if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls({ capLevelToPlayerSize: true });
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (!data.fatal) return;
+      const position = video.currentTime;
+      const wasPlaying = !video.paused;
+      hls.destroy();
+      video.src = mp4Url;
+      video.currentTime = position;
+      if (wasPlaying) video.play();
+    });
+  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = hlsUrl;
+  } else {
+    video.src = mp4Url;
+  }
+</script>
+```
+
+Replace `HLS_URL`, `MP4_URL` and `POSTER_URL` with the video's `hlsUrl`, `mp4Url` and `posterUrl`.
+
+- hls.js runs wherever the browser supports Media Source Extensions. A browser without them that plays HLS itself gets the playlist directly, and anything else gets the MP4.
+- Keep the checks in that order. `canPlayType` is not a test for Safari by itself, because Chrome answers it for HLS too.
+- If hls.js hits an error it cannot recover from, the page switches to the MP4 at the same position and keeps playing.
+- `capLevelToPlayerSize` stops hls.js from loading a rendition larger than the player. Without it, a small player on a fast connection climbs to the largest rendition.
+- There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
+
+### Play in Safari
+
+A page that only has to work in Safari needs no script:
+
+```html
+<video src="HLS_URL" poster="POSTER_URL" controls playsinline></video>
+```
+
+### Stable URLs, Redirects and Caching
+
+- `hlsUrl`, `mp4Url` and `posterUrl` are stable. Store them and reuse them for as long as the video exists.
+- `mp4Url` and `posterUrl` answer with a `302` redirect to a signed URL on the media host, `v.cap.so`. Browsers and video players follow it. Do not store the URL you were redirected to.
+- The playlists behind `hlsUrl` list signed media URLs on the same host. A signed URL works for 12 hours. A player left paused for longer than that has to load the playlist again before it can fetch more of the video.
+- Playback answers are cached for 60 seconds by browsers and shared caches, so a change such as a delete or a top-up can take up to a minute to show.
+
+The page above recovers from expired media URLs by itself, by switching to the MP4. To stay on HLS, load the playlist again and return to the same position:
+
+```js
+const position = video.currentTime;
+hls.once(Hls.Events.MANIFEST_PARSED, () => {
+  video.currentTime = position;
+});
+hls.loadSource(hlsUrl);
+```
+
+In Safari, set `video.src` to the `hlsUrl` again and then set `video.currentTime`.
+
+### Content Security Policy
+
+A site with a Content Security Policy has to allow two hosts: `https://cap.so`, which serves the playback URLs, and `https://v.cap.so`, which serves the media they point to. For the hls.js page above:
+
+```
+connect-src https://cap.so https://v.cap.so;
+media-src blob: https://cap.so https://v.cap.so;
+img-src https://cap.so https://v.cap.so;
+worker-src blob:;
+```
+
+| Directive | Why |
+|-----------|-----|
+| `connect-src` | hls.js fetches the playlists from `cap.so` and the media from `v.cap.so` |
+| `media-src` | hls.js feeds the video element through a `blob:` URL. The two hosts cover the MP4 fallback and HLS in Safari |
+| `img-src` | The poster is loaded from `cap.so` and redirects to `v.cap.so`, so both are needed |
+| `worker-src` | hls.js does its work in a worker created from a `blob:` URL. Without this it still plays, on the main thread, and the browser logs a violation |
+
+Add the origin you load hls.js from to `script-src`. A page that plays HLS in Safari without hls.js needs only `media-src` and `img-src` with the two hosts. To use `embedUrl` in an iframe, allow `frame-src https://cap.so`.
+
+If you self-host Cap, use your own web origin and the host your playback URLs redirect to.
+
+### Bitrates
+
+`renditions[].bitrate` is the average bitrate of a rendition. The `BANDWIDTH` in the master playlist is its peak, and players choose a rendition by the peak. The peak can be more than twice the average, most of all for screen recordings, so a viewer whose connection matches a rendition's `bitrate` can be given the one below it.
+
+### The MP4
+
+`mp4Url` is a single file, at most the dimensions of the largest rendition. It is not part of the adaptive ladder, so every viewer gets the same file whatever their connection.
+
+When the upload is already H.264 and fits the tier, Cap can keep its video as uploaded instead of encoding it again, and the MP4 then has the bitrate of the upload. On the `2160p` tier that can be a source-quality 4K file, which is large. Use `hlsUrl` for playback on that tier, and keep `mp4Url` for downloads and as the last fallback.
+
+### When Playback Stops
+
+- **The app is out of credit.** When an app is `paused`, every playback URL answers `402` with a plain text reason: `Playback is paused because the account that hosts this video is out of credit.` Neither hls.js nor the MP4 can load, so the video element fires an `error` event. Listen for it to show your own message. Playback returns within a minute of credits being added. An app in `grace` still plays. See [Get Usage](/docs/api/rest-api#get-usage) for the standings.
+- **The video was deleted.** The playback URLs answer `404` with the plain text `Not found`. [Delete Video](/docs/api/rest-api#delete-video) gives the timings for new viewers and for links that were already handed out. A deleted video and an ID that never existed answer the same way.
+- **An output is not encoded yet.** A URL that is `null` in the API has nothing behind it yet and would answer `404`. Wait for the field to be filled in.
+
 ## Share and Embed
 
 Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create, get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
@@ -743,13 +1034,6 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it shows `errorReason`. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
-## SDKs
-
-Cap provides official SDK packages to simplify integration:
-
-- **`@cap/sdk-recorder`** -- Recording SDK for capturing video in web applications. Includes React bindings.
-- **`@cap/sdk-embed`** -- Embedding SDK for displaying Cap videos. Available for React and vanilla JavaScript.
-
 ## Video Object Reference
 
 The full video object returned by list and get endpoints:
@@ -764,13 +1048,13 @@ The full video object returned by list and get endpoints:
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
-| `transcriptionStatus` | string \| null | One of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, `NO_AUDIO` |
+| `transcriptionStatus` | string \| null | `null`. Uploaded videos are not transcribed automatically |
 | `metadata` | object \| null | Custom metadata provided during creation |
 | `status` | string | One of: `uploading`, `processing`, `ready`, `errored` |
 | `errorReason` | string \| null | Why processing failed (null unless `status` is `errored`) |
 | `playbackId` | string \| null | Unguessable ID the playback URLs are built from |
 | `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
-| `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate`, `bytes` and `codecs` |
+| `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate` (average bits per second), `bytes` and `codecs`. Empty until `hlsUrl` is set |
 | `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
@@ -784,7 +1068,9 @@ The full video object returned by list and get endpoints:
 ## Best Practices
 
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
-- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true`, then play `hlsUrl` when it is present and `mp4Url` otherwise.
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every few seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. See [Play a Video](/docs/api/rest-api#play-a-video).
+- **Switch on `code`.** Every error carries a stable `code`. The `error` text can change.
+- **Watch the rate limit headers.** Each key allows 60 requests per minute. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
 - **Store your keys securely.** Use environment variables or a secrets manager.
 - **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
 - **Monitor your credit balance.** Use the usage endpoint to track the balance, `standing` and `upload.allowed`, and top up from your app's Billing page in Cap Infra. Auto top-up on that page adds credits from a saved card when the balance runs low.
