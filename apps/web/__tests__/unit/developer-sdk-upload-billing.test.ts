@@ -27,9 +27,7 @@ vi.mock("@/lib/infra-standing", async (importOriginal) => ({
 }));
 
 vi.mock("@cap/database", async () => {
-	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
 	const { developerVideos } = await import("@cap/database/schema");
-	const dialect = new MySqlDialect();
 
 	const selectRows = (fields: Record<string, unknown>) => {
 		const keys = Object.keys(fields).sort().join(",");
@@ -69,30 +67,37 @@ vi.mock("@cap/database", async () => {
 
 	const selectChain = (fields: Record<string, unknown>) => ({
 		from: () => ({
-			where: () =>
-				Object.assign(
-					Promise.resolve().then(() => selectRows(fields)),
-					{
-						limit: async () => selectRows(fields),
-						for: async () => selectRows(fields),
+			where: () => {
+				const rows = Promise.resolve().then(() => selectRows(fields));
+				const result = Object.assign(rows, {
+					limit: () => result,
+					for: () => {
+						mocks.events.push("lock");
+						return result;
 					},
-				),
+				});
+				return result;
+			},
 		}),
 	});
 
+	const writeVideo = (values: Record<string, unknown>) => {
+		mocks.videoUpdates.push(values);
+		if ("duration" in values) {
+			mocks.storedDuration = values.duration as number | null;
+		}
+	};
+
 	const tx = {
 		select: selectChain,
-		update: () => ({
-			set: (values: {
-				balanceMicroCredits: Parameters<typeof dialect.sqlToQuery>[0];
-			}) => ({
+		update: (table: unknown) => ({
+			set: (values: Record<string, unknown>) => ({
 				where: async () => {
-					const debit = Number(
-						dialect.sqlToQuery(values.balanceMicroCredits).params.at(-1),
-					);
-					if (mocks.balance < debit) return [{ affectedRows: 0 }];
-					mocks.balance -= debit;
-					mocks.events.push("debit");
+					if (table !== developerVideos || mocks.storedDuration !== null) {
+						return [{ affectedRows: 0 }];
+					}
+					writeVideo(values);
+					mocks.events.push("store");
 					return [{ affectedRows: 1 }];
 				},
 			}),
@@ -111,10 +116,7 @@ vi.mock("@cap/database", async () => {
 			update: (table: unknown) => ({
 				set: (values: Record<string, unknown>) => ({
 					where: async () => {
-						if (table !== developerVideos) return;
-						mocks.videoUpdates.push(values);
-						if (typeof values.duration === "number")
-							mocks.storedDuration = values.duration;
+						if (table === developerVideos) writeVideo(values);
 					},
 				}),
 			}),
@@ -248,7 +250,33 @@ describe("developer SDK multipart completion", () => {
 		expect(response.status).toBe(200);
 		expect(mocks.balance).toBe(10_000_000);
 		expect(mocks.creditTransactions).toEqual([]);
-		expect(mocks.events).toEqual(["complete"]);
+	});
+
+	it("checks admission and records the video under the account lock, before storage completes", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		mocks.admission.mockImplementation(async () => {
+			mocks.events.push("admission");
+			return admitted;
+		});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.events).toEqual(["lock", "admission", "store", "complete"]);
+	});
+
+	it("does not complete storage again when another request already recorded the video", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		mocks.admission.mockImplementation(async () => {
+			mocks.storedDuration = 60;
+			return admitted;
+		});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
 	});
 
 	it("measures the upload from the part sizes storage reports, not the sizes in the request", async () => {
@@ -427,7 +455,7 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
-	it("can be retried after storage fails to complete the upload", async () => {
+	it("releases the video when storage fails, so the upload can be retried", async () => {
 		mocks.completeFailures = 1;
 		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
 		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -440,7 +468,10 @@ describe("developer SDK multipart completion", () => {
 		expect(mocks.creditTransactions).toEqual([]);
 		expect(mocks.videoUpdates).toEqual([
 			{ duration: 60, width: 1920, height: 1080 },
+			{ duration: null },
+			{ duration: 60, width: 1920, height: 1080 },
 		]);
+		expect(mocks.storedDuration).toBe(60);
 		errors.mockRestore();
 	});
 });

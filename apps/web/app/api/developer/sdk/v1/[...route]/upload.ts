@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
-import { developerVideos } from "@cap/database/schema";
+import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
 import { provideOptionalAuth, S3Buckets } from "@cap/web-backend";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -21,6 +21,11 @@ const MIN_PLAUSIBLE_BYTES_PER_SECOND = 1_000;
 type StoredPart = { PartNumber?: number; ETag?: string; Size?: number };
 
 const withoutQuotes = (etag: string | undefined) => etag?.replaceAll('"', "");
+
+const affectedRows = (result: unknown) =>
+	Array.isArray(result)
+		? ((result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
+		: ((result as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
 
 function storedBytesForParts(
 	requestedParts: { partNumber: number; etag: string }[],
@@ -243,30 +248,6 @@ app.post(
 				Math.max(plausibleDuration, sizeBasedMinDuration),
 				MAX_DURATION_SECS,
 			);
-			const admission = await getInfraUploadAdmission(
-				appId,
-				billableVideo({ duration: storedDuration, width, height }),
-			);
-			if (!admission.allowed) {
-				return c.json(uploadAdmissionError(admission), 402);
-			}
-
-			await Effect.gen(function* () {
-				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
-
-				const sortedParts = [...parts].sort(
-					(a, b) => a.partNumber - b.partNumber,
-				);
-				const formattedParts = sortedParts.map((part) => ({
-					PartNumber: part.partNumber,
-					ETag: part.etag,
-				}));
-
-				yield* bucket.multipart.complete(s3Key, uploadId, {
-					MultipartUpload: { Parts: formattedParts },
-				});
-			}).pipe(provideOptionalAuth, runPromise);
-
 			const updates: Partial<typeof developerVideos.$inferInsert> = {
 				duration: storedDuration,
 			};
@@ -274,10 +255,62 @@ app.post(
 			if (height !== undefined) updates.height = height;
 			if (fps !== undefined) updates.fps = fps;
 
-			await db()
-				.update(developerVideos)
-				.set(updates)
-				.where(eq(developerVideos.id, videoId));
+			const { admission, stored } = await db().transaction(async (tx) => {
+				await tx
+					.select({ id: developerCreditAccounts.id })
+					.from(developerCreditAccounts)
+					.where(eq(developerCreditAccounts.appId, appId))
+					.limit(1)
+					.for("update");
+
+				const admission = await getInfraUploadAdmission(
+					appId,
+					billableVideo({ duration: storedDuration, width, height }),
+				);
+				if (!admission.allowed) return { admission, stored: false };
+
+				const result = await tx
+					.update(developerVideos)
+					.set(updates)
+					.where(
+						and(
+							eq(developerVideos.id, videoId),
+							isNull(developerVideos.duration),
+						),
+					);
+				return { admission, stored: affectedRows(result) > 0 };
+			});
+
+			if (!admission.allowed) {
+				return c.json(uploadAdmissionError(admission), 402);
+			}
+			if (!stored) {
+				return c.json({ success: true });
+			}
+
+			try {
+				await Effect.gen(function* () {
+					const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+
+					const sortedParts = [...parts].sort(
+						(a, b) => a.partNumber - b.partNumber,
+					);
+					const formattedParts = sortedParts.map((part) => ({
+						PartNumber: part.partNumber,
+						ETag: part.etag,
+					}));
+
+					yield* bucket.multipart.complete(s3Key, uploadId, {
+						MultipartUpload: { Parts: formattedParts },
+					});
+				}).pipe(provideOptionalAuth, runPromise);
+			} catch (error) {
+				await db()
+					.update(developerVideos)
+					.set({ duration: null })
+					.where(eq(developerVideos.id, videoId));
+				throw error;
+			}
 
 			return c.json({ success: true });
 		} catch (error) {

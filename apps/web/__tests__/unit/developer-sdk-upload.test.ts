@@ -111,6 +111,9 @@ beforeEach(() => {
 					: [],
 			};
 		}
+		if (query.includes("from `developer_credit_accounts`")) {
+			return { rows: [["account-1"]] };
+		}
 		return { rows: [{ affectedRows: 1 }] };
 	});
 });
@@ -191,7 +194,7 @@ describe("developer SDK multipart upload", () => {
 		expect(writes()).toHaveLength(0);
 	});
 
-	it("completes without reading or writing the credit ledger", async () => {
+	it("completes without writing to the credit ledger, holding the account lock", async () => {
 		const response = await post("/complete", completeBody);
 
 		expect(response.status).toBe(200);
@@ -199,9 +202,21 @@ describe("developer SDK multipart upload", () => {
 		const queries = mocks.query.mock.calls.map(([query]) => String(query));
 		expect(
 			queries.some((query) =>
-				/developer_credit_(accounts|transactions)/.test(query),
+				/from `developer_credit_accounts`.*for update/i.test(query),
+			),
+		).toBe(true);
+		expect(
+			writes().some(([query]) =>
+				/developer_credit_(accounts|transactions)/.test(String(query)),
 			),
 		).toBe(false);
+		expect(
+			writes().some(([query]) =>
+				/^update `developer_videos` set .*`duration` is null/i.test(
+					String(query),
+				),
+			),
+		).toBe(true);
 		expect(mocks.admission).toHaveBeenCalledWith("app-1", {
 			durationSeconds: 12,
 			width: 0,
