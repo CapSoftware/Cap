@@ -40,11 +40,7 @@ const processing: DeveloperVideoPlayer = {
 	kind: "processing",
 	uploading: false,
 };
-const failed: DeveloperVideoPlayer = {
-	...frame,
-	kind: "failed",
-	reason: "This file has no video track.",
-};
+const failed: DeveloperVideoPlayer = { ...frame, kind: "failed" };
 const paused: DeveloperVideoPlayer = { ...frame, kind: "paused" };
 
 const render = (
@@ -118,19 +114,17 @@ describe("developer video page states", () => {
 		expect(html).not.toContain("<video");
 	});
 
-	it("shows the reason a video failed", () => {
+	it("tells a viewer of a failed video one neutral sentence and nothing else", () => {
 		const html = render(failed);
+		const text = html
+			.replace(/<style>.*?<\/style>/g, "")
+			.replace(/<[^>]+>/g, " ");
 
-		expect(html).toContain("This video could not be processed");
-		expect(html).toContain("This file has no video track.");
+		expect(text).toContain("This video is not available.");
+		expect(text.match(/[.!?](\s|$)/g)).toHaveLength(1);
+		expect(text).not.toMatch(/upload|export|processed|owner|credit/i);
 		expect(html).not.toContain("<video");
 		expect(html).not.toContain('role="status"');
-	});
-
-	it("escapes a failure reason", () => {
-		const html = render({ ...failed, reason: "<script>alert(1)</script>" });
-
-		expect(html).not.toContain("<script>");
 	});
 
 	it("says playback is paused and offers nothing to play", () => {
@@ -328,7 +322,7 @@ describe("developer video page routes", () => {
 			}),
 		);
 
-		expect(html).toContain("This file has no video track.");
+		expect(html).toContain("This video is not available.");
 	});
 
 	it("hands the query of each route to the player", async () => {

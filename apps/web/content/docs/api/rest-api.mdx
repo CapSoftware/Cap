@@ -1198,7 +1198,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 ></iframe>
 ```
 
-Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it says so. It gives the reason only when the reason is about the file itself, such as a file with no video track. Any other reason, such as a credit shortfall, is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
 ### Embed Parameters
 
