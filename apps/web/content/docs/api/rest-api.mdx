@@ -1212,10 +1212,10 @@ Complete can itself return `409` with a `code`:
 
 | `code` | Meaning | What to do |
 |--------|---------|------------|
-| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
+| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait for the seconds in the `Retry-After` header, then send the same complete request again, and repeat for as long as it answers this way. If the earlier request was cut off, that can last up to 15 minutes. Do not abort the upload or delete the video. |
 | `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new upload and send the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header: wait for the completion to finish. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
 
 #### Abort Upload
 

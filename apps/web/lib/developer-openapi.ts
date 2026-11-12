@@ -1714,7 +1714,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			CompletionInProgress: json(
 				ref("Error"),
-				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
+				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
 			),
 			UploadCompleted: json(
 				ref("Error"),
