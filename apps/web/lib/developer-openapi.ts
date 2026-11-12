@@ -74,6 +74,58 @@ const errorSchema = {
 	},
 };
 
+const playbackProperties = {
+	status: {
+		type: "string",
+		enum: ["uploading", "processing", "ready", "errored"],
+		description:
+			"uploading until the upload completes, processing while it encodes, then ready or errored.",
+	},
+	errorReason: {
+		type: ["string", "null"],
+		description: "Why processing failed, when status is errored.",
+	},
+	playbackId: {
+		type: ["string", "null"],
+		description: "Unguessable ID that the playback URLs are built from.",
+	},
+	renditions: {
+		type: "array",
+		description: "Encoded HLS renditions, largest first. Empty until ready.",
+		items: {
+			type: "object",
+			required: ["name", "width", "height", "bitrate", "bytes"],
+			properties: {
+				name: { type: "string", description: "Tier name, such as 1080p." },
+				width: { type: "integer" },
+				height: { type: "integer" },
+				bitrate: {
+					type: "integer",
+					description: "Average bits per second.",
+				},
+				bytes: { type: "integer", description: "Stored bytes." },
+				codecs: { type: ["string", "null"] },
+			},
+		},
+	},
+	hlsUrl: {
+		type: ["string", "null"],
+		format: "uri",
+		description:
+			"Adaptive HLS master playlist. Null until ready, or when only the MP4 is available.",
+	},
+	mp4Url: {
+		type: ["string", "null"],
+		format: "uri",
+		description: "Progressive MP4. Null until ready.",
+	},
+	posterUrl: {
+		type: ["string", "null"],
+		format: "uri",
+		description: "Poster image. Null until ready.",
+	},
+};
+
 const developerVideoSchema = {
 	type: "object",
 	required: ["id", "appId", "name", "createdAt", "updatedAt"],
@@ -87,11 +139,21 @@ const developerVideoSchema = {
 		name: { type: "string", description: "Video name." },
 		duration: {
 			type: ["number", "null"],
-			description: "Duration in seconds, set when the upload completes.",
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing.",
 		},
-		width: { type: ["integer", "null"], description: "Width in pixels." },
-		height: { type: ["integer", "null"], description: "Height in pixels." },
-		fps: { type: ["integer", "null"], description: "Frames per second." },
+		width: {
+			type: ["integer", "null"],
+			description: "Measured source width in pixels.",
+		},
+		height: {
+			type: ["integer", "null"],
+			description: "Measured source height in pixels.",
+		},
+		fps: {
+			type: ["integer", "null"],
+			description: "Measured frames per second.",
+		},
 		s3Key: {
 			type: ["string", "null"],
 			description: "Storage key of the uploaded file.",
@@ -105,6 +167,16 @@ const developerVideoSchema = {
 			type: ["object", "null"],
 			additionalProperties: true,
 			description: "Metadata passed to createSdkVideo.",
+		},
+		...playbackProperties,
+		maxResolutionTier: {
+			type: "string",
+			enum: ["1080p", "1440p", "2160p"],
+			description: "Highest resolution this video is encoded at.",
+		},
+		storedBytes: {
+			type: ["integer", "null"],
+			description: "Bytes stored for the source and every encoded output.",
 		},
 		deletedAt: {
 			type: ["string", "null"],
@@ -232,7 +304,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
 				description:
-					"Returns whether the video is ready to play, with its dimensions, duration and transcription state. Poll this after completeSdkUpload.",
+					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [videoIdParam],
@@ -385,8 +457,9 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						developerVideoSchema.properties.transcriptionStatus,
 					ready: {
 						type: "boolean",
-						description: "True once duration and width are known.",
+						description: "True once status is ready.",
 					},
+					...playbackProperties,
 				},
 			},
 			Usage: {
@@ -419,6 +492,12 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						maxLength: 255,
 						description: "Your own user ID, for filtering listDeveloperVideos.",
 					},
+					maxResolutionTier: {
+						type: "string",
+						enum: ["1080p", "1440p", "2160p"],
+						default: "1080p",
+						description: "Highest resolution to encode this video at.",
+					},
 					metadata: {
 						type: "object",
 						additionalProperties: true,
@@ -431,6 +510,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: ["videoId", "s3Key", "shareUrl", "embedUrl"],
 				properties: {
 					videoId: { type: "string" },
+					playbackId: { type: "string" },
 					s3Key: { type: "string" },
 					shareUrl: { type: "string", format: "uri" },
 					embedUrl: { type: "string", format: "uri" },

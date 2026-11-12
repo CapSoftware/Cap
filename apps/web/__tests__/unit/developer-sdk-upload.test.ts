@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	video: null as null | {
 		appId: string;
 		duration: number | null;
+		playbackId?: string | null;
 		deletedAt: string | null;
 	},
 	paidMicroCredits: 0,
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	presign: vi.fn(),
 	complete: vi.fn(),
 	abort: vi.fn(),
+	startProcessing: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -44,6 +46,9 @@ vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
 });
+vi.mock("@/lib/developer-video-start", () => ({
+	startDeveloperVideoProcessing: mocks.startProcessing,
+}));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
@@ -95,7 +100,17 @@ beforeEach(() => {
 			const video = mocks.video;
 			return {
 				rows: video
-					? [[video.appId, s3Key, video.duration, video.deletedAt]]
+					? [
+							[
+								video.appId,
+								s3Key,
+								video.duration,
+								video.playbackId === undefined
+									? "playback-1"
+									: video.playbackId,
+								video.deletedAt,
+							],
+						]
 					: [],
 			};
 		}
@@ -174,6 +189,56 @@ describe("developer SDK multipart upload", () => {
 				String(query).startsWith("update `developer_videos`"),
 			),
 		).toBe(true);
+		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
+		expect(mocks.startProcessing).toHaveBeenCalledWith("video-1");
+		const savedAt = mocks.query.mock.invocationCallOrder.at(
+			mocks.query.mock.calls.findLastIndex(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			),
+		);
+		expect(savedAt).toBeLessThan(
+			mocks.startProcessing.mock.invocationCallOrder[0] ?? 0,
+		);
+	});
+
+	it("gives a video created before playback ids existed one on completion", async () => {
+		mocks.video = { ...inProgress, playbackId: null };
+
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		const [update, params] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).toContain("`playbackId` = ?");
+		expect(params).toEqual(
+			expect.arrayContaining([expect.stringMatching(/^[A-Za-z0-9_-]{16,}$/)]),
+		);
+	});
+
+	it("never shortens a length an overlapping completion already recorded", async () => {
+		await post("/complete", completeBody);
+
+		const [update, params] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).toContain(
+			"(`developer_videos`.`duration` is null or `developer_videos`.`duration` < ?)",
+		);
+		expect(params).toEqual(expect.arrayContaining([12]));
+	});
+
+	it("keeps an existing playback id on completion", async () => {
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		const [update] =
+			writes().find(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			) ?? [];
+		expect(String(update)).not.toContain("`playbackId`");
 	});
 
 	it("answers a repeated complete without charging or touching storage again", async () => {
@@ -185,6 +250,7 @@ describe("developer SDK multipart upload", () => {
 		await expect(response.json()).resolves.toEqual({ success: true });
 		expect(mocks.complete).not.toHaveBeenCalled();
 		expect(writes()).toHaveLength(0);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
 	});
 
 	it("charges a completion once even when a retry overlaps it", async () => {

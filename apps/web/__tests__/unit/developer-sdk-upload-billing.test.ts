@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
 	videoUpdates: [] as Record<string, unknown>[],
 }));
 
+vi.mock("@/lib/developer-video-start", () => ({
+	startDeveloperVideoProcessing: vi.fn(),
+}));
+
 vi.mock("@cap/database", async () => {
 	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
 	const { developerVideos } = await import("@cap/database/schema");
@@ -27,12 +31,13 @@ vi.mock("@cap/database", async () => {
 
 	const selectRows = (fields: Record<string, unknown>) => {
 		const keys = Object.keys(fields).sort().join(",");
-		if (keys === "appId,deletedAt,duration,s3Key") {
+		if (keys === "appId,deletedAt,duration,playbackId,s3Key") {
 			return [
 				{
 					appId: "app-1",
 					s3Key: S3_KEY,
 					duration: mocks.storedDuration,
+					playbackId: "playback-1",
 					deletedAt: null,
 				},
 			];
