@@ -32,6 +32,11 @@ import {
 	US_EIN_METADATA_KEY,
 } from "@/lib/checkout/customer-us-ein";
 import { addCreditsToAccount } from "@/lib/developer-credits";
+import {
+	saveCardFromCheckout,
+	settleAutoTopUpPaymentIntent,
+} from "@/lib/infra-auto-top-up";
+import { isFreeCreditCheckout } from "@/lib/infra-credit-code";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	attachSsoCheckout,
@@ -47,6 +52,8 @@ const relevantEvents = new Set([
 	"customer.subscription.deleted",
 	"invoice.paid",
 	"invoice.payment_failed",
+	"payment_intent.succeeded",
+	"payment_intent.payment_failed",
 ]);
 
 async function grantDeveloperCredits(
@@ -55,8 +62,14 @@ async function grantDeveloperCredits(
 	const { accountId, amountCents } = session.metadata ?? {};
 	const paymentIntentId =
 		typeof session.payment_intent === "string" ? session.payment_intent : null;
+	const free = isFreeCreditCheckout(session, Number(amountCents));
+	const reference = paymentIntentId
+		? ({ id: paymentIntentId, type: "stripe_payment_intent" } as const)
+		: free
+			? ({ id: session.id, type: "stripe_checkout_session" } as const)
+			: null;
 
-	if (!accountId || !amountCents || !paymentIntentId) {
+	if (!accountId || !amountCents || !reference) {
 		console.error("Missing required metadata for developer credits:", {
 			accountId,
 			amountCents,
@@ -65,13 +78,10 @@ async function grantDeveloperCredits(
 		return new Response("Missing metadata", { status: 400 });
 	}
 
-	// Only grant credits once the payment has actually settled. Without this
-	// guard a checkout session (e.g. an unpaid/async payment) could grant
-	// credits before money is captured.
-	if (session.payment_status !== "paid") {
+	if (session.payment_status !== "paid" && !free) {
 		console.log(
 			`Developer credits checkout not paid yet (payment_status=${session.payment_status}); skipping credit grant`,
-			{ accountId, paymentIntentId },
+			{ accountId, referenceId: reference.id },
 		);
 		return NextResponse.json({ received: true });
 	}
@@ -79,7 +89,7 @@ async function grantDeveloperCredits(
 	console.log("Processing developer credits purchase:", {
 		accountId,
 		amountCents,
-		paymentIntentId,
+		referenceId: reference.id,
 	});
 
 	const [existingTxn] = await db()
@@ -88,8 +98,8 @@ async function grantDeveloperCredits(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.referenceId, paymentIntentId),
-				eq(developerCreditTransactions.referenceType, "stripe_payment_intent"),
+				eq(developerCreditTransactions.referenceId, reference.id),
+				eq(developerCreditTransactions.referenceType, reference.type),
 			),
 		)
 		.limit(1);
@@ -105,11 +115,15 @@ async function grantDeveloperCredits(
 	await addCreditsToAccount({
 		accountId,
 		amountCents: Number(amountCents),
-		referenceId: paymentIntentId,
-		referenceType: "stripe_payment_intent",
+		referenceId: reference.id,
+		referenceType: reference.type,
 		metadata: {
 			amountCents: Number(amountCents),
 			stripeSessionId: session.id,
+			...(typeof session.amount_total === "number" &&
+			session.amount_total !== Number(amountCents)
+				? { paidCents: session.amount_total }
+				: {}),
 		},
 	});
 
@@ -473,6 +487,16 @@ export const POST = async (req: Request) => {
 	if (relevantEvents.has(event.type)) {
 		try {
 			if (
+				event.type === "payment_intent.succeeded" ||
+				event.type === "payment_intent.payment_failed"
+			) {
+				await settleAutoTopUpPaymentIntent(
+					event.data.object as Stripe.PaymentIntent,
+					event.type === "payment_intent.succeeded" ? "succeeded" : "failed",
+				);
+				return NextResponse.json({ received: true });
+			}
+			if (
 				event.type === "customer.subscription.created" ||
 				event.type === "customer.subscription.updated" ||
 				event.type === "customer.subscription.deleted"
@@ -531,6 +555,10 @@ export const POST = async (req: Request) => {
 				const session = event.data.object as Stripe.Checkout.Session;
 				if (session.metadata?.type === "saml_sso") {
 					await attachSsoCheckout(session.id);
+					return NextResponse.json({ received: true });
+				}
+				if (session.metadata?.type === "developer_card") {
+					await saveCardFromCheckout(session);
 					return NextResponse.json({ received: true });
 				}
 				const subscriptionId =

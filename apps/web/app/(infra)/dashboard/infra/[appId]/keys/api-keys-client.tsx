@@ -12,53 +12,44 @@ import { Button, PageHeader, Split } from "../../_components/ui";
 
 export function ApiKeysClient({
 	appId,
-	publicKey,
 	secretKeyPrefix,
 }: {
 	appId: string;
-	publicKey: string | null;
 	secretKeyPrefix: string | null;
 }) {
 	const router = useRouter();
-	const [newKeys, setNewKeys] = useState<{
-		publicKey: string;
-		secretKey: string;
-	} | null>(null);
+	const [newSecretKey, setNewSecretKey] = useState<string | null>(null);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
 	const regenerate = useMutation({
 		mutationFn: () => regenerateDeveloperKeys(appId),
 		onSuccess: (result) => {
-			setNewKeys(result);
+			setNewSecretKey(result.secretKey);
 			setConfirmOpen(false);
-			toast.success("New keys generated");
+			toast.success("New secret key generated");
 			router.refresh();
 		},
-		onError: () => toast.error("Could not generate new keys"),
+		onError: () => toast.error("Could not generate a new secret key"),
 	});
 
 	return (
 		<>
 			<PageHeader
 				title="API keys"
-				description="Use the public key in the browser to create and upload videos. Use the secret key on your server to read and delete them."
+				description="One secret key per app. It belongs on your server, where it creates uploads and reads and deletes videos. Browsers upload with a token your server issues, never with the key."
 			/>
 
 			<div>
-				{newKeys ? (
+				{newSecretKey ? (
 					<Split
-						title="Your new keys"
-						description="Copy the secret key now. It is only shown once."
+						title="Your new secret key"
+						description="Copy it now. It is only shown once."
 					>
-						<KeysReveal app={{ appId, ...newKeys }} />
+						<KeysReveal secretKey={newSecretKey} />
 					</Split>
 				) : (
-					<Split
-						title="Current keys"
-						description="The secret key is hidden after it is created."
-					>
+					<Split title="Secret key" description="Hidden after it is created.">
 						<div className="border-t border-[rgba(222,230,246,0.07)]">
-							{publicKey && <KeyRow label="Public key" value={publicKey} />}
 							<KeyRow
 								label="Secret key"
 								value={`${secretKeyPrefix ?? "csk_"}${"•".repeat(24)}`}
@@ -69,20 +60,20 @@ export function ApiKeysClient({
 				)}
 
 				<Split
-					title="Generate new keys"
-					description="Revokes both current keys immediately. Use this if you lost the secret key or it leaked."
+					title="Generate a new secret key"
+					description="Revokes the current key immediately. Use this if you lost it or it leaked."
 				>
 					<Button variant="ghost" onClick={() => setConfirmOpen(true)}>
-						Generate new keys
+						Generate a new secret key
 					</Button>
 				</Split>
 			</div>
 
 			<ConfirmDialog
 				open={confirmOpen}
-				title="Generate new keys"
-				description="Both current keys stop working right away. Anything still using them will fail until you switch to the new pair."
-				confirmLabel="Generate new keys"
+				title="Generate a new secret key"
+				description="The current key stops working right away. Anything still using it will fail until you switch to the new one."
+				confirmLabel="Generate new key"
 				loading={regenerate.isPending}
 				onConfirm={() => regenerate.mutate()}
 				onCancel={() => {

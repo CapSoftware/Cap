@@ -24,6 +24,7 @@ import {
 	int,
 	json,
 	longtext,
+	mediumtext,
 	mysqlTable,
 	primaryKey,
 	text,
@@ -35,10 +36,14 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type {
-	VideoCallToAction,
-	VideoEditSpec,
-	VideoMetadata,
+import {
+	DEVELOPER_VIDEO_RESOLUTION_TIERS,
+	DEVELOPER_VIDEO_STATUSES,
+	type DeveloperVideoProcessingState,
+	type DeveloperVideoRendition,
+	type VideoCallToAction,
+	type VideoEditSpec,
+	type VideoMetadata,
 } from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
@@ -1883,7 +1888,25 @@ export const developerVideos = mysqlTable(
 			enum: ["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"],
 		}),
 		metadata: json("metadata"),
+		status: varchar("status", {
+			length: 16,
+			enum: DEVELOPER_VIDEO_STATUSES,
+		})
+			.notNull()
+			.default("uploading"),
+		playbackId: varchar("playbackId", { length: 64 }),
+		maxResolutionTier: varchar("maxResolutionTier", {
+			length: 8,
+			enum: DEVELOPER_VIDEO_RESOLUTION_TIERS,
+		})
+			.notNull()
+			.default("1080p"),
+		renditions: json("renditions").$type<DeveloperVideoRendition[]>(),
+		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
+		errorReason: varchar("errorReason", { length: 512 }),
+		processing: json("processing").$type<DeveloperVideoProcessingState>(),
 		deletedAt: timestamp("deletedAt"),
+		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -1891,6 +1914,94 @@ export const developerVideos = mysqlTable(
 		index("app_created_idx").on(table.appId, table.createdAt),
 		index("app_user_idx").on(table.appId, table.externalUserId),
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
+		uniqueIndex("playback_id_idx").on(table.playbackId),
+		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
+	],
+);
+
+export type DeveloperTranscriptStatus =
+	| "uploading"
+	| "queued"
+	| "processing"
+	| "complete"
+	| "error";
+
+export type DeveloperTranscriptSourceType = "upload" | "url";
+
+export const developerTranscripts = mysqlTable(
+	"developer_transcripts",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		externalUserId: varchar("externalUserId", { length: 255 }),
+		name: varchar("name", { length: 255 }).notNull().default("Untitled"),
+		status: varchar("status", {
+			length: 16,
+			enum: ["uploading", "queued", "processing", "complete", "error"],
+		})
+			.notNull()
+			.$type<DeveloperTranscriptStatus>(),
+		sourceType: varchar("sourceType", {
+			length: 8,
+			enum: ["upload", "url"],
+		})
+			.notNull()
+			.$type<DeveloperTranscriptSourceType>(),
+		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		s3Key: varchar("s3Key", { length: 512 }),
+		resultKey: varchar("resultKey", { length: 512 }),
+		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
+		durationSeconds: float("durationSeconds"),
+		requestedLanguage: varchar("requestedLanguage", { length: 16 }),
+		language: varchar("language", { length: 16 }),
+		text: mediumtext("text"),
+		wordCount: int("wordCount"),
+		reservedMicroCredits: bigint("reservedMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		billedMicroCredits: bigint("billedMicroCredits", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		errorCode: varchar("errorCode", { length: 64 }),
+		errorMessage: varchar("errorMessage", { length: 512 }),
+		metadata: json("metadata"),
+		runId: varchar("runId", { length: 32 }),
+		queuedAt: timestamp("queuedAt"),
+		startedAt: timestamp("startedAt"),
+		completedAt: timestamp("completedAt"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("dev_transcripts_app_list_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.createdAt,
+			table.id,
+		),
+		index("dev_transcripts_app_user_idx").on(
+			table.appId,
+			table.externalUserId,
+			table.createdAt,
+		),
+		index("dev_transcripts_app_status_idx").on(
+			table.appId,
+			table.status,
+			table.createdAt,
+		),
+		index("dev_transcripts_status_updated_idx").on(
+			table.status,
+			table.updatedAt,
+		),
 	],
 );
 
@@ -1921,22 +2032,34 @@ export const developerCreditAccounts = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
-	(table) => [uniqueIndex("app_id_unique").on(table.appId)],
+	(table) => [
+		uniqueIndex("app_id_unique").on(table.appId),
+		index("owner_idx").on(table.ownerId),
+	],
 );
 
 export type DeveloperCreditTransactionType =
 	| "topup"
 	| "video_create"
 	| "storage_daily"
+	| "transcription"
 	| "refund"
 	| "adjustment"
-	| "pro_credit";
+	| "pro_credit"
+	| "topup_failed"
+	| "topup_pending";
 
 export type DeveloperCreditReferenceType =
 	| "developer_video"
+	| "developer_transcript"
 	| "stripe_payment_intent"
+	| "stripe_checkout_session"
 	| "manual"
-	| "pro_monthly_credit";
+	| "pro_monthly_credit"
+	| "storage_day"
+	| "auto_top_up"
+	| "auto_top_up_failed"
+	| "auto_top_up_pending";
 
 export const developerCreditTransactions = mysqlTable(
 	"developer_credit_transactions",
@@ -1949,9 +2072,12 @@ export const developerCreditTransactions = mysqlTable(
 				"topup",
 				"video_create",
 				"storage_daily",
+				"transcription",
 				"refund",
 				"adjustment",
 				"pro_credit",
+				"topup_failed",
+				"topup_pending",
 			],
 		})
 			.notNull()
@@ -1968,9 +2094,15 @@ export const developerCreditTransactions = mysqlTable(
 			length: 32,
 			enum: [
 				"developer_video",
+				"developer_transcript",
 				"stripe_payment_intent",
+				"stripe_checkout_session",
 				"manual",
 				"pro_monthly_credit",
+				"storage_day",
+				"auto_top_up",
+				"auto_top_up_failed",
+				"auto_top_up_pending",
 			],
 		}).$type<DeveloperCreditReferenceType>(),
 		metadata: json("metadata"),
@@ -1987,6 +2119,7 @@ export const developerCreditTransactions = mysqlTable(
 			table.type,
 			table.createdAt,
 		),
+		index("account_created_idx").on(table.accountId, table.createdAt),
 		index("account_ref_dedup_idx").on(
 			table.accountId,
 			table.referenceId,
@@ -2060,6 +2193,16 @@ export const developerVideosRelations = relations(
 	({ one }) => ({
 		app: one(developerApps, {
 			fields: [developerVideos.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerTranscriptsRelations = relations(
+	developerTranscripts,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerTranscripts.appId],
 			references: [developerApps.id],
 		}),
 	}),

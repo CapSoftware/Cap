@@ -11,6 +11,7 @@ import { NewAppModal } from "./create-app";
 import { infraMono, infraSans } from "./fonts";
 import { rememberInfraApp } from "./remember-infra-app";
 import { EnvTag, FOCUS } from "./ui";
+import { useMayLeave } from "./uploads";
 
 const ITEM =
 	"flex cursor-default select-none items-center gap-3 rounded-[7px] px-2.5 py-2 text-[13.5px] text-[rgba(232,236,244,0.8)] outline-none data-[highlighted]:bg-[rgba(222,230,246,0.07)] data-[highlighted]:text-white";
@@ -27,13 +28,14 @@ export function AppSwitcher({
 	const pathname = usePathname();
 	const router = useRouter();
 	const [createOpen, setCreateOpen] = useState(false);
+	const mayLeave = useMayLeave();
 	const { section } = parseInfraPathname(pathname);
 	const current = apps.find((app) => app.id === appId) ?? null;
 
 	if (!current) return null;
 
 	const selectApp = (id: string) => {
-		if (id === current.id) return;
+		if (id === current.id || !mayLeave()) return;
 		rememberInfraApp(id);
 		router.push(infraAppPath(id, section ?? ""));
 	};
@@ -66,27 +68,32 @@ export function AppSwitcher({
 					<Menu.Content
 						align={compact ? "end" : "start"}
 						sideOffset={6}
-						className={`${infraSans.variable} ${infraMono.variable} z-[500] max-h-[60vh] w-[260px] overflow-y-auto rounded-[11px] bg-[#0B0C0E] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
+						className={`${infraSans.variable} ${infraMono.variable} z-[500] flex max-h-[min(60vh,var(--radix-dropdown-menu-content-available-height))] w-[260px] flex-col rounded-[11px] bg-[#0B0C0E] p-1.5 shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_18px_60px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif]`}
 					>
-						{apps.map((app) => (
-							<Menu.Item
-								key={app.id}
-								className={ITEM}
-								onSelect={() => selectApp(app.id)}
-							>
-								<span className="min-w-0 flex-1">
-									<span className="block truncate text-[#E8ECF4]">
-										{app.name}
+						<div className="min-h-0 overflow-y-auto">
+							{apps.map((app) => (
+								<Menu.Item
+									key={app.id}
+									className={ITEM}
+									onSelect={() => selectApp(app.id)}
+								>
+									<span className="min-w-0 flex-1">
+										<span className="block truncate text-[#E8ECF4]">
+											{app.name}
+										</span>
+										<EnvTag environment={app.environment} className="mt-1" />
 									</span>
-									<EnvTag environment={app.environment} className="mt-1" />
-								</span>
-								{app.id === current.id && (
-									<Check size={14} className="shrink-0 text-white" />
-								)}
-							</Menu.Item>
-						))}
+									{app.id === current.id && (
+										<Check size={14} className="shrink-0 text-white" />
+									)}
+								</Menu.Item>
+							))}
+						</div>
 						<Menu.Separator className="mx-1 my-1.5 h-px bg-[rgba(222,230,246,0.08)]" />
-						<Menu.Item className={ITEM} onSelect={() => setCreateOpen(true)}>
+						<Menu.Item
+							className={clsx(ITEM, "shrink-0")}
+							onSelect={() => setCreateOpen(true)}
+						>
 							<Plus size={14} className="shrink-0" />
 							New app
 						</Menu.Item>

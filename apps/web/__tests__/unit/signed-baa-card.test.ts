@@ -38,8 +38,15 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/app/(org)/dashboard/Contexts", () => ({
 	useDashboardContext: () => ({
-		activeOrganization: { organization: { id: mocks.organizationId } },
-		user: { name: "Jane", lastName: "Smith", email: "jane@example.com" },
+		activeOrganization: {
+			organization: { id: mocks.organizationId, ownerId: "owner" },
+		},
+		user: {
+			id: "owner",
+			name: "Jane",
+			lastName: "Smith",
+			email: "jane@example.com",
+		},
 	}),
 }));
 
@@ -251,7 +258,7 @@ describe("Signed BAA payment and signing", () => {
 		vi.mocked(getSignedBaaStatus).mockResolvedValue(paidStatus);
 		await act(async () => confirmation.resolve(paidStatus));
 		await waitFor(() => {
-			expect(container.textContent).toContain("Paid — awaiting signature");
+			expect(container.textContent).toContain("Paid, awaiting signature");
 			expect(container.querySelector('[role="dialog"]')).not.toBeNull();
 		});
 
@@ -349,7 +356,7 @@ describe("Signed BAA payment and signing", () => {
 		await render();
 
 		expect(container.textContent).toContain("confirmation link is incomplete");
-		expect(container.textContent).not.toContain("Paid — awaiting signature");
+		expect(container.textContent).not.toContain("Paid, awaiting signature");
 		expect(container.querySelector('[role="dialog"]')).toBeNull();
 		expect(button("Get Signed BAA")).toBeUndefined();
 		expect(confirmSignedBaaPayment).not.toHaveBeenCalled();
@@ -434,7 +441,7 @@ describe("Signed BAA payment and signing", () => {
 		await click("Sign & pay $99/mo");
 		await waitFor(() => expect(button("Sign BAA")).toBeDefined());
 
-		expect(container.textContent).toContain("Paid — awaiting signature");
+		expect(container.textContent).toContain("Paid, awaiting signature");
 		expect(button("Sign & pay $99/mo")).toBeUndefined();
 		expect(button("Sign BAA")?.disabled).toBe(true);
 		expect(mocks.error).toHaveBeenCalledWith(
@@ -522,7 +529,7 @@ describe("Signed BAA payment and signing", () => {
 		expect(queryClient.getQueryData(["signed-baa", "org-2"])).toEqual(
 			createStatus(),
 		);
-		expect(container.textContent).not.toContain("Paid — awaiting signature");
+		expect(container.textContent).not.toContain("Paid, awaiting signature");
 		expect(container.querySelector('[role="dialog"]')).toBeNull();
 		expect(confirmSignedBaaPayment).toHaveBeenNthCalledWith(
 			2,

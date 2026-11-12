@@ -7,6 +7,7 @@ enum CapActions {
     static func copyLink(_ link: String, session: SessionModel) {
         guard let url = SafeURL.web(link) else { return }
         UIPasteboard.general.url = url
+        Usage.track("cap_link_copied")
         session.toasts.show("Link copied", systemImage: "link")
     }
 
@@ -18,6 +19,7 @@ enum CapActions {
         session.capChanged(optimistic)
         do {
             let updated = try await session.api.updateSharing(id, isPublic: isPublic)
+            Usage.track("cap_visibility_changed", ["public": .bool(updated.isPublic)])
             session.capChanged(updated)
             let restricted = updated.isPublic && updated.linkRestricted == true
             session.toasts.show(
@@ -59,6 +61,7 @@ enum CapActions {
         guard let id = CapID(cap.id) else { return false }
         do {
             try await session.api.deleteCap(id)
+            Usage.track("cap_deleted")
             session.capDeleted(cap.id)
             session.toasts.show("Cap deleted", systemImage: "trash")
             return true

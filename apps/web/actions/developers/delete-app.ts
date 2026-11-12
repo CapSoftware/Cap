@@ -2,13 +2,18 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { developerApiKeys, developerApps } from "@cap/database/schema";
+import {
+	developerApiKeys,
+	developerApps,
+	developerVideos,
+} from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
 
 export async function deleteDeveloperApp(appId: string) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const [app] = await db()
 		.select()
@@ -39,6 +44,16 @@ export async function deleteDeveloperApp(appId: string) {
 			.update(developerApps)
 			.set({ deletedAt: new Date() })
 			.where(eq(developerApps.id, appId));
+
+		await tx
+			.update(developerVideos)
+			.set({ deletedAt: new Date() })
+			.where(
+				and(
+					eq(developerVideos.appId, appId),
+					isNull(developerVideos.deletedAt),
+				),
+			);
 	});
 
 	revalidatePath("/dashboard/infra", "layout");

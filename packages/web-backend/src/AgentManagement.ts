@@ -615,6 +615,10 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 											Db.developerCreditAccounts.autoTopUpThresholdMicroCredits,
 										autoTopUpAmountCents:
 											Db.developerCreditAccounts.autoTopUpAmountCents,
+										cardSaved:
+											sql<number>`${Db.developerCreditAccounts.stripePaymentMethodId} IS NOT NULL`.mapWith(
+												Boolean,
+											),
 									})
 									.from(Db.developerCreditAccounts)
 									.where(eq(Db.developerCreditAccounts.appId, appId))
@@ -675,7 +679,10 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 										isNull(Db.developerApps.deletedAt),
 										isNull(Db.developerVideos.deletedAt),
 										externalUserId
-											? eq(Db.developerVideos.externalUserId, externalUserId)
+											? and(
+													eq(Db.developerVideos.externalUserId, externalUserId),
+													sql`CAST(${Db.developerVideos.externalUserId} AS BINARY) = CAST(${externalUserId} AS BINARY)`,
+												)
 											: undefined,
 										cursor
 											? or(
