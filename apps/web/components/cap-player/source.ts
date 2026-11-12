@@ -253,8 +253,7 @@ export const attachSource = (
 				hls.destroy();
 			};
 			setLevel = (index) => {
-				if (index === AUTO_LEVEL) hls.nextLevel = AUTO_LEVEL;
-				else hls.currentLevel = index;
+				hls.nextLevel = index;
 			};
 			start();
 		})
