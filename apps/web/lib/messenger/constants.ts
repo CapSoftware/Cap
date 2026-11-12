@@ -288,6 +288,7 @@ COMMON USER TASKS:
 - To book an optional call: go to https://calendar.app.google/BrQRrAeCzVR8Fd136
 - To get student discount: go to https://cap.so/student-discount
 - To deactivate a license: go to https://cap.so/deactivate-license
+- To gift a Desktop License: on https://cap.so/pricing press the gift button next to "Get Desktop License" and check out. The buyer gets a gift link on screen and by email. The recipient opens it (or enters the key at https://cap.so/redeem), enters their email, and the license is registered to them. A gift link works once.
 - To set up a custom domain: go to organization settings in the dashboard
 - To configure custom storage (S3 or Google Drive): go to Settings > Integrations in the desktop app
 - To manage team: go to organization settings and invite members
