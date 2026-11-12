@@ -155,7 +155,10 @@ describe("console video list", () => {
 		expect(sql).toContain("`appId` = ?");
 		expect(sql).toContain("`deletedAt` is null");
 		expect(sql).toContain("`externalUserId` = ?");
-		expect(params).toEqual(["app-1", "user_123"]);
+		expect(sql).toMatch(
+			/CAST\(.*`externalUserId` AS BINARY\) = CAST\(\? AS BINARY\)/,
+		);
+		expect(params).toEqual(["app-1", "user_123", "user_123"]);
 	});
 });
 

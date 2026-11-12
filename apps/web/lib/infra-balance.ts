@@ -17,12 +17,12 @@ export async function lockInfraAccount(
 		.for("update");
 }
 
-export async function heldTranscriptMicroCredits(
+const heldTranscriptsQuery = (
 	executor: Pick<InfraDbExecutor, "select">,
 	appId: string,
-	exceptTranscriptId: string | null = null,
-) {
-	const [held] = await executor
+	exceptTranscriptId: string | null,
+) =>
+	executor
 		.select({
 			total: sql<
 				string | number | null
@@ -39,7 +39,40 @@ export async function heldTranscriptMicroCredits(
 					: undefined,
 			),
 		);
+
+export async function heldTranscriptMicroCredits(
+	executor: Pick<InfraDbExecutor, "select">,
+	appId: string,
+	exceptTranscriptId: string | null = null,
+) {
+	const [held] = await heldTranscriptsQuery(
+		executor,
+		appId,
+		exceptTranscriptId,
+	);
 	return Number(held?.total ?? 0) || 0;
+}
+
+export async function readBalanceAndHolds(
+	appId: string,
+	executor: Pick<InfraDbExecutor, "select"> = db(),
+): Promise<{ balanceMicroCredits: number; heldMicroCredits: number } | null> {
+	const [row] = await executor
+		.select({
+			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
+			heldMicroCredits: sql<
+				string | number | null
+			>`(${heldTranscriptsQuery(executor, appId, null)})`,
+		})
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, appId))
+		.limit(1);
+	return row
+		? {
+				balanceMicroCredits: row.balanceMicroCredits,
+				heldMicroCredits: Number(row.heldMicroCredits ?? 0) || 0,
+			}
+		: null;
 }
 
 export async function availableBalance(

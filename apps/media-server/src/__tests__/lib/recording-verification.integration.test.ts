@@ -2057,7 +2057,11 @@ describe("source-preserving recording mux", () => {
 	});
 });
 
-async function decoderPids(input: string): Promise<number[]> {
+async function decoderPids(source: string): Promise<number[]> {
+	// FFmpeg reads a remote input through the relay, which keeps its file name.
+	const input = /^https?:/.test(source)
+		? (new URL(source).pathname.split("/").pop() ?? source)
+		: source;
 	if (process.platform === "linux") {
 		const processes = (await readdir("/proc")).filter((name) =>
 			/^\d+$/.test(name),

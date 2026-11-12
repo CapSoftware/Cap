@@ -50,6 +50,7 @@ import {
 	TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_BYTES,
+	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS,
 	type TranscriptErrorCode,
 	type TranscriptResultObject,
 	transcriptObjectKeys,
@@ -66,7 +67,10 @@ import {
 } from "@/lib/public-media-fetch";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
 
-const URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const downloadLimit = () =>
+	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS >= 60_000
+		? `${Math.round(TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS / 60_000)} minutes`
+		: `${Math.round(TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS / 1000)} seconds`;
 
 const HOLD_WAIT_LIMIT_SECONDS = 15 * 60;
 const HOLD_RETRY_MAX_SECONDS = 10;
@@ -161,6 +165,7 @@ const FAILURE_MESSAGES = {
 	source_missing: "The source file was not found",
 	source_too_large: "The source file is larger than the 2 GB limit",
 	source_unreachable: "The file at the URL could not be downloaded",
+	source_incomplete: "The file at the URL ended before its declared length",
 	source_blocked: "The URL does not point to a public address",
 	no_audio_track: "The file has no audio track",
 	unsupported_format: "The file is not a supported audio or video format",
@@ -288,28 +293,21 @@ async function claimTranscript(
 	return claimTranscriptRun(transcriptId, runId);
 }
 
-async function spoolToStorage(
-	key: string,
+async function spoolToFile(
+	path: string,
 	body: ReadableStream<Uint8Array>,
-	contentType: string,
+	maxBytes: number,
 ) {
-	const path = join(tmpdir(), `transcript-source-${randomUUID()}`);
-	try {
-		await pipeline(
-			Readable.fromWeb(
-				limitStreamBytes(
-					body,
-					TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
-				) as unknown as Parameters<typeof Readable.fromWeb>[0],
-			),
-			createWriteStream(path),
-		);
-		const { size } = await fs.stat(path);
-		if (size > 0) await putDeveloperObjectFile(key, path, size, contentType);
-		return size;
-	} finally {
-		await fs.unlink(path).catch(() => {});
-	}
+	await pipeline(
+		Readable.fromWeb(
+			limitStreamBytes(body, maxBytes) as unknown as Parameters<
+				typeof Readable.fromWeb
+			>[0],
+		),
+		createWriteStream(path),
+	);
+	const { size } = await fs.stat(path);
+	return size;
 }
 
 async function holdForSource(
@@ -365,67 +363,113 @@ async function prepareTranscriptSource(
 		if (refused) return refused;
 	}
 
+	const download = new AbortController();
+	const timer = setTimeout(
+		() => download.abort(),
+		TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS,
+	);
+	const spoolPath = join(tmpdir(), `transcript-source-${randomUUID()}`);
+	const stop = (result: StepFailure | HoldWait) => {
+		download.abort();
+		return result;
+	};
 	try {
-		const { response, contentLength } = await fetchPublicMedia(
-			transcript.sourceUrl,
-			{
-				maxBytes: TRANSCRIPT_MAX_URL_BYTES,
-				signal: AbortSignal.timeout(URL_DOWNLOAD_TIMEOUT_MS),
-			},
-		);
-		if (!response.body) {
+		let spooled: { bytes: number; contentType: string } | null = null;
+		let sourceBytes = 0;
+		try {
+			const { response, contentLength } = await fetchPublicMedia(
+				transcript.sourceUrl,
+				{ maxBytes: TRANSCRIPT_MAX_URL_BYTES, signal: download.signal },
+			);
+			if (!response.body) {
+				return stop(
+					failure("source_unreachable", FAILURE_MESSAGES.source_unreachable),
+				);
+			}
+			const declared =
+				contentLength !== null && contentLength > 0 ? contentLength : null;
+			const refused = await holdForSource(transcript.id, { bytes: declared });
+			if (refused) {
+				await response.body.cancel().catch(() => {});
+				return stop(refused);
+			}
+			const contentType =
+				response.headers.get("content-type") ?? "application/octet-stream";
+			if (declared !== null && declared > TRANSCRIPT_MAX_SPOOLED_URL_BYTES) {
+				await putDeveloperObjectStream(
+					keys.source,
+					limitStreamBytes(response.body, declared),
+					declared,
+					contentType,
+				);
+				sourceBytes = declared;
+			} else {
+				const bytes = await spoolToFile(
+					spoolPath,
+					response.body,
+					declared ?? TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
+				);
+				if (bytes === 0 || (declared !== null && bytes < declared)) {
+					return stop(
+						failure(
+							"source_unreachable",
+							bytes === 0
+								? FAILURE_MESSAGES.source_unreachable
+								: FAILURE_MESSAGES.source_incomplete,
+						),
+					);
+				}
+				spooled = { bytes, contentType };
+				sourceBytes = bytes;
+			}
+		} catch (error) {
+			const timedOut = download.signal.aborted;
+			download.abort();
+			await deleteDeveloperObjects([keys.source]);
+			if (error instanceof PublicMediaFetchError) {
+				if (error.problem === "too_large") {
+					return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
+				}
+				if (
+					error.problem === "bad_status" ||
+					error.problem === "too_many_redirects"
+				) {
+					return failure("source_unreachable", error.message);
+				}
+				return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(
+				`[developer-transcribe] Source download failed for ${transcript.id}: ${message}`,
+			);
+			if (timedOut) {
+				return failure(
+					"source_unreachable",
+					`The file at the URL did not finish downloading within ${downloadLimit()}`,
+				);
+			}
+			if (/private address/i.test(message)) {
+				return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
+			}
 			return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
 		}
-		const refused = await holdForSource(transcript.id, {
-			bytes: contentLength !== null && contentLength > 0 ? contentLength : null,
-		});
-		if (refused) {
-			await response.body.cancel().catch(() => {});
-			return refused;
-		}
-		const contentType =
-			response.headers.get("content-type") ?? "application/octet-stream";
-		const sourceBytes =
-			contentLength !== null && contentLength > 0
-				? await putDeveloperObjectStream(
-						keys.source,
-						limitStreamBytes(response.body, contentLength),
-						contentLength,
-						contentType,
-					).then(() => contentLength)
-				: await spoolToStorage(keys.source, response.body, contentType);
 
-		if (sourceBytes === 0) {
-			return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
+		if (spooled) {
+			await putDeveloperObjectFile(
+				keys.source,
+				spoolPath,
+				spooled.bytes,
+				spooled.contentType,
+			);
 		}
-
 		await db()
 			.update(developerTranscripts)
 			.set({ sourceBytes })
 			.where(eq(developerTranscripts.id, transcript.id));
 		return { ok: true };
-	} catch (error) {
-		await deleteDeveloperObjects([keys.source]);
-		if (error instanceof PublicMediaFetchError) {
-			if (error.problem === "too_large") {
-				return failure("source_too_large", FAILURE_MESSAGES.source_too_large);
-			}
-			if (
-				error.problem === "bad_status" ||
-				error.problem === "too_many_redirects"
-			) {
-				return failure("source_unreachable", error.message);
-			}
-			return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
-		}
-		const message = error instanceof Error ? error.message : String(error);
-		console.error(
-			`[developer-transcribe] Source download failed for ${transcript.id}: ${message}`,
-		);
-		if (/private address/i.test(message)) {
-			return failure("source_blocked", FAILURE_MESSAGES.source_blocked);
-		}
-		return failure("source_unreachable", FAILURE_MESSAGES.source_unreachable);
+	} finally {
+		clearTimeout(timer);
+		await fs.unlink(spoolPath).catch(() => {});
 	}
 }
 
