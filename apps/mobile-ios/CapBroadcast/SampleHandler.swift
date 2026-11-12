@@ -265,14 +265,15 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
                 for _ in 0..<20 where uploads.job(jobId)?.phase == .completing {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
-                let unfinished = uploads.job(jobId) != nil
-                if unfinished {
-                    await uploads.handOff(jobId, durationSeconds: duration)
+                var handedOver = false
+                if uploads.job(jobId) != nil {
+                    // The upload can still finish between that check and this call, which then has nothing to take.
+                    handedOver = await uploads.handOff(jobId, durationSeconds: duration)
                     ScreenRecordingStore.postHandOff()
                 }
                 if let entry = entry ?? self.created.withLock({ $0 }) {
                     // Cap shows it next time it's in front.
-                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl, uploaded: !unfinished), accessGroup: Self.keychainGroup)
+                    RecordingHandoff.save(.init(capId: entry.capId, shareUrl: entry.shareUrl, uploaded: !handedOver), accessGroup: Self.keychainGroup)
                 }
                 done()
             }
