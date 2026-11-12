@@ -7,7 +7,7 @@ import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import { Search } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { getSpaceMemberIds } from "@/actions/organization/get-space-member-ids";
@@ -31,6 +31,10 @@ export default function BrowseSpacesPage() {
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
 	const [editSpace, setEditSpace] = useState<NewSpaceFormProps["space"]>(null);
 	const [searchQuery, setSearchQuery] = useState("");
+	// Edit loads the space's members before opening its form. Any newer
+	// dialog action bumps this, so a slower lookup cannot take over a form
+	// the user has opened since.
+	const dialogRequest = useRef(0);
 
 	const filteredSpaces = spacesData?.filter((space: Spaces) =>
 		space.name.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -47,6 +51,7 @@ export default function BrowseSpacesPage() {
 	const handleDeleteSpace = (e: React.MouseEvent, space: Spaces) => {
 		e.preventDefault();
 		e.stopPropagation();
+		dialogRequest.current += 1;
 		setPendingDeleteSpace(space);
 		setConfirmOpen(true);
 	};
@@ -86,7 +91,10 @@ export default function BrowseSpacesPage() {
 		<>
 			<div className="flex flex-wrap gap-3 justify-between items-start w-full">
 				<Button
-					onClick={() => setShowSpaceDialog(true)}
+					onClick={() => {
+						dialogRequest.current += 1;
+						setShowSpaceDialog(true);
+					}}
 					size="sm"
 					variant="dark"
 				>
@@ -170,11 +178,13 @@ export default function BrowseSpacesPage() {
 													size="sm"
 													onClick={async (e) => {
 														e.stopPropagation();
+														const request = ++dialogRequest.current;
 														// Saving replaces the space's members with this
 														// list, so it must start from the real ones.
 														const members = await getSpaceMemberIds(
 															space.id,
 														).catch(() => null);
+														if (request !== dialogRequest.current) return;
 														if (!members) {
 															toast.error(
 																"Could not load this space's members",
