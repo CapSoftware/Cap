@@ -181,7 +181,9 @@ export const CapCard = ({
 
 	const router = useRouter();
 	const rpc = useRpcClient();
-	const { downloadAudio } = useVideoDownload(cap.id);
+	const { downloadAudio, isDownloading: isDownloadingAudio } = useVideoDownload(
+		cap.id,
+	);
 
 	const downloadMutation = useEffectMutation({
 		mutationFn: () =>
@@ -549,16 +551,19 @@ export const CapCard = ({
 								<FontAwesomeIcon icon={faDownload} />
 								<p className="text-sm text-gray-12">Download</p>
 							</DropdownMenuItem>
-							<DropdownMenuItem
-								onClick={(e) => {
-									e.stopPropagation();
-									downloadAudio();
-								}}
-								className="flex gap-2 items-center rounded-lg"
-							>
-								<FontAwesomeIcon icon={faFileAudio} />
-								<p className="text-sm text-gray-12">Download audio</p>
-							</DropdownMenuItem>
+							{cap.isScreenshot !== true && (
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										downloadAudio();
+									}}
+									disabled={isDownloadingAudio}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon icon={faFileAudio} />
+									<p className="text-sm text-gray-12">Download audio</p>
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuItem
 								onClick={(e) => {
 									e.stopPropagation();

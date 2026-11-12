@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 	spacePasswords: [] as string[],
 	verifiedPasswords: [] as string[],
 	mediaServerConfigured: true,
+	audioRateLimited: false,
 	hasAudio: vi.fn(),
 	stream: vi.fn(),
 }));
@@ -99,8 +100,16 @@ vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoLockedByShareableLinkLimit: () => Promise.resolve(mocks.shareLimited),
 }));
 vi.mock("@/lib/rate-limit", () => ({
-	RATE_LIMIT_IDS: { VIEWER_DOWNLOAD: "rl_viewer_download" },
-	isRateLimited: () => Promise.resolve(mocks.rateLimited),
+	RATE_LIMIT_IDS: {
+		VIEWER_DOWNLOAD: "rl_viewer_download",
+		AUDIO_DOWNLOAD: "rl_audio_download",
+	},
+	isRateLimited: (ruleId: string) =>
+		Promise.resolve(
+			ruleId === "rl_audio_download"
+				? mocks.audioRateLimited
+				: mocks.rateLimited,
+		),
 }));
 vi.mock("@/lib/media-client", () => ({
 	isMediaServerConfigured: () => mocks.mediaServerConfigured,
@@ -192,6 +201,7 @@ beforeEach(() => {
 	mocks.spacePasswords = [];
 	mocks.verifiedPasswords = [];
 	mocks.mediaServerConfigured = true;
+	mocks.audioRateLimited = false;
 	mocks.sign.mockReset();
 	mocks.access.mockReset();
 	mocks.hasAudio.mockReset();
@@ -292,10 +302,10 @@ describe("getVideoAudioDownloadInfo", () => {
 		expect(mocks.hasAudio).not.toHaveBeenCalled();
 	});
 
-	it("names the file after the video, with a fallback for a blank title", async () => {
-		setVideo({ name: "   " });
+	it("names the file after the video", async () => {
+		setVideo({ name: "Q4 planning: draft" });
 		expect(await getVideoAudioDownloadInfo(VIDEO)).toMatchObject({
-			filename: "Cap.mp3",
+			filename: "Q4 planning: draft.mp3",
 		});
 	});
 });
@@ -348,6 +358,16 @@ describe("GET /api/videos/[videoId]/audio", () => {
 		setVideo();
 		mocks.stream.mockRejectedValue(new Error("Server is busy"));
 		expect((await callRoute()).status).toBe(502);
+	});
+
+	it("rate limits audio extraction for members too", async () => {
+		mocks.viewer = member;
+		mocks.isMember = true;
+		mocks.audioRateLimited = true;
+		setVideo();
+		expect((await callRoute()).status).toBe(429);
+		expect(mocks.access).not.toHaveBeenCalled();
+		expect(mocks.stream).not.toHaveBeenCalled();
 	});
 
 	it("rate limits viewers before touching storage", async () => {

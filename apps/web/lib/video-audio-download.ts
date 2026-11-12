@@ -20,10 +20,6 @@ const SOURCE_URL_EXPIRES_SECONDS = 60 * 60;
 const STILL_PROCESSING =
 	"Video is still processing. Try again once it has finished.";
 
-export function audioDownloadFilename(videoName: string) {
-	return `${videoName.trim() || "Cap"}.mp3`;
-}
-
 export async function resolveVideoAudioSource(
 	videoId: Video.VideoId,
 	user: SessionUser | null,
@@ -133,7 +129,7 @@ export async function resolveVideoAudioSource(
 		return {
 			success: true,
 			sourceUrl,
-			filename: audioDownloadFilename(video.name),
+			filename: `${video.name}.mp3`,
 		};
 	} catch (error) {
 		console.error("Error preparing audio download:", error);

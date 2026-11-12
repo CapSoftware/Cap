@@ -84,6 +84,7 @@ async function fetchWithRetry(
 			return response;
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));
+			if (options.signal?.aborted) break;
 			if (attempt < maxRetries) {
 				const delay = INITIAL_RETRY_DELAY_MS * 2 ** attempt;
 				console.log(

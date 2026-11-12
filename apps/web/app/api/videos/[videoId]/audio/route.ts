@@ -5,6 +5,7 @@ import {
 	isMediaServerConfigured,
 	streamAudioViaMediaServer,
 } from "@/lib/media-client";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { resolveVideoAudioSource } from "@/lib/video-audio-download";
 
 export async function GET(
@@ -21,6 +22,18 @@ export async function GET(
 	}
 
 	const user = await getCurrentUser();
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.AUDIO_DOWNLOAD, {
+			key: user?.id,
+			headers: request.headers,
+		})
+	) {
+		return Response.json(
+			{ error: "Too many downloads. Please wait a moment and try again." },
+			{ status: 429 },
+		);
+	}
+
 	const source = await resolveVideoAudioSource(videoId, user);
 	if (!source.success) {
 		return Response.json({ error: source.error }, { status: source.status });
