@@ -24,16 +24,14 @@ import SpaceDialog, {
 } from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
+import { getSpaceMemberIds } from "../[spaceId]/actions";
 
 export default function BrowseSpacesPage() {
-	const { spacesData, user, activeOrganization } = useDashboardContext();
+	const { spacesData } = useDashboardContext();
 	const [showSpaceDialog, setShowSpaceDialog] = useState(false);
 	const [editSpace, setEditSpace] = useState<NewSpaceFormProps["space"]>(null);
 	const [searchQuery, setSearchQuery] = useState("");
-
-	const trueActiveOrgMembers = activeOrganization?.members.filter(
-		(m) => m.user?.id !== user?.id,
-	);
+	const [loadingSpaceId, setLoadingSpaceId] = useState<string | null>(null);
 
 	const filteredSpaces = spacesData?.filter((space: Spaces) =>
 		space.name.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -46,6 +44,27 @@ export default function BrowseSpacesPage() {
 		null,
 	);
 	const [removing, setRemoving] = useState(false);
+
+	const handleEditSpace = async (space: Spaces) => {
+		setLoadingSpaceId(space.id);
+		try {
+			const members = await getSpaceMemberIds(space.id);
+			setEditSpace({
+				id: space.id,
+				name: space.name,
+				members,
+				iconUrl: space.iconUrl ?? undefined,
+				settings: space.settings,
+				hasPassword: space.hasPassword,
+				public: space.public,
+			});
+			setShowSpaceDialog(true);
+		} catch {
+			toast.error("Failed to load space members");
+		} finally {
+			setLoadingSpaceId(null);
+		}
+	};
 
 	const handleDeleteSpace = (e: React.MouseEvent, space: Spaces) => {
 		e.preventDefault();
@@ -90,6 +109,7 @@ export default function BrowseSpacesPage() {
 			<div className="flex flex-wrap gap-3 justify-between items-start w-full">
 				<Button
 					onClick={() => setShowSpaceDialog(true)}
+					disabled={loadingSpaceId !== null}
 					size="sm"
 					variant="dark"
 				>
@@ -171,27 +191,21 @@ export default function BrowseSpacesPage() {
 													variant="gray"
 													className="size-8 p-0 min-w-[unset]"
 													size="sm"
+													disabled={loadingSpaceId !== null}
+													spinner={loadingSpaceId === space.id}
 													onClick={(e) => {
 														e.stopPropagation();
-														setEditSpace({
-															id: space.id,
-															name: space.name,
-															members: (trueActiveOrgMembers || []).map(
-																(m: { user: { id: string } }) => m.user.id,
-															),
-															iconUrl: space.iconUrl ?? undefined,
-															settings: space.settings,
-															hasPassword: space.hasPassword,
-															public: space.public,
-														});
-														setShowSpaceDialog(true);
+														handleEditSpace(space);
 													}}
 												>
-													<FontAwesomeIcon icon={faEdit} className="size-3" />
+													{loadingSpaceId !== space.id && (
+														<FontAwesomeIcon icon={faEdit} className="size-3" />
+													)}
 												</Button>
 												<Button
 													variant="gray"
 													onClick={(e) => handleDeleteSpace(e, space)}
+													disabled={loadingSpaceId !== null}
 													className="size-8 p-0 min-w-[unset]"
 													size="sm"
 												>
