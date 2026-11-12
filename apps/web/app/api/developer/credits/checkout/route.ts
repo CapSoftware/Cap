@@ -12,6 +12,7 @@ import { canUseInfra } from "@/lib/infra-access";
 import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { findCreditCode } from "@/lib/infra-credit-code-lookup";
 import { infraAppPath } from "@/lib/infra-routes";
+import { TOP_UP_MAX_CENTS, TOP_UP_MIN_CENTS } from "@/lib/infra-top-up";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { zValidator } from "@/utils/zod-validator";
 import { corsMiddleware, withAuth } from "../../../utils";
@@ -34,7 +35,7 @@ app.post(
 		"json",
 		z.object({
 			appId: z.string(),
-			amountCents: z.number().int().min(500).max(100_000),
+			amountCents: z.number().int().min(TOP_UP_MIN_CENTS).max(TOP_UP_MAX_CENTS),
 			code: z.string().trim().min(1).max(CREDIT_CODE_MAX_LENGTH).optional(),
 		}),
 	),
@@ -44,6 +45,18 @@ app.post(
 
 		if (!canUseInfra(user.email)) {
 			return c.json({ error: "Cap Infra credits are not available yet" }, 403);
+		}
+
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.CHECKOUT, {
+				key: `checkout:${user.id}`,
+				headers: c.req.raw.headers,
+			})
+		) {
+			return c.json(
+				{ error: "Too many checkout attempts. Try again in a few minutes" },
+				429,
+			);
 		}
 
 		const [app] = await db()

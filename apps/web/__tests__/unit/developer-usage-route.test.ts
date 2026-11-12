@@ -36,7 +36,12 @@ vi.mock("@/lib/infra-standing", () => ({
 	getInfraBilling: async () => ({}),
 	infraBillingJson: () => ({
 		standing: { state: "active", pausesAt: null },
+		upload: { allowed: true },
 	}),
+	infraStorageJson: () => ({ dailyMicroCredits: 0 }),
+}));
+vi.mock("@/lib/infra-storage", () => ({
+	getAppStorageUsage: async () => ({ videoCount: 2, totalMinutes: 12.5 }),
 }));
 vi.mock("@/lib/developer-transcript-usage", () => ({
 	getSpeechUsage: mocks.speech,
@@ -109,6 +114,6 @@ describe("GET /usage", () => {
 				"rates",
 			]),
 		);
-		expect(data.balanceDollars).toBe("9.49");
+		expect(data.balanceDollars).toBe("9.49286");
 	});
 });
