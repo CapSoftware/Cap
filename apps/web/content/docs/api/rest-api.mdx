@@ -153,7 +153,7 @@ List endpoints support pagination via query parameters:
 
 Lists are strict about their query string. A `limit` or `offset` that is not a whole number in range returns `400` with the code `invalid_limit` or `invalid_offset`, and a query parameter the list does not know returns `400` with the code `unknown_parameter`. Parameter names are case-sensitive. Nothing is clamped or ignored, so a mistyped filter never returns an unfiltered list.
 
-Video lists do not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`. Transcript lists also return `pagination.hasMore`.
+Video lists do not include pagination metadata. To paginate, increment `offset` by `limit` until the returned array has fewer items than `limit`. Transcript and transaction lists also return `pagination.hasMore`.
 
 ---
 
@@ -226,7 +226,7 @@ Creating an upload is free. It returns `402` if the app is out of credit or its 
 {
   "error": "Insufficient credits",
   "code": "insufficient_credits",
-  "message": "Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.15.",
+  "message": "Uploading needs $0.19834 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.14834.",
   "standing": "active",
   "pausesAt": null,
   "balanceMicroCredits": 5000,
@@ -596,8 +596,8 @@ Returns the transcript. Once the status is `complete` the response includes `tex
     "language": "en",
     "wordCount": 1893,
     "text": "Morning everyone. Quick update from my side...",
-    "costMicroCredits": 2097,
-    "costDollars": 0.02097,
+    "costMicroCredits": 2094,
+    "costDollars": 0.02094,
     "error": null,
     "userId": null,
     "metadata": null,
@@ -652,7 +652,7 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 
 #### Transcript billing
 
-- The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio length itself and bills it to the nearest second, with a minimum of one second. A length sent by the client is never used.
+- The price is $0.10 per audio hour, which is 10,000 micro-credits. Cap measures the audio itself, rounds its length to the nearest whole second with a minimum of one, and charges those seconds at the hourly rate, rounded down to a whole micro-credit and never less than one. The example above is 754.2 seconds, billed as 754 seconds: 754 × 10,000 ÷ 3,600 is 2,094.4, so it costs 2,094 micro-credits. A length sent by the client is never used.
 - Creating or starting a transcript needs an app in good standing and an available balance of at least 1,000 micro-credits ($0.01). Otherwise the API answers `402`, with `code` set to `out_of_credit` when the app is in `grace` or `paused` and `insufficient_credits` when the balance is under the minimum. The `message` says how much to add.
 - Credits are taken once, when the transcript completes. A transcript that is retried internally is never charged twice.
 - Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
@@ -710,13 +710,13 @@ curl https://cap.so/api/developer/v1/usage \
 }
 ```
 
-Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
+Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
 
-**Totals.** `totalVideos` counts videos whose upload completed, and `totalDurationMinutes` is their combined length. `uploadingVideos` counts videos that were created and have not completed an upload.
+**Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 
 **Rates.** `rates` holds the prices and rules the other fields are built from, so a client does not need to hard-code them: dollars to store 1,000 minutes for a 30 day month in each tier, dollars to transcribe one hour of audio, and the number of days of storage the balance must cover before an upload is accepted.
 
-**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days.
+**What is billed.** Uploading and encoding are free. Stored video is charged once a day, for each video by its length and resolution tier, with a month counted as 30 days. [Billing](/docs/api/billing) has the daily arithmetic, worked examples, top-ups, codes, auto top-up and what happens when credit runs out.
 
 | Tier | Pixels (width times height) | Storage per 1,000 minutes per month |
 |------|-----------------------------|-------------------------------------|
@@ -726,7 +726,9 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits).
 
 A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
-**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
+**Storage.** `storage` describes the videos counted in `totalVideos`: their minutes in each tier, and what they cost per day and per 30 day month.
+
+**Uploading.** `upload.allowed` is true when the app is in good standing and its balance covers 7 days of storage for everything it stores, counting videos that are still encoding. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 
 **Standing.** `standing.state` is one of:
 
@@ -737,6 +739,84 @@ A video is billed at the lower of two tiers: the tier its source falls in by pix
 | `paused` | Playback is paused until credits are added. Videos stay stored. |
 
 Adding credits that cover one day of storage returns the app to `active` at once. Days it could not pay for are not charged afterwards.
+
+### List Transactions
+
+Retrieve the app's ledger: every credit added and every charge taken, newest first.
+
+```
+GET /api/developer/v1/transactions
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | No | Number of results (default 50, max 100) |
+| `offset` | integer | No | Number of results to skip (default 0) |
+
+**Example request:**
+
+```bash
+curl "https://cap.so/api/developer/v1/transactions?limit=2" \
+  -H "Authorization: Bearer csk_your_secret_key_here"
+```
+
+**Example response:**
+
+```json
+{
+  "data": [
+    {
+      "id": "p4w8n2k6x1m9q3z",
+      "type": "transcription",
+      "description": "Transcription",
+      "note": null,
+      "amountMicroCredits": -2094,
+      "amountDollars": "-0.02094",
+      "balanceAfterMicroCredits": 497906,
+      "balanceAfterDollars": "4.97906",
+      "referenceType": "developer_transcript",
+      "referenceId": "8kq2m4x7n1p3v5w",
+      "createdAt": "2026-11-11T10:30:21.000Z"
+    },
+    {
+      "id": "h7c3v9b5t2r8y4d",
+      "type": "topup",
+      "description": "Top-up",
+      "note": null,
+      "amountMicroCredits": 500000,
+      "amountDollars": "5.00",
+      "balanceAfterMicroCredits": 500000,
+      "balanceAfterDollars": "5.00",
+      "referenceType": "stripe_payment_intent",
+      "referenceId": "pi_3Example",
+      "createdAt": "2026-11-11T10:00:00.000Z"
+    }
+  ],
+  "pagination": { "limit": 2, "offset": 0, "hasMore": false }
+}
+```
+
+`amountMicroCredits` is positive for credit added, negative for a charge and 0 for a row that moved nothing, such as a declined auto top-up. `balanceAfterMicroCredits` is the balance once the row was applied, so each row's balance is the balance of the row before it plus its amount. The dollar fields are the same figures written exactly, never rounded.
+
+`id` is the row's own ID. `referenceType` says what `referenceId` identifies:
+
+| `type` | `description` | `referenceType` | `referenceId` |
+|--------|---------------|-----------------|---------------|
+| `topup` | Top-up | `stripe_payment_intent` | The payment |
+| `topup` | Code redeemed | `stripe_checkout_session` | The checkout a code covered in full |
+| `topup` | Auto top-up | `auto_top_up` | The payment |
+| `topup_failed` | Auto top-up declined | `auto_top_up_failed` | The payment, or `declined-` and the UTC day when there was none |
+| `topup_pending` | Auto top-up pending | `auto_top_up_pending` | The payment |
+| `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
+| `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
+| `transcription` | Transcription | `developer_transcript` | The transcript ID |
+| `adjustment` | Adjustment | `manual` | A note, when there is one |
+
+A storage row is described as "Storage, part paid" or "Storage, unpaid" when the balance could not cover that day. `note` holds a sentence of explanation for the rows that need one.
+
+Rows written in the same second have the same `createdAt`. Within a page they are ordered so each balance follows from the row beneath it.
+
+The console's Billing page shows the same rows and exports them all as CSV.
 
 ---
 

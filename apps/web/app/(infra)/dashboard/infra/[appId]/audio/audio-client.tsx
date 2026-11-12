@@ -150,6 +150,8 @@ export function AudioClient({
 	initialHasMore,
 	available,
 	canTranscribe,
+	creditNeeded,
+	creditBalance,
 	pricePerHour,
 }: {
 	appId: string;
@@ -157,6 +159,8 @@ export function AudioClient({
 	initialHasMore: boolean;
 	available: boolean;
 	canTranscribe: boolean;
+	creditNeeded: string;
+	creditBalance: string;
 	pricePerHour: string;
 }) {
 	const input = useRef<HTMLInputElement>(null);
@@ -482,8 +486,9 @@ export function AudioClient({
 									Up to 2 GB and 4 hours of audio.
 								</p>
 							) : (
-								<p className="m-0 mt-1 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
-									This app needs credits before it can transcribe.{" "}
+								<p className="m-0 mt-1 text-pretty text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+									Transcribing needs {creditNeeded} of credit and this app has{" "}
+									{creditBalance}.{" "}
 									<Link
 										href={infraAppPath(appId, "billing")}
 										className={clsx(TEXT_LINK, "text-[#E8ECF4]")}
