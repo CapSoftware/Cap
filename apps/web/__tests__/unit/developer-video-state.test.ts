@@ -2,16 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
 	beginPart,
 	createDeveloperVideoProcessingState,
+	DEVELOPER_VIDEO_MAX_LOST_JOBS,
 	DEVELOPER_VIDEO_PARTS,
 	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
 	hlsRetryDelayMs,
+	LOST_JOB_CONFIRM_MS,
+	lostJobConfirmed,
+	markPartChecked,
 	markPartDispatched,
+	markPartNotFound,
 	releasePart,
+	requeueLostPart,
 	resolveDeveloperVideoStatus,
 	retryUnavailableHls,
+	SILENT_JOB_CHECK_MS,
 	settlePart,
 } from "@/lib/developer-video-state";
 import { developerVideo, processingState } from "../fixtures/developer-video";
@@ -22,6 +29,19 @@ const fresh = () =>
 const running = (part: "hls" | "mp4", token: string, state = fresh()) => {
 	const next = beginPart(state, part, { token, now: 2_000 });
 	if (!next) throw new Error("part did not start");
+	return next;
+};
+
+const dispatchedPart = (
+	part: "hls" | "mp4",
+	token: string,
+	state = fresh(),
+) => {
+	const next = markPartDispatched(running(part, token, state), part, {
+		token,
+		jobId: "job-1",
+	});
+	if (!next) throw new Error("part was not dispatched");
 	return next;
 };
 
@@ -68,7 +88,148 @@ describe("developer video processing state", () => {
 		).toBeNull();
 		expect(
 			dispatched && developerVideoPartAction(dispatched.hls, 9_000_000),
+		).toBe("check");
+	});
+
+	it("asks about a job only after it has been quiet for three minutes", () => {
+		const dispatched = dispatchedPart("hls", "t1");
+
+		expect(SILENT_JOB_CHECK_MS).toBe(3 * 60 * 1000);
+		expect(
+			developerVideoPartAction(dispatched.hls, 2_000 + SILENT_JOB_CHECK_MS - 1),
 		).toBe("wait");
+		expect(
+			developerVideoPartAction(dispatched.hls, 2_000 + SILENT_JOB_CHECK_MS),
+		).toBe("check");
+	});
+
+	it("waits another three minutes after a job answered that it is still running", () => {
+		const checkedAt = 2_000 + SILENT_JOB_CHECK_MS;
+		const checked = markPartChecked(dispatchedPart("hls", "t1"), "hls", {
+			token: "t1",
+			now: checkedAt,
+		});
+
+		expect(checked?.hls).toMatchObject({
+			state: "running",
+			token: "t1",
+			jobId: "job-1",
+			startedAt: 2_000,
+		});
+		expect(
+			checked &&
+				developerVideoPartAction(
+					checked.hls,
+					checkedAt + SILENT_JOB_CHECK_MS - 1,
+				),
+		).toBe("wait");
+		expect(
+			checked &&
+				developerVideoPartAction(checked.hls, checkedAt + SILENT_JOB_CHECK_MS),
+		).toBe("check");
+		expect(
+			markPartChecked(dispatchedPart("hls", "t1"), "hls", {
+				token: "stale",
+				now: checkedAt,
+			}),
+		).toBeNull();
+	});
+
+	it("counts a job as lost only after it has stayed not found for a minute", () => {
+		const dispatched = dispatchedPart("hls", "t1");
+		const marked = markPartNotFound(dispatched, "hls", {
+			token: "t1",
+			now: 200_000,
+		});
+		if (!marked) throw new Error("not found answer was not recorded");
+
+		expect(LOST_JOB_CONFIRM_MS).toBe(60 * 1000);
+		expect(lostJobConfirmed(dispatched.hls, 9_000_000)).toBe(false);
+		expect(marked.hls).toMatchObject({ state: "running", notFoundAt: 200_000 });
+		expect(marked.attempts).toEqual(dispatched.attempts);
+		expect(
+			lostJobConfirmed(marked.hls, 200_000 + LOST_JOB_CONFIRM_MS - 1),
+		).toBe(false);
+		expect(lostJobConfirmed(marked.hls, 200_000 + LOST_JOB_CONFIRM_MS)).toBe(
+			true,
+		);
+		expect(
+			markPartNotFound(marked, "hls", { token: "t1", now: 250_000 }),
+		).toBeNull();
+		expect(
+			markPartNotFound(dispatched, "hls", { token: "stale", now: 200_000 }),
+		).toBeNull();
+		expect(developerVideoPartAction(marked.hls, 250_000)).toBe("check");
+	});
+
+	it("forgets that a job was not found once it answers", () => {
+		const marked = markPartNotFound(dispatchedPart("hls", "t1"), "hls", {
+			token: "t1",
+			now: 200_000,
+		});
+		const alive =
+			marked && markPartChecked(marked, "hls", { token: "t1", now: 220_000 });
+
+		expect(alive?.hls).toEqual({
+			state: "running",
+			token: "t1",
+			jobId: "job-1",
+			startedAt: 2_000,
+			checkedAt: 220_000,
+		});
+		expect(alive && lostJobConfirmed(alive.hls, 9_000_000)).toBe(false);
+	});
+
+	it("sends a lost job again without spending an attempt", () => {
+		const dispatched = dispatchedPart("mp4", "t1");
+
+		const requeued = requeueLostPart(dispatched, "mp4", "t1");
+
+		expect(dispatched.attempts.mp4).toBe(1);
+		expect(requeued?.mp4).toEqual({ state: "pending" });
+		expect(requeued?.attempts.mp4).toBe(0);
+		expect(requeued && developerVideoPartAction(requeued.mp4, 3_000)).toBe(
+			"dispatch",
+		);
+		expect(requeued && running("mp4", "t2", requeued).attempts.mp4).toBe(1);
+		expect(requeueLostPart(dispatched, "mp4", "stale")).toBeNull();
+	});
+
+	it("stops sending a job again once it has been lost three times", () => {
+		let state = fresh();
+		for (let lost = 0; lost < DEVELOPER_VIDEO_MAX_LOST_JOBS; lost++) {
+			const requeued = requeueLostPart(
+				dispatchedPart("hls", `t${lost}`, state),
+				"hls",
+				`t${lost}`,
+			);
+			if (!requeued) throw new Error("lost job was not requeued");
+			state = requeued;
+		}
+
+		expect(DEVELOPER_VIDEO_MAX_LOST_JOBS).toBe(3);
+		expect(state.attempts.hls).toBe(0);
+		expect(
+			requeueLostPart(dispatchedPart("hls", "last", state), "hls", "last"),
+		).toBeNull();
+		expect(
+			requeueLostPart(dispatchedPart("mp4", "t", state), "mp4", "t"),
+		).not.toBeNull();
+	});
+
+	it("keeps a ready video ready while its other output is sent again", () => {
+		const ready = complete("mp4", 2_000);
+		const requeued = requeueLostPart(
+			dispatchedPart("hls", "t-hls", ready),
+			"hls",
+			"t-hls",
+		);
+
+		expect(requeued?.hls).toEqual({ state: "pending" });
+		expect(requeued?.mp4).toEqual({ state: "complete", output: "t" });
+		expect(
+			requeued && resolveDeveloperVideoStatus(requeued, "ready").status,
+		).toBe("ready");
 	});
 
 	it("waits two minutes for a start that was never confirmed, then restarts it without a second attempt", () => {
