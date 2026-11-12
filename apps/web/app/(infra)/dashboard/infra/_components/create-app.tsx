@@ -61,8 +61,8 @@ export function EnvironmentChoice({
 				})}
 			</fieldset>
 			<p className="m-0 mt-2.5 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.46)]">
-				A development app takes uploads from any website, and a production app
-				only from the websites you allow.
+				Use a development app for testing and a production app for live traffic.
+				Both work the same way.
 				{switchable && " You can switch at any time in Settings."}
 			</p>
 		</div>

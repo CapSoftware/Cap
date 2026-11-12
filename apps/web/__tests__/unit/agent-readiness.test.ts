@@ -294,7 +294,7 @@ describe("developer OpenAPI spec", () => {
 			{ post?: { responses: Record<string, { $ref?: string }> } }
 		>;
 		for (const path of [
-			"/api/developer/sdk/v1/videos/create",
+			"/api/developer/v1/uploads",
 			"/api/developer/sdk/v1/upload/multipart/complete",
 		]) {
 			expect(paths[path]?.post?.responses["402"]).toEqual({
@@ -344,8 +344,14 @@ describe("developer OpenAPI spec", () => {
 
 	it("does not describe a storage key anywhere", () => {
 		expect(JSON.stringify(spec)).not.toMatch(/s3Key/i);
-		expect(spec.components.schemas.CreateVideoResponse.required).toEqual([
+		expect(spec.components.schemas.Upload.required).toEqual([
+			"id",
 			"videoId",
+			"token",
+			"expiresAt",
+			"corsOrigin",
+			"status",
+			"uploadUrl",
 			"playbackId",
 			"shareUrl",
 			"embedUrl",

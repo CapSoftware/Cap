@@ -43,7 +43,10 @@ vi.mock("@cap/database/auth/request-site", () => ({
 }));
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_WEB_URL: "https://cap.so" },
-	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
+	serverEnv: () => ({
+		WEB_URL: "https://cap.so",
+		NEXTAUTH_SECRET: "unit-test-signing-secret",
+	}),
 }));
 vi.mock("@/lib/developer-key-hash", () => ({
 	hashKey: async (key: string) => `hash:${key}`,
@@ -76,6 +79,7 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
+import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -85,7 +89,15 @@ type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
 const ORIGIN = "https://cap.so";
 let keySerial = 0;
-const freshKey = (prefix: "csk" | "cpk") => `${prefix}_key_${++keySerial}`;
+const freshKey = (prefix: "csk" | "cpk" | "cut") =>
+	prefix === "cut"
+		? createDeveloperUploadToken({
+				appId: "app-1",
+				videoId: `video-${++keySerial}`,
+				expiresAt: Date.now() + 60_000,
+				corsOrigin: null,
+			})
+		: `${prefix}_key_${++keySerial}`;
 
 function call(
 	routes: Partial<Record<Method, (request: Request) => unknown>>,
@@ -246,9 +258,9 @@ describe("rate limit headers", () => {
 		const response = await call(
 			sdk,
 			"POST",
-			"/api/developer/sdk/v1/videos/create",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
 			{
-				key: freshKey("cpk"),
+				key: freshKey("cut"),
 				headers: {
 					Origin: "https://app.example",
 					"Content-Type": "application/json",
@@ -258,6 +270,9 @@ describe("rate limit headers", () => {
 		);
 
 		expect(response.status).toBe(200);
+		expect(mocks.initiate).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ appId: "app-1" }),
+		);
 		expect(
 			response.headers
 				.get("Access-Control-Expose-Headers")
@@ -281,12 +296,12 @@ describe("wrong method and unknown path", () => {
 		[rest, "DELETE", "/api/developer/v1/videos/video-1/status", "csk", "GET"],
 		[rest, "POST", "/api/developer/v1/usage", "csk", "GET"],
 		[rest, "DELETE", "/api/developer/v1/transcripts", "csk", "POST, GET"],
-		[sdk, "GET", "/api/developer/sdk/v1/videos/create", "cpk", "POST"],
+		[rest, "GET", "/api/developer/v1/uploads", "csk", "POST"],
 		[
 			sdk,
 			"DELETE",
 			"/api/developer/sdk/v1/upload/multipart/abort",
-			"cpk",
+			"cut",
 			"POST",
 		],
 	] as const)(
@@ -310,7 +325,8 @@ describe("wrong method and unknown path", () => {
 		[rest, "GET", "/api/developer/v1/nope", "csk"],
 		[rest, "POST", "/api/developer/v1/videos/a/b/c", "csk"],
 		[rest, "GET", "/api/developer/v1/usage/extra", "csk"],
-		[sdk, "POST", "/api/developer/sdk/v1/upload/multipart", "cpk"],
+		[sdk, "POST", "/api/developer/sdk/v1/upload/multipart", "cut"],
+		[sdk, "POST", "/api/developer/sdk/v1/videos/create", "cut"],
 	] as const)(
 		"keeps 404 for %s %s %s, a path no method serves",
 		async (routes, method, path, prefix) => {
@@ -376,10 +392,10 @@ describe("errors thrown inside a handler", () => {
 	});
 });
 
-describe("creating a video with the wrong content type", () => {
+describe("creating an upload with the wrong content type", () => {
 	const create = (headers: Record<string, string>, body?: string) =>
-		call(sdk, "POST", "/api/developer/sdk/v1/videos/create", {
-			key: freshKey("cpk"),
+		call(rest, "POST", "/api/developer/v1/uploads", {
+			key: freshKey("csk"),
 			headers,
 			body,
 		});

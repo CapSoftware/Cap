@@ -8,6 +8,7 @@ import {
 } from "../../../utils";
 
 import * as transcripts from "./transcripts";
+import * as uploads from "./uploads";
 import * as usage from "./usage";
 import * as videos from "./videos";
 
@@ -16,6 +17,7 @@ const app = new Hono()
 	.use(developerSdkCors)
 	.use(developerRateLimiter)
 	.route("/videos", videos.app)
+	.route("/uploads", uploads.app)
 	.route("/transcripts", transcripts.app)
 	.route("/usage", usage.app)
 	.onError(developerApiError);

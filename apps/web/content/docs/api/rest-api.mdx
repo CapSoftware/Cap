@@ -8,15 +8,15 @@ The Cap Developer API lets your product host video with Cap. You upload a file, 
 
 There are two APIs:
 
-- **REST API** (`/api/developer/v1`) -- Server-side management of videos and usage, authenticated with secret keys (`csk_`).
-- **SDK API** (`/api/developer/sdk/v1`) -- Client-side video creation and uploads, authenticated with public keys (`cpk_`).
+- **REST API** (`/api/developer/v1`) -- Server-side: create uploads and manage videos and usage, authenticated with secret keys (`csk_`).
+- **SDK API** (`/api/developer/sdk/v1`) -- Browser-side: upload a video's file, authenticated with an upload token (`cut_`) that your server creates for that one video.
 
 These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with `CAP_API_KEY` in headless environments, see [Set Up Your Agent](/docs/agents/setup#headless-environments-ci-containers-and-remote-sandboxes).
 
 A video goes through four steps:
 
-1. [Create Video](/docs/api/rest-api#create-video) with the public key.
-2. Upload the file with [Multipart Upload](/docs/api/rest-api#multipart-upload).
+1. [Create Upload](/docs/api/rest-api#create-upload) from your server with the secret key. It returns an upload token.
+2. Upload the file from the browser with that token, using [Multipart Upload](/docs/api/rest-api#multipart-upload).
 3. Poll [Get Video Status](/docs/api/rest-api#get-video-status) with the secret key until `status` is `ready` or `errored`.
 4. Play it. See [Play a Video](/docs/api/rest-api#play-a-video).
 
@@ -29,8 +29,8 @@ API keys are managed in Cap Infra, not the general Settings page.
 1. Go to [cap.so/dashboard/infra](/dashboard/infra).
 2. Create an app and give it a name and environment (development or production).
 3. Two keys are generated for each app:
-   - **Public key** (`cpk_...`) -- Safe to use in client-side code. Used with the SDK API.
-   - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API.
+   - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API, including to create uploads.
+   - **Public key** (`cpk_...`) -- Cannot create or upload videos. Browsers upload with an upload token instead.
 4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair.
 
 ### Using Your Keys
@@ -41,11 +41,13 @@ Include the appropriate key in the `Authorization` header as a Bearer token:
 Authorization: Bearer csk_your_secret_key_here
 ```
 
-For the SDK API, use the public key instead:
+The SDK API takes an upload token instead. Your server gets one from [Create Upload](/docs/api/rest-api#create-upload) and hands it to the browser:
 
 ```
-Authorization: Bearer cpk_your_public_key_here
+Authorization: Bearer cut_your_upload_token_here
 ```
+
+An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload: the SDK API answers `403` with code `public_key_not_allowed`.
 
 Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly.
 
@@ -61,7 +63,7 @@ A machine-readable OpenAPI 3.1 description of both APIs is published at [cap.so/
 https://cap.so/api/developer/v1
 ```
 
-**SDK API (public key):**
+**SDK API (upload token):**
 
 ```
 https://cap.so/api/developer/sdk/v1
@@ -103,7 +105,7 @@ A request body that fails validation returns `400` with the code `invalid_reques
 }
 ```
 
-A `402` from Create Video or Complete Upload is the one exception to the shape: it has `error`, `code` and `message`, and carries the balance fields shown under [Create Video](/docs/api/rest-api#create-video) in place of `hint` and `docs`.
+A `402` from Create Upload or Complete Upload is the one exception to the shape: it has `error`, `code` and `message`, and carries the balance fields shown under [Create Upload](/docs/api/rest-api#create-upload) in place of `hint` and `docs`.
 
 Send request bodies as JSON with the header `Content-Type: application/json`. Malformed JSON returns `400` with the code `invalid_json`, and a body sent with any other content type returns `415` with the code `unsupported_media_type`.
 
@@ -111,9 +113,9 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 |-------------|-------------|
 | `200` | Success |
 | `400` | Bad request. The `code` says what was wrong, for example `invalid_request`, `invalid_json`, `invalid_limit` or `unknown_parameter` |
-| `401` | Unauthorized. The API key is missing, invalid or revoked |
+| `401` | Unauthorized. The API key or upload token is missing, invalid, revoked or expired |
 | `402` | Payment required. The app is out of credit, its balance does not cover 7 days of storage, or it is below the minimum to start a transcript |
-| `403` | Forbidden. A production app was called without an allowed `Origin` (SDK API), or the account cannot use this feature yet |
+| `403` | Forbidden. On the SDK API, a public key was sent (`public_key_not_allowed`), the `Origin` differs from the upload token's `corsOrigin` (`origin_not_allowed`) or the body names another video (`video_mismatch`). Elsewhere, the account cannot use this feature yet |
 | `404` | Not found. The video, transcript or upload does not exist (`video_not_found`, `transcript_not_found`, `upload_not_found`), or no route matches the path (`not_found`) |
 | `405` | Method not allowed. The path exists but not with this method (`method_not_allowed`). The `Allow` header lists the methods it takes |
 | `409` | Conflict with the current state, for example an upload that already completed. The `code` says which |
@@ -126,7 +128,7 @@ A `4xx` response will not succeed if the same request is sent again, with two ex
 
 ## Rate Limits
 
-Each key allows 60 requests per minute, counted across every endpoint. Playback URLs need no key and are not counted.
+Each key and each upload token allows 60 requests per minute, counted across every endpoint. Playback URLs need no key and are not counted.
 
 Every response carries three headers:
 
@@ -138,7 +140,7 @@ Every response carries three headers:
 
 Past the limit the API answers `429` with the code `rate_limited` and a `Retry-After` header in seconds. The count is kept by the server that answers, so `X-RateLimit-Remaining` can differ from one response to the next. Treat it as a guide, and treat a `429` with its `Retry-After` as the instruction.
 
-The public key has its own count, shared by every browser that uses your app, and each uploaded part spends one presign request from it.
+Each upload token has its own count, separate from your secret key's and from every other upload. Each uploaded part spends one presign request from it.
 
 ## Pagination
 
@@ -158,6 +160,82 @@ Video lists do not include pagination metadata. To paginate, increment `offset` 
 ## REST API Endpoints
 
 All REST API endpoints require a secret key (`csk_`) in the `Authorization` header.
+
+### Create Upload
+
+Create a video and an upload token for it. Call this from your server, then give the token to the browser that uploads the file.
+
+```
+POST /api/developer/v1/uploads
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | No | Video name, up to 255 characters (defaults to "Untitled") |
+| `userId` | string | No | Your external user ID for filtering, up to 255 characters. Videos return it as `externalUserId` |
+| `maxResolutionTier` | string | No | Highest resolution to encode: `1080p` (default), `1440p` or `2160p` |
+| `metadata` | object | No | Your own JSON object to store with the video, under 8KB |
+| `corsOrigin` | string | No | Exact origin of the page that uploads, such as `https://app.example.com`, with no path or trailing slash |
+| `timeoutSeconds` | integer | No | How long the token works, in seconds from `60` to `86400`. Defaults to `3600` |
+
+The body is optional. A request with no body creates an upload with the defaults.
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/uploads \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "User Recording", "userId": "user_42", "corsOrigin": "https://app.example.com"}'
+```
+
+**Example response:**
+
+```json
+{
+  "data": {
+    "id": "abc123def456",
+    "videoId": "abc123def456",
+    "token": "cut_eyJ2IjoxLCJhcHAiOiIuLi4ifQ.Jm2c...",
+    "expiresAt": "2026-03-10T15:30:00.000Z",
+    "corsOrigin": "https://app.example.com",
+    "status": "uploading",
+    "uploadUrl": "https://cap.so/api/developer/sdk/v1/upload/multipart",
+    "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
+  }
+}
+```
+
+Each video takes one upload, so `id` equals `videoId`. `shareUrl` and `embedUrl` are a hosted player for the video. See [Share and Embed](/docs/api/rest-api#share-and-embed). To build your own player, see [Play a Video](/docs/api/rest-api#play-a-video).
+
+The token is the only credential the [SDK API](/docs/api/rest-api#sdk-api-endpoints) accepts, and it is returned once:
+
+- It uploads this video and no other.
+- It works until `expiresAt`. The upload has to complete by then, so raise `timeoutSeconds` for large files on slow connections.
+- It stops working when the upload completes or the video is deleted.
+
+`corsOrigin` is a convenience for browser uploads. When it is set, the SDK API refuses a request whose `Origin` header is anything else. A script can send any `Origin` it likes, so the token is what protects the upload, not the origin. Leave `corsOrigin` out to upload from a server or a native app.
+
+Creating an upload is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
+
+```json
+{
+  "error": "Insufficient credits",
+  "code": "insufficient_credits",
+  "message": "Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.15.",
+  "standing": "active",
+  "pausesAt": null,
+  "balanceMicroCredits": 5000,
+  "requiredMicroCredits": 19834,
+  "shortfallMicroCredits": 14834
+}
+```
+
+`code` is `insufficient_credits`, `out_of_credit` (the app is in `grace` or `paused`) or `no_account`.
 
 ### List Videos
 
@@ -658,70 +736,20 @@ Adding credits that cover one day of storage returns the app to `active` at once
 
 ## SDK API Endpoints
 
-The SDK API is designed for client-side use in browsers and apps. All SDK API endpoints require a public key (`cpk_`) in the `Authorization` header.
+The SDK API uploads a video's file from a browser or app. Every endpoint takes the upload token from [Create Upload](/docs/api/rest-api#create-upload) in the `Authorization` header. The token already names the video, so `videoId` in a request body is optional, and a `videoId` that is not the token's returns `403` with code `video_mismatch`.
 
-For production apps, the `Origin` header must match one of the allowed domains configured in your app settings. A browser sends it by itself. A request with no `Origin` returns `403` with the code `origin_required`, and one from a domain that is not on the list returns `403` with the code `origin_not_allowed`. Development apps skip origin validation, so use one to try the examples below from a terminal.
-
-### Create Video
-
-Create a new video record and get URLs for sharing and embedding.
-
-```
-POST /api/developer/sdk/v1/videos/create
-```
-
-**Request body (JSON):**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | No | Video name, up to 255 characters (defaults to "Untitled") |
-| `userId` | string | No | Your external user ID for filtering, up to 255 characters. Videos return it as `externalUserId` |
-| `maxResolutionTier` | string | No | Highest resolution to encode: `1080p` (default), `1440p` or `2160p` |
-| `metadata` | object | No | Your own JSON object to store with the video, under 8KB |
-
-The body is optional. A request with no body creates a video with the defaults.
-
-**Example request:**
-
-```bash
-curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
-  -H "Authorization: Bearer cpk_your_public_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "User Recording", "userId": "user_42"}'
-```
-
-**Example response:**
-
-```json
-{
-  "videoId": "abc123def456",
-  "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-  "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-  "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
-}
-```
-
-`shareUrl` and `embedUrl` are a hosted player for the video. See [Share and Embed](/docs/api/rest-api#share-and-embed). To build your own player, see [Play a Video](/docs/api/rest-api#play-a-video).
-Creating a video is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
-
-```json
-{
-  "error": "Insufficient credits",
-  "code": "insufficient_credits",
-  "message": "Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.05, so add at least $0.15.",
-  "standing": "active",
-  "pausesAt": null,
-  "balanceMicroCredits": 5000,
-  "requiredMicroCredits": 19834,
-  "shortfallMicroCredits": 14834
-}
-```
-
-`code` is `insufficient_credits`, `out_of_credit` (the app is in `grace` or `paused`) or `no_account`.
+| Status | `code` | Meaning |
+|--------|--------|---------|
+| `401` | `invalid_upload_token` | The token is missing, malformed or altered |
+| `401` | `upload_token_expired` | The token is past `expiresAt`. Create a new upload |
+| `403` | `public_key_not_allowed` | A public key was sent. Public keys cannot create or upload videos |
+| `403` | `origin_not_allowed` | The token has a `corsOrigin` and the `Origin` header is different |
+| `403` | `video_mismatch` | The body names a video other than the token's |
+| `404` | `video_not_found` | The token's video was deleted |
 
 ### Multipart Upload
 
-After creating a video, upload its file in parts:
+After creating an upload, send its file in parts with the upload token:
 
 1. Initiate the upload to get an `uploadId`.
 2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts.
@@ -738,16 +766,16 @@ POST /api/developer/sdk/v1/upload/multipart/initiate
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `videoId` | string | Yes | The video ID from the create step |
+| `videoId` | string | No | The token's video ID |
 | `contentType` | string | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska`, `video/avi` or `application/octet-stream`. Any other value is stored as `video/mp4` |
 
 **Example request:**
 
 ```bash
 curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/initiate \
-  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Authorization: Bearer cut_your_upload_token_here" \
   -H "Content-Type: application/json" \
-  -d '{"videoId": "abc123def456", "contentType": "video/mp4"}'
+  -d '{"contentType": "video/mp4"}'
 ```
 
 **Example response:**
@@ -770,7 +798,7 @@ POST /api/developer/sdk/v1/upload/multipart/presign-part
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `videoId` | string | Yes | The video ID |
+| `videoId` | string | No | The token's video ID |
 | `uploadId` | string | Yes | The upload ID from the initiate step |
 | `partNumber` | integer | Yes | Part number, from 1 to 10,000 |
 
@@ -778,9 +806,9 @@ POST /api/developer/sdk/v1/upload/multipart/presign-part
 
 ```bash
 curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
-  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Authorization: Bearer cut_your_upload_token_here" \
   -H "Content-Type: application/json" \
-  -d '{"videoId": "abc123def456", "uploadId": "multipart-upload-id", "partNumber": 1}'
+  -d '{"uploadId": "multipart-upload-id", "partNumber": 1}'
 ```
 
 **Example response:**
@@ -811,7 +839,7 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `videoId` | string | Yes | The video ID |
+| `videoId` | string | No | The token's video ID |
 | `uploadId` | string | Yes | The upload ID |
 | `parts` | array | Yes | Every uploaded part, at least one. A part left out of the list is left out of the video |
 | `parts[].partNumber` | integer | Yes | The part number, from 1 to 10,000 |
@@ -826,10 +854,9 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 
 ```bash
 curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/complete \
-  -H "Authorization: Bearer cpk_your_public_key_here" \
+  -H "Authorization: Bearer cut_your_upload_token_here" \
   -H "Content-Type: application/json" \
   -d '{
-    "videoId": "abc123def456",
     "uploadId": "multipart-upload-id",
     "parts": [
       { "partNumber": 1, "etag": "\"9b2cf535f27731c974343645a3985328\"", "size": 5242880 },
@@ -858,18 +885,18 @@ A mistake in the request returns one of these:
 | `400` | `part_too_small` | A part other than the last is under 5 MB. | Initiate again and upload the file in larger parts. |
 | `404` | `upload_not_found` | No open upload matches the `uploadId`. It was aborted or the ID is wrong. | Initiate again and upload the parts again. |
 
-The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as create, and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
+The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as [Create Upload](/docs/api/rest-api#create-upload), and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
 
-Each video accepts one completed upload. Once it completes, initiate and presign-part return `409` with the code `upload_already_completed`, and repeating complete returns `{ "success": true }`.
+Each video accepts one completed upload, and its token is used up with it. Once the upload completes, initiate, presign-part and abort return `409` with the code `upload_already_completed`, and repeating complete returns `{ "success": true }` without doing anything.
 
 Complete can itself return `409` with a `code`:
 
 | `code` | Meaning | What to do |
 |--------|---------|------------|
 | `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
-| `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new video and upload the file again. |
+| `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new upload and send the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video. Initiate, presign-part and complete return `404` with the code `video_not_found` for a deleted video. To upload a new file, create a new video.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
 
 #### Abort Upload
 
@@ -883,7 +910,7 @@ POST /api/developer/sdk/v1/upload/multipart/abort
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `videoId` | string | Yes | The video ID |
+| `videoId` | string | No | The token's video ID |
 | `uploadId` | string | Yes | The upload ID to abort |
 
 **Example response:**
@@ -1034,7 +1061,7 @@ When the upload is already H.264 and fits the tier, Cap can keep its video as up
 
 ## Share and Embed
 
-Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create, get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
+Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create an upload and when you get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
 
 - `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
@@ -1084,11 +1111,11 @@ The full video object returned by list and get endpoints:
 
 ## Best Practices
 
-- **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
+- **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Create each upload on your server and send only its `cut_` upload token to the browser.
 - **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` every few seconds until `status` is `ready` or `errored`, then play `hlsUrl` when it is present and `mp4Url` otherwise. See [Play a Video](/docs/api/rest-api#play-a-video).
 - **Switch on `code`.** Every error carries a stable `code`. The `error` text can change.
-- **Watch the rate limit headers.** Each key allows 60 requests per minute. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
+- **Watch the rate limit headers.** Each key and each upload token allows 60 requests per minute. Slow down as `X-RateLimit-Remaining` nears zero, and wait for `Retry-After` seconds after a `429`.
 - **Store your keys securely.** Use environment variables or a secrets manager.
-- **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
+- **Check who is uploading before you create an upload.** Your server decides who gets a token, so authenticate the user first and set `userId` to tie the video to them.
 - **Monitor your credit balance.** Use the usage endpoint to track the balance, `standing` and `upload.allowed`, and top up from your app's Billing page in Cap Infra. Auto top-up on that page adds credits from a saved card when the balance runs low.
 - **Paginate large result sets.** Use `limit` and `offset` to retrieve videos in batches. When the returned array length is less than `limit`, you have reached the end.
