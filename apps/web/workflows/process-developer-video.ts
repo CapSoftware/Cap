@@ -6,6 +6,7 @@ import {
 	type DeveloperVideoPreparation,
 	dispatchDeveloperVideoPart,
 	failDeveloperVideoProcessing,
+	isDeveloperVideoRefusal,
 	prepareDeveloperVideoProcessing,
 	readDeveloperVideoParts,
 	sweepSupersededDeveloperVideoOutputs,
@@ -21,7 +22,12 @@ const PROCESSING_DEADLINE_MS = 3 * 60 * 60 * 1000;
 const RETRY_SECONDS = 20;
 const PROBING_POLL_SECONDS = 2;
 const MAX_POLL_SECONDS = 20;
-const TIMED_OUT = "Video processing timed out";
+const TIMED_OUT =
+	"Processing took too long and was stopped. Upload the video again.";
+const INTERNAL_FAILURE =
+	"Processing failed because of a problem on our side. Upload the video again.";
+
+type Prepared = DeveloperVideoPreparation | { refused: string };
 
 export async function processDeveloperVideoWorkflow(
 	payload: ProcessDeveloperVideoPayload,
@@ -35,6 +41,10 @@ export async function processDeveloperVideoWorkflow(
 
 		for (;;) {
 			const prepared = await prepareVideo(videoId, encodeId);
+			if (typeof prepared === "object") {
+				await failVideo(videoId, encodeId, prepared.refused);
+				return { success: false };
+			}
 			if (prepared === "stale") return { success: false };
 			if (prepared === "ready") break;
 			if (Date.now() >= deadline) {
@@ -75,7 +85,8 @@ export async function processDeveloperVideoWorkflow(
 		return { success: true };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await failVideo(videoId, encodeId, message);
+		console.error("[developer-video] Processing failed", { videoId, message });
+		await failVideo(videoId, encodeId, INTERNAL_FAILURE);
 		throw new FatalError(message);
 	}
 }
@@ -83,10 +94,17 @@ export async function processDeveloperVideoWorkflow(
 async function prepareVideo(
 	videoId: string,
 	encodeId: string,
-): Promise<DeveloperVideoPreparation> {
+): Promise<Prepared> {
 	"use step";
 
-	return prepareDeveloperVideoProcessing(videoId, encodeId);
+	// A refusal is an answer, not a failed step: thrown, the step would be run
+	// again and the same file probed several more times for the same result.
+	try {
+		return await prepareDeveloperVideoProcessing(videoId, encodeId);
+	} catch (error) {
+		if (isDeveloperVideoRefusal(error)) return { refused: error.message };
+		throw error;
+	}
 }
 
 async function readParts(
