@@ -350,6 +350,7 @@ describe("developer OpenAPI spec", () => {
 			"token",
 			"expiresAt",
 			"corsOrigin",
+			"maxBytes",
 			"status",
 			"uploadUrl",
 			"playbackId",

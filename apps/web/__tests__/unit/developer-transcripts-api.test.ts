@@ -211,6 +211,37 @@ describe("developer transcripts API", () => {
 			expect(mocks.store.listTranscripts).not.toHaveBeenCalled();
 		});
 
+		it.each([
+			["an empty userId", "userId="],
+			["a userId of spaces", "userId=%20%20"],
+			["an empty userId beside another filter", "status=complete&userId="],
+		])(
+			"refuses %s instead of listing every transcript",
+			async (_label, query) => {
+				const response = await app.request(`/?${query}`, { headers: SECRET });
+				expect(response.status).toBe(400);
+				expect(await response.json()).toMatchObject({
+					code: "invalid_user_id",
+					error: "userId filter is empty",
+					hint: expect.stringContaining("leave userId out"),
+					docs: "https://cap.so/docs/api/rest-api",
+				});
+				expect(mocks.store.listTranscripts).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([
+			["ALICE", "ALICE"],
+			["%C3%A0lice", "àlice"],
+			["%20alice%20", "alice"],
+		])("passes userId=%s to the store as %j", async (sent, userId) => {
+			await app.request(`/?userId=${sent}`, { headers: SECRET });
+			expect(mocks.store.listTranscripts).toHaveBeenCalledWith(
+				"app-1",
+				expect.objectContaining({ userId }),
+			);
+		});
+
 		it("rejects an unknown status filter", async () => {
 			const response = await app.request("/?status=done", { headers: SECRET });
 			expect(response.status).toBe(400);
@@ -251,7 +282,6 @@ describe("developer transcripts API", () => {
 					url: "https://media.example.com/a.mp3",
 					language: "en",
 					userId: "user-1",
-					durationSeconds: 1,
 				},
 				{ ...SECRET, "Idempotency-Key": "retry-key-1" },
 			);
@@ -269,6 +299,55 @@ describe("developer transcripts API", () => {
 			expect(body.data).toMatchObject({ id: "tr-1", status: "queued" });
 			expect(JSON.stringify(body)).not.toContain("s3Key");
 		});
+
+		it.each([
+			["user_id", { user_id: "alice" }],
+			["durationSeconds", { durationSeconds: 1 }],
+			["Url", { Url: "https://media.example.com/b.mp3" }],
+		])(
+			"refuses the unknown field %s on a URL transcript and names it",
+			async (field, extra) => {
+				const response = await post(
+					"/",
+					{ url: "https://media.example.com/a.mp3", ...extra },
+					SECRET,
+				);
+				expect(response.status).toBe(400);
+				const body = await response.json();
+				expect(body).toMatchObject({
+					code: "invalid_request",
+					error: `Invalid request: Unrecognized key: "${field}"`,
+					hint: "This request accepts url, name, language, userId, metadata. Field names are case-sensitive.",
+				});
+				expect(body.issues).toEqual([
+					expect.objectContaining({ code: "unrecognized_keys", keys: [field] }),
+				]);
+				expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([
+			["user_id", { user_id: "alice" }],
+			["filename", { filename: "standup.m4a" }],
+			["url", { url: "https://media.example.com/a.mp3" }],
+		])(
+			"refuses the unknown field %s on a file transcript and names it",
+			async (field, extra) => {
+				const response = await post(
+					"/uploads",
+					{ contentLength: 1_000, ...extra },
+					SECRET,
+				);
+				expect(response.status).toBe(400);
+				const body = await response.json();
+				expect(body).toMatchObject({
+					code: "invalid_request",
+					error: `Invalid request: Unrecognized key: "${field}"`,
+					hint: "This request accepts fileName, contentLength, name, language, userId, metadata. Field names are case-sensitive.",
+				});
+				expect(mocks.store.createTranscriptUpload).not.toHaveBeenCalled();
+			},
+		);
 
 		it("rejects a malformed idempotency key", async () => {
 			const response = await post(
@@ -386,6 +465,117 @@ describe("developer transcripts API", () => {
 			).json();
 			expect(body.data.words).toHaveLength(1);
 			expect(body.data).not.toHaveProperty("segments");
+		});
+	});
+
+	describe("include", () => {
+		it.each([
+			["speakers", "speakers"],
+			["WORDS", "WORDS"],
+			["words,speakers", "speakers"],
+			["segments, confidence", "confidence"],
+		])("refuses include=%s and names the value", async (include, named) => {
+			const response = await app.request(
+				`/tr-1?include=${encodeURIComponent(include)}`,
+				{ headers: SECRET },
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_include",
+				message: `include has an unknown value: ${named}`,
+				hint: "Use words, segments or both, separated by a comma.",
+			});
+			expect(mocks.store.getTranscript).not.toHaveBeenCalled();
+			expect(mocks.store.getTranscriptResult).not.toHaveBeenCalled();
+		});
+
+		it.each(["words", "segments", "words,segments", " words , segments ", ""])(
+			"accepts include=%s",
+			async (include) => {
+				mocks.store.getTranscript.mockResolvedValue(
+					transcript({ status: "complete", text: "hello world", wordCount: 2 }),
+				);
+				mocks.store.getTranscriptResult.mockResolvedValue({
+					text: "hello world",
+					language: "en",
+					durationSeconds: 1,
+					words: [{ text: "hello", start: 0, end: 0.4 }],
+					segments: [{ text: "hello world", start: 0, end: 0.9 }],
+				});
+
+				const response = await app.request(
+					`/tr-1?include=${encodeURIComponent(include)}`,
+					{ headers: SECRET },
+				);
+
+				expect(response.status).toBe(200);
+				const { data } = (await response.json()) as {
+					data: Record<string, unknown>;
+				};
+				expect("words" in data).toBe(include.includes("words"));
+				expect("segments" in data).toBe(include.includes("segments"));
+			},
+		);
+	});
+
+	describe("what a transcript response carries", () => {
+		it("returns when the upload URL expires while the transcript waits for its file", async () => {
+			mocks.store.getTranscript.mockResolvedValue(
+				transcript({
+					status: "uploading",
+					sourceType: "upload",
+					sourceUrl: null,
+					updatedAt: new Date("2026-11-12T14:28:41.000Z"),
+				}),
+			);
+
+			const response = await app.request("/tr-1", { headers: SECRET });
+
+			expect((await response.json()).data).toMatchObject({
+				status: "uploading",
+				upload: { expiresAt: "2026-11-12T15:28:41.000Z" },
+			});
+		});
+
+		it.each(["queued", "processing", "complete", "error"])(
+			"has no upload expiry once the transcript is %s",
+			async (status) => {
+				mocks.store.getTranscript.mockResolvedValue(transcript({ status }));
+
+				const response = await app.request("/tr-1", { headers: SECRET });
+
+				expect("upload" in (await response.json()).data).toBe(false);
+			},
+		);
+
+		it("never returns the query string of the source URL, from get, list or create", async () => {
+			const signed = transcript({
+				sourceUrl: "https://files.example.com/call.mp3?sig=abc123&expires=9",
+			});
+			mocks.store.getTranscript.mockResolvedValue(signed);
+			mocks.store.listTranscripts.mockResolvedValue({
+				transcripts: [signed],
+				hasMore: false,
+			});
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: true,
+				transcript: signed,
+			});
+
+			const text = async (response: Response | Promise<Response>) =>
+				(await response).text();
+			const bodies = await Promise.all([
+				text(app.request("/tr-1", { headers: SECRET })),
+				text(app.request("/", { headers: SECRET })),
+				text(post("/", { url: signed.sourceUrl }, SECRET)),
+			]);
+
+			for (const body of bodies) {
+				expect(body).toContain("https://files.example.com/call.mp3");
+				expect(body).not.toContain("abc123");
+				expect(body).not.toContain("expires=9");
+			}
 		});
 	});
 });

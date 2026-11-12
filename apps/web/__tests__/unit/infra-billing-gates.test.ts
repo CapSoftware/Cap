@@ -194,6 +194,7 @@ describe("creating an upload", () => {
 			"embedUrl",
 			"expiresAt",
 			"id",
+			"maxBytes",
 			"playbackId",
 			"shareUrl",
 			"status",

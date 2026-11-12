@@ -17,6 +17,7 @@ import {
 	isTranscriptStatus,
 	serializeTranscript,
 	TRANSCRIPT_STATUSES,
+	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperSecretAuth } from "../../../utils";
@@ -45,6 +46,8 @@ const readIdempotencyKey = (header: string | undefined) => {
 		: { ok: false as const };
 };
 
+const INCLUDE_VALUES = ["words", "segments"] as const;
+
 const invalidIdempotencyKey = apiErrorBody(
 	"invalid_idempotency_key",
 	"Idempotency-Key is not valid",
@@ -55,7 +58,7 @@ app.post(
 	"/",
 	developerZValidator(
 		"json",
-		z.object({ url: z.string().min(1), ...optionsSchema }),
+		z.strictObject({ url: z.string().min(1), ...optionsSchema }),
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
@@ -74,7 +77,7 @@ app.post(
 	"/uploads",
 	developerZValidator(
 		"json",
-		z.object({
+		z.strictObject({
 			fileName: z.string().max(255).optional(),
 			contentLength: z.number().int().positive(),
 			...optionsSchema,
@@ -128,12 +131,24 @@ app.get("/", async (c) => {
 		);
 	}
 
+	const userId = c.req.query("userId")?.trim();
+	if (userId === "") {
+		return c.json(
+			apiErrorBody(
+				"invalid_user_id",
+				"userId filter is empty",
+				"Send the user ID to filter by, or leave userId out to list every transcript.",
+			),
+			400,
+		);
+	}
+
 	const { transcripts, hasMore } = await listTranscripts(
 		c.get("developerAppId"),
 		{
 			limit,
 			offset,
-			userId: c.req.query("userId")?.trim() || null,
+			userId: userId ?? null,
 			status: status ?? null,
 		},
 	);
@@ -145,6 +160,26 @@ app.get("/", async (c) => {
 });
 
 app.get("/:id", async (c) => {
+	const include = new Set(
+		(c.req.query("include") ?? "")
+			.split(",")
+			.map((part) => part.trim())
+			.filter(Boolean),
+	);
+	const unknown = [...include].find(
+		(value) => !INCLUDE_VALUES.some((known) => known === value),
+	);
+	if (unknown !== undefined) {
+		return c.json(
+			apiErrorBody(
+				"invalid_include",
+				`include has an unknown value: ${unknown.slice(0, 64)}`,
+				`Use ${INCLUDE_VALUES.join(", ")} or both, separated by a comma.`,
+			),
+			400,
+		);
+	}
+
 	const transcript = await getTranscript(
 		c.get("developerAppId"),
 		c.req.param("id"),
@@ -160,13 +195,16 @@ app.get("/:id", async (c) => {
 		);
 	}
 
-	const include = new Set(
-		(c.req.query("include") ?? "")
-			.split(",")
-			.map((part) => part.trim())
-			.filter(Boolean),
-	);
-	const data = serializeTranscript(transcript, { includeText: true });
+	const data = {
+		...serializeTranscript(transcript, { includeText: true }),
+		...(transcript.status === "uploading"
+			? {
+					upload: {
+						expiresAt: transcriptUploadExpiry(transcript).toISOString(),
+					},
+				}
+			: {}),
+	};
 	if (!include.has("words") && !include.has("segments")) {
 		return c.json({ data });
 	}
