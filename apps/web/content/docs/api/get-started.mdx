@@ -483,7 +483,7 @@ const SIGN_AT_ONCE = 10;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const forUser = (userId) =>
-  userId ? `userId=${encodeURIComponent(userId)}` : "";
+  userId === undefined ? "" : `userId=${encodeURIComponent(userId)}`;
 
 async function request(url, method, credential, body) {
   const headers = { Authorization: `Bearer ${credential}` };
@@ -540,13 +540,15 @@ export async function uploadFile(path, token) {
           length,
           start,
         );
-        const sendPart = () =>
-          fetch(presignedUrl, { method: "PUT", body: buffer });
-        const put = await sendPart().catch(sendPart);
-        if (!put.ok) {
-          throw new Error(`part ${partNumber} answered ${put.status}`);
-        }
-        parts.push({ partNumber, etag: put.headers.get("etag"), size: length });
+        const sendPart = async () => {
+          const put = await fetch(presignedUrl, { method: "PUT", body: buffer });
+          if (!put.ok) {
+            throw new Error(`part ${partNumber} answered ${put.status}`);
+          }
+          return put.headers.get("etag");
+        };
+        const etag = await sendPart().catch(sendPart);
+        parts.push({ partNumber, etag, size: length });
       }
     }
     await step("complete", { uploadId, parts, durationInSecs: 1 });
@@ -614,7 +616,7 @@ SIGN_AT_ONCE = 10
 
 
 def for_user(user_id):
-    return urllib.parse.urlencode({"userId": user_id}) if user_id else ""
+    return "" if user_id is None else urllib.parse.urlencode({"userId": user_id})
 
 
 def request(url, method, credential, body=None):
@@ -642,7 +644,7 @@ def cap_api(method, path, body=None):
 
 def create_upload(name, user_id=None):
     body = {"name": name}
-    if user_id:
+    if user_id is not None:
         body["userId"] = user_id
     return cap_api("POST", "/uploads", body)["data"]
 
@@ -773,7 +775,7 @@ def delete_video(video_id, user_id=None):
     cap_api("DELETE", f"/videos/{video_id}?{for_user(user_id)}")
 ```
 
-Leave `userId` out of every call if your app has no users of its own.
+Leave `userId` out of every call if your app has no users of its own. The helpers send an empty `userId` as it is, so list, status and delete refuse it with `400` and never fall back to every user's videos.
 
 ## 8. Transcribe audio
 
