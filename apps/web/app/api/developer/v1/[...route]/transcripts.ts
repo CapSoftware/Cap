@@ -55,7 +55,7 @@ app.post(
 	"/",
 	developerZValidator(
 		"json",
-		z.object({ url: z.string().min(1), ...optionsSchema }),
+		z.strictObject({ url: z.string().min(1), ...optionsSchema }),
 	),
 	async (c) => {
 		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
@@ -74,7 +74,7 @@ app.post(
 	"/uploads",
 	developerZValidator(
 		"json",
-		z.object({
+		z.strictObject({
 			fileName: z.string().max(255).optional(),
 			contentLength: z.number().int().positive(),
 			...optionsSchema,
@@ -128,12 +128,24 @@ app.get("/", async (c) => {
 		);
 	}
 
+	const userId = c.req.query("userId")?.trim();
+	if (userId === "") {
+		return c.json(
+			apiErrorBody(
+				"invalid_user_id",
+				"userId filter is empty",
+				"Send the user ID to filter by, or leave userId out to list every transcript.",
+			),
+			400,
+		);
+	}
+
 	const { transcripts, hasMore } = await listTranscripts(
 		c.get("developerAppId"),
 		{
 			limit,
 			offset,
-			userId: c.req.query("userId")?.trim() || null,
+			userId: userId ?? null,
 			status: status ?? null,
 		},
 	);
