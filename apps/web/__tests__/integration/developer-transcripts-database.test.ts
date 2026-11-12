@@ -64,6 +64,9 @@ vi.mock("@/workflows/process-developer-video", () => ({
 vi.mock("@/lib/media-client", () => ({
 	isMediaServerConfigured: () => false,
 }));
+vi.mock("@/lib/media-container", () => ({
+	urlIsSelfContainedMedia: async () => true,
+}));
 vi.mock("@/lib/developer-video-storage", () => ({}));
 vi.mock("@/lib/server", () => ({ runPromise: async () => undefined }));
 vi.mock("@cap/web-backend", () => ({
