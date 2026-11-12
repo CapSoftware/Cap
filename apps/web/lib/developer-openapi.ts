@@ -115,16 +115,20 @@ const transcriptSchema = {
 			description: "Measured audio length. Set when the transcript finishes.",
 		},
 		language: { type: ["string", "null"] },
-		wordCount: { type: ["integer", "null"] },
+		wordCount: {
+			type: ["integer", "null"],
+			description:
+				"Words in the transcript. 0 on a complete transcript means no speech was found in the audio.",
+		},
 		text: {
 			type: ["string", "null"],
 			description:
-				"The transcript text. Returned by getTranscript once status is complete.",
+				"The transcript text. Returned by getTranscript once status is complete. An empty string when the audio has no speech.",
 		},
 		costMicroCredits: {
 			type: "integer",
 			description:
-				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second.",
+				"Credits charged for this transcript. 0 until it completes, and 0 for failed transcripts. Audio length is measured by Cap and billed to the nearest second. Audio with no speech is billed for its length and completes with empty text.",
 		},
 		costDollars: { type: "number" },
 		error: {
@@ -204,7 +208,8 @@ const playbackProperties = {
 	},
 	errorReason: {
 		type: ["string", "null"],
-		description: "Why processing failed, when status is errored.",
+		description:
+			"Why processing failed, when status is errored. A failed video is not billed and its files are removed 24 hours after processing started.",
 	},
 	playbackId: {
 		type: ["string", "null"],
@@ -305,7 +310,8 @@ const developerVideoSchema = {
 		},
 		storedBytes: {
 			type: ["integer", "null"],
-			description: "Bytes stored for the source and every encoded output.",
+			description:
+				"Bytes stored for the source and every encoded output. 0 once a failed video's files have been removed.",
 		},
 		deletedAt: {
 			type: ["string", "null"],
@@ -589,7 +595,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getTranscript",
 				summary: "Get a transcript",
 				description:
-					"Returns the transcript with its status and, once complete, its text. Add include=words or include=segments for timings in seconds.",
+					"Returns the transcript with its status and, once complete, its text. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
@@ -724,7 +730,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag) or part_too_small (a part other than the last is under 5 MB), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),

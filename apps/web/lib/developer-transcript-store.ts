@@ -580,6 +580,8 @@ export async function getTranscriptResult(
 	}
 }
 
+const hasTextColumn = sql<number>`(${developerTranscripts.text} IS NOT NULL AND ${developerTranscripts.text} <> '')`;
+
 const summaryColumns = {
 	id: developerTranscripts.id,
 	appId: developerTranscripts.appId,
@@ -595,6 +597,7 @@ const summaryColumns = {
 	requestedLanguage: developerTranscripts.requestedLanguage,
 	language: developerTranscripts.language,
 	wordCount: developerTranscripts.wordCount,
+	hasText: hasTextColumn,
 	reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 	billedMicroCredits: developerTranscripts.billedMicroCredits,
 	errorCode: developerTranscripts.errorCode,
@@ -665,6 +668,8 @@ export async function listConsoleTranscripts(appId: string, limit: number) {
 			status: developerTranscripts.status,
 			durationSeconds: developerTranscripts.durationSeconds,
 			billedMicroCredits: developerTranscripts.billedMicroCredits,
+			wordCount: developerTranscripts.wordCount,
+			hasText: hasTextColumn,
 			errorMessage: developerTranscripts.errorMessage,
 			createdAt: developerTranscripts.createdAt,
 		})

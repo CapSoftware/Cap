@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	abort: vi.fn(),
 	listParts: vi.fn(),
 	headObject: vi.fn(),
+	deleteObject: vi.fn(),
 	listUploads: vi.fn(),
 }));
 
@@ -55,7 +56,12 @@ vi.mock("@cap/web-backend", async () => {
 		S3Buckets: {
 			getBucketAccess: () =>
 				Effect.succeed([
-					{ multipart, headObject: () => storage(() => mocks.headObject()) },
+					{
+						multipart,
+						headObject: () => storage(() => mocks.headObject()),
+						deleteObject: (...args: unknown[]) =>
+							storage(() => mocks.deleteObject(...args)),
+					},
 				]),
 		},
 	};
@@ -95,6 +101,11 @@ vi.mock("@/app/api/utils", async () => {
 });
 
 const { app } = await import("@/app/api/developer/sdk/v1/[...route]/upload");
+const { MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_SECS, recordedUploadDuration } =
+	await import("@/lib/infra-video-upload");
+const { DEVELOPER_VIDEO_MAX_UPLOAD_BYTES } = await import(
+	"@/lib/developer-video-upload"
+);
 
 const s3Key = "developer/app-1/video-1/video";
 const inProgress = { appId: "app-1", duration: null, deletedAt: null };
@@ -730,6 +741,149 @@ describe("client mistakes on complete and abort", () => {
 			status: 409,
 			code: "completion_in_progress",
 		});
+	});
+});
+
+describe("upload size ceiling", () => {
+	const PART_COUNT = 8;
+	const partsOf = (totalBytes: number) => {
+		const partBytes = Math.floor(totalBytes / PART_COUNT);
+		return Array.from({ length: PART_COUNT }, (_, index) => ({
+			partNumber: index + 1,
+			etag: `etag-${index + 1}`,
+			size:
+				index === PART_COUNT - 1
+					? totalBytes - partBytes * (PART_COUNT - 1)
+					: partBytes,
+		}));
+	};
+	const stored = (totalBytes: number) =>
+		mocks.listParts.mockReturnValue(
+			partsOf(totalBytes).map((part) => ({
+				PartNumber: part.partNumber,
+				ETag: `"${part.etag}"`,
+				Size: part.size,
+			})),
+		);
+	const completeFileOf = (totalBytes: number) =>
+		post("/complete", {
+			uploadId: "upload-1",
+			parts: partsOf(totalBytes),
+			durationInSecs: 12,
+		});
+
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+	});
+
+	it("is the size at which the four hour cap stops billing more bytes", () => {
+		expect(recordedUploadDuration(1, MAX_UPLOAD_BYTES)).toBe(
+			MAX_UPLOAD_DURATION_SECS,
+		);
+		expect(recordedUploadDuration(1, MAX_UPLOAD_BYTES - 2_500_000)).toBe(
+			MAX_UPLOAD_DURATION_SECS - 1,
+		);
+		expect(recordedUploadDuration(1, MAX_UPLOAD_BYTES * 2)).toBe(
+			MAX_UPLOAD_DURATION_SECS,
+		);
+	});
+
+	it("is not below the limit of the single request upload", () => {
+		expect(MAX_UPLOAD_BYTES).toBeGreaterThanOrEqual(
+			DEVELOPER_VIDEO_MAX_UPLOAD_BYTES,
+		);
+	});
+
+	it("completes a file exactly at the ceiling and bills it for four hours", async () => {
+		stored(MAX_UPLOAD_BYTES);
+
+		const response = await completeFileOf(MAX_UPLOAD_BYTES);
+
+		expect(response.status).toBe(200);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.abort).not.toHaveBeenCalled();
+		expect(mocks.admission).toHaveBeenCalledWith(
+			"app-1",
+			expect.objectContaining({ durationSeconds: MAX_UPLOAD_DURATION_SECS }),
+			expect.anything(),
+			{ excludeVideoId: "video-1" },
+		);
+		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses a file one byte over, aborts its upload and records nothing", async () => {
+		stored(MAX_UPLOAD_BYTES + 1);
+
+		const response = await completeFileOf(MAX_UPLOAD_BYTES + 1);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			error: "The file is larger than the 36 GB upload limit",
+			code: "file_too_large",
+			hint: expect.stringContaining("call initiate again"),
+		});
+		expect(mocks.abort).toHaveBeenCalledExactlyOnceWith(s3Key, "upload-1");
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.admission).not.toHaveBeenCalled();
+		expect(mocks.claim).not.toHaveBeenCalled();
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
+	});
+
+	it("lets the video take a new upload after an oversized one was refused", async () => {
+		stored(MAX_UPLOAD_BYTES + 1);
+		await completeFileOf(MAX_UPLOAD_BYTES + 1);
+		mocks.create.mockReturnValue({ UploadId: "upload-2" });
+
+		const initiated = await post("/initiate", {});
+
+		expect(initiated.status).toBe(200);
+		await expect(initiated.json()).resolves.toEqual({ uploadId: "upload-2" });
+
+		stored(MAX_UPLOAD_BYTES);
+		const completed = await post("/complete", {
+			uploadId: "upload-2",
+			parts: partsOf(MAX_UPLOAD_BYTES),
+			durationInSecs: 12,
+		});
+
+		expect(completed.status).toBe(200);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.complete.mock.calls[0]?.[1]).toBe("upload-2");
+	});
+
+	it("still refuses when the upload could not be aborted, and leaves it for the cleanup", async () => {
+		stored(MAX_UPLOAD_BYTES + 1);
+		mocks.abort.mockImplementation(fails("InternalError", 500));
+
+		const response = await completeFileOf(MAX_UPLOAD_BYTES + 1);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "file_too_large",
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
+	});
+
+	it("removes an oversized file that an earlier request had already assembled", async () => {
+		mocks.listParts.mockImplementation(fails("NoSuchUpload", 404));
+		mocks.headObject.mockReturnValue({ ContentLength: MAX_UPLOAD_BYTES + 1 });
+
+		const response = await completeFileOf(MAX_UPLOAD_BYTES + 1);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "file_too_large",
+		});
+		expect(mocks.deleteObject).toHaveBeenCalledExactlyOnceWith(s3Key);
+		expect(mocks.release).toHaveBeenCalledTimes(1);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+		expect(
+			writes().some(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			),
+		).toBe(false);
 	});
 });
 

@@ -14,6 +14,7 @@ import {
 } from "@/lib/developer-video-api";
 import {
 	INFRA_VIDEO_FAILURE_FALLBACK,
+	INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK,
 	infraRefreshDelayMs,
 	infraVideoEmbedCode,
 	infraVideoFailure,
@@ -119,6 +120,65 @@ describe("infraVideoFailure", () => {
 		]) {
 			expect(infraVideoFailure(reason)).toBe(INFRA_VIDEO_FAILURE_FALLBACK);
 		}
+	});
+});
+
+describe("infraVideoFailure for a viewer of the public page", () => {
+	const forViewer = (reason: string | null) =>
+		infraVideoFailure(reason, "viewer");
+
+	it("passes on the sentences about the file", () => {
+		for (const reason of [
+			"This file has no video track.",
+			"This file is a playlist, not a video. Upload the video file itself.",
+			"This video could not be processed. Upload it again, or export it as an MP4 and upload that.",
+			"The uploaded file is empty. Upload it again.",
+			"Video is longer than the 4 hour limit",
+		]) {
+			expect(forViewer(reason)).toBe(reason);
+			expect(infraVideoFailure(reason)).toBe(reason);
+		}
+	});
+
+	it("never passes on a sentence about credit, which the owner still gets", () => {
+		for (const reason of [
+			"Not enough credit to store this video at its measured length and size. Add at least $0.01 of credit and upload it again.",
+			"Not enough credit for the video's full length",
+		]) {
+			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
+			expect(infraVideoFailure(reason)).toBe(reason);
+		}
+	});
+
+	it("does not let billing words through behind an opening about the file", () => {
+		for (const reason of [
+			"This video could not be stored because the app is out of credit.",
+			"This video needs a balance of at least 1 to be stored.",
+			"The uploaded file was removed after a failed payment.",
+			"This file costs $2 to store.",
+			"This video is waiting for a top-up.",
+		]) {
+			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
+		}
+	});
+
+	it("replaces encoder and internal wording with the neutral sentence", () => {
+		for (const reason of [
+			"Encoded MP4 was not stored",
+			"Video processing is not available on the media server",
+			"ffmpeg exited with code 1: [url]",
+			"Processing took too long and was stopped. Upload the video again.",
+			"",
+			null,
+		]) {
+			expect(forViewer(reason)).toBe(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK);
+		}
+	});
+
+	it("says nothing about credit, billing or uploading in the neutral sentence", () => {
+		expect(INFRA_VIDEO_PUBLIC_FAILURE_FALLBACK).not.toMatch(
+			/credit|balance|billing|payment|upload/i,
+		);
 	});
 });
 
