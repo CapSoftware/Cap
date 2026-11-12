@@ -464,82 +464,6 @@
 		0 0 28px 4px rgba(190, 210, 255, 0.28);
 }
 
-.reach {
-	position: absolute;
-	left: 0;
-	top: 0;
-	height: 1px;
-	width: calc(var(--reach) * 100%);
-	background: rgba(232, 236, 244, 0.72);
-}
-
-.reach::after {
-	content: "";
-	position: absolute;
-	right: 0;
-	top: -4px;
-	width: 1px;
-	height: 9px;
-	background: rgba(232, 236, 244, 0.8);
-}
-
-.atReach {
-	position: absolute;
-	left: calc(var(--reach) * 100%);
-	translate: -50% 0;
-}
-
-.rate {
-	position: relative;
-	flex: 1 1 0;
-	min-width: 0;
-	height: 9px;
-}
-
-.rate span {
-	position: absolute;
-	left: 0;
-	top: 4px;
-	height: 1px;
-	min-width: 1px;
-	width: calc(var(--share) * 100%);
-	background: rgba(222, 230, 246, 0.26);
-	transition: width 700ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.rate span::after {
-	content: "";
-	position: absolute;
-	right: 0;
-	top: -4px;
-	width: 1px;
-	height: 9px;
-	background: rgba(222, 230, 246, 0.44);
-}
-
-.rateLit span {
-	top: 3px;
-	height: 3px;
-	min-width: 3px;
-	background: #fff;
-	box-shadow:
-		0 0 8px 1px rgba(214, 228, 255, 0.7),
-		0 0 28px 4px rgba(190, 210, 255, 0.28);
-}
-
-.rateLit span::after {
-	display: none;
-}
-
-.rateBeyond span {
-	-webkit-mask-image: linear-gradient(to right, #000 55%, transparent 100%);
-	mask-image: linear-gradient(to right, #000 55%, transparent 100%);
-}
-
-.rateBeyond span::after {
-	display: none;
-}
-
 .caret {
 	display: inline-block;
 	width: 2px;
@@ -585,9 +509,5 @@
 	.pulse,
 	.caret {
 		animation: none;
-	}
-
-	.rate span {
-		transition: none;
 	}
 }
