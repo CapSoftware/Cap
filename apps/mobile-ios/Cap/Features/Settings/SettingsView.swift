@@ -37,6 +37,7 @@ struct SettingsView: View {
                 if let plan = session.plan, !plan.upgraded, upgrade.isAllowed {
                     Button {
                         // Safari rather than the in-app browser, so an existing cap.so sign-in carries over.
+                        Usage.track("upgrade_clicked", ["source": "settings"])
                         UIApplication.shared.open(app.services.environment.upgradeURL)
                     } label: {
                         Label {

@@ -202,8 +202,10 @@ final class CapDetailModel {
     }
 
     private func apply(_ detail: CapDetail, session: SessionModel) {
+        let owned = detail.cap.isOwned(by: session.credentials.userId)
+        if case .loaded = content {} else { Usage.screen("cap", ["owner": .bool(owned)]) }
         content = .loaded(detail)
-        if detail.cap.isOwned(by: session.credentials.userId) {
+        if owned {
             session.capChanged(detail.cap)
         }
         if let durationSeconds = detail.cap.durationSeconds, durationSeconds > 0, duration == nil {
@@ -627,6 +629,7 @@ final class CapDetailModel {
         composerTimestamp = nil
         do {
             let created = try await session.api.createComment(id, content: text, timestamp: timestamp, parentCommentId: parent?.id)
+            Usage.track("comment_created", ["reply": .bool(parent != nil)])
             replaceLocal(placeholder.id, with: created)
             highlightedCommentID = created.parentCommentId ?? created.id
         } catch {
@@ -647,6 +650,7 @@ final class CapDetailModel {
         pendingCommentIDs.insert(placeholder.id)
         do {
             let created = try await session.api.createReaction(id, emoji: emoji, timestamp: placeholder.timestamp)
+            Usage.track("reaction_created")
             replaceLocal(placeholder.id, with: created)
         } catch {
             removeLocal(placeholder.id)
@@ -796,6 +800,7 @@ final class CapDetailModel {
             try await PHPhotoLibrary.shared().performChanges {
                 PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: file)
             }
+            Usage.track("cap_saved_to_photos")
             session.toasts.show("Saved to Photos", systemImage: "checkmark.circle.fill")
         } catch {
             session.toasts.show("The video couldn't be saved. Try again.", systemImage: "exclamationmark.triangle.fill", style: .error)
