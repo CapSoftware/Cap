@@ -365,7 +365,7 @@ export async function startMediaServerVideoJob(
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }
-	| { status: "rejected"; message: string };
+	| { status: "rejected"; message: string; unusable: boolean };
 
 export async function tryProbeVideoViaMediaServer(
 	videoUrl: string,
@@ -389,7 +389,11 @@ export async function tryProbeVideoViaMediaServer(
 		return { status: "unreachable" };
 	}
 	if (!response.ok) {
-		return { status: "rejected", message: await readErrorMessage(response) };
+		return {
+			status: "rejected",
+			message: await readErrorMessage(response),
+			unusable: response.status === 422,
+		};
 	}
 	const data = (await response.json()) as { metadata: MediaServerProbeResult };
 	return { status: "ok", metadata: data.metadata };

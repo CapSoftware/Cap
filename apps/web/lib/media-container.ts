@@ -62,10 +62,61 @@ export function isSelfContainedMedia(bytes: Uint8Array) {
 
 const SNIFF_TIMEOUT_MS = 30_000;
 
+const PLAYLIST_MARKERS = [
+	"#extm3u",
+	"#ext-x-",
+	"<?xml",
+	"<mpd",
+	"<smil",
+	"<asx",
+	"ffconcat version",
+	"[playlist]",
+	"v=0\n",
+	"v=0\r",
+	"http://",
+	"https://",
+];
+const UTF8_BOM = [0xef, 0xbb, 0xbf];
+const PLAYLIST_MARKER_BYTES = 64;
+
+export function looksLikePlaylist(bytes: Uint8Array) {
+	let start = startsWith(bytes, UTF8_BOM) ? UTF8_BOM.length : 0;
+	while (
+		start < bytes.length &&
+		(bytes[start] === 0x20 ||
+			bytes[start] === 0x09 ||
+			bytes[start] === 0x0a ||
+			bytes[start] === 0x0d)
+	) {
+		start++;
+	}
+	let text = "";
+	const end = Math.min(bytes.length, start + PLAYLIST_MARKER_BYTES);
+	for (let index = start; index < end; index++) {
+		text += String.fromCharCode(bytes[index] ?? 0);
+	}
+	const lowered = text.toLowerCase();
+	return PLAYLIST_MARKERS.some((marker) => lowered.startsWith(marker));
+}
+
+export type MediaSniff = "media" | "playlist" | "unknown";
+
+export function sniffMedia(bytes: Uint8Array): MediaSniff {
+	if (isSelfContainedMedia(bytes)) return "media";
+	return looksLikePlaylist(bytes) ? "playlist" : "unknown";
+}
+
 export async function urlIsSelfContainedMedia(url: string) {
+	return (await sniffMediaUrl(url)) === "media";
+}
+
+export async function sniffMediaUrl(
+	url: string,
+	timeoutMs: number = SNIFF_TIMEOUT_MS,
+): Promise<MediaSniff> {
 	const response = await fetch(url, {
 		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
-		signal: AbortSignal.timeout(SNIFF_TIMEOUT_MS),
+		signal: AbortSignal.timeout(timeoutMs),
 	});
 	if (!response.ok || !response.body) {
 		throw new Error(`Could not read the stored file (${response.status})`);
@@ -84,5 +135,5 @@ export async function urlIsSelfContainedMedia(url: string) {
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
-	return isSelfContainedMedia(head.subarray(0, filled));
+	return sniffMedia(head.subarray(0, filled));
 }

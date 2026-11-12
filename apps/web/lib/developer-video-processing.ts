@@ -34,6 +34,7 @@ import {
 	type DeveloperVideoPartAction,
 	type DeveloperVideoPartOutcome,
 	type DeveloperVideoRedrive,
+	developerVideoFailureReason,
 	developerVideoPartAction,
 	developerVideoRedrive,
 	developerVideoStoredBytes,
@@ -56,6 +57,7 @@ import {
 	startMediaServerVideoJob,
 	tryProbeVideoViaMediaServer,
 } from "./media-client";
+import { sniffMediaUrl } from "./media-container";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
 type DeveloperVideoUpdate = Partial<typeof developerVideos.$inferInsert>;
@@ -69,7 +71,12 @@ export interface DeveloperVideoClaim {
 	encodeId: string;
 }
 
-export type DeveloperVideoPreparation = "ready" | "retry" | "stale" | "probing";
+export type DeveloperVideoPreparation =
+	| "ready"
+	| "retry"
+	| "stale"
+	| "probing"
+	| "unclear";
 
 export type DeveloperVideoDispatch =
 	| "dispatched"
@@ -254,6 +261,56 @@ const PROBED_DURATION_TOLERANCE_SECONDS = 2;
 
 // A video the app can't pay for, or one over the length limit. Anything else
 // thrown while charging (a database blip) is left to the caller's retries.
+// The upload itself is the problem and trying again would give the same
+// answer. The message is written for the customer and shown as errorReason.
+export class DeveloperVideoRejected extends Error {
+	override name = "DeveloperVideoRejected";
+}
+
+const UNREADABLE_FILE =
+	"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.";
+const PLAYLIST_FILE =
+	"This file is a playlist, not a video. Upload the video file itself.";
+const UNENCODABLE_FILE =
+	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
+
+// The media server's wording is for operators and can name internals, so the
+// customer gets one of a few fixed sentences.
+function fileProblem(message: string, fallback: string): string {
+	if (/playlist|resource list/i.test(message)) {
+		return PLAYLIST_FILE;
+	}
+	if (/no video (stream|track)/i.test(message)) {
+		return "This file has no video track.";
+	}
+	if (/\bempty\b/i.test(message)) {
+		return "The uploaded file is empty. Upload it again.";
+	}
+	return fallback;
+}
+
+// A probe error only proves the file is bad when the media server says so
+// (422) or names a problem with the file. Anything else may be a storage or
+// server fault that clears up, so it must not end the video.
+const FILE_PROBLEM =
+	/playlist|resource list|could not be read|unsupported or unrecognizable format|no video (stream|track)|input is empty/i;
+
+function probeFoundFileProblem(probed: {
+	message: string;
+	unusable: boolean;
+}): boolean {
+	return probed.unusable || FILE_PROBLEM.test(probed.message);
+}
+
+export function isDeveloperVideoRefusal(
+	error: unknown,
+): error is DeveloperVideoRejected | DeveloperVideoChargeRefused {
+	return (
+		error instanceof DeveloperVideoRejected ||
+		error instanceof DeveloperVideoChargeRefused
+	);
+}
+
 export class DeveloperVideoChargeRefused extends Error {
 	override name = "DeveloperVideoChargeRefused";
 }
@@ -355,41 +412,116 @@ async function releaseProbe(
 	});
 }
 
+const SNIFF_TIMEOUT_MS = 5_000;
+const PROBE_CLAIM_RENEW_AFTER_MS = 1_000;
+
+async function renewProbe(
+	videoId: string,
+	encodeId: string,
+	token: string,
+): Promise<boolean> {
+	const renewed = await mutateEncode(videoId, encodeId, (processing) => {
+		if (processing.probe || processing.probing?.token !== token) return null;
+		return {
+			processing: {
+				...processing,
+				probing: { token, startedAt: Date.now() },
+			},
+		};
+	});
+	return renewed !== null;
+}
+
+async function preparationWithoutClaim(
+	videoId: string,
+	encodeId: string,
+): Promise<DeveloperVideoPreparation> {
+	const latest = await findEncode(videoId, encodeId);
+	if (!latest) return "stale";
+	return latest.processing.probe ? "ready" : "probing";
+}
+
 export async function prepareDeveloperVideoProcessing(
 	videoId: string,
 	encodeId: string,
 ): Promise<DeveloperVideoPreparation> {
 	const encode = await findEncode(videoId, encodeId);
-	if (!encode) return "stale";
+	if (!encode || encode.video.status === "errored") return "stale";
 	if (encode.processing.probe) return "ready";
 
 	const token = newAttemptToken();
 	const video = await claimProbe(videoId, encodeId, token);
-	if (!video) {
-		const latest = await findEncode(videoId, encodeId);
-		if (!latest) return "stale";
-		return latest.processing.probe ? "ready" : "probing";
-	}
+	if (!video) return preparationWithoutClaim(videoId, encodeId);
+	const claimedAt = Date.now();
 
 	try {
-		if (!video.s3Key) throw new Error("Video has no uploaded file");
+		if (!video.s3Key) {
+			throw new DeveloperVideoRejected(
+				"This video has no uploaded file. Upload it again.",
+			);
+		}
 
 		const source = await headDeveloperVideoObject(video.s3Key);
-		if (!source) throw new Error("Uploaded video was not found in storage");
-		const probed = await tryProbeVideoViaMediaServer(
-			await internalDeveloperVideoUrl(
-				video.s3Key,
-				MEDIA_SERVER_URL_EXPIRES_SECONDS,
-			),
+		if (!source) {
+			throw new DeveloperVideoRejected(
+				"The uploaded file was not found. Upload it again.",
+			);
+		}
+		if (source.bytes === 0) {
+			throw new DeveloperVideoRejected(
+				"The uploaded file is empty. Upload it again.",
+			);
+		}
+		const sourceUrl = await internalDeveloperVideoUrl(
+			video.s3Key,
+			MEDIA_SERVER_URL_EXPIRES_SECONDS,
 		);
+		const sniffed = await sniffMediaUrl(sourceUrl, SNIFF_TIMEOUT_MS).catch(
+			(error) => {
+				console.warn(
+					"[developer-video] Could not read the upload's first bytes",
+					{
+						videoId,
+						message: error instanceof Error ? error.message : String(error),
+					},
+				);
+				return null;
+			},
+		);
+		if (sniffed === "playlist") {
+			throw new DeveloperVideoRejected(PLAYLIST_FILE);
+		}
+		if (sniffed === "unknown") {
+			throw new DeveloperVideoRejected(UNREADABLE_FILE);
+		}
+		if (
+			Date.now() - claimedAt > PROBE_CLAIM_RENEW_AFTER_MS &&
+			!(await renewProbe(videoId, encodeId, token))
+		) {
+			return preparationWithoutClaim(videoId, encodeId);
+		}
+		const probed = await tryProbeVideoViaMediaServer(sourceUrl);
 		if (probed.status === "unreachable") {
 			await releaseProbe(videoId, encodeId, token);
 			return "retry";
 		}
-		if (probed.status === "rejected") throw new Error(probed.message);
+		if (probed.status === "rejected") {
+			console.warn("[developer-video] Probe rejected the upload", {
+				videoId,
+				message: developerVideoFailureReason(probed.message),
+				unusable: probed.unusable,
+			});
+			if (!probeFoundFileProblem(probed)) {
+				await releaseProbe(videoId, encodeId, token);
+				return "unclear";
+			}
+			throw new DeveloperVideoRejected(
+				fileProblem(probed.message, UNREADABLE_FILE),
+			);
+		}
 		const { metadata } = probed;
 		if (!(metadata.width > 0) || !(metadata.height > 0)) {
-			throw new Error("Uploaded file has no video track");
+			throw new DeveloperVideoRejected("This file has no video track.");
 		}
 		const probedDuration =
 			Number.isFinite(metadata.duration) && metadata.duration > 0
@@ -749,16 +881,22 @@ export async function applyDeveloperVideoProgress(
 	}
 
 	if (payload.phase !== "complete") {
-		const reason =
+		const detail =
 			(typeof payload.error === "string" && payload.error) ||
 			(typeof payload.message === "string" && payload.message) ||
-			"Video processing failed";
+			"";
+		console.warn("[developer-video] Encode failed", {
+			videoId: video.id,
+			part,
+			phase: payload.phase,
+			detail: developerVideoFailureReason(detail),
+		});
 		const applied = await settleDeveloperVideoPart(
 			video.id,
 			encodeId,
 			part,
 			token,
-			{ type: "failed", reason },
+			{ type: "failed", reason: fileProblem(detail, UNENCODABLE_FILE) },
 		);
 		return { success: true, applied };
 	}
