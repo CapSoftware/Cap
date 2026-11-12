@@ -41,6 +41,27 @@ const videoIdParam = {
 	schema: { type: "string" },
 };
 
+const USER_SCOPE_RULES =
+	"The match is exact: case and accents count. Spaces around the value are ignored, as they are when a video is created. An empty value returns 400 invalid_user_id and a parameter sent more than once returns 400 repeated_parameter.";
+
+const videoUserScopeParams = [
+	{
+		name: "userId",
+		in: "query",
+		required: false,
+		description: `Answer 404 video_not_found unless the video was created with this userId, so a server can pass its signed-in user straight through. ${USER_SCOPE_RULES} Any other query parameter returns 400 unknown_parameter.`,
+		schema: { type: "string", minLength: 1, maxLength: 255 },
+	},
+	{
+		name: "externalUserId",
+		in: "query",
+		required: false,
+		description:
+			"Another name for userId. Sending both with different values returns 400 conflicting_parameters.",
+		schema: { type: "string", minLength: 1, maxLength: 255 },
+	},
+];
+
 const transcriptIdParam = {
 	name: "id",
 	in: "path",
@@ -375,7 +396,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "listDeveloperVideos",
 				summary: "List videos",
 				description:
-					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown query parameter or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
+					"Lists the app's videos, newest first. Filter by your own user ID and page with limit and offset. An unknown or repeated query parameter, an empty userId or an out-of-range limit or offset returns 400 rather than an unfiltered list.",
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [
@@ -383,16 +404,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						name: "userId",
 						in: "query",
 						required: false,
-						description:
-							"Only return videos created with this userId. Videos return it as externalUserId.",
-						schema: { type: "string", maxLength: 255 },
+						description: `Only return videos created with this userId. Videos return it as externalUserId. ${USER_SCOPE_RULES}`,
+						schema: { type: "string", minLength: 1, maxLength: 255 },
 					},
 					{
 						name: "externalUserId",
 						in: "query",
 						required: false,
-						description: "Another name for the userId filter.",
-						schema: { type: "string", maxLength: 255 },
+						description:
+							"Another name for the userId filter. Sending both with different values returns 400 conflicting_parameters.",
+						schema: { type: "string", minLength: 1, maxLength: 255 },
 					},
 					{
 						name: "limit",
@@ -429,12 +450,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getDeveloperVideo",
 				summary: "Get a video",
-				description: "Returns one video owned by the app.",
+				description:
+					"Returns one video owned by the app. Send userId to return it only when it was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(dataEnvelope(ref("DeveloperVideo")), "The video."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -443,12 +466,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "deleteDeveloperVideo",
 				summary: "Delete a video",
 				description:
-					"Deletes a video owned by the app. It stops appearing in list and get results. Deleting a video this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404.",
+					"Deletes a video owned by the app. It stops appearing in list and get results. Deleting a video this app already deleted returns success, so the call is safe to repeat; an ID that never belonged to this app returns 404. Send userId to delete it only when it was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(ref("Success"), "The video was deleted."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -459,12 +483,13 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
 				description:
-					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload.",
+					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.",
 				tags: ["Videos"],
 				security: secretAuth,
-				parameters: [videoIdParam],
+				parameters: [videoIdParam, ...videoUserScopeParams],
 				responses: {
 					"200": json(dataEnvelope(ref("VideoStatus")), "The video status."),
+					"400": response("BadRequest"),
 					"404": response("NotFound"),
 					...restErrors,
 				},
@@ -939,6 +964,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				required: ["id", "ready"],
 				properties: {
 					id: { type: "string" },
+					externalUserId: developerVideoSchema.properties.externalUserId,
 					duration: { type: ["number", "null"] },
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
