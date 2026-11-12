@@ -146,6 +146,7 @@ final class ScreenRecordingSession {
     func began(withCamera: Bool) {
         guard recording == nil else { return }
         recording = (withCamera, .now, ProcessStats.mark())
+        Usage.track("recording_started", ["mode": "screen", "camera": .bool(withCamera)])
         startActivityIfNeeded()
         // iOS only starts Live Activities while Cap is in front, and the system sheet is still
         // closing as recording begins.
@@ -203,6 +204,7 @@ final class ScreenRecordingSession {
         endActivity()
         if let recording {
             self.recording = nil
+            Usage.track("recording_stopped", ["mode": "screen", "duration_seconds": .int(Int(Date.now.timeIntervalSince(recording.startedAt).rounded()))])
             ProcessStats.measure(since: recording.stats, process: "app", recordedSeconds: Date.now.timeIntervalSince(recording.startedAt), extra: ["bubble": CameraBubble.shared.isFloating ? 1 : 0]).save()
         }
         guard wasRecording else { return }

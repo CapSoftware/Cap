@@ -162,6 +162,7 @@ final class RecordModel {
         recordings.begin(job)
         capture.beginRecording(writer)
         phase = .recording(startedAt: .now)
+        Usage.track("recording_started", ["mode": "camera", "microphone": .bool(hasMicrophone)])
         UIApplication.shared.isIdleTimerDisabled = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         if let limit {
@@ -195,6 +196,7 @@ final class RecordModel {
             duration = recordings.job(jobId).flatMap(RecordingUploads.recordedDuration) ?? 0
         }
         guard duration >= Self.minimumDuration else {
+            Usage.track("recording_discarded", ["mode": "camera", "reason": "too_short"])
             RecordingUploads.markActive(jobId, false)
             session.toasts.show("Recording was too short", systemImage: "record.circle", style: .info)
             await throwAway(jobId)
@@ -203,6 +205,7 @@ final class RecordModel {
         }
         // Hand over before clearing the active flag, or a resume pass in between would treat it as a crash.
         recordings.finish(jobId, durationSeconds: duration)
+        Usage.track("recording_stopped", ["mode": "camera", "duration_seconds": .int(Int(duration.rounded()))])
         RecordingUploads.markActive(jobId, false)
         self.jobId = nil
         // Shown if the user leaves before the last seconds finish uploading.
@@ -216,6 +219,7 @@ final class RecordModel {
 
     func discard() {
         guard isRecording || phase == .finishing, let jobId else { return }
+        Usage.track("recording_discarded", ["mode": "camera", "reason": "cancelled"])
         limitTask?.cancel()
         UIApplication.shared.isIdleTimerDisabled = false
         capture.cancelRecording()
