@@ -5,6 +5,47 @@ export interface CapPlayerSource {
 
 export type PlaybackMode = "native" | "mse" | "file" | "none";
 
+export interface CapPlayerLevel {
+	index: number;
+	width: number;
+	height: number;
+	bitrate: number;
+	label: string;
+}
+
+export interface CapPlayerAttachment {
+	detach: () => void;
+	setLevel: (index: number) => void;
+}
+
+export const AUTO_LEVEL = -1;
+
+export const resolutionLabel = (width: number, height: number) => {
+	const long = Math.max(width, height);
+	if (long >= 3840) return "4K";
+	if (long >= 2560) return "1440p";
+	if (long >= 1920) return "1080p";
+	if (long >= 1280) return "720p";
+	return long > 0 ? "360p" : "";
+};
+
+export const listLevels = (
+	levels: readonly { width: number; height: number; bitrate: number }[],
+): CapPlayerLevel[] => {
+	const best = new Map<string, CapPlayerLevel>();
+	levels.forEach((level, index) => {
+		const label = resolutionLabel(level.width, level.height);
+		if (!label) return;
+		const kept = best.get(label);
+		if (!kept || level.bitrate > kept.bitrate) {
+			best.set(label, { index, label, ...level });
+		}
+	});
+	return [...best.values()].sort(
+		(a, b) => b.width * b.height - a.width * a.height || b.bitrate - a.bitrate,
+	);
+};
+
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
 
@@ -69,15 +110,27 @@ const release = (video: HTMLVideoElement) => {
 export const attachSource = (
 	video: HTMLVideoElement,
 	source: CapPlayerSource,
-	options: { autoPlay: boolean; onFatal: () => void },
-): (() => void) => {
-	const { autoPlay, onFatal } = options;
+	options: {
+		autoPlay: boolean;
+		onFatal: () => void;
+		onLevels?: (levels: CapPlayerLevel[]) => void;
+	},
+): CapPlayerAttachment => {
+	const { autoPlay, onFatal, onLevels } = options;
 	const mode = pickPlaybackMode(video, source);
 	let cancelled = false;
 	let detach = () => release(video);
+	let setLevel: (index: number) => void = () => undefined;
 
 	const start = () => {
-		if (autoPlay) void video.play().catch(() => undefined);
+		if (!autoPlay) return;
+		void video.play().catch((error: unknown) => {
+			const blocked =
+				error instanceof DOMException && error.name === "NotAllowedError";
+			if (!blocked || video.muted) return;
+			video.muted = true;
+			void video.play().catch(() => undefined);
+		});
 	};
 
 	const position = () => ({
@@ -98,6 +151,8 @@ export const attachSource = (
 			return;
 		}
 		fileAttached = true;
+		setLevel = () => undefined;
+		onLevels?.([]);
 		video.removeEventListener("error", onNativeError);
 		video.addEventListener("error", onFatal);
 		detach = () => {
@@ -110,27 +165,30 @@ export const attachSource = (
 		else if (resumeAt === 0) start();
 	}
 
-	const stop = () => {
-		cancelled = true;
-		video.removeEventListener("error", onNativeError);
-		detach();
+	const attachment: CapPlayerAttachment = {
+		detach: () => {
+			cancelled = true;
+			video.removeEventListener("error", onNativeError);
+			detach();
+		},
+		setLevel: (index) => setLevel(index),
 	};
 
 	if (mode === "none") {
 		onFatal();
-		return () => undefined;
+		return { detach: () => undefined, setLevel: () => undefined };
 	}
 
 	if (mode === "file") {
 		playFile({ resumeAt: 0, wasPlaying: false });
-		return stop;
+		return attachment;
 	}
 
 	if (mode === "native" && source.hls) {
 		video.src = source.hls;
 		video.addEventListener("error", onNativeError);
 		start();
-		return stop;
+		return attachment;
 	}
 
 	loadHls()
@@ -150,6 +208,7 @@ export const attachSource = (
 				backBufferLength: 30,
 			});
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+				onLevels?.(listLevels(data.levels));
 				hls.startLevel = pickStartingLevel(
 					data.levels,
 					video.clientWidth * window.devicePixelRatio,
@@ -172,9 +231,13 @@ export const attachSource = (
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);
 			detach = () => hls.destroy();
+			setLevel = (index) => {
+				if (index === AUTO_LEVEL) hls.nextLevel = AUTO_LEVEL;
+				else hls.currentLevel = index;
+			};
 			start();
 		})
 		.catch(() => playFile());
 
-	return stop;
+	return attachment;
 };
