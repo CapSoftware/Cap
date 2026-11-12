@@ -2721,7 +2721,7 @@ impl CapMcpServer {
                     "videoId",
                     &created,
                     "The video is stored. Continue with developer_video_wait, or remove it with developer_video_delete.",
-                    "The file did not finish uploading. Remove the video with developer_video_delete, then upload it again.",
+                    "The upload was not confirmed. Check it with developer_video_get. If its status is still uploading, remove it with developer_video_delete and upload it again.",
                 )
             })
             .await,
@@ -2800,7 +2800,7 @@ impl CapMcpServer {
                     "transcriptId",
                     &tracked,
                     "The transcript exists. Continue with developer_transcript_wait, or remove it with developer_transcript_delete.",
-                    "The file did not finish uploading. Remove the transcript with developer_transcript_delete, then create it again.",
+                    "The upload was not confirmed. Check it with developer_transcript_get. If its status is still uploading, remove it with developer_transcript_delete and create it again.",
                 )
             })
             .await,
@@ -4178,7 +4178,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelling_during_the_upload_does_not_say_the_file_is_stored() {
+    async fn cancelling_before_the_upload_is_confirmed_says_to_check_it() {
         let cancellation = tokio_util::sync::CancellationToken::new();
         let created = Created::default();
         let work = async {
