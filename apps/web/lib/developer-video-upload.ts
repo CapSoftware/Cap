@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import { developerVideos } from "@cap/database/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import {
+	developerCreditTransactions,
+	developerVideos,
+} from "@cap/database/schema";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
 	debitDeveloperUsage,
-	getDeveloperBalance,
+	getAvailableDeveloperBalance,
 } from "@/lib/developer-credits";
 import { UPLOAD_MICRO_CREDITS_PER_MINUTE } from "@/lib/developer-pricing";
 import {
@@ -83,7 +86,7 @@ export function developerVideoIdForIdempotencyKey(appId: string, key: string) {
 		.slice(0, 15);
 }
 
-export function developerVideoBilling(input: {
+export function developerVideoBillingSeconds(input: {
 	measuredSeconds: number | null;
 	claimedSeconds: number | null;
 	totalBytes: number;
@@ -98,21 +101,114 @@ export function developerVideoBilling(input: {
 					),
 					input.totalBytes / BILLED_BYTES_PER_SECOND,
 				);
-	const billingSeconds = Math.min(
-		Math.max(seconds, 0),
-		DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
-	);
+	return Math.min(Math.max(seconds, 0), DEVELOPER_VIDEO_MAX_DURATION_SECONDS);
+}
+
+export function developerVideoUploadMicroCredits(durationSeconds: number) {
+	return Math.floor((durationSeconds / 60) * UPLOAD_MICRO_CREDITS_PER_MINUTE);
+}
+
+type DeveloperVideoCharge = "charged" | "insufficient" | "no-account";
+
+async function chargeDeveloperVideoUpload(input: {
+	appId: string;
+	videoId: string;
+	durationSeconds: number;
+	metadata: Record<string, unknown>;
+}): Promise<DeveloperVideoCharge> {
+	const owed = developerVideoUploadMicroCredits(input.durationSeconds);
+	if (owed <= 0) return "charged";
+
+	return db().transaction(async (tx) => {
+		await tx
+			.select({ id: developerVideos.id })
+			.from(developerVideos)
+			.where(eq(developerVideos.id, input.videoId))
+			.limit(1)
+			.for("update");
+
+		const debit = await debitDeveloperUsage(tx, {
+			appId: input.appId,
+			microCredits: owed,
+			type: "video_create",
+			referenceId: input.videoId,
+			referenceType: "developer_video",
+			metadata: input.metadata,
+		});
+		if (debit.state === "no_account") return "no-account";
+		if (debit.state === "insufficient") return "insufficient";
+		return "charged";
+	});
+}
+
+async function developerVideoPaidMicroCredits(videoId: string) {
+	const [paid] = await db()
+		.select({
+			total: sql<
+				string | number | null
+			>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.referenceId, videoId),
+				eq(developerCreditTransactions.referenceType, "developer_video"),
+				eq(developerCreditTransactions.type, "video_create"),
+			),
+		);
+	return Number(paid?.total ?? 0) || 0;
+}
+
+const affectedRows = (result: unknown) =>
+	Array.isArray(result)
+		? ((result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
+		: ((result as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+
+export type DeveloperVideoView = {
+	id: string;
+	appId: string;
+	name: string;
+	durationSeconds: number;
+	width: number | null;
+	height: number | null;
+	fps: number | null;
+};
+
+type DeveloperVideoRecord = {
+	id: string;
+	appId: string;
+	name: string;
+	duration: number | null;
+	width: number | null;
+	height: number | null;
+	fps: number | null;
+};
+
+export function toDeveloperVideoView(
+	video: DeveloperVideoRecord,
+): DeveloperVideoView {
 	return {
-		billingSeconds,
-		microCredits: Math.floor(
-			(billingSeconds / 60) * UPLOAD_MICRO_CREDITS_PER_MINUTE,
-		),
+		id: video.id,
+		appId: video.appId,
+		name: video.name,
+		durationSeconds: video.duration ?? 0,
+		width: video.width,
+		height: video.height,
+		fps: video.fps,
 	};
 }
 
 async function findVideo(appId: string, videoId: string) {
 	const [video] = await db()
-		.select()
+		.select({
+			id: developerVideos.id,
+			appId: developerVideos.appId,
+			name: developerVideos.name,
+			duration: developerVideos.duration,
+			width: developerVideos.width,
+			height: developerVideos.height,
+			fps: developerVideos.fps,
+		})
 		.from(developerVideos)
 		.where(
 			and(
@@ -163,7 +259,7 @@ export async function createDeveloperVideoUpload(
 		);
 	}
 
-	const balance = await getDeveloperBalance(appId);
+	const balance = await getAvailableDeveloperBalance(appId);
 	if (balance === null || balance < DEVELOPER_VIDEO_MIN_BALANCE_MICRO_CREDITS) {
 		return INSUFFICIENT;
 	}
@@ -179,7 +275,13 @@ export async function createDeveloperVideoUpload(
 		.onDuplicateKeyUpdate({ set: { id } });
 
 	const [video] = await db()
-		.select()
+		.select({
+			id: developerVideos.id,
+			name: developerVideos.name,
+			s3Key: developerVideos.s3Key,
+			duration: developerVideos.duration,
+			deletedAt: developerVideos.deletedAt,
+		})
 		.from(developerVideos)
 		.where(and(eq(developerVideos.id, id), eq(developerVideos.appId, appId)))
 		.limit(1);
@@ -224,17 +326,17 @@ export async function completeDeveloperVideoUpload(
 		fps?: number;
 	},
 ): Promise<
-	| {
-			ok: true;
-			video: typeof developerVideos.$inferSelect;
-			chargedMicroCredits: number;
-	  }
+	| { ok: true; video: DeveloperVideoView; chargedMicroCredits: number }
 	| DeveloperVideoFailure
 > {
 	const video = await findVideo(appId, videoId);
 	if (!video) return NOT_FOUND;
 	if (video.duration !== null) {
-		return { ok: true, video, chargedMicroCredits: 0 };
+		return {
+			ok: true,
+			video: toDeveloperVideoView(video),
+			chargedMicroCredits: 0,
+		};
 	}
 
 	const claimedSeconds = positive(input.durationSeconds);
@@ -285,70 +387,60 @@ export async function completeDeveloperVideoUpload(
 			return DURATION_REQUIRED;
 		}
 
-		const billing = developerVideoBilling({
+		const durationSeconds = developerVideoBillingSeconds({
 			measuredSeconds,
 			claimedSeconds,
 			totalBytes,
 		});
 
-		const outcome = await db().transaction(async (tx) => {
-			const [locked] = await tx
-				.select({
-					duration: developerVideos.duration,
-					deletedAt: developerVideos.deletedAt,
-				})
-				.from(developerVideos)
-				.where(eq(developerVideos.id, video.id))
-				.limit(1)
-				.for("update");
-			if (!locked || locked.deletedAt) return { state: "missing" as const };
-			if (locked.duration !== null) return { state: "superseded" as const };
-
-			const debit =
-				billing.microCredits > 0
-					? await debitDeveloperUsage(tx, {
-							appId,
-							microCredits: billing.microCredits,
-							type: "video_create",
-							referenceId: video.id,
-							referenceType: "developer_video",
-							metadata: {
-								durationSeconds: billing.billingSeconds,
-								totalBytes,
-								measured: measuredSeconds !== null,
-							},
-						})
-					: ({ state: "already_paid" } as const);
-			if (debit.state === "no_account" || debit.state === "insufficient") {
-				return { state: "insufficient" as const };
-			}
-
-			await tx
-				.update(developerVideos)
-				.set({
-					s3Key: storedKey,
-					duration: billing.billingSeconds,
-					width: width === null ? undefined : Math.round(width),
-					height: height === null ? undefined : Math.round(height),
-					fps: fps === null ? undefined : Math.round(fps),
-				})
-				.where(eq(developerVideos.id, video.id));
+		const current = await findVideo(appId, video.id);
+		if (!current) return NOT_FOUND;
+		if (current.duration !== null) {
 			return {
-				state: "stored" as const,
-				charged: debit.state === "debited" ? debit.chargedMicroCredits : 0,
+				ok: true,
+				video: toDeveloperVideoView(current),
+				chargedMicroCredits: 0,
 			};
-		});
+		}
 
-		kept = outcome.state === "stored";
-		if (outcome.state === "missing") return NOT_FOUND;
-		if (outcome.state === "insufficient") return INSUFFICIENT;
+		const charge = await chargeDeveloperVideoUpload({
+			appId,
+			videoId: video.id,
+			durationSeconds,
+			metadata: {
+				durationSeconds,
+				totalBytes,
+				measured: measuredSeconds !== null,
+			},
+		});
+		if (charge !== "charged") return INSUFFICIENT;
+
+		const stored = await db()
+			.update(developerVideos)
+			.set({
+				s3Key: storedKey,
+				duration: durationSeconds,
+				width: width === null ? undefined : Math.round(width),
+				height: height === null ? undefined : Math.round(height),
+				fps: fps === null ? undefined : Math.round(fps),
+			})
+			.where(
+				and(
+					eq(developerVideos.id, video.id),
+					isNull(developerVideos.duration),
+					isNull(developerVideos.deletedAt),
+				),
+			);
+		kept = affectedRows(stored) > 0;
 
 		const completed = await findVideo(appId, video.id);
 		if (!completed) return NOT_FOUND;
 		return {
 			ok: true,
-			video: completed,
-			chargedMicroCredits: outcome.state === "stored" ? outcome.charged : 0,
+			video: toDeveloperVideoView(completed),
+			chargedMicroCredits: kept
+				? await developerVideoPaidMicroCredits(video.id)
+				: 0,
 		};
 	} finally {
 		await deleteDeveloperObjects([kept ? uploadKey : storedKey]);

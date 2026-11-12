@@ -93,15 +93,17 @@ vi.mock("@/lib/media-client", () => ({
 import {
 	developerCreditAccounts,
 	developerCreditTransactions,
+	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
-	developerVideoBilling,
+	developerVideoBillingSeconds,
 	developerVideoContentType,
 	developerVideoIdForIdempotencyKey,
 	developerVideoUploadKey,
+	developerVideoUploadMicroCredits,
 } from "@/lib/developer-video-upload";
 
 const fake = () => {
@@ -147,10 +149,22 @@ beforeEach(() => {
 	});
 });
 
+const billed = (input: {
+	measuredSeconds: number | null;
+	claimedSeconds: number | null;
+	totalBytes: number;
+}) => {
+	const billingSeconds = developerVideoBillingSeconds(input);
+	return {
+		billingSeconds,
+		microCredits: developerVideoUploadMicroCredits(billingSeconds),
+	};
+};
+
 describe("developer video billing", () => {
 	it("bills the measured length at the upload rate", () => {
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: 120,
 				claimedSeconds: 5,
 				totalBytes: 10_000_000_000,
@@ -160,14 +174,14 @@ describe("developer video billing", () => {
 
 	it("uses the larger of the claim and the size floor when it cannot measure", () => {
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: null,
 				claimedSeconds: 10,
 				totalBytes: 250_000_000,
 			}),
 		).toEqual({ billingSeconds: 100, microCredits: 8_333 });
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: null,
 				claimedSeconds: 600,
 				totalBytes: 6_000_000,
@@ -177,14 +191,14 @@ describe("developer video billing", () => {
 
 	it("bounds a claim the file is too small to hold", () => {
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: null,
 				claimedSeconds: 4 * 3600,
 				totalBytes: 30_000,
 			}),
 		).toEqual({ billingSeconds: 30, microCredits: 2_500 });
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: null,
 				claimedSeconds: 600,
 				totalBytes: 1_000,
@@ -194,7 +208,7 @@ describe("developer video billing", () => {
 
 	it("never bounds a measured length by the file size", () => {
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: 600,
 				claimedSeconds: null,
 				totalBytes: 1_000,
@@ -204,7 +218,7 @@ describe("developer video billing", () => {
 
 	it("caps the billed length at four hours", () => {
 		expect(
-			developerVideoBilling({
+			billed({
 				measuredSeconds: 10 * 3600,
 				claimedSeconds: null,
 				totalBytes: 1,
@@ -450,6 +464,106 @@ describe("completing a developer video upload", () => {
 		expect(account()?.balanceMicroCredits).toBe(1_000_000);
 		expect([...context.objects.keys()]).toEqual([UPLOAD_KEY]);
 		expect(videos()[0]?.duration).toBeNull();
+	});
+
+	it("leaves credits held for a running transcript alone", async () => {
+		const id = await createAndUpload();
+		const current = account();
+		if (current) current.balanceMicroCredits = 15_000;
+		fake().seed(developerTranscripts, {
+			id: "tr-held",
+			appId: "app-1",
+			status: "processing",
+			deletedAt: null,
+			reservedMicroCredits: 10_000,
+		});
+
+		expect(await completeDeveloperVideoUpload("app-1", id, {})).toMatchObject({
+			ok: false,
+			status: 402,
+		});
+		expect(account()?.balanceMicroCredits).toBe(15_000);
+		expect(ledger()).toHaveLength(0);
+
+		const held = fake()
+			.rows(developerTranscripts)
+			.find((row) => row.id === "tr-held");
+		if (held) held.status = "complete";
+		expect(await completeDeveloperVideoUpload("app-1", id, {})).toMatchObject({
+			ok: true,
+			chargedMicroCredits: 10_000,
+		});
+	});
+
+	it("needs the minimum balance after holds to start an upload", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 12_000;
+		fake().seed(developerTranscripts, {
+			id: "tr-held",
+			appId: "app-1",
+			status: "processing",
+			deletedAt: null,
+			reservedMicroCredits: 10_000,
+		});
+		expect(await create()).toMatchObject({ ok: false, status: 402 });
+	});
+
+	it("returns named fields only, never the stored row", async () => {
+		const id = await createAndUpload();
+		const row = videos()[0];
+		if (row) {
+			Object.assign(row, {
+				metadata: { secret: "internal-note" },
+				filesDeletedAt: null,
+				processing: { encodeId: "enc-1", probe: { duration: 1 } },
+				playbackId: "pb-internal",
+				renditions: [{ key: "developer/app-1/x/720p.m3u8" }],
+				errorReason: "internal reason",
+			});
+		}
+
+		const first = await completeDeveloperVideoUpload("app-1", id, {});
+		const repeat = await completeDeveloperVideoUpload("app-1", id, {});
+
+		for (const result of [first, repeat]) {
+			if (!result.ok) throw new Error("completion failed");
+			expect(Object.keys(result).sort()).toEqual([
+				"chargedMicroCredits",
+				"ok",
+				"video",
+			]);
+			expect(Object.keys(result.video).sort()).toEqual([
+				"appId",
+				"durationSeconds",
+				"fps",
+				"height",
+				"id",
+				"name",
+				"width",
+			]);
+			const serialized = JSON.stringify(result);
+			for (const internal of [
+				"s3Key",
+				"developer/",
+				"_uploads",
+				"internal-note",
+				"filesDeletedAt",
+				"processing",
+				"enc-1",
+				"pb-internal",
+				"renditions",
+				"errorReason",
+				"deletedAt",
+				"externalUserId",
+			]) {
+				expect(serialized).not.toContain(internal);
+			}
+		}
+
+		const created = await create({ idempotencyKey: "another-key-0001" });
+		if (!created.ok) throw new Error("create failed");
+		expect(Object.keys(created.video).sort()).toEqual(["appId", "id", "name"]);
+		expect(JSON.stringify(created.video)).not.toContain("developer/");
 	});
 
 	it("does not complete another app's video", async () => {

@@ -14,6 +14,7 @@ import {
 	measuredTranscriptDuration,
 	serializeTranscript,
 	type TranscriptSummaryRow,
+	toAgentDeveloperTranscript,
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
@@ -235,6 +236,72 @@ describe("transcript serialization", () => {
 		expect(serialized).not.toContain("developer/app-1");
 		expect(serialized).not.toContain("s3Key");
 		expect(serialized).not.toContain("resultKey");
+	});
+
+	it("returns an exact set of fields and no internal column, in every response shape", () => {
+		const internal = row({
+			runId: "run-internal",
+			reservedMicroCredits: 4_242,
+			sourceBytes: 987_654,
+			requestedLanguage: "xx-requested",
+		});
+		const rest = serializeTranscript(internal, { includeText: true });
+		const agent = toAgentDeveloperTranscript(internal);
+
+		expect(Object.keys(rest).sort()).toEqual([
+			"completedAt",
+			"costDollars",
+			"costMicroCredits",
+			"createdAt",
+			"durationSeconds",
+			"error",
+			"id",
+			"language",
+			"metadata",
+			"name",
+			"source",
+			"status",
+			"text",
+			"updatedAt",
+			"userId",
+			"wordCount",
+		]);
+		expect(Object.keys(agent).sort()).toEqual([
+			"appId",
+			"completedAt",
+			"costMicroCredits",
+			"createdAt",
+			"durationSeconds",
+			"errorCode",
+			"errorMessage",
+			"externalUserId",
+			"id",
+			"language",
+			"name",
+			"sourceType",
+			"sourceUrl",
+			"status",
+			"updatedAt",
+			"wordCount",
+		]);
+		for (const serialized of [JSON.stringify(rest), JSON.stringify(agent)]) {
+			for (const leaked of [
+				"run-internal",
+				"runId",
+				"4242",
+				"reservedMicroCredits",
+				"987654",
+				"xx-requested",
+				"s3Key",
+				"resultKey",
+				"developer/",
+				"queuedAt",
+				"startedAt",
+				"deletedAt",
+			]) {
+				expect(serialized).not.toContain(leaked);
+			}
+		}
 	});
 
 	it("keeps the source URL for URL transcripts", () => {

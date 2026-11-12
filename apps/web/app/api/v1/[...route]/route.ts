@@ -137,7 +137,7 @@ import {
 } from "@/lib/developer-transcript-store";
 import {
 	isTranscriptStatus,
-	type TranscriptSummaryRow,
+	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import {
 	completeDeveloperVideoUpload,
@@ -451,25 +451,6 @@ const developerMediaFailure = (
 	}
 	return badRequest(requestId, failure.message);
 };
-
-const toAgentDeveloperTranscript = (row: TranscriptSummaryRow) => ({
-	id: row.id,
-	appId: row.appId,
-	status: row.status,
-	name: row.name,
-	sourceType: row.sourceType,
-	sourceUrl: row.sourceUrl,
-	durationSeconds: row.durationSeconds,
-	language: row.language,
-	wordCount: row.wordCount,
-	costMicroCredits: row.billedMicroCredits,
-	errorCode: row.status === "error" ? row.errorCode : null,
-	errorMessage: row.status === "error" ? row.errorMessage : null,
-	externalUserId: row.externalUserId,
-	createdAt: row.createdAt.toISOString(),
-	updatedAt: row.updatedAt.toISOString(),
-	completedAt: row.completedAt?.toISOString() ?? null,
-});
 
 const withMappedErrors = <A, E, R>(
 	effect: Effect.Effect<A, E, R>,
@@ -4599,15 +4580,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							);
 						}
 						return {
-							video: {
-								id: result.video.id,
-								appId: result.video.appId,
-								name: result.video.name,
-								durationSeconds: result.video.duration ?? 0,
-								width: result.video.width,
-								height: result.video.height,
-								fps: result.video.fps,
-							},
+							video: result.video,
 							chargedMicroCredits: result.chargedMicroCredits,
 							requestId,
 						};

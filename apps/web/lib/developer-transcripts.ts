@@ -161,6 +161,27 @@ export function serializeTranscript(
 
 export type SerializedTranscript = ReturnType<typeof serializeTranscript>;
 
+export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
+	return {
+		id: row.id,
+		appId: row.appId,
+		status: row.status,
+		name: row.name,
+		sourceType: row.sourceType,
+		sourceUrl: row.sourceUrl,
+		durationSeconds: row.durationSeconds,
+		language: row.language,
+		wordCount: row.wordCount,
+		costMicroCredits: row.billedMicroCredits,
+		errorCode: row.status === "error" ? row.errorCode : null,
+		errorMessage: row.status === "error" ? row.errorMessage : null,
+		externalUserId: row.externalUserId,
+		createdAt: row.createdAt.toISOString(),
+		updatedAt: row.updatedAt.toISOString(),
+		completedAt: row.completedAt?.toISOString() ?? null,
+	};
+}
+
 type SpeechWord = {
 	text: string;
 	start: number;
