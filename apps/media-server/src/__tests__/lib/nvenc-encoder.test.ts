@@ -17,6 +17,7 @@ import {
 	pickMobileSafeH264Level,
 	probeVideoSourceTraits,
 	processVideo,
+	sourceHasAudio,
 } from "../../lib/media-video";
 import {
 	buildNvencEncodeArgs,
@@ -505,6 +506,29 @@ describe("process video args", () => {
 			...sdrColor,
 			...outputTail,
 		]);
+	});
+
+	test("encodes audio the probe cannot name instead of leaving it out", () => {
+		const source = metadata(1920, 1080, "h264");
+		const args = buildProcessVideoArgs(
+			processArgs(source, {
+				hasAudio: sourceHasAudio({ audioCodec: null, audioChannels: 2 }),
+				audioTranscode: true,
+			}),
+		);
+		expect(args).not.toContain("-an");
+		expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
+	});
+
+	test("decides whether a source has audio from its track", () => {
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: 6 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "aac", audioChannels: 2 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "opus", audioChannels: null })).toBe(
+			true,
+		);
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: null })).toBe(
+			false,
+		);
 	});
 
 	test("runs a 4K HEVC source fully on the GPU", () => {

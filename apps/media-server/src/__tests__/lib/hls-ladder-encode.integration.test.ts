@@ -326,6 +326,35 @@ describe("HLS ladder encode", () => {
 		expect(firstFrames.length + secondFrames.length).toBe(whole.length);
 	}, 180_000);
 
+	test("keeps audio in a codec the probe cannot name", async () => {
+		const lossless = join(directory, "lossless.mov");
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-i",
+			source,
+			"-t",
+			"6",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"alac",
+			"-y",
+			lossless,
+		]);
+		const metadata = await probeVideoFile(lossless);
+		expect(metadata.audioCodec).toBeNull();
+		expect(metadata.audioChannels).toBe(1);
+
+		const ladder = await encode(undefined, true, lossless);
+		expect(ladder.result.audio?.media).toBe("audio.m4s");
+		const master = fileNamed(ladder, "master.m3u8").path;
+		expect(streamSeconds(master, "a:0")).toBeGreaterThan(5.5);
+
+		const slice = await encode({ startSeconds: 0 }, true, lossless);
+		expect(slice.result.audio?.media).toBe("audio.m4s");
+	}, 120_000);
+
 	test("keeps a rotated source in the orientation it plays in", async () => {
 		const rotated = join(directory, "rotated.mp4");
 		execFileSync("ffmpeg", [

@@ -1419,8 +1419,17 @@ function needsVideoTranscode(
 	);
 }
 
+// The probe names only the audio codecs it knows. A track in any other codec
+// (ALAC, DTS and the like) still reports its channels, so the track itself
+// says whether there is audio.
+export function sourceHasAudio(
+	metadata: Pick<VideoMetadata, "audioCodec" | "audioChannels">,
+): boolean {
+	return Boolean(metadata.audioCodec) || metadata.audioChannels !== null;
+}
+
 function needsAudioTranscode(metadata: VideoMetadata): boolean {
-	return Boolean(metadata.audioCodec && metadata.audioCodec !== "aac");
+	return sourceHasAudio(metadata) && metadata.audioCodec !== "aac";
 }
 
 export function getProcessTimeoutMs(
@@ -1722,7 +1731,11 @@ export async function processVideo(
 		: hdr !== null ||
 			!browserPixelFormat ||
 			needsVideoTranscode(metadata, opts, sourceH264Level);
-	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
+	// A remux copies audio as it is, but a codec the probe cannot name is not
+	// known to fit in an MP4, so that one is still encoded.
+	const audioTranscode = remuxOnly
+		? sourceHasAudio(metadata) && !metadata.audioCodec
+		: needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
 		? buildExtraInputFlags(resilientFlags)
 		: [];
@@ -1764,7 +1777,7 @@ export async function processVideo(
 		inputPath,
 		outputPath: outputTempFile.path,
 		videoCodec: metadata.videoCodec,
-		hasAudio: Boolean(metadata.audioCodec),
+		hasAudio: sourceHasAudio(metadata),
 		opts,
 		targetH264Level: targetH264Level.ffmpegValue,
 		normalizeH264Level,
@@ -2113,7 +2126,7 @@ async function processVideoWithCapcodec(
 			"-i",
 			videoOnly.path,
 		];
-		if (metadata.audioCodec) {
+		if (sourceHasAudio(metadata)) {
 			muxArgs.push(
 				...extraInputArgs,
 				"-i",

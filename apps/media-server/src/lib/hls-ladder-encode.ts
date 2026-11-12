@@ -23,6 +23,7 @@ import {
 	getProcessTimeoutMs,
 	probeVideoSourceTraits,
 	runTranscodeCommand,
+	sourceHasAudio,
 } from "./media-video";
 import {
 	canDecodeOnGpu,
@@ -89,9 +90,9 @@ export async function encodeHlsLadder(
 		{ width: metadata.width, height: metadata.height },
 		{ maxTier: options.maxTier },
 	);
-	const sourceHasAudio = Boolean(metadata.audioCodec);
 	const range = options.range ?? null;
-	const wantsAudio = sourceHasAudio && (options.includeAudio ?? !range);
+	const wantsAudio =
+		sourceHasAudio(metadata) && (options.includeAudio ?? !range);
 	const muxAudioWithVideo = wantsAudio && !range;
 
 	await ensureTempDir();
