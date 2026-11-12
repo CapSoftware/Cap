@@ -15,6 +15,51 @@ export function hdrTransferFrom(
 		: null;
 }
 
+// The colour primaries and matrix a source declares, as ffprobe names them.
+export interface HdrColor {
+	primaries?: string | null;
+	matrix?: string | null;
+}
+
+// ffprobe and zscale share these names. Anything else (untagged, reserved, or
+// a value zscale cannot read) is treated as BT.2020, which is what HDR video
+// is mastered in when it says nothing.
+const ZSCALE_PRIMARIES: readonly string[] = [
+	"bt709",
+	"bt470m",
+	"bt470bg",
+	"smpte170m",
+	"smpte240m",
+	"film",
+	"bt2020",
+	"smpte428",
+	"smpte431",
+	"smpte432",
+	"ebu3213",
+];
+const ZSCALE_MATRICES: readonly string[] = [
+	"bt709",
+	"fcc",
+	"bt470bg",
+	"smpte170m",
+	"smpte240m",
+	"ycgco",
+	"bt2020nc",
+	"bt2020c",
+	"chroma-derived-nc",
+	"chroma-derived-c",
+	"ictcp",
+];
+const DEFAULT_HDR_PRIMARIES = "bt2020";
+const DEFAULT_HDR_MATRIX = "bt2020nc";
+
+function declared(
+	value: string | null | undefined,
+	known: readonly string[],
+): string | null {
+	return value && known.includes(value) ? value : null;
+}
+
 // HDR reference white is 203 nits and standard range white is 100, so light is
 // scaled to put the two on top of each other: skin, walls and paper keep the
 // brightness they would have had in a standard range recording.
@@ -30,10 +75,19 @@ const TONE_CURVE = `tonemap=tonemap=mobius:param=0.3:peak=${PEAK.toFixed(2)}:des
 export function hdrToSdrFilter(
 	transfer: HdrTransfer,
 	size?: { width: number; height: number },
+	color?: HdrColor | null,
 ): string {
 	const resize = size ? `w=${size.width}:h=${size.height}:` : "";
+	const declaredPrimaries = declared(color?.primaries, ZSCALE_PRIMARIES);
+	const primaries = declaredPrimaries ?? DEFAULT_HDR_PRIMARIES;
+	const matrix = declared(color?.matrix, ZSCALE_MATRICES) ?? DEFAULT_HDR_MATRIX;
+	// Frames of a source that declares no primaries carry none, and zscale
+	// refuses to convert to "unspecified" ("no path between colorspaces"), so
+	// the primaries of its output are named as well.
+	const outputPrimaries =
+		color && declaredPrimaries === null ? `:p=${primaries}` : "";
 	return [
-		`zscale=${resize}tin=${transfer}:pin=bt2020:min=bt2020nc:t=linear:npl=${REFERENCE_WHITE_NITS}`,
+		`zscale=${resize}tin=${transfer}:pin=${primaries}${outputPrimaries}:min=${matrix}:t=linear:npl=${REFERENCE_WHITE_NITS}`,
 		"format=gbrpf32le",
 		"zscale=p=bt709",
 		TONE_CURVE,

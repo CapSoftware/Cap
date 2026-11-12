@@ -6,6 +6,7 @@ import {
 	developerRateLimiter,
 } from "../../../utils";
 
+import * as transactions from "./transactions";
 import * as transcripts from "./transcripts";
 import * as uploads from "./uploads";
 import * as usage from "./usage";
@@ -18,6 +19,7 @@ const app = new Hono()
 	.route("/uploads", uploads.app)
 	.route("/transcripts", transcripts.app)
 	.route("/usage", usage.app)
+	.route("/transactions", transactions.app)
 	.onError(developerApiError);
 
 app.notFound((c) => developerApiNotFound(c, app.routes));

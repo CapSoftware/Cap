@@ -1,6 +1,6 @@
 import { infraAppPath } from "@/lib/infra-routes";
 import type { InfraAppStanding } from "@/lib/infra-standing";
-import { formatCharge } from "@/lib/infra-usage";
+import { formatNeed } from "@/lib/infra-usage";
 import { ButtonLink } from "./ui";
 
 const dayFormat = new Intl.DateTimeFormat("en-US", {
@@ -25,7 +25,7 @@ export function StandingNotice({
 	const day = dayFormat.format(standing.pausesAt);
 	const needed =
 		shortfallMicroCredits > 0
-			? ` Add ${formatCharge(Math.ceil(shortfallMicroCredits / 1000) * 1000)} or more to bring it back.`
+			? ` Add ${formatNeed(shortfallMicroCredits)} or more to bring it back.`
 			: " Add credits to bring it back.";
 
 	return (
