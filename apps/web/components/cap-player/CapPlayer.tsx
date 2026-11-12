@@ -470,7 +470,7 @@ export const CapPlayer = ({
 					This video could not be played.
 				</p>
 			) : null}
-			{controls ? null : (
+			{controls || failed ? null : (
 				<button
 					type="button"
 					className={styles.cover}
