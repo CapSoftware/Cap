@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type DeveloperVideoStore,
@@ -69,6 +72,34 @@ const ready = () =>
 async function get(path: string) {
 	const response = await app.request(path);
 	return { status: response.status, body: await response.json() };
+}
+
+const ITEM_ROUTES = [
+	["GET", "/video-1"],
+	["GET", "/video-1/status"],
+	["DELETE", "/video-1"],
+] as const;
+
+const docs = readFileSync(
+	join(process.cwd(), "content/docs/api/rest-api.mdx"),
+	"utf8",
+);
+
+function docsSection(heading: string) {
+	const start = docs.indexOf(`\n${heading}\n`);
+	if (start === -1) throw new Error(`The docs have no section ${heading}`);
+	const level = heading.slice(0, heading.indexOf(" ") + 1);
+	const end = docs.indexOf(`\n${level}`, start + heading.length);
+	return docs.slice(start, end === -1 ? undefined : end);
+}
+
+function docsExampleResponse(heading: string) {
+	const section = docsSection(heading);
+	const example = section
+		.slice(section.indexOf("**Example response:**"))
+		.match(/```json\n([\s\S]*?)```/)?.[1];
+	if (!example) throw new Error(`${heading} has no example response`);
+	return JSON.parse(example).data as Record<string, unknown>;
 }
 
 beforeEach(() => {
@@ -157,6 +188,22 @@ describe("developer video API", () => {
 		);
 	});
 
+	it("returns exactly the fields the docs list", async () => {
+		const video = Object.keys((await get("/video-1")).body.data).sort();
+		const status = Object.keys((await get("/video-1/status")).body.data).sort();
+		const reference = [
+			...docsSection("## Video Object Reference").matchAll(/^\| `(\w+)` \|/gm),
+		].map((row) => row[1]);
+
+		expect(reference.sort()).toEqual(video);
+		expect(Object.keys(docsExampleResponse("### Get Video")).sort()).toEqual(
+			video,
+		);
+		expect(
+			Object.keys(docsExampleResponse("### Get Video Status")).sort(),
+		).toEqual(status);
+	});
+
 	describe("list filters", () => {
 		beforeEach(() => {
 			mocks.store.video = { ...ready(), externalUserId: "user-1" };
@@ -187,6 +234,21 @@ describe("developer video API", () => {
 			["offset=abc", "invalid_offset"],
 			["offset=-5", "invalid_offset"],
 			["userId=user-1&externalUserId=user-2", "conflicting_parameters"],
+			["userId=", "invalid_user_id"],
+			["userId", "invalid_user_id"],
+			["externalUserId=", "invalid_user_id"],
+			["userId=&limit=10", "invalid_user_id"],
+			["userId=&externalUserId=user-1", "invalid_user_id"],
+			["userId=user-1&externalUserId=", "invalid_user_id"],
+			["userId=%20", "invalid_user_id"],
+			["userId=%20%09%20", "invalid_user_id"],
+			["externalUserId=%20", "invalid_user_id"],
+			["userId=user-1&userId=user-2", "repeated_parameter"],
+			["userId=user-2&userId=user-1", "repeated_parameter"],
+			["userId=user-1&userId=user-1", "repeated_parameter"],
+			["externalUserId=user-1&externalUserId=user-2", "repeated_parameter"],
+			["userId=user-1&limit=1&limit=100", "repeated_parameter"],
+			["offset=0&offset=0", "repeated_parameter"],
 		])("refuses ?%s rather than listing every video", async (query, code) => {
 			const { status, body } = await get(`/?${query}`);
 
@@ -196,6 +258,241 @@ describe("developer video API", () => {
 			expect(typeof body.hint).toBe("string");
 			expect(body).not.toHaveProperty("data");
 		});
+
+		it("says the filter was empty and how to list everyone", async () => {
+			const { body } = await get("/?externalUserId=");
+
+			expect(body).toMatchObject({
+				error: "userId filter is empty",
+				code: "invalid_user_id",
+				hint: "Send the user ID to filter by, or leave externalUserId out to list every video.",
+			});
+		});
+
+		it("finds a video by the externalUserId it returns, spaces included", async () => {
+			mocks.store.video = { ...ready(), externalUserId: " user 1 " };
+			const stored = (await get("/video-1")).body.data.externalUserId;
+			const scope = `userId=${encodeURIComponent(stored)}`;
+
+			expect(stored).toBe(" user 1 ");
+			expect((await get(`/?${scope}`)).body.data).toHaveLength(1);
+			expect((await get(`/video-1?${scope}`)).status).toBe(200);
+			expect((await get(`/video-1/status?${scope}`)).status).toBe(200);
+			expect((await get("/?userId=user%201")).body.data).toEqual([]);
+			expect((await get("/video-1?userId=user%201")).status).toBe(404);
+
+			const removed = await app.request(`/video-1?${scope}`, {
+				method: "DELETE",
+			});
+			expect(removed.status).toBe(200);
+		});
+
+		it("treats a padded copy of the same value in both names as a conflict", async () => {
+			const { status, body } = await get(
+				"/?userId=user-1&externalUserId=%20user-1",
+			);
+
+			expect(status).toBe(400);
+			expect(body).toMatchObject({ code: "conflicting_parameters" });
+		});
+	});
+
+	describe("exact user match", () => {
+		const variants = [
+			"ALICE",
+			"Alice",
+			"àlice",
+			"Alicé",
+			"ÀLICÉ",
+			"alice ",
+			" alice",
+			"alic",
+			"a lice",
+			"alice%",
+			"a_ice",
+		];
+
+		beforeEach(() => {
+			mocks.store.video = { ...ready(), externalUserId: "alice" };
+		});
+
+		it("lists alice's videos for alice", async () => {
+			const { status, body } = await get("/?userId=alice");
+
+			expect(status).toBe(200);
+			expect(body.data).toHaveLength(1);
+		});
+
+		it.each(variants)("lists nothing for %j", async (userId) => {
+			for (const name of ["userId", "externalUserId"]) {
+				const { status, body } = await get(
+					`/?${name}=${encodeURIComponent(userId)}`,
+				);
+
+				expect(status).toBe(200);
+				expect(body.data).toEqual([]);
+			}
+		});
+
+		it.each(variants)(
+			"hides the video from get, status and delete for %j",
+			async (userId) => {
+				const scope = `?userId=${encodeURIComponent(userId)}`;
+
+				for (const [method, path] of ITEM_ROUTES) {
+					const response = await app.request(`${path}${scope}`, { method });
+
+					expect(response.status).toBe(404);
+					expect(await response.json()).toMatchObject({
+						code: "video_not_found",
+					});
+				}
+				expect(mocks.store.updates).toHaveLength(0);
+			},
+		);
+
+		it("matches a user whose ID has capitals and accents only as written", async () => {
+			mocks.store.video = { ...ready(), externalUserId: "Zoë" };
+
+			expect((await get("/?userId=Zo%C3%AB")).body.data).toHaveLength(1);
+			expect((await get("/?userId=zoe")).body.data).toEqual([]);
+			expect((await get("/video-1?userId=Zo%C3%AB")).status).toBe(200);
+			expect((await get("/video-1?userId=ZOË")).status).toBe(404);
+		});
+
+		it("keeps the indexed equality and adds a byte comparison", async () => {
+			const { exactUserIdMatch } = await import("@/lib/developer-user-scope");
+			const { developerVideos } = await import("@cap/database/schema");
+
+			const match = exactUserIdMatch(developerVideos.externalUserId, "alice");
+			if (!match) throw new Error("The exact match built no condition");
+			const query = new MySqlDialect().sqlToQuery(match);
+
+			expect(query.sql).toBe(
+				"(`developer_videos`.`externalUserId` = ? and CAST(`developer_videos`.`externalUserId` AS BINARY) = CAST(? AS BINARY))",
+			);
+			expect(query.params).toEqual(["alice", "alice"]);
+		});
+	});
+
+	describe("scoped to a user", () => {
+		beforeEach(() => {
+			mocks.store.video = { ...ready(), externalUserId: "alice" };
+		});
+
+		it.each(["userId", "externalUserId"])(
+			"returns the video and its status to its own user with ?%s",
+			async (name) => {
+				const video = await get(`/video-1?${name}=alice`);
+				const status = await get(`/video-1/status?${name}=alice`);
+
+				expect(video.status).toBe(200);
+				expect(video.body.data).toMatchObject({
+					id: "video-1",
+					externalUserId: "alice",
+				});
+				expect(status.status).toBe(200);
+				expect(status.body.data).toMatchObject({
+					id: "video-1",
+					externalUserId: "alice",
+					ready: true,
+				});
+			},
+		);
+
+		it.each(ITEM_ROUTES)(
+			"answers 404 to another user for %s %s",
+			async (method, path) => {
+				const response = await app.request(`${path}?userId=bob`, { method });
+
+				expect(response.status).toBe(404);
+				expect(await response.json()).toMatchObject({
+					error: "Video not found",
+					code: "video_not_found",
+					hint: expect.stringContaining("created with this userId"),
+				});
+				expect(mocks.store.updates).toHaveLength(0);
+				expect(mocks.redrive).not.toHaveBeenCalled();
+			},
+		);
+
+		it("answers 404 for a video that has no user", async () => {
+			mocks.store.video = ready();
+
+			expect((await get("/video-1?userId=alice")).status).toBe(404);
+			expect((await get("/video-1/status?userId=alice")).status).toBe(404);
+			const removed = await app.request("/video-1?userId=alice", {
+				method: "DELETE",
+			});
+			expect(removed.status).toBe(404);
+			expect(mocks.store.updates).toHaveLength(0);
+		});
+
+		it("deletes the video for its own user and leaves it for anyone else", async () => {
+			const refused = await app.request("/video-1?userId=bob", {
+				method: "DELETE",
+			});
+			expect(refused.status).toBe(404);
+			expect(mocks.store.video?.deletedAt).toBeNull();
+
+			const removed = await app.request("/video-1?userId=alice", {
+				method: "DELETE",
+			});
+			expect(removed.status).toBe(200);
+			expect(await removed.json()).toEqual({ success: true });
+			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+
+			const repeated = await app.request("/video-1?userId=alice", {
+				method: "DELETE",
+			});
+			expect(repeated.status).toBe(200);
+			expect(mocks.store.updates).toHaveLength(1);
+		});
+
+		it("says the filter was empty and how to drop it", async () => {
+			const { status, body } = await get("/video-1?userId=");
+
+			expect(status).toBe(400);
+			expect(body).toMatchObject({
+				error: "userId filter is empty",
+				code: "invalid_user_id",
+				hint: "Send the user ID to filter by, or leave userId out to reach any video of the app.",
+			});
+		});
+
+		it("still serves every video of the app when no user is sent", async () => {
+			expect((await get("/video-1")).status).toBe(200);
+			expect((await get("/video-1/status")).status).toBe(200);
+		});
+
+		it.each([
+			["userId=", "invalid_user_id"],
+			["userId", "invalid_user_id"],
+			["externalUserId=", "invalid_user_id"],
+			["userId=%20", "invalid_user_id"],
+			["userId=alice&userId=bob", "repeated_parameter"],
+			["userId=alice&userId=alice", "repeated_parameter"],
+			["userId=alice&externalUserId=bob", "conflicting_parameters"],
+			["userid=alice", "unknown_parameter"],
+			["user=alice", "unknown_parameter"],
+			["userId=alice&limit=1", "unknown_parameter"],
+		])(
+			"refuses ?%s on get, status and delete instead of dropping the scope",
+			async (query, code) => {
+				for (const [method, path] of ITEM_ROUTES) {
+					const response = await app.request(`${path}?${query}`, { method });
+					const body = await response.json();
+
+					expect(response.status).toBe(400);
+					expect(body).toMatchObject({ code });
+					expect(typeof body.error).toBe("string");
+					expect(typeof body.hint).toBe("string");
+					expect(body).not.toHaveProperty("data");
+					expect(body).not.toHaveProperty("success");
+				}
+				expect(mocks.store.updates).toHaveLength(0);
+			},
+		);
 	});
 
 	describe("not found", () => {
@@ -309,6 +606,7 @@ describe("developer video API", () => {
 
 		expect(body.data).toEqual({
 			id: "video-1",
+			externalUserId: null,
 			duration: 12,
 			width: 1920,
 			height: 1080,
