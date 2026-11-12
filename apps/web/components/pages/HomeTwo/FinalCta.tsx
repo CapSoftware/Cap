@@ -1,4 +1,8 @@
+"use client";
+
 import Link from "next/link";
+import { trackEvent } from "@/app/utils/analytics";
+import { DownloadCtaLink } from "@/components/download/DownloadCtaLink";
 import { BODY_TEXT, BTN_PRIMARY, BTN_SECONDARY, H_HERO } from "./theme";
 
 export const FinalCta = () => (
@@ -14,12 +18,26 @@ export const FinalCta = () => (
 				polish, and share without the busywork.
 			</p>
 			<div className="mt-9 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-				<Link href="/pricing" className={BTN_PRIMARY}>
+				<Link
+					href="/pricing"
+					onClick={() =>
+						trackEvent("pricing_cta_clicked", {
+							source_page: "home_final",
+							cta_location: "primary",
+							target_url: "/pricing",
+						})
+					}
+					className={BTN_PRIMARY}
+				>
 					Upgrade to Cap Pro
 				</Link>
-				<Link href="/download" className={BTN_SECONDARY}>
+				<DownloadCtaLink
+					sourcePage="home_final"
+					ctaLocation="secondary"
+					className={BTN_SECONDARY}
+				>
 					Download for free
-				</Link>
+				</DownloadCtaLink>
 			</div>
 		</div>
 	</section>
