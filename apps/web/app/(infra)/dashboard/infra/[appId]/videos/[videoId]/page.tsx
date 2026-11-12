@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { getInfraAppStanding } from "@/lib/infra-standing";
 import { getDeveloperAppVideo, requireInfraApp } from "../../../infra-data";
 import { VideoClient } from "./video-client";
 
@@ -14,8 +15,17 @@ export default async function InfraVideoPage({
 }) {
 	const { appId, videoId } = await params;
 	const { app } = await requireInfraApp(appId);
-	const video = await getDeveloperAppVideo(app.id, videoId);
+	const [video, standing] = await Promise.all([
+		getDeveloperAppVideo(app.id, videoId),
+		getInfraAppStanding(app.id),
+	]);
 	if (!video) notFound();
 
-	return <VideoClient appId={app.id} video={video} />;
+	return (
+		<VideoClient
+			appId={app.id}
+			video={video}
+			playbackPaused={standing.state === "paused"}
+		/>
+	);
 }

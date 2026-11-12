@@ -257,7 +257,7 @@ export function VideosClient({
 					pendingDelete
 						? pendingDelete.state === "uploading"
 							? `Remove "${pendingDelete.name}"? Its file has not arrived. An upload still running somewhere else will fail.`
-							: `Delete "${pendingDelete.name}"? It stops playing everywhere it is embedded, stops counting toward storage and disappears from the API.`
+							: `Delete "${pendingDelete.name}"? Its links stop playing within about a minute, its files are removed and it stops counting toward storage.`
 						: undefined
 				}
 				confirmLabel={

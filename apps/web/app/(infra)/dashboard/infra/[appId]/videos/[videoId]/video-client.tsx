@@ -23,6 +23,7 @@ import { useLiveRefresh } from "../../../_components/live-refresh";
 import {
 	Block,
 	Button,
+	ButtonLink,
 	FOCUS,
 	Input,
 	MONO,
@@ -114,9 +115,11 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 export function VideoClient({
 	appId,
 	video,
+	playbackPaused,
 }: {
 	appId: string;
 	video: InfraVideoDetail;
+	playbackPaused: boolean;
 }) {
 	const router = useRouter();
 	const nameId = useId();
@@ -257,7 +260,20 @@ export function VideoClient({
 
 			<div className="grid items-start gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
 				<div className="min-w-0">
-					{video.state === "ready" && playable ? (
+					{video.state === "ready" && playable && playbackPaused ? (
+						<Notice
+							title="Playback is paused"
+							action={
+								<ButtonLink size="sm" href={infraAppPath(appId, "billing")}>
+									Add credits
+								</ButtonLink>
+							}
+						>
+							This app is out of credit, so its videos do not play here or
+							anywhere they are embedded. They are still stored. Add credits and
+							playback is back within about a minute.
+						</Notice>
+					) : video.state === "ready" && playable ? (
 						<Player video={video} />
 					) : video.state === "ready" ? (
 						<Notice title="Nothing to play yet">
@@ -368,7 +384,7 @@ export function VideoClient({
 			<ConfirmDialog
 				open={confirmDelete}
 				title="Delete video"
-				description={`Delete "${video.name}"? It stops playing everywhere it is embedded, stops counting toward storage and disappears from the API.`}
+				description={`Delete "${video.name}"? Its links stop playing within about a minute, its files are removed and it stops counting toward storage.`}
 				confirmLabel="Delete"
 				loading={remove.isPending}
 				onConfirm={() => remove.mutate()}
