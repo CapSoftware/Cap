@@ -39,8 +39,10 @@ import {
 	developerVideoRedrive,
 	developerVideoStoredBytes,
 	failUnfinishedParts,
+	lostJobConfirmed,
 	markPartChecked,
 	markPartDispatched,
+	markPartNotFound,
 	releasePart,
 	requeueLostPart,
 	resolveDeveloperVideoStatus,
@@ -94,6 +96,7 @@ export type DeveloperVideoJobCheck =
 	| "skipped"
 	| "unreachable"
 	| "waiting"
+	| "unconfirmed"
 	| "requeued"
 	| "settled";
 
@@ -784,24 +787,31 @@ export async function checkDeveloperVideoPart(
 		);
 		return applied ? "settled" : "skipped";
 	}
-	if (
-		job.status === "missing" &&
-		(await requeueLostDeveloperVideoPart(videoId, encodeId, part, token))
-	) {
+	const now = Date.now();
+	let result = "skipped" as DeveloperVideoJobCheck;
+	await mutateEncode(videoId, encodeId, (processing) => {
+		const latest = processing[part];
+		if (latest.state !== "running" || latest.token !== token) return null;
+		if (job.status === "missing" && !lostJobConfirmed(latest, now)) {
+			result = "unconfirmed";
+			const marked = markPartNotFound(processing, part, { token, now });
+			return marked ? { processing: marked } : null;
+		}
+		const requeued =
+			job.status === "missing"
+				? requeueLostPart(processing, part, token)
+				: null;
+		result = requeued ? "requeued" : "waiting";
+		const next = requeued ?? markPartChecked(processing, part, { token, now });
+		return next ? { processing: next } : null;
+	});
+	if (result === "requeued") {
 		console.warn("[developer-video] Encode job was lost, sending it again", {
 			videoId,
 			part,
 		});
-		return "requeued";
 	}
-	const stamped = await mutateEncode(videoId, encodeId, (processing) => {
-		const checked = markPartChecked(processing, part, {
-			token,
-			now: Date.now(),
-		});
-		return checked ? { processing: checked } : null;
-	});
-	return stamped ? "waiting" : "skipped";
+	return result;
 }
 
 export async function failDeveloperVideoProcessing(

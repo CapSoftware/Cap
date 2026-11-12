@@ -35,6 +35,7 @@ export type DeveloperVideoPartState =
 			jobId: string | null;
 			startedAt: number;
 			checkedAt?: number;
+			notFoundAt?: number;
 	  }
 	| { state: "complete"; output: string }
 	| { state: "failed"; reason: string }

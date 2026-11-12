@@ -9,8 +9,11 @@ import {
 	developerVideoStoredBytes,
 	failUnfinishedParts,
 	hlsRetryDelayMs,
+	LOST_JOB_CONFIRM_MS,
+	lostJobConfirmed,
 	markPartChecked,
 	markPartDispatched,
+	markPartNotFound,
 	releasePart,
 	requeueLostPart,
 	resolveDeveloperVideoStatus,
@@ -130,6 +133,51 @@ describe("developer video processing state", () => {
 				now: checkedAt,
 			}),
 		).toBeNull();
+	});
+
+	it("counts a job as lost only after it has stayed not found for a minute", () => {
+		const dispatched = dispatchedPart("hls", "t1");
+		const marked = markPartNotFound(dispatched, "hls", {
+			token: "t1",
+			now: 200_000,
+		});
+		if (!marked) throw new Error("not found answer was not recorded");
+
+		expect(LOST_JOB_CONFIRM_MS).toBe(60 * 1000);
+		expect(lostJobConfirmed(dispatched.hls, 9_000_000)).toBe(false);
+		expect(marked.hls).toMatchObject({ state: "running", notFoundAt: 200_000 });
+		expect(marked.attempts).toEqual(dispatched.attempts);
+		expect(
+			lostJobConfirmed(marked.hls, 200_000 + LOST_JOB_CONFIRM_MS - 1),
+		).toBe(false);
+		expect(lostJobConfirmed(marked.hls, 200_000 + LOST_JOB_CONFIRM_MS)).toBe(
+			true,
+		);
+		expect(
+			markPartNotFound(marked, "hls", { token: "t1", now: 250_000 }),
+		).toBeNull();
+		expect(
+			markPartNotFound(dispatched, "hls", { token: "stale", now: 200_000 }),
+		).toBeNull();
+		expect(developerVideoPartAction(marked.hls, 250_000)).toBe("check");
+	});
+
+	it("forgets that a job was not found once it answers", () => {
+		const marked = markPartNotFound(dispatchedPart("hls", "t1"), "hls", {
+			token: "t1",
+			now: 200_000,
+		});
+		const alive =
+			marked && markPartChecked(marked, "hls", { token: "t1", now: 220_000 });
+
+		expect(alive?.hls).toEqual({
+			state: "running",
+			token: "t1",
+			jobId: "job-1",
+			startedAt: 2_000,
+			checkedAt: 220_000,
+		});
+		expect(alive && lostJobConfirmed(alive.hls, 9_000_000)).toBe(false);
 	});
 
 	it("sends a lost job again without spending an attempt", () => {

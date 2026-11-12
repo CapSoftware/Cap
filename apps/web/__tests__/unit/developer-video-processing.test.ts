@@ -428,6 +428,7 @@ describe("developer video webhook", () => {
 describe("quiet encode jobs", () => {
 	const NOW = Date.parse("2026-11-01T02:00:00Z");
 	const QUIET_MS = 3 * 60 * 1000;
+	const CONFIRM_MS = 60 * 1000;
 	const quietPart = (token: string, quietFor = QUIET_MS) => ({
 		state: "running" as const,
 		token,
@@ -504,6 +505,8 @@ describe("quiet encode jobs", () => {
 			}),
 		});
 
+		expect(await check("mp4")).toBe("unconfirmed");
+		vi.mocked(Date.now).mockReturnValue(NOW + CONFIRM_MS);
 		expect(await check("mp4")).toBe("requeued");
 
 		expect(video().processing?.mp4).toEqual({ state: "pending" });
@@ -517,12 +520,93 @@ describe("quiet encode jobs", () => {
 			"dispatched",
 		);
 		expect(video().processing?.attempts.mp4).toBe(1);
-		expect(video().processing?.mp4).toMatchObject({
+		expect(video().processing?.mp4).toEqual({
 			state: "running",
+			token: expect.any(String),
 			jobId: "job-2",
-			startedAt: NOW,
+			startedAt: NOW + CONFIRM_MS,
 		});
 		expect(mocks.startJob).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not treat one not found answer as a lost job", async () => {
+		mocks.readJob.mockResolvedValue({ status: "missing" });
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				mp4: quietPart("t-mp4"),
+				attempts: { hls: 0, mp4: 1 },
+			}),
+		});
+
+		expect(await check("mp4")).toBe("unconfirmed");
+
+		expect(video().processing?.mp4).toEqual({
+			...quietPart("t-mp4"),
+			notFoundAt: NOW,
+		});
+		expect(video().processing?.attempts.mp4).toBe(1);
+		expect(video().processing?.lostJobs).toBeUndefined();
+		expect(mocks.store.updates).toHaveLength(1);
+
+		vi.mocked(Date.now).mockReturnValue(NOW + CONFIRM_MS - 1_000);
+		expect(await readDeveloperVideoParts("video-1", "encode-1")).toMatchObject({
+			mp4: "check",
+		});
+		expect(await check("mp4")).toBe("unconfirmed");
+		expect(mocks.readJob).toHaveBeenCalledTimes(2);
+		expect(mocks.store.updates).toHaveLength(1);
+		expect(video().processing?.mp4).toMatchObject({ state: "running" });
+		expect(mocks.startJob).not.toHaveBeenCalled();
+	});
+
+	it("forgets a not found answer once the job answers that it is running", async () => {
+		mocks.readJob.mockResolvedValueOnce({ status: "missing" });
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				mp4: quietPart("t-mp4"),
+				attempts: { hls: 0, mp4: 1 },
+			}),
+		});
+
+		expect(await check("mp4")).toBe("unconfirmed");
+		mocks.readJob.mockResolvedValueOnce({ status: "running" });
+		vi.mocked(Date.now).mockReturnValue(NOW + 20_000);
+		expect(await check("mp4")).toBe("waiting");
+
+		expect(video().processing?.mp4).toEqual({
+			...quietPart("t-mp4"),
+			checkedAt: NOW + 20_000,
+		});
+
+		mocks.readJob.mockResolvedValue({ status: "missing" });
+		vi.mocked(Date.now).mockReturnValue(NOW + 20_000 + QUIET_MS);
+		expect(await check("mp4")).toBe("unconfirmed");
+		expect(video().processing?.mp4).toMatchObject({
+			state: "running",
+			notFoundAt: NOW + 20_000 + QUIET_MS,
+		});
+		expect(video().processing?.attempts.mp4).toBe(1);
+	});
+
+	it("does not count an unanswered ask as proof that a job is lost or alive", async () => {
+		mocks.readJob.mockResolvedValueOnce({ status: "missing" });
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				mp4: quietPart("t-mp4"),
+				attempts: { hls: 0, mp4: 1 },
+			}),
+		});
+
+		expect(await check("mp4")).toBe("unconfirmed");
+		mocks.readJob.mockResolvedValueOnce({ status: "unreachable" });
+		vi.mocked(Date.now).mockReturnValue(NOW + CONFIRM_MS);
+		expect(await check("mp4")).toBe("unreachable");
+
+		expect(video().processing?.mp4).toEqual({
+			...quietPart("t-mp4"),
+			notFoundAt: NOW,
+		});
+		expect(mocks.store.updates).toHaveLength(1);
 	});
 
 	it("sends the lost output of a ready video again without waiting hours", async () => {
@@ -542,6 +626,9 @@ describe("quiet encode jobs", () => {
 			mp4: "done",
 			hls: "check",
 		});
+		expect(await check("hls")).toBe("unconfirmed");
+		expect(video().status).toBe("ready");
+		vi.mocked(Date.now).mockReturnValue(NOW + CONFIRM_MS);
 		expect(await check("hls")).toBe("requeued");
 		expect(video().status).toBe("ready");
 		expect(video().processing?.hls).toEqual({ state: "pending" });
@@ -565,7 +652,7 @@ describe("quiet encode jobs", () => {
 		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-2" });
 		mocks.store.video = developerVideo({
 			processing: processingState({
-				mp4: quietPart("t-mp4"),
+				mp4: { ...quietPart("t-mp4"), notFoundAt: NOW - CONFIRM_MS },
 				attempts: { hls: 0, mp4: 1 },
 			}),
 		});
@@ -594,7 +681,7 @@ describe("quiet encode jobs", () => {
 		mocks.readJob.mockResolvedValue({ status: "missing" });
 		mocks.store.video = developerVideo({
 			processing: processingState({
-				mp4: quietPart("t-mp4"),
+				mp4: { ...quietPart("t-mp4"), notFoundAt: NOW - CONFIRM_MS },
 				attempts: { hls: 0, mp4: 1 },
 				lostJobs: { mp4: 3 },
 			}),
