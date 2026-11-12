@@ -3,7 +3,9 @@ import { organizations, videos } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
+import { cache } from "react";
 import { videoBelongsToOrganization } from "@/lib/cap-analytics-access";
+import type { PublicCollection } from "@/lib/public-collections";
 
 const DEFAULT_HOSTNAMES = ["cap.so", "cap.link", "localhost", "127.0.0.1"];
 
@@ -88,7 +90,7 @@ export const resolveShareWebUrl = async (
 	}
 };
 
-const findVerifiedDomainOrganization = async (hostname: string) => {
+const findVerifiedDomainOrganization = cache(async (hostname: string) => {
 	const [organization] = await db()
 		.select({
 			id: organizations.id,
@@ -99,16 +101,13 @@ const findVerifiedDomainOrganization = async (hostname: string) => {
 		.limit(1);
 
 	return organization?.domainVerified ? organization : null;
-};
+});
 
-const mainOriginShareUrl = (
-	videoId: string,
+const mainOriginUrl = (
+	path: string,
 	searchParams: Record<string, string | string[] | undefined>,
 ) => {
-	const url = new URL(
-		`/s/${encodeURIComponent(videoId)}`,
-		buildEnv.NEXT_PUBLIC_WEB_URL,
-	);
+	const url = new URL(path, buildEnv.NEXT_PUBLIC_WEB_URL);
 	for (const [key, value] of Object.entries(searchParams)) {
 		for (const entry of Array.isArray(value) ? value : [value]) {
 			if (entry !== undefined) url.searchParams.append(key, entry);
@@ -131,7 +130,7 @@ export const resolveRestrictedShareRedirect = async (
 	const defaultWebUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
 	if ((await resolveShareWebUrl(headersList)) === defaultWebUrl) return null;
 
-	return mainOriginShareUrl(videoId, searchParams);
+	return mainOriginUrl(`/s/${encodeURIComponent(videoId)}`, searchParams);
 };
 
 /**
@@ -171,5 +170,27 @@ export const resolveForeignShareRedirect = async (
 		.limit(1);
 
 	if (!video || video.belongsToDomain) return null;
-	return mainOriginShareUrl(videoId, searchParams);
+	return mainOriginUrl(`/s/${encodeURIComponent(videoId)}`, searchParams);
+};
+
+export const resolveForeignCollectionRedirect = async (
+	headersList: Headers,
+	collection: Pick<PublicCollection, "id" | "organizationId">,
+	searchParams: Record<string, string | string[] | undefined>,
+): Promise<string | null> => {
+	const hostname = requestShareHostname(headersList);
+	if (
+		isDefaultShareHostname(
+			hostname,
+			buildEnv.NEXT_PUBLIC_WEB_URL,
+			deploymentHostnames(),
+		)
+	)
+		return null;
+
+	const organization = await findVerifiedDomainOrganization(hostname);
+	if (!organization || organization.id === collection.organizationId)
+		return null;
+
+	return mainOriginUrl(`/c/${encodeURIComponent(collection.id)}`, searchParams);
 };

@@ -112,6 +112,7 @@ jobs:
           __tests__/unit/caption-translation-ownership.test.ts
           __tests__/unit/checkout-request-limits.test.ts
           __tests__/unit/clock-hours.test.ts
+          __tests__/unit/collection-custom-domain.test.ts
           __tests__/unit/comment-composer-composition.test.ts
           __tests__/unit/currency-hook.test.ts
           __tests__/unit/dashboard-analytics-cap-access.test.ts
