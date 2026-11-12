@@ -376,6 +376,49 @@ describe("auto top-up charge", () => {
 		expect(ledger.rows).toHaveLength(1);
 	});
 
+	it("keeps a decline visible when the webhook settles before the pending record is written", async () => {
+		mocks.createPaymentIntent.mockImplementation(async () => {
+			await settleAutoTopUpPaymentIntent(
+				intent("pi_1", "requires_payment_method", {
+					last_payment_error: {
+						decline_code: "insufficient_funds",
+					} as Stripe.PaymentIntent.LastPaymentError,
+				}),
+				"failed",
+			);
+			return intent("pi_1", "processing");
+		});
+
+		await runAutoTopUp("account-1", now());
+
+		expect(ledger.rows.map((row) => row.type)).toEqual(["topup_failed"]);
+		expect(ledger.account.autoTopUpEnabled).toBe(false);
+		expect(await getAutoTopUpFailure("account-1")).toMatchObject({
+			reason: "insufficient_funds",
+		});
+	});
+
+	it("shows the last settled result even when a pending record is newer", async () => {
+		mocks.createPaymentIntent.mockRejectedValue(
+			decline("pi_declined", "card_declined"),
+		);
+		await runAutoTopUp("account-1", now());
+		ledger.rows.push({
+			id: "pending-later",
+			accountId: "account-1",
+			type: "topup_pending",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 30_000,
+			referenceId: "pi_other",
+			referenceType: "auto_top_up_pending",
+			createdAt: new Date(ledger.now.getTime() + 1000),
+		});
+
+		expect(await getAutoTopUpFailure("account-1")).toMatchObject({
+			reason: "card_declined",
+		});
+	});
+
 	it("switches auto top-up off and adds no credit when the card is declined", async () => {
 		mocks.createPaymentIntent.mockRejectedValue(
 			decline("pi_declined", "authentication_required"),

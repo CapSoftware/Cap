@@ -123,13 +123,9 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			return newestFirst(storageRows()).slice(0, 1);
 		}
 		if (keys === "createdAt,metadata,type") {
+			const types = rendered.params.slice(1);
 			return newestFirst(
-				ledger.rows.filter(
-					(row) =>
-						row.referenceType === "auto_top_up" ||
-						row.referenceType === "auto_top_up_failed" ||
-						row.referenceType === "auto_top_up_pending",
-				),
+				ledger.rows.filter((row) => types.includes(row.referenceType)),
 			).slice(0, 1);
 		}
 		if (keys === "id" && rendered.sql.includes("balanceAfterMicroCredits")) {
@@ -142,11 +138,11 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			);
 		}
 		if (keys === "id") {
-			const [, referenceId, referenceType] = rendered.params;
+			const [, referenceId, ...referenceTypes] = rendered.params;
 			return ledger.rows.filter(
 				(row) =>
 					row.referenceId === referenceId &&
-					row.referenceType === referenceType,
+					referenceTypes.includes(row.referenceType),
 			);
 		}
 		if (keys === "accountId") {

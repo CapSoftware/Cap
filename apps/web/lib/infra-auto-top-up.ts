@@ -119,7 +119,21 @@ function declineFrom(error: unknown) {
 	};
 }
 
-async function lastAttempt(accountId: string) {
+const ATTEMPT_REFERENCE_TYPES = [
+	AUTO_TOP_UP_REFERENCE_TYPE,
+	AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
+	AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+];
+
+const SETTLED_REFERENCE_TYPES = [
+	AUTO_TOP_UP_REFERENCE_TYPE,
+	AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
+];
+
+async function lastAttempt(
+	accountId: string,
+	referenceTypes: typeof ATTEMPT_REFERENCE_TYPES = ATTEMPT_REFERENCE_TYPES,
+) {
 	const [row] = await db()
 		.select({
 			type: developerCreditTransactions.type,
@@ -130,11 +144,7 @@ async function lastAttempt(accountId: string) {
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				inArray(developerCreditTransactions.referenceType, [
-					AUTO_TOP_UP_REFERENCE_TYPE,
-					AUTO_TOP_UP_FAILED_REFERENCE_TYPE,
-					AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
-				]),
+				inArray(developerCreditTransactions.referenceType, referenceTypes),
 			),
 		)
 		.orderBy(desc(developerCreditTransactions.createdAt))
@@ -143,7 +153,7 @@ async function lastAttempt(accountId: string) {
 }
 
 export async function getAutoTopUpFailure(accountId: string) {
-	const attempt = await lastAttempt(accountId);
+	const attempt = await lastAttempt(accountId, SETTLED_REFERENCE_TYPES);
 	if (attempt?.type !== "topup_failed") return null;
 	const metadata =
 		typeof attempt.metadata === "object" && attempt.metadata !== null
@@ -249,9 +259,9 @@ async function recordPendingAutoTopUp({
 				and(
 					eq(developerCreditTransactions.accountId, accountId),
 					eq(developerCreditTransactions.referenceId, paymentIntentId),
-					eq(
+					inArray(
 						developerCreditTransactions.referenceType,
-						AUTO_TOP_UP_PENDING_REFERENCE_TYPE,
+						ATTEMPT_REFERENCE_TYPES,
 					),
 				),
 			)
