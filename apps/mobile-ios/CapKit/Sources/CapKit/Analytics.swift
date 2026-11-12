@@ -386,9 +386,13 @@ extension Analytics {
             for waiter in waiters { waiter.resume() }
             waiters.removeAll()
             guard timer == nil, !unsupported else { return }
-            // Only for events this session may send; another user's wait for sign-in without a timer running.
+            // Only events this session may send count; another user's wait for sign-in without a timer running.
             let user = currentUserId()
-            if pending.contains(where: { $0.event.userId == nil || $0.event.userId == user }) {
+            let ready = pending.count { $0.event.userId == nil || $0.event.userId == user }
+            if failures == 0, ready >= configuration.flushThreshold {
+                // Enough arrived while the last request was out.
+                beginRound()
+            } else if ready > 0 {
                 schedule(after: configuration.flushInterval)
             }
         }

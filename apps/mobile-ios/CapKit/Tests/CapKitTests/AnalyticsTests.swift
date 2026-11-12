@@ -364,6 +364,31 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         #expect(!FileManager.default.fileExists(atPath: storage.path()))
     }
 
+    @Test func sendsAFullBatchThatQueuedWhileARequestWasOut() async throws {
+        let transport = GatedTransport()
+        let timers = ManualTimers()
+        var configuration = Analytics.Configuration()
+        configuration.flushThreshold = 3
+        let analytics = Analytics(
+            api: CapAPI(environment: .production, transport: transport, credentials: { testCredentials }),
+            app: Rig.app,
+            storage: nil,
+            configuration: configuration,
+            currentUserId: { testCredentials.userId },
+            sleep: { await timers.sleep($0) }
+        )
+        for _ in 0..<3 { analytics.track("cap_opened") }
+        #expect(await eventually { transport.requests.count == 1 })
+        for _ in 0..<3 { analytics.track("comment_created") }
+
+        transport.open()
+        #expect(await eventually { transport.requests.count == 2 })
+        let later = try #require(try bodyJSON(transport.requests[1])["events"] as? [[String: Any]])
+        #expect(later.compactMap { $0["name"] as? String } == ["comment_created", "comment_created", "comment_created"])
+        await analytics.flush()
+        #expect(transport.requests.count == 2)
+    }
+
     @Test func leavesNoTimerRunningForEventsItMayNotSend() async throws {
         let rig = Rig()
         rig.status.value = 0
