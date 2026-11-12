@@ -220,6 +220,7 @@ describe("developer SDK multipart upload", () => {
 	it("keeps an existing playback id on completion", async () => {
 		const response = await post("/complete", completeBody);
 
+		expect(response.status).toBe(200);
 		const [update] =
 			writes().find(([query]) =>
 				String(query).startsWith("update `developer_videos`"),
