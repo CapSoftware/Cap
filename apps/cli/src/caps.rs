@@ -594,6 +594,23 @@ impl std::fmt::Display for AgentApiError {
 
 impl std::error::Error for AgentApiError {}
 
+impl From<String> for AgentApiError {
+    fn from(message: String) -> Self {
+        let first_line = message.lines().next().unwrap_or_default();
+        match first_line.split_once(": ") {
+            Some((code, text))
+                if !code.is_empty()
+                    && code
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_') =>
+            {
+                Self::local(code, text)
+            }
+            _ => Self::local("COMMAND_FAILED", first_line),
+        }
+    }
+}
+
 impl AgentApiError {
     pub fn local(code: &str, message: impl Into<String>) -> Self {
         Self {

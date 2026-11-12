@@ -537,7 +537,7 @@ fn main() {
     let runtime_thread = std::thread::Builder::new()
         .name("cap-cli-runtime".to_string())
         .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
-        .spawn(move || -> Result<(), String> {
+        .spawn(move || -> Result<(), CliFailure> {
             // serve_main_thread blocks the main thread until this shutdown
             // runs; a drop guard keeps that true on every exit path, including
             // the runtime failing to build and panics unwinding out of run().
@@ -553,7 +553,7 @@ fn main() {
                 .enable_all()
                 .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
                 .build()
-                .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
+                .map_err(|e| CliFailure::from(format!("Failed to build Tokio runtime: {e}")))?;
 
             if _diagnostic_guard.is_some() {
                 drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
@@ -593,11 +593,11 @@ fn main() {
 
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(message)) => {
+        Ok(Err(failure)) => {
             if json_mode && !JSON_WRITTEN.load(Ordering::SeqCst) {
-                let _ = write_json(&failure_json(&message));
+                failure.emit_json();
             }
-            eprintln!("error: {message}");
+            eprintln!("error: {}", failure.describe());
             std::process::exit(1);
         }
         Err(_) => {
@@ -607,13 +607,46 @@ fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), String> {
+enum CliFailure {
+    Message(String),
+    Api(Box<caps::AgentApiError>),
+}
+
+impl From<String> for CliFailure {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<caps::AgentApiError> for CliFailure {
+    fn from(error: caps::AgentApiError) -> Self {
+        Self::Api(Box::new(error))
+    }
+}
+
+impl CliFailure {
+    fn describe(&self) -> String {
+        match self {
+            Self::Message(message) => message.clone(),
+            Self::Api(error) => error.describe(),
+        }
+    }
+
+    fn emit_json(&self) {
+        match self {
+            Self::Message(message) => caps::AgentApiError::from(message.clone()).emit_json(),
+            Self::Api(error) => error.emit_json(),
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), CliFailure> {
     let json = cli.json;
     let Some(command) = cli.command else {
-        return print_welcome(json);
+        return Ok(print_welcome(json)?);
     };
 
-    match command {
+    let result: Result<(), String> = match command {
         Commands::Export(e) => e.run(json).await,
         Commands::ExportPreview(e) => e.run().await,
         Commands::Selftest(args) => args.run(json).await,
@@ -660,13 +693,13 @@ async fn run(cli: Cli) -> Result<(), String> {
             AuthCommands::Logout(args) => args.run(json).await,
         },
         Commands::Caps(args) => args.run(json).await,
-        Commands::Account(args) => args.run(json).await,
-        Commands::Organizations(args) => args.run(json).await,
-        Commands::Library(args) => args.run(json).await,
-        Commands::Notifications(args) => args.run(json).await,
-        Commands::Analytics(args) => args.run(json).await,
+        Commands::Account(args) => return Ok(args.run(json).await?),
+        Commands::Organizations(args) => return Ok(args.run(json).await?),
+        Commands::Library(args) => return Ok(args.run(json).await?),
+        Commands::Notifications(args) => return Ok(args.run(json).await?),
+        Commands::Analytics(args) => return Ok(args.run(json).await?),
         Commands::Developers(args) => args.run(json).await,
-        Commands::Jobs(args) => args.run(json).await,
+        Commands::Jobs(args) => return Ok(args.run(json).await?),
         Commands::Mcp(args) => args.run().await,
         Commands::Agents(args) => args.run(json),
         Commands::Targets(args) => args.run(json),
@@ -690,7 +723,8 @@ async fn run(cli: Cli) -> Result<(), String> {
             args.run();
             Ok(())
         }
-    }
+    };
+    Ok(result?)
 }
 
 fn print_welcome(json: bool) -> Result<(), String> {
@@ -924,27 +958,6 @@ fn usage_error_json(rendered: &str) -> serde_json::Value {
     })
 }
 
-fn failure_json(message: &str) -> serde_json::Value {
-    let first_line = message.lines().next().unwrap_or_default();
-    let (code, text) = match first_line.split_once(": ") {
-        Some((code, text))
-            if !code.is_empty()
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_') =>
-        {
-            (code, text)
-        }
-        _ => ("COMMAND_FAILED", first_line),
-    };
-    serde_json::json!({
-        "error": text,
-        "code": code,
-        "message": text,
-        "retryable": false,
-    })
-}
-
 pub fn write_json<T: Serialize>(value: &T) -> Result<(), String> {
     mark_json_written();
     let mut stdout = stdout();
@@ -967,7 +980,7 @@ mod tests {
 
     use clap::{CommandFactory, error::ErrorKind};
 
-    use super::{Cli, args_request_json, failure_json, usage_error_json};
+    use super::{Cli, CliFailure, args_request_json, usage_error_json};
 
     fn string_literals(source: &str) -> Vec<String> {
         let mut literals = Vec::new();
@@ -1163,17 +1176,38 @@ mod tests {
     }
 
     #[test]
-    fn plain_failures_become_one_json_object() {
-        let coded = failure_json("NOT_FOUND: Cap not found\nhint: check the id");
-        assert_eq!(coded["code"], "NOT_FOUND");
-        assert_eq!(coded["message"], "Cap not found");
-        assert_eq!(coded["error"], "Cap not found");
+    fn plain_failures_get_a_code_and_typed_failures_keep_their_fields() {
+        let json = |error: &crate::caps::AgentApiError| serde_json::to_value(error).unwrap();
 
-        let plain = failure_json("Image must be a PNG or JPEG");
-        assert_eq!(plain["code"], "COMMAND_FAILED");
-        assert_eq!(plain["message"], "Image must be a PNG or JPEG");
+        let coded = crate::caps::AgentApiError::from(
+            "NOT_FOUND: Cap not found\nhint: check the id".to_string(),
+        );
+        assert_eq!(coded.code, "NOT_FOUND");
+        assert_eq!(coded.message, "Cap not found");
 
-        let url = failure_json("Failed to open http://localhost: refused");
-        assert_eq!(url["code"], "COMMAND_FAILED");
+        let plain = crate::caps::AgentApiError::from("Image must be a PNG or JPEG".to_string());
+        assert_eq!(plain.code, "COMMAND_FAILED");
+        assert_eq!(json(&plain)["retryable"], false);
+
+        let url = crate::caps::AgentApiError::from(
+            "Failed to open http://localhost: refused".to_string(),
+        );
+        assert_eq!(url.code, "COMMAND_FAILED");
+
+        let typed = crate::caps::AgentApiError {
+            code: "RATE_LIMITED".to_string(),
+            message: "Too many requests. Try again later".to_string(),
+            retryable: true,
+            retry_after_ms: Some(60_000),
+            request_id: Some("req_1".to_string()),
+            ..Default::default()
+        };
+        let CliFailure::Api(carried) = CliFailure::from(typed) else {
+            panic!("a typed error must stay typed");
+        };
+        let carried = json(&carried);
+        assert_eq!(carried["retryable"], true);
+        assert_eq!(carried["retryAfterMs"], 60_000);
+        assert_eq!(carried["requestId"], "req_1");
     }
 }
