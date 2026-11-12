@@ -4215,13 +4215,21 @@ impl ZoomFrameSource {
 fn zoom_frame_crop(
     project: &ProjectConfiguration,
     start: f64,
+    reference: (u32, u32),
     (width, height): (u32, u32),
 ) -> Bounds<f32> {
     match &project.style_at(start).background.crop {
-        Some(crop) => Bounds::new(
-            point(crop.position.x as f32, crop.position.y as f32),
-            size(crop.size.x as f32, crop.size.y as f32),
-        ),
+        Some(crop) => {
+            let scale_x = width as f32 / reference.0.max(1) as f32;
+            let scale_y = height as f32 / reference.1.max(1) as f32;
+            Bounds::new(
+                point(
+                    crop.position.x as f32 * scale_x,
+                    crop.position.y as f32 * scale_y,
+                ),
+                size(crop.size.x as f32 * scale_x, crop.size.y as f32 * scale_y),
+            )
+        }
         None => Bounds::new(point(0., 0.), size(width as f32, height as f32)),
     }
 }
@@ -4564,12 +4572,18 @@ impl EditorWindow {
             .get(source.recording_clip as usize)?
             .display;
         let frame_size = (display.width, display.height);
+        let first = &instance.recordings.segments.first()?.display;
         Some((
             source,
             ui::PadBackdrop {
                 image: self.sidebar.zoom_frame.image.clone(),
                 frame_size: (display.width as f32, display.height as f32),
-                crop: zoom_frame_crop(&self.project, start, frame_size),
+                crop: zoom_frame_crop(
+                    &self.project,
+                    start,
+                    (first.width, first.height),
+                    frame_size,
+                ),
             },
         ))
     }
@@ -8706,7 +8720,7 @@ mod tests {
     fn zoom_frame_crop_uses_the_project_crop_or_the_whole_frame() {
         let mut project = split_project();
         assert_eq!(
-            zoom_frame_crop(&project, 1., (1920, 1080)),
+            zoom_frame_crop(&project, 1., (1920, 1080), (1920, 1080)),
             Bounds::new(point(0., 0.), size(1920., 1080.))
         );
         project.background.crop = Some(cap_project::Crop {
@@ -8714,8 +8728,12 @@ mod tests {
             size: XY::new(800, 600),
         });
         assert_eq!(
-            zoom_frame_crop(&project, 1., (1920, 1080)),
+            zoom_frame_crop(&project, 1., (1920, 1080), (1920, 1080)),
             Bounds::new(point(100., 50.), size(800., 600.))
+        );
+        assert_eq!(
+            zoom_frame_crop(&project, 1., (1920, 1080), (960, 540)),
+            Bounds::new(point(50., 25.), size(400., 300.))
         );
     }
 
