@@ -105,6 +105,7 @@ function docsExampleResponse(heading: string) {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.store.video = ready();
+	mocks.store.more = [];
 	mocks.store.updates = [];
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
@@ -269,31 +270,127 @@ describe("developer video API", () => {
 			});
 		});
 
-		it("finds a video by the externalUserId it returns, spaces included", async () => {
-			mocks.store.video = { ...ready(), externalUserId: " user 1 " };
-			const stored = (await get("/video-1")).body.data.externalUserId;
-			const scope = `userId=${encodeURIComponent(stored)}`;
+		it.each(["userId", "externalUserId"])(
+			"trims the spaces around %s before matching",
+			async (name) => {
+				mocks.store.video = { ...ready(), externalUserId: "user 1" };
+				const scope = `${name}=%20user%201%09`;
 
-			expect(stored).toBe(" user 1 ");
-			expect((await get(`/?${scope}`)).body.data).toHaveLength(1);
-			expect((await get(`/video-1?${scope}`)).status).toBe(200);
-			expect((await get(`/video-1/status?${scope}`)).status).toBe(200);
-			expect((await get("/?userId=user%201")).body.data).toEqual([]);
-			expect((await get("/video-1?userId=user%201")).status).toBe(404);
+				expect((await get(`/?${scope}`)).body.data).toHaveLength(1);
+				expect((await get(`/video-1?${scope}`)).status).toBe(200);
+				expect((await get(`/video-1/status?${scope}`)).status).toBe(200);
+				expect((await get(`/?${name}=user1`)).body.data).toEqual([]);
 
-			const removed = await app.request(`/video-1?${scope}`, {
-				method: "DELETE",
-			});
-			expect(removed.status).toBe(200);
-		});
+				const removed = await app.request(`/video-1?${scope}`, {
+					method: "DELETE",
+				});
+				expect(removed.status).toBe(200);
+				expect(mocks.store.updates).toHaveLength(1);
+			},
+		);
 
-		it("treats a padded copy of the same value in both names as a conflict", async () => {
+		it("takes a padded copy of the same value in both names as one filter", async () => {
 			const { status, body } = await get(
 				"/?userId=user-1&externalUserId=%20user-1",
 			);
 
-			expect(status).toBe(400);
-			expect(body).toMatchObject({ code: "conflicting_parameters" });
+			expect(status).toBe(200);
+			expect(body.data).toHaveLength(1);
+		});
+	});
+
+	describe("paging", () => {
+		const sameSecond = new Date("2026-01-01T00:00:00.000Z");
+		const page = async (query: string) => {
+			const { body } = await get(`/?${query}`);
+			return {
+				ids: body.data.map((video: { id: string }) => video.id),
+				pagination: body.pagination,
+			};
+		};
+
+		beforeEach(() => {
+			mocks.store.video = { ...ready(), id: "video-b", createdAt: sameSecond };
+			mocks.store.more = [
+				{ ...ready(), id: "video-a", createdAt: sameSecond },
+				{ ...ready(), id: "video-c", createdAt: sameSecond },
+				{
+					...ready(),
+					id: "video-old",
+					createdAt: new Date("2025-01-01T00:00:00.000Z"),
+				},
+			];
+		});
+
+		it("returns videos created in the same second in the same order on every call", async () => {
+			const order = ["video-c", "video-b", "video-a", "video-old"];
+
+			for (let call = 0; call < 4; call++) {
+				expect((await page("limit=10")).ids).toEqual(order);
+			}
+		});
+
+		it("never returns a video on two pages or skips one", async () => {
+			const seen: string[] = [];
+			for (let offset = 0; offset < 4; offset++) {
+				seen.push(...(await page(`limit=1&offset=${offset}`)).ids);
+			}
+
+			expect(seen).toEqual(["video-c", "video-b", "video-a", "video-old"]);
+		});
+
+		it.each([
+			["limit=1", true],
+			["limit=3", true],
+			["limit=2&offset=1", true],
+			["limit=4", false],
+			["limit=3&offset=1", false],
+			["limit=10", false],
+			["limit=2&offset=4", false],
+		])(
+			"reports with ?%s whether another video follows",
+			async (query, hasMore) => {
+				const { ids, pagination } = await page(query);
+				const params = new URLSearchParams(query);
+				const limit = Number(params.get("limit"));
+				const offset = Number(params.get("offset") ?? 0);
+
+				expect(pagination).toEqual({ limit, offset, hasMore });
+				expect(ids).toHaveLength(Math.max(0, Math.min(limit, 4 - offset)));
+			},
+		);
+
+		it("returns the list fields the docs and the OpenAPI description show", async () => {
+			const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+			const documented =
+				developerOpenApiSpec("https://cap.so").components.schemas
+					.DeveloperVideoList.properties;
+			const example = JSON.parse(
+				docsSection("### List Videos").match(/```json\n([\s\S]*?)```/)?.[1] ??
+					"{}",
+			);
+			const { body } = await get("/?limit=1");
+
+			expect(Object.keys(example)).toEqual(Object.keys(body));
+			expect(Object.keys(documented)).toEqual(Object.keys(body));
+			expect(Object.keys(example.pagination)).toEqual(
+				Object.keys(body.pagination),
+			);
+			expect(Object.keys(documented.pagination.properties)).toEqual(
+				Object.keys(body.pagination),
+			);
+		});
+
+		it("counts only the filtered user's videos toward hasMore", async () => {
+			mocks.store.more = (mocks.store.more ?? []).map((video) => ({
+				...video,
+				externalUserId: video.id === "video-a" ? "alice" : "bob",
+			}));
+
+			expect(await page("userId=alice&limit=1")).toEqual({
+				ids: ["video-a"],
+				pagination: { limit: 1, offset: 0, hasMore: false },
+			});
 		});
 	});
 
@@ -304,8 +401,6 @@ describe("developer video API", () => {
 			"àlice",
 			"Alicé",
 			"ÀLICÉ",
-			"alice ",
-			" alice",
 			"alic",
 			"a lice",
 			"alice%",
