@@ -11,6 +11,7 @@ import { NewAppModal } from "./create-app";
 import { infraMono, infraSans } from "./fonts";
 import { rememberInfraApp } from "./remember-infra-app";
 import { EnvTag, FOCUS } from "./ui";
+import { useMayLeave } from "./uploads";
 
 const ITEM =
 	"flex cursor-default select-none items-center gap-3 rounded-[7px] px-2.5 py-2 text-[13.5px] text-[rgba(232,236,244,0.8)] outline-none data-[highlighted]:bg-[rgba(222,230,246,0.07)] data-[highlighted]:text-white";
@@ -27,13 +28,14 @@ export function AppSwitcher({
 	const pathname = usePathname();
 	const router = useRouter();
 	const [createOpen, setCreateOpen] = useState(false);
+	const mayLeave = useMayLeave();
 	const { section } = parseInfraPathname(pathname);
 	const current = apps.find((app) => app.id === appId) ?? null;
 
 	if (!current) return null;
 
 	const selectApp = (id: string) => {
-		if (id === current.id) return;
+		if (id === current.id || !mayLeave()) return;
 		rememberInfraApp(id);
 		router.push(infraAppPath(id, section ?? ""));
 	};

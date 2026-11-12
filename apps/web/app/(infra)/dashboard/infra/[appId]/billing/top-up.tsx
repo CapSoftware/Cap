@@ -124,6 +124,14 @@ export function TopUp({ appId }: { appId: string }) {
 					/>
 				</div>
 			</div>
+			{customCents !== null && !valid && (
+				<p
+					role="alert"
+					className="m-0 -mt-2 text-[13px] leading-[1.5] text-[#F2A199]"
+				>
+					Enter an amount from $5 to $1,000.
+				</p>
+			)}
 			{codeOpen && (
 				<div className="w-[240px] max-w-full">
 					<label htmlFor={codeId} className="sr-only">
