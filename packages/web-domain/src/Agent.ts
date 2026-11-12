@@ -1025,8 +1025,33 @@ export const AgentDeveloperAppContextResponse = Schema.Struct({
 			autoTopUpEnabled: Schema.Boolean,
 			autoTopUpThresholdMicroCredits: Schema.Number,
 			autoTopUpAmountCents: Schema.Number,
+			cardSaved: Schema.Boolean,
 		}),
 	),
+	billing: Schema.Struct({
+		standing: Schema.Struct({
+			state: Schema.Literal("active", "grace", "paused"),
+			pausesAt: Schema.NullOr(Schema.String),
+		}),
+		upload: Schema.Struct({
+			allowed: Schema.Boolean,
+			reason: Schema.NullOr(
+				Schema.Literal("no_account", "out_of_credit", "insufficient_credits"),
+			),
+			requiredMicroCredits: Schema.Number,
+			shortfallMicroCredits: Schema.Number,
+			message: Schema.NullOr(Schema.String),
+		}),
+		storage: Schema.Struct({
+			minutesByTier: Schema.Struct({
+				"1080p": Schema.Number,
+				"1440p": Schema.Number,
+				"2160p": Schema.Number,
+			}),
+			dailyMicroCredits: Schema.Number,
+			monthlyMicroCredits: Schema.Number,
+		}),
+	}),
 	requestId: Schema.String,
 });
 
@@ -1071,6 +1096,7 @@ export const AgentDeveloperCreditTransaction = Schema.Struct({
 		"refund",
 		"adjustment",
 		"pro_credit",
+		"topup_failed",
 	),
 	amountMicroCredits: Schema.Number,
 	balanceAfterMicroCredits: Schema.Number,

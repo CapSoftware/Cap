@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 		duration: number | null;
 		deletedAt: string | null;
 	},
-	paidMicroCredits: 0,
+	admission: vi.fn(),
 	create: vi.fn(),
 	presign: vi.fn(),
 	complete: vi.fn(),
@@ -40,6 +40,10 @@ vi.mock("@cap/web-backend", async () => {
 		},
 	};
 });
+vi.mock("@/lib/infra-standing", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/infra-standing")>()),
+	getInfraUploadAdmission: mocks.admission,
+}));
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
@@ -89,7 +93,15 @@ function writes() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.video = inProgress;
-	mocks.paidMicroCredits = 0;
+	mocks.admission.mockResolvedValue({
+		allowed: true,
+		reason: null,
+		standing: { state: "active", pausesAt: null },
+		balanceMicroCredits: 1_000_000,
+		requiredMicroCredits: 1,
+		shortfallMicroCredits: 0,
+		message: null,
+	});
 	mocks.query.mockImplementation(async (query: string) => {
 		if (query.includes("from `developer_videos`")) {
 			const video = mocks.video;
@@ -97,14 +109,6 @@ beforeEach(() => {
 				rows: video
 					? [[video.appId, s3Key, video.duration, video.deletedAt]]
 					: [],
-			};
-		}
-		if (query.includes("from `developer_credit_transactions`")) {
-			return { rows: [[mocks.paidMicroCredits]] };
-		}
-		if (query.includes("from `developer_credit_accounts`")) {
-			return {
-				rows: query.includes("`id`") ? [["account-1", 1_000_000]] : [[990_000]],
 			};
 		}
 		return { rows: [{ affectedRows: 1 }] };
@@ -187,9 +191,7 @@ describe("developer SDK multipart upload", () => {
 		expect(writes()).toHaveLength(0);
 	});
 
-	it("charges a completion once even when a retry overlaps it", async () => {
-		mocks.paidMicroCredits = 1_000;
-
+	it("completes without reading or writing the credit ledger", async () => {
 		const response = await post("/complete", completeBody);
 
 		expect(response.status).toBe(200);
@@ -197,32 +199,38 @@ describe("developer SDK multipart upload", () => {
 		const queries = mocks.query.mock.calls.map(([query]) => String(query));
 		expect(
 			queries.some((query) =>
-				/from `developer_videos`.*for update/i.test(query),
-			),
-		).toBe(true);
-		expect(
-			writes().some(([query]) =>
-				/^(update `developer_credit_accounts`|insert into `developer_credit_transactions`)/.test(
-					String(query),
-				),
+				/developer_credit_(accounts|transactions)/.test(query),
 			),
 		).toBe(false);
+		expect(mocks.admission).toHaveBeenCalledWith("app-1", {
+			durationSeconds: 12,
+			width: 0,
+			height: 0,
+			tier: "1080p",
+		});
 	});
 
-	it("charges only the unpaid difference when a retry reports a longer upload", async () => {
-		mocks.paidMicroCredits = 400;
+	it("refuses with 402 when the balance cannot cover seven days of storage", async () => {
+		mocks.admission.mockResolvedValue({
+			allowed: false,
+			reason: "insufficient_credits",
+			standing: { state: "active", pausesAt: null },
+			balanceMicroCredits: 0,
+			requiredMicroCredits: 19_834,
+			shortfallMicroCredits: 19_834,
+			message: "This app has no credit.",
+		});
 
 		const response = await post("/complete", completeBody);
 
-		expect(response.status).toBe(200);
-		const debit = writes().find(([query]) =>
-			String(query).startsWith("update `developer_credit_accounts`"),
-		);
-		expect(debit?.[1]).toContain(600);
-		const record = writes().find(([query]) =>
-			String(query).startsWith("insert into `developer_credit_transactions`"),
-		);
-		expect(record?.[1]).toContain(-600);
+		expect(response.status).toBe(402);
+		await expect(response.json()).resolves.toMatchObject({
+			error: "Insufficient credits",
+			code: "insufficient_credits",
+			requiredMicroCredits: 19_834,
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
 	});
 
 	it("refuses to complete an upload for a deleted video", async () => {

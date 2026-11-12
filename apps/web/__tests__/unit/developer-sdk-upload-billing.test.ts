@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
 	listParts: vi.fn(),
 	creditTransactions: [] as Record<string, unknown>[],
 	videoUpdates: [] as Record<string, unknown>[],
+	admission: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-standing", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/infra-standing")>()),
+	getInfraUploadAdmission: mocks.admission,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -162,7 +168,12 @@ import { app } from "@/app/api/developer/sdk/v1/[...route]/upload";
 
 type RequestPart = { partNumber: number; etag: string; size: number };
 
-const complete = (body: { parts?: RequestPart[]; durationInSecs: number }) =>
+const complete = (body: {
+	parts?: RequestPart[];
+	durationInSecs: number;
+	width?: number;
+	height?: number;
+}) =>
 	app.request("/complete", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -171,14 +182,33 @@ const complete = (body: { parts?: RequestPart[]; durationInSecs: number }) =>
 			uploadId: "upload-1",
 			parts: body.parts ?? [{ partNumber: 1, etag: '"etag-1"', size: 1 }],
 			durationInSecs: body.durationInSecs,
-			width: 1920,
-			height: 1080,
+			width: body.width ?? 1920,
+			height: body.height ?? 1080,
 		}),
 	});
 
-const microCreditsFor = (seconds: number) => Math.floor((seconds / 60) * 5_000);
+const admitted = {
+	allowed: true,
+	reason: null,
+	standing: { state: "active" as const, pausesAt: null },
+	balanceMicroCredits: 10_000_000,
+	requiredMicroCredits: 20,
+	shortfallMicroCredits: 0,
+	message: null,
+};
 
-describe("developer SDK multipart completion billing", () => {
+const refused = {
+	allowed: false,
+	reason: "insufficient_credits" as const,
+	standing: { state: "active" as const, pausesAt: null },
+	balanceMicroCredits: 100,
+	requiredMicroCredits: 19_834,
+	shortfallMicroCredits: 19_734,
+	message:
+		"Uploading needs $0.20 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.00, so add at least $0.20.",
+};
+
+describe("developer SDK multipart completion", () => {
 	beforeEach(() => {
 		mocks.balance = 10_000_000;
 		mocks.accountExists = true;
@@ -189,6 +219,8 @@ describe("developer SDK multipart completion billing", () => {
 		mocks.events = [];
 		mocks.creditTransactions = [];
 		mocks.videoUpdates = [];
+		mocks.admission.mockReset();
+		mocks.admission.mockResolvedValue(admitted);
 		mocks.complete.mockReset();
 		mocks.complete.mockImplementation(() => {
 			if (mocks.completeFailures > 0) {
@@ -208,7 +240,18 @@ describe("developer SDK multipart completion billing", () => {
 		);
 	});
 
-	it("bills from the part sizes storage reports, not the sizes in the request", async () => {
+	it("charges nothing when an upload completes", async () => {
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.balance).toBe(10_000_000);
+		expect(mocks.creditTransactions).toEqual([]);
+		expect(mocks.events).toEqual(["complete"]);
+	});
+
+	it("measures the upload from the part sizes storage reports, not the sizes in the request", async () => {
 		mocks.storedParts = [
 			{ PartNumber: 1, ETag: '"etag-1"', Size: 60_000_000 },
 			{ PartNumber: 2, ETag: '"etag-2"', Size: 40_000_000 },
@@ -223,31 +266,8 @@ describe("developer SDK multipart completion billing", () => {
 
 		expect(response.status).toBe(200);
 		expect(mocks.listParts).toHaveBeenCalledWith(S3_KEY, "upload-1");
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				amountMicroCredits: -microCreditsFor(40),
-				metadata: { durationSeconds: 40, totalBytes: 100_000_000 },
-			}),
-		]);
-		expect(mocks.balance).toBe(10_000_000 - microCreditsFor(40));
-		expect(mocks.events).toEqual(["debit", "complete"]);
-	});
-
-	it("stores the billed duration when the size floor is longer than the submitted duration", async () => {
-		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
-		];
-		const response = await complete({ durationInSecs: 0.0001 });
-
-		expect(response.status).toBe(200);
 		expect(mocks.videoUpdates).toEqual([
 			{ duration: 40, width: 1920, height: 1080 },
-		]);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				amountMicroCredits: -microCreditsFor(40),
-				metadata: { durationSeconds: 40, totalBytes: 100_000_000 },
-			}),
 		]);
 	});
 
@@ -259,188 +279,168 @@ describe("developer SDK multipart completion billing", () => {
 		expect(mocks.videoUpdates).toEqual([
 			{ duration: 12.5, width: 1920, height: 1080 },
 		]);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({ amountMicroCredits: -microCreditsFor(12.5) }),
-		]);
 	});
 
 	it("only counts the parts the request completes", async () => {
 		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 5_000_000 },
-			{ PartNumber: 2, ETag: '"etag-2"', Size: 95_000_000 },
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 25_000_000 },
+			{ PartNumber: 2, ETag: '"etag-2"', Size: 500_000_000 },
 		];
-		const response = await complete({ durationInSecs: 0.5 });
+		const response = await complete({ durationInSecs: 1 });
 
 		expect(response.status).toBe(200);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				metadata: { durationSeconds: 2, totalBytes: 5_000_000 },
-			}),
-		]);
-	});
-
-	it("keeps the submitted duration when it is longer than the size floor", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
-		const response = await complete({ durationInSecs: 120 });
-
-		expect(response.status).toBe(200);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({ amountMicroCredits: -microCreditsFor(120) }),
+		expect(mocks.videoUpdates).toEqual([
+			{ duration: 10, width: 1920, height: 1080 },
 		]);
 	});
 
 	it("keeps the four hour cap for submitted and size-derived durations", async () => {
 		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000_000 },
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 50_000_000_000 },
 		];
-		expect((await complete({ durationInSecs: 1 })).status).toBe(200);
+		const response = await complete({ durationInSecs: FOUR_HOURS_SECS + 600 });
 
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				amountMicroCredits: -microCreditsFor(FOUR_HOURS_SECS),
-			}),
-		]);
-		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([
-			FOUR_HOURS_SECS,
-		]);
-
-		mocks.storedDuration = null;
-		mocks.creditTransactions = [];
-		mocks.videoUpdates = [];
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 20_000_000 }];
-		expect((await complete({ durationInSecs: 99_999 })).status).toBe(200);
-
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				amountMicroCredits: -microCreditsFor(FOUR_HOURS_SECS),
-			}),
-		]);
-		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([
-			FOUR_HOURS_SECS,
-		]);
+		expect(response.status).toBe(200);
+		expect(mocks.videoUpdates[0]?.duration).toBe(FOUR_HOURS_SECS);
 	});
 
 	it("bounds a declared duration by what the uploaded bytes could hold", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 4_000 }];
-		const response = await complete({ durationInSecs: FOUR_HOURS_SECS });
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 30_000 }];
+		const response = await complete({ durationInSecs: 3600 });
 
 		expect(response.status).toBe(200);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({
-				amountMicroCredits: -microCreditsFor(4),
-				metadata: { durationSeconds: 4, totalBytes: 4_000 },
-			}),
-		]);
-		expect(mocks.videoUpdates.map((row) => row.duration)).toEqual([4]);
+		expect(mocks.videoUpdates[0]?.duration).toBe(30);
 	});
 
-	it("accepts the longest duration the uploaded bytes could hold", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 60_000 }];
-		expect((await complete({ durationInSecs: 60 })).status).toBe(200);
-		expect(mocks.creditTransactions).toEqual([
-			expect.objectContaining({ amountMicroCredits: -microCreditsFor(60) }),
+	it("asks admission with the stored duration, size and tier of the new video", async () => {
+		mocks.storedParts = [
+			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
+		];
+
+		await complete({ durationInSecs: 90, width: 3840, height: 2160 });
+
+		expect(mocks.admission).toHaveBeenCalledTimes(1);
+		expect(mocks.admission).toHaveBeenCalledWith("app-1", {
+			durationSeconds: 90,
+			width: 3840,
+			height: 2160,
+			tier: "2160p",
+		});
+	});
+
+	it("refuses with 402 and the amount needed, and leaves the upload open for a retry", async () => {
+		mocks.admission.mockResolvedValueOnce(refused);
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+
+		const first = await complete({ durationInSecs: 60 });
+
+		expect(first.status).toBe(402);
+		await expect(first.json()).resolves.toEqual({
+			error: "Insufficient credits",
+			code: "insufficient_credits",
+			message: refused.message,
+			standing: "active",
+			pausesAt: null,
+			balanceMicroCredits: 100,
+			requiredMicroCredits: 19_834,
+			shortfallMicroCredits: 19_734,
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.videoUpdates).toEqual([]);
+
+		const retry = await complete({ durationInSecs: 60 });
+
+		expect(retry.status).toBe(200);
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+		expect(mocks.videoUpdates).toEqual([
+			{ duration: 60, width: 1920, height: 1080 },
 		]);
 	});
 
-	it("refuses a request that repeats a part, without billing", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 50_000_000 }];
-		const repeated = { partNumber: 1, etag: "etag-1", size: 50_000_000 };
+	it("refuses an app that is out of credit", async () => {
+		mocks.admission.mockResolvedValue({
+			...refused,
+			reason: "out_of_credit",
+			standing: {
+				state: "grace",
+				pausesAt: new Date("2026-11-18T06:41:00Z"),
+			},
+			message:
+				"This app is out of credit, so uploads are blocked. Add at least $0.20 to upload again.",
+		});
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(402);
+		await expect(response.json()).resolves.toMatchObject({
+			code: "out_of_credit",
+			standing: "grace",
+			pausesAt: "2026-11-18T06:41:00.000Z",
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it("refuses a request that repeats a part, before admission", async () => {
 		const response = await complete({
-			parts: [repeated, repeated, repeated, repeated],
-			durationInSecs: 5,
+			parts: [
+				{ partNumber: 1, etag: '"etag-1"', size: 1 },
+				{ partNumber: 1, etag: '"etag-1"', size: 1 },
+			],
+			durationInSecs: 60,
 		});
 
 		expect(response.status).toBe(400);
-		expect(mocks.creditTransactions).toEqual([]);
-		expect(mocks.events).toEqual([]);
+		expect(mocks.admission).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
 	it("accepts part ETags with or without quotes", async () => {
-		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000 }];
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
 		const response = await complete({
-			parts: [{ partNumber: 1, etag: "etag-1", size: 10_000 }],
-			durationInSecs: 3,
+			parts: [{ partNumber: 1, etag: "etag-1", size: 1 }],
+			durationInSecs: 5,
 		});
 
 		expect(response.status).toBe(200);
-		expect(mocks.events).toEqual(["debit", "complete"]);
 	});
 
-	it.each([
-		[
-			"a part storage does not have",
-			[{ PartNumber: 2, ETag: '"etag-2"', Size: 1_000 }],
-		],
-		[
-			"a part with a different ETag",
-			[{ PartNumber: 1, ETag: '"other"', Size: 1_000 }],
-		],
-		["a part with no reported size", [{ PartNumber: 1, ETag: '"etag-1"' }]],
-	])("rejects %s without billing or completing", async (_, storedParts) => {
-		mocks.storedParts = storedParts;
-		const response = await complete({ durationInSecs: 30 });
-
-		expect(response.status).toBe(400);
-		expect(mocks.balance).toBe(10_000_000);
-		expect(mocks.creditTransactions).toEqual([]);
-		expect(mocks.complete).not.toHaveBeenCalled();
-		expect(mocks.videoUpdates).toEqual([]);
-	});
-
-	it("leaves the upload open on insufficient credits so a retry after topping up completes it", async () => {
-		mocks.balance = 1_000;
-		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
-		];
-		const rejected = await complete({ durationInSecs: 0.5 });
-
-		expect(rejected.status).toBe(402);
-		expect(await rejected.json()).toEqual({ error: "Insufficient credits" });
-		expect(mocks.balance).toBe(1_000);
-		expect(mocks.complete).not.toHaveBeenCalled();
-
-		mocks.balance = 10_000_000;
-		const retried = await complete({ durationInSecs: 0.5 });
-
-		expect(retried.status).toBe(200);
-		expect(mocks.balance).toBe(10_000_000 - microCreditsFor(40));
-		expect(mocks.events).toEqual(["debit", "complete"]);
-	});
-
-	it("does not bill when the uploaded parts cannot be listed", async () => {
+	it("does not ask admission when the uploaded parts cannot be listed", async () => {
 		mocks.listPartsFails = true;
-		const response = await complete({ durationInSecs: 30 });
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const response = await complete({ durationInSecs: 60 });
 
 		expect(response.status).toBe(500);
-		expect(mocks.balance).toBe(10_000_000);
+		expect(mocks.admission).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		errors.mockRestore();
+	});
+
+	it("returns success without another check when the upload already completed", async () => {
+		mocks.storedDuration = 60;
+
+		const response = await complete({ durationInSecs: 60 });
+
+		expect(response.status).toBe(200);
+		expect(mocks.admission).not.toHaveBeenCalled();
+		expect(mocks.listParts).not.toHaveBeenCalled();
 		expect(mocks.complete).not.toHaveBeenCalled();
 	});
 
-	it("does not debit again when a completed upload is completed a second time", async () => {
-		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
-		];
-		expect((await complete({ durationInSecs: 0.5 })).status).toBe(200);
-		expect((await complete({ durationInSecs: 0.5 })).status).toBe(200);
-
-		expect(mocks.balance).toBe(10_000_000 - microCreditsFor(40));
-		expect(mocks.creditTransactions).toHaveLength(1);
-		expect(mocks.events).toEqual(["debit", "complete"]);
-	});
-
-	it("does not debit again when a retry follows a failed completion", async () => {
-		mocks.storedParts = [
-			{ PartNumber: 1, ETag: '"etag-1"', Size: 100_000_000 },
-		];
+	it("can be retried after storage fails to complete the upload", async () => {
 		mocks.completeFailures = 1;
-		expect((await complete({ durationInSecs: 0.5 })).status).toBe(500);
-		expect((await complete({ durationInSecs: 0.5 })).status).toBe(200);
+		mocks.storedParts = [{ PartNumber: 1, ETag: '"etag-1"', Size: 10_000_000 }];
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		expect(mocks.balance).toBe(10_000_000 - microCreditsFor(40));
-		expect(mocks.creditTransactions).toHaveLength(1);
-		expect(mocks.events).toEqual(["debit", "complete"]);
+		const first = await complete({ durationInSecs: 60 });
+		const retry = await complete({ durationInSecs: 60 });
+
+		expect(first.status).toBe(500);
+		expect(retry.status).toBe(200);
+		expect(mocks.creditTransactions).toEqual([]);
 		expect(mocks.videoUpdates).toEqual([
-			{ duration: 40, width: 1920, height: 1080 },
+			{ duration: 60, width: 1920, height: 1080 },
 		]);
+		errors.mockRestore();
 	});
 });

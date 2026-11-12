@@ -1,14 +1,15 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
+import { developerVideos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import {
+	getInfraUploadAdmission,
+	uploadAdmissionError,
+} from "@/lib/infra-standing";
 import { zValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
-
-const MIN_BALANCE_MICRO_CREDITS = 5_000;
 
 export const app = new Hono<{
 	Variables: {
@@ -37,16 +38,9 @@ app.post(
 		const appId = c.get("developerAppId");
 		const body = c.req.valid("json");
 
-		const [account] = await db()
-			.select({
-				balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-			})
-			.from(developerCreditAccounts)
-			.where(eq(developerCreditAccounts.appId, appId))
-			.limit(1);
-
-		if (!account || account.balanceMicroCredits < MIN_BALANCE_MICRO_CREDITS) {
-			return c.json({ error: "Insufficient credits" }, 402);
+		const admission = await getInfraUploadAdmission(appId);
+		if (!admission.allowed) {
+			return c.json(uploadAdmissionError(admission), 402);
 		}
 
 		const videoId = nanoId();
