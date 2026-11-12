@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CapBrand, DoodleBoilFilter } from "../shared/cap-brand";
 import { toCameraDevices } from "../shared/devices";
+import { requestCameraAndMicrophone } from "../shared/media-access";
 import { mountPageNav } from "../shared/page-nav";
 import { rememberCameraSelection } from "../shared/preferences";
 import { sendServiceWorkerMessage } from "../shared/runtime";
@@ -51,7 +52,9 @@ const getCameraErrorMessage = (error: unknown) => {
 	) {
 		return "Chrome did not grant camera access. Click Allow in the browser prompt.";
 	}
-	if (error.name === "NotFoundError") return "No camera was found.";
+	if (error.name === "NotFoundError") {
+		return "No camera or microphone was found.";
+	}
 	if (error.name === "NotReadableError") return "Camera is already in use.";
 	return error.message || "Camera unavailable";
 };
@@ -59,7 +62,8 @@ const getCameraErrorMessage = (error: unknown) => {
 const getPreferredDeviceId = (
 	settings: ExtensionSettings,
 	devices: CameraDevice[],
-) => {
+): string | null => {
+	if (devices.length === 0) return null;
 	const selectedDeviceStillExists = devices.some(
 		(device) => device.deviceId === settings.webcam.deviceId,
 	);
@@ -70,7 +74,7 @@ const getPreferredDeviceId = (
 	) {
 		return settings.webcam.deviceId;
 	}
-	return devices[0]?.deviceId ?? DEFAULT_CAMERA_DEVICE_ID;
+	return devices[0]?.deviceId ?? null;
 };
 
 function App() {
@@ -115,7 +119,7 @@ function App() {
 	const saveCameraSelection = async (
 		nextSettings: ExtensionSettings,
 		nextDevices: CameraDevice[],
-		deviceId: string,
+		deviceId: string | null,
 	) => {
 		const settingsToSave = rememberCameraSelection(
 			nextSettings,
@@ -123,7 +127,7 @@ function App() {
 			nextDevices,
 		);
 		setSettings(settingsToSave);
-		setSelectedDeviceId(deviceId);
+		setSelectedDeviceId(deviceId ?? DEFAULT_CAMERA_DEVICE_ID);
 		await saveSettings(settingsToSave);
 		await sendServiceWorkerMessage({
 			target: "service-worker",
@@ -149,19 +153,9 @@ function App() {
 		setError(null);
 
 		try {
-			// Request camera and microphone together so the extension origin gets
-			// both grants from one prompt; retry camera-only when no mic exists.
-			const stream = await navigator.mediaDevices
-				.getUserMedia({ video: true, audio: true })
-				.catch((err: unknown) => {
-					if (err instanceof DOMException && err.name === "NotFoundError") {
-						return navigator.mediaDevices.getUserMedia({
-							video: true,
-							audio: false,
-						});
-					}
-					throw err;
-				});
+			const stream = await requestCameraAndMicrophone((constraints) =>
+				navigator.mediaDevices.getUserMedia(constraints),
+			);
 			const cameraGranted = stream.getVideoTracks().length > 0;
 			const microphoneGranted = stream.getAudioTracks().length > 0;
 			stopStream(stream);
@@ -188,7 +182,11 @@ function App() {
 		await saveCameraSelection(settings, devices, deviceId);
 	};
 
-	const { title, lede } = headlines[status];
+	const noCamera = status === "ready" && devices.length === 0;
+	const { title } = headlines[status];
+	const lede = noCamera
+		? "Microphone access is on. No camera was found; connect one and click Refresh list to use it."
+		: headlines[status].lede;
 
 	return (
 		<>
