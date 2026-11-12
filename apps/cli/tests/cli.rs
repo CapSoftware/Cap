@@ -3001,29 +3001,34 @@ fn mcp_developer_tools_finish_the_job_and_return_each_result_once() {
 #[test]
 fn developer_waits_stop_at_their_deadline() {
     let stub = start_infra_stub();
-    let timed = |args: &[&str]| {
-        let started = std::time::Instant::now();
-        let output = infra_cap(&stub, args);
-        (output, started.elapsed())
+    let answered = |id: &str| {
+        stub.requests()
+            .iter()
+            .filter(|request| request.starts_with("GET ") && request.ends_with(id))
+            .count()
     };
 
     for (kind, id, id_key) in [
         ("videos", INFRA_STALLED_VIDEO, "videoId"),
         ("transcripts", INFRA_STALLED_TRANSCRIPT, "transcriptId"),
     ] {
-        let (output, elapsed) = timed(&[
-            "developers",
-            kind,
-            "wait",
-            INFRA_APP,
-            id,
-            "--timeout-seconds",
-            "1",
-            "--json",
-        ]);
-        assert!(
-            elapsed < INFRA_STALL - Duration::from_secs(1),
-            "{kind} wait took {elapsed:?} with a 1 second limit"
+        let output = infra_cap(
+            &stub,
+            &[
+                "developers",
+                kind,
+                "wait",
+                INFRA_APP,
+                id,
+                "--timeout-seconds",
+                "1",
+                "--json",
+            ],
+        );
+        assert_eq!(
+            answered(id),
+            0,
+            "the {kind} wait outlived its 1 second limit and saw the late answer"
         );
         assert_eq!(output.status.code(), Some(1), "{kind}");
         let error = single_json_error(&output);
@@ -3033,19 +3038,23 @@ fn developer_waits_stop_at_their_deadline() {
         assert!(error.get("status").is_none(), "{kind}");
     }
 
-    let (output, elapsed) = timed(&[
-        "developers",
-        "videos",
-        "wait",
-        INFRA_APP,
-        INFRA_SLOW_VIDEO,
-        "--timeout-seconds",
-        "2",
-        "--json",
-    ]);
+    let output = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "wait",
+            INFRA_APP,
+            INFRA_SLOW_VIDEO,
+            "--timeout-seconds",
+            "2",
+            "--json",
+        ],
+    );
+    let polls = answered(INFRA_SLOW_VIDEO);
     assert!(
-        elapsed < Duration::from_secs(3),
-        "the last sleep ran past the limit: {elapsed:?}"
+        (1..=3).contains(&polls),
+        "a 2 second wait polls at 0, 0.5 and 1.5 seconds, not {polls} times"
     );
     let error = single_json_error(&output);
     assert_eq!(error["code"], "NOT_READY");
@@ -3055,8 +3064,14 @@ fn developer_waits_stop_at_their_deadline() {
         "cap developers videos wait {INFRA_APP} {INFRA_SLOW_VIDEO}"
     )));
 
+    for _ in 0..200 {
+        if answered(INFRA_STALLED_VIDEO) == 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(answered(INFRA_STALLED_VIDEO), 1);
     let mut session = McpSession::start(&stub.url);
-    let started = std::time::Instant::now();
     let (result, _) = session.call(
         "developer_video_wait",
         serde_json::json!({
@@ -3065,7 +3080,11 @@ fn developer_waits_stop_at_their_deadline() {
             "timeout_seconds": 1,
         }),
     );
-    assert!(started.elapsed() < INFRA_STALL - Duration::from_secs(1));
+    assert_eq!(
+        answered(INFRA_STALLED_VIDEO),
+        1,
+        "the MCP wait outlived its 1 second limit and saw the late answer"
+    );
     assert_eq!(result["isError"], true);
     let error = mcp_payload(&result);
     assert_eq!(error["code"], "NOT_READY");
