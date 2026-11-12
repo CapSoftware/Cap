@@ -1,3 +1,4 @@
+import type { Effect as EffectType } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 	presign: vi.fn(),
 	complete: vi.fn(),
 	abort: vi.fn(),
+	listParts: vi.fn(),
+	headObject: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -26,21 +29,31 @@ vi.mock("@cap/database", async () => {
 });
 vi.mock("@cap/web-backend", async () => {
 	const { Effect } = await import("effect");
+	const { S3Error } = await import("@cap/web-domain");
+	const storage = (call: () => unknown) =>
+		Effect.try({ try: call, catch: (cause) => new S3Error({ cause }) });
 	const multipart = {
 		create: (...args: unknown[]) =>
-			Effect.sync(() => mocks.create(...args) ?? { UploadId: "upload-1" }),
+			storage(() => mocks.create(...args) ?? { UploadId: "upload-1" }),
 		getPresignedUploadPartUrl: (...args: unknown[]) =>
-			Effect.sync(() => mocks.presign(...args) ?? "https://part"),
-		complete: (...args: unknown[]) =>
-			Effect.sync(() => mocks.complete(...args)),
-		abort: (...args: unknown[]) => Effect.sync(() => mocks.abort(...args)),
-		listParts: () =>
-			Effect.succeed([{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 }]),
+			storage(() => mocks.presign(...args) ?? "https://part"),
+		complete: (...args: unknown[]) => storage(() => mocks.complete(...args)),
+		abort: (...args: unknown[]) => storage(() => mocks.abort(...args)),
+		listParts: (...args: unknown[]) =>
+			storage(
+				() =>
+					mocks.listParts(...args) ?? [
+						{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 },
+					],
+			),
 	};
 	return {
 		provideOptionalAuth: <T>(effect: T) => effect,
 		S3Buckets: {
-			getBucketAccess: () => Effect.succeed([{ multipart }]),
+			getBucketAccess: () =>
+				Effect.succeed([
+					{ multipart, headObject: () => storage(() => mocks.headObject()) },
+				]),
 		},
 	};
 });
@@ -54,8 +67,17 @@ vi.mock("@/lib/developer-video-start", () => ({
 	startDeveloperVideoProcessing: mocks.startProcessing,
 }));
 vi.mock("@/lib/server", async () => {
-	const { Effect } = await import("effect");
-	return { runPromise: Effect.runPromise };
+	const { Cause, Effect, Exit } = await import("effect");
+	return {
+		runPromise: <A, E>(effect: EffectType.Effect<A, E>) =>
+			Effect.runPromiseExit(effect).then((exit) => {
+				if (Exit.isFailure(exit)) {
+					if (Cause.isDieType(exit.cause)) throw exit.cause.defect;
+					throw exit;
+				}
+				return exit.value;
+			}),
+	};
 });
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
@@ -93,6 +115,18 @@ const completeBody = {
 	durationInSecs: 12,
 };
 
+const storageError = (code: string, status: number) =>
+	Object.assign(new Error(code), {
+		name: code,
+		Code: code,
+		$fault: status >= 500 ? "server" : "client",
+		$metadata: { httpStatusCode: status },
+	});
+
+const fails = (code: string, status: number) => () => {
+	throw storageError(code, status);
+};
+
 function writes() {
 	return mocks.query.mock.calls.filter(([query]) =>
 		/^(insert|update|delete)/.test(String(query)),
@@ -104,6 +138,7 @@ beforeEach(() => {
 	mocks.video = inProgress;
 	mocks.claim.mockResolvedValue({ action: "start", encodeId: "encode-1" });
 	mocks.startProcessing.mockResolvedValue(true);
+	mocks.release.mockResolvedValue(undefined);
 	mocks.admission.mockResolvedValue({
 		allowed: true,
 		reason: null,
@@ -303,5 +338,286 @@ describe("developer SDK multipart upload", () => {
 
 		expect(response.status).toBe(200);
 		expect(mocks.abort).toHaveBeenCalledWith(s3Key, "upload-1");
+	});
+});
+
+describe("client mistakes on complete and abort", () => {
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		mocks.headObject.mockImplementation(fails("NotFound", 404));
+	});
+
+	async function refusal(response: Response) {
+		const body = await response.json();
+		expect(typeof body.error).toBe("string");
+		expect(typeof body.code).toBe("string");
+		expect(typeof body.hint).toBe("string");
+		return { status: response.status, code: body.code, hint: body.hint };
+	}
+
+	it("refuses an empty part list before touching storage or the claim", async () => {
+		const response = await post("/complete", { ...completeBody, parts: [] });
+
+		expect(await refusal(response)).toMatchObject({
+			status: 400,
+			code: "parts_required",
+		});
+		expect(mocks.listParts).not.toHaveBeenCalled();
+		expect(mocks.claim).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
+	});
+
+	it("answers 404 for an uploadId that is wrong or was aborted", async () => {
+		mocks.listParts.mockImplementation(fails("NoSuchUpload", 404));
+
+		const response = await post("/complete", {
+			...completeBody,
+			uploadId: "not-an-upload",
+		});
+
+		expect(await refusal(response)).toMatchObject({
+			status: 404,
+			code: "upload_not_found",
+			hint: expect.stringContaining("Call initiate"),
+		});
+		expect(mocks.listParts).toHaveBeenCalledWith(s3Key, "not-an-upload");
+		expect(mocks.claim).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(writes()).toHaveLength(0);
+		expect(console.error).not.toHaveBeenCalled();
+	});
+
+	it("still completes when the upload is gone because the file was already assembled", async () => {
+		mocks.listParts.mockImplementation(fails("NoSuchUpload", 404));
+		mocks.headObject.mockReturnValue({ ContentLength: 1_048_576 });
+
+		const response = await post("/complete", completeBody);
+
+		expect(response.status).toBe(200);
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(mocks.startProcessing).toHaveBeenCalledTimes(1);
+	});
+
+	it("names the minimum part size when a part other than the last is too small", async () => {
+		mocks.complete.mockImplementation(fails("EntityTooSmall", 400));
+
+		const response = await post("/complete", completeBody);
+
+		expect(await refusal(response)).toMatchObject({
+			status: 400,
+			code: "part_too_small",
+			hint: expect.stringContaining("5242880 bytes (5 MB)"),
+		});
+		expect(mocks.release).toHaveBeenCalledWith("video-1", {
+			action: "start",
+			encodeId: "encode-1",
+		});
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+		expect(
+			writes().some(([query]) =>
+				String(query).startsWith("update `developer_videos`"),
+			),
+		).toBe(false);
+	});
+
+	it.each(["InvalidPart", "InvalidPartOrder"])(
+		"answers 400 when storage rejects the parts with %s",
+		async (code) => {
+			mocks.complete.mockImplementation(fails(code, 400));
+
+			const response = await post("/complete", completeBody);
+
+			expect(await refusal(response)).toMatchObject({
+				status: 400,
+				code: "parts_mismatch",
+			});
+			expect(mocks.release).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it("answers 404 when the upload is aborted while it is being completed", async () => {
+		mocks.complete.mockImplementation(fails("NoSuchUpload", 404));
+
+		const response = await post("/complete", completeBody);
+
+		expect(await refusal(response)).toMatchObject({
+			status: 404,
+			code: "upload_not_found",
+		});
+		expect(mocks.release).toHaveBeenCalledTimes(1);
+	});
+
+	it("answers 400 with a code when a listed part was never uploaded", async () => {
+		const response = await post("/complete", {
+			...completeBody,
+			parts: [{ partNumber: 2, etag: "etag-2", size: 1 }],
+		});
+
+		expect(await refusal(response)).toMatchObject({
+			status: 400,
+			code: "parts_mismatch",
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["complete", "SlowDown", 503],
+		["complete", "InternalError", 500],
+		["complete", "AccessDenied", 403],
+		["listParts", "InternalError", 500],
+		["listParts", "AccessDenied", 403],
+	] as const)(
+		"keeps a %s failure with %s a retryable 500",
+		async (call, code, status) => {
+			mocks[call].mockImplementation(fails(code, status));
+
+			const response = await post("/complete", completeBody);
+
+			expect(await refusal(response)).toMatchObject({
+				status: 500,
+				code: "internal_error",
+				hint: expect.stringContaining("Retry with backoff"),
+			});
+			expect(console.error).toHaveBeenCalled();
+			expect(mocks.startProcessing).not.toHaveBeenCalled();
+		},
+	);
+
+	it("answers 404 when aborting an upload that does not exist", async () => {
+		mocks.video = uploaded;
+		mocks.abort.mockImplementation(fails("NoSuchUpload", 404));
+
+		const response = await post("/abort", { uploadId: "not-an-upload" });
+
+		expect(await refusal(response)).toMatchObject({
+			status: 404,
+			code: "upload_not_found",
+			hint: expect.stringContaining("Nothing was aborted"),
+		});
+		expect(console.error).not.toHaveBeenCalled();
+	});
+
+	it("keeps a storage failure on abort a retryable 500", async () => {
+		mocks.abort.mockImplementation(fails("InternalError", 500));
+
+		const response = await post("/abort", { uploadId: "upload-1" });
+
+		expect(await refusal(response)).toMatchObject({
+			status: 500,
+			code: "internal_error",
+		});
+	});
+
+	it.each([
+		["/initiate", {}, null, 404, "video_not_found"],
+		[
+			"/presign-part",
+			{ uploadId: "u", partNumber: 1 },
+			null,
+			404,
+			"video_not_found",
+		],
+		["/complete", completeBody, null, 404, "video_not_found"],
+		["/abort", { uploadId: "u" }, null, 404, "video_not_found"],
+		["/initiate", {}, uploaded, 409, "upload_already_completed"],
+		[
+			"/presign-part",
+			{ uploadId: "u", partNumber: 1 },
+			uploaded,
+			409,
+			"upload_already_completed",
+		],
+	] as const)(
+		"gives %s a code and a hint for a video in the wrong state",
+		async (path, body, video, status, code) => {
+			mocks.video = video;
+
+			const response = await post(path, body);
+
+			expect(await refusal(response)).toMatchObject({ status, code });
+		},
+	);
+
+	it("gives the completion race its code and a hint", async () => {
+		mocks.claim.mockResolvedValue(null);
+
+		const response = await post("/complete", completeBody);
+
+		expect(await refusal(response)).toMatchObject({
+			status: 409,
+			code: "completion_in_progress",
+		});
+	});
+});
+
+describe("malformed upload requests", () => {
+	const send = (path: string, init: RequestInit) =>
+		app.request(path, { method: "POST", ...init });
+
+	it("puts a string in error and the failing fields in issues", async () => {
+		const response = await post("/complete", {
+			uploadId: "upload-1",
+			parts: [{ partNumber: 0, etag: "etag-1", size: 1 }],
+		});
+
+		expect(response.status).toBe(400);
+		const body = await response.json();
+		expect(body.code).toBe("invalid_request");
+		expect(body.error).toMatch(/^Invalid request: parts\.0\.partNumber: /);
+		expect(body.error).toContain("durationInSecs: ");
+		expect(typeof body.hint).toBe("string");
+		expect(
+			body.issues.map((issue: { path: unknown[] }) => issue.path.join(".")),
+		).toEqual(["parts.0.partNumber", "durationInSecs"]);
+		expect(body).not.toHaveProperty("success");
+	});
+
+	it.each(['{"videoId": "video-1"', "", "not json"])(
+		"answers malformed JSON %j with a JSON body",
+		async (body) => {
+			const response = await send("/initiate", {
+				headers: { "Content-Type": "application/json" },
+				body,
+			});
+
+			expect(response.status).toBe(400);
+			expect(response.headers.get("content-type")).toContain(
+				"application/json",
+			);
+			expect(await response.json()).toMatchObject({
+				error: "Malformed JSON in request body",
+				code: "invalid_json",
+				hint: expect.stringContaining("Content-Type: application/json"),
+			});
+			expect(mocks.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		["text/plain", JSON.stringify({ videoId: "video-1" })],
+		["application/x-www-form-urlencoded", "videoId=video-1"],
+		[undefined, JSON.stringify({ videoId: "video-1" })],
+	])("refuses a body sent as %s", async (contentType, body) => {
+		const response = await send("/initiate", {
+			headers: contentType ? { "Content-Type": contentType } : {},
+			body: new TextEncoder().encode(body),
+		});
+
+		expect(response.status).toBe(415);
+		expect(await response.json()).toMatchObject({
+			code: "unsupported_media_type",
+			hint: expect.stringContaining("Content-Type: application/json"),
+		});
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+
+	it("accepts the JSON content types Hono parses", async () => {
+		const response = await send("/initiate", {
+			headers: { "Content-Type": "application/json; charset=utf-8" },
+			body: JSON.stringify({ videoId: "video-1" }),
+		});
+
+		expect(response.status).toBe(200);
 	});
 });
