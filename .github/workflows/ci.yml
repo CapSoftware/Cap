@@ -154,6 +154,7 @@ jobs:
           __tests__/unit/referral-checkout.test.ts
           __tests__/unit/remove-organization-member.test.ts
           __tests__/unit/reply-notification.test.ts
+          __tests__/unit/retry-transcription.test.ts
           __tests__/unit/seo-demo-videos.test.ts
           __tests__/unit/share-comments-rendering.test.ts
           __tests__/unit/share-page-loading.test.ts

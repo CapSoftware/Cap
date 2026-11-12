@@ -3,7 +3,7 @@ import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function POST(
@@ -39,11 +39,33 @@ export async function POST(
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
 		}
 
+		if (video.transcriptionStatus === "PROCESSING") {
+			return Response.json(
+				{ error: "Transcription is already in progress" },
+				{ status: 409 },
+			);
+		}
+
 		// Reset status to null - this will trigger automatic retry via get-status.ts
-		await db()
+		const [result] = await db()
 			.update(videos)
 			.set({ transcriptionStatus: null })
-			.where(eq(videos.id, videoId));
+			.where(
+				and(
+					eq(videos.id, videoId),
+					eq(videos.ownerId, user.id),
+					video.transcriptionStatus === null
+						? isNull(videos.transcriptionStatus)
+						: eq(videos.transcriptionStatus, video.transcriptionStatus),
+				),
+			);
+
+		if (result.affectedRows === 0) {
+			return Response.json(
+				{ error: "Transcription changed. Refresh and try again." },
+				{ status: 409 },
+			);
+		}
 
 		// Revalidate the video page to ensure UI updates with fresh data
 		revalidatePath(`/s/${videoId}`);
