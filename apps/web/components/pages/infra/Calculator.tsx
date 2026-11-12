@@ -4,6 +4,7 @@ import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { type CSSProperties, useId, useState } from "react";
 import type { InfraResolutionTier } from "@/lib/infra-pricing";
+import { parseAmount } from "./amount";
 import { PRICES, usd, usdWhole } from "./content";
 import { StartLink } from "./shared";
 import { TierSwitch, useTier } from "./TierSwitch";
@@ -118,7 +119,7 @@ const compact = new Intl.NumberFormat("en-US", {
 	maximumFractionDigits: 1,
 });
 
-const grouped = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const grouped = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
 const CURRENCY = {
 	style: "currency",
@@ -179,7 +180,7 @@ const MeterInput = ({
 					<input
 						id={`${id}-number`}
 						type="text"
-						inputMode="numeric"
+						inputMode="decimal"
 						autoComplete="off"
 						value={draft ?? grouped.format(value)}
 						onFocus={(event) => {
@@ -188,10 +189,9 @@ const MeterInput = ({
 						}}
 						onBlur={() => setDraft(null)}
 						onChange={(event) => {
-							const digits = event.target.value.replace(/\D/g, "");
-							setDraft(digits);
-							const next = digits === "" ? 0 : Number(digits);
-							onChange(Math.min(meter.max, next));
+							const next = parseAmount(event.target.value, meter.max);
+							setDraft(next.draft);
+							onChange(next.value);
 						}}
 						className="w-[92px] min-w-0 bg-transparent text-right text-[16px] tabular-nums text-[#E8ECF4] outline-none"
 					/>

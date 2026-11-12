@@ -13,6 +13,7 @@ vi.mock("@cap/database/helpers", () => ({
 	nanoIdLength: 15,
 }));
 
+import { parseAmount } from "@/components/pages/infra/amount";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
@@ -171,5 +172,27 @@ describe("the Cap Infra landing page", () => {
 		const heading = content.LINKS.uploadDocs.split("#")[1];
 		expect(rest).toMatch(/^#+ Multipart Upload$/m);
 		expect(heading).toBe("multipart-upload");
+	});
+});
+
+describe("the calculator's number field", () => {
+	it("reads decimals as decimals", () => {
+		expect(parseAmount("0.5", 100)).toEqual({ draft: "0.5", value: 0.5 });
+		expect(parseAmount("1.5", 100)).toEqual({ draft: "1.5", value: 1.5 });
+		expect(parseAmount("0.", 100)).toEqual({ draft: "0.", value: 0 });
+		expect(parseAmount(".", 100)).toEqual({ draft: ".", value: 0 });
+		expect(parseAmount(".25", 100)).toEqual({ draft: ".25", value: 0.25 });
+		expect(parseAmount("1.2.3", 100)).toEqual({ draft: "1.23", value: 1.23 });
+		expect(parseAmount("0.129", 100)).toEqual({ draft: "0.12", value: 0.12 });
+	});
+
+	it("reads grouped whole numbers and caps at the meter's maximum", () => {
+		expect(parseAmount("1,500", 10_000)).toEqual({
+			draft: "1500",
+			value: 1500,
+		});
+		expect(parseAmount("", 100)).toEqual({ draft: "", value: 0 });
+		expect(parseAmount("abc", 100)).toEqual({ draft: "", value: 0 });
+		expect(parseAmount("250", 100)).toEqual({ draft: "250", value: 100 });
 	});
 });
