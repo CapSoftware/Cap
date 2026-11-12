@@ -1685,7 +1685,6 @@ export async function processVideo(
 		Object.entries(options).filter(([, value]) => value !== undefined),
 	) as VideoProcessingOptions;
 	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
-	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
 	const [sourceH264Level, sourcePixelFormat] =
@@ -1706,6 +1705,9 @@ export async function processVideo(
 			: await probeVideoSourceTraits(inputPath, abortSignal);
 	abortSignal?.throwIfAborted();
 	const hdr = traits?.hdr ?? null;
+	// Created only once nothing above can throw, so a job cancelled while its
+	// source is probed leaves no output path behind.
+	const outputTempFile = await createTempFile(".mp4");
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
