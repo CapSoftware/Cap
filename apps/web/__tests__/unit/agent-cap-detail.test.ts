@@ -26,6 +26,7 @@ vi.mock("@cap/database/auth/auth-options", () => ({ authOptions: () => ({}) }));
 vi.mock("@cap/database/emails/config", () => ({}));
 vi.mock("@/actions/loom", () => ({}));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({}));
+vi.mock("@/lib/developer-video-upload", () => ({}));
 vi.mock("@/lib/generate-ai", () => ({}));
 vi.mock("@/lib/loom-csv-import", () => ({}));
 vi.mock("@/lib/Notification", () => ({}));

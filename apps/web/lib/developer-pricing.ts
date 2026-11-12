@@ -19,6 +19,9 @@ export type BillableVideo = {
 };
 
 export type StorageMinutesByTier = Record<InfraResolutionTier, number>;
+export const SPEECH_MICRO_CREDITS_PER_HOUR = Math.round(
+	SPEECH_DOLLARS_PER_HOUR * MICRO_CREDITS_PER_DOLLAR,
+);
 
 export type StorageUsage = {
 	videoCount: number;
@@ -139,5 +142,19 @@ export function uploadAdmissionMicroCredits(monthlyMicroCredits: number) {
 			(positive(monthlyMicroCredits) * UPLOAD_ADMISSION_DAYS) /
 				STORAGE_BILLING_DAYS_PER_MONTH,
 		),
+	);
+}
+
+export function transcriptionBilledSeconds(durationSeconds: number) {
+	if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0;
+	return Math.max(1, Math.round(durationSeconds));
+}
+
+export function transcriptionMicroCredits(durationSeconds: number) {
+	const billedSeconds = transcriptionBilledSeconds(durationSeconds);
+	if (billedSeconds === 0) return 0;
+	return Math.max(
+		1,
+		Math.floor((billedSeconds * SPEECH_MICRO_CREDITS_PER_HOUR) / 3600),
 	);
 }

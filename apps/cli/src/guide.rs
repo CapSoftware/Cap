@@ -343,8 +343,8 @@ fn build() -> Guide {
                 &[],
             ),
             cmd(
-                "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transactions",
-                "Manage developer apps, SDK videos, credit history, domains, credentials, auto top-up, and credit checkout. New credentials are returned only by confirmed CLI commands.",
+                "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transcripts|transactions",
+                "Manage developer apps, SDK videos, transcripts, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file>` uploads a local video. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. New credentials are returned only by confirmed CLI commands.",
                 OutputMode::SingleJson,
                 &[],
             ),
@@ -425,6 +425,7 @@ fn build() -> Guide {
              are skipped on the CLI. List them with `cap automations list`.",
             "Cap library reads and waits never start transcription, AI generation, or other paid processing.",
             "MCP never accepts passwords, S3 credentials, image files, or newly issued developer credentials. Use confirmed secure CLI commands for those values.",
+            "Developer video uploads and transcripts read a local file path and send it straight to Cap storage. Signed upload URLs stay inside the CLI and are never printed or returned by MCP.",
         ],
     }
 }

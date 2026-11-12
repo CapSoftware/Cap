@@ -4,6 +4,7 @@ import {
 	STORAGE_BILLING_DAYS_PER_MONTH,
 	storageMicroCreditsPerMinutePerMonth,
 } from "@/lib/developer-pricing";
+import { getTranscriptionUsageSince } from "@/lib/developer-transcript-store";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -66,10 +67,15 @@ export default async function InfraUsagePage({
 	const { app } = await requireInfraApp(appId);
 	const now = new Date();
 
-	const [usage, snapshots] = await Promise.all([
+	const [usage, snapshots, transcription] = await Promise.all([
 		getAppStorageUsage(app.id),
 		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
+		getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
+			console.error("[infra-usage] Transcription usage unavailable", error);
+			return null;
+		}),
 	]);
+	const audioHours = (transcription?.audioSeconds ?? 0) / 3600;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
 		(tier) => usage.minutesByTier[tier] > 0,
 	);
@@ -108,6 +114,13 @@ export default async function InfraUsagePage({
 					hint={`${month.billedDays} billed ${month.billedDays === 1 ? "day" : "days"}`}
 					value={formatCharge(month.chargedMicroCredits)}
 				/>
+				{transcription && (
+					<Figure
+						label={`Transcription in ${monthName}`}
+						hint={`${audioHours.toLocaleString("en-US", { maximumFractionDigits: audioHours < 10 ? 2 : 0 })} audio ${audioHours === 1 ? "hour" : "hours"}`}
+						value={formatCharge(transcription.chargedMicroCredits)}
+					/>
+				)}
 			</Figures>
 
 			{first && last && timeline.length > 1 && (
