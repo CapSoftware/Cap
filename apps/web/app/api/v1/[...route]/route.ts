@@ -4673,7 +4673,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const transcript = yield* Effect.tryPromise(() =>
 							getTranscript(path.appId, path.transcriptId),
 						);
-						if (!transcript) return yield* notFound(requestId);
+						if (!transcript) {
+							return yield* new Agent.AgentNotFoundError({
+								...commonError(requestId, "Transcript not found"),
+								code: "NOT_FOUND",
+							});
+						}
 						const includeSegments = (urlParams.include ?? "")
 							.split(",")
 							.some((part) => part.trim() === "segments");
