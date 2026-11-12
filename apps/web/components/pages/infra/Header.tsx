@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Lockup } from "@/components/infra/Lockup";
 import { LINKS, NAV_LINKS } from "./content";
+import { StartLink } from "./shared";
 
 const NAV_ITEM =
 	"rounded-[6px] px-2.5 py-1.5 text-[13.5px] text-[rgba(232,236,244,0.58)] transition-colors duration-200 hover:text-[#E8ECF4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]";
@@ -31,12 +32,7 @@ export const Header = () => (
 				<Link href={LINKS.signIn} className={NAV_ITEM}>
 					Sign in
 				</Link>
-				<Link
-					href={LINKS.start}
-					className="inline-flex h-8 items-center whitespace-nowrap rounded-[7px] bg-[#E8ECF4] px-3 text-[13.5px] font-medium text-[#050506] transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]"
-				>
-					Start building
-				</Link>
+				<StartLink className="inline-flex h-8 items-center whitespace-nowrap rounded-[7px] bg-[#E8ECF4] px-3 text-[13.5px] font-medium text-[#050506] transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]" />
 			</div>
 		</div>
 	</header>

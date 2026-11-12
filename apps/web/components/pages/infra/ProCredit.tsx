@@ -8,7 +8,7 @@ import {
 	TIER_LABEL,
 	usdWhole,
 } from "./content";
-import { Section, SectionHeading } from "./shared";
+import { Section, SectionHeading, StartLink } from "./shared";
 import { BTN_GHOST, BTN_PRIMARY, MONO } from "./theme";
 
 const grouped = new Intl.NumberFormat("en-US");
@@ -18,10 +18,10 @@ const CREDIT = usdWhole(PRICES.proMonthlyCredit);
 export const ProCredit = () => (
 	<Section id={ANCHORS.pro} className="pt-24 lg:pt-32">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-8">
-			<SectionHeading title={`${CREDIT} free every month with Cap Pro.`}>
+			<SectionHeading title={`${CREDIT} of credit every month with Cap Pro.`}>
 				<p>
-					Every Cap Pro subscription comes with {CREDIT} of Cap Infra credit
-					each month. Your usage comes out of it first.
+					Cap Pro includes {CREDIT} of Cap Infra credit every month. Claim it
+					from an app's Billing page and your usage is drawn from it.
 				</p>
 			</SectionHeading>
 			<figure className="m-0 min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
@@ -29,9 +29,9 @@ export const ProCredit = () => (
 					<span className="block leading-[inherit] text-[#E8ECF4]">
 						What {CREDIT} covers at {TIER_LABEL[DEFAULT_TIER]}
 					</span>
-					Any one of these, every month
+					Either one, every month
 				</figcaption>
-				<dl className="m-0 mt-6 grid border-t border-[rgba(222,230,246,0.08)] sm:grid-cols-3 sm:pt-6">
+				<dl className="m-0 mt-6 grid border-t border-[rgba(222,230,246,0.08)] sm:grid-cols-2 sm:pt-6">
 					{PRO_CREDIT_COVERS.map((cover) => (
 						<div
 							key={cover.unit}
@@ -53,9 +53,7 @@ export const ProCredit = () => (
 				</p>
 			</figure>
 			<div className="flex flex-wrap gap-2.5 self-start lg:col-start-1 lg:row-start-2">
-				<Link href={LINKS.start} className={BTN_PRIMARY}>
-					Start building
-				</Link>
+				<StartLink className={BTN_PRIMARY} />
 				<Link href={LINKS.pro} className={BTN_GHOST}>
 					See Cap Pro
 				</Link>

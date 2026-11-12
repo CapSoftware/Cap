@@ -12,8 +12,8 @@ export const Pricing = () => (
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
 			<SectionHeading title="Pay for minutes, not plans.">
 				<p>
-					Encoding is free at every resolution. No minimums, seats or plans.
-					Credits are prepaid.
+					Two things are charged: stored video and speech to text. Uploading and
+					encoding are free. Credits are prepaid.
 				</p>
 			</SectionHeading>
 			<div className="min-w-0">
@@ -82,9 +82,9 @@ export const Pricing = () => (
 					</tbody>
 				</table>
 				<p className="m-0 mt-4 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
-					Storage is billed on the resolution of the video, delivery on the
-					resolution each viewer watched. Videos are encoded up to 1080p by
-					default, and 1440p and 4K are a per-video setting.
+					A video is billed by its length and resolution tier once it is ready
+					to play. Videos are encoded up to 1080p by default, and 1440p and 4K
+					are set per upload.
 				</p>
 			</div>
 		</div>

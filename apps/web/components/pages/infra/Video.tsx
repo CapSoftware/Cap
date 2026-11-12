@@ -1,12 +1,14 @@
+import Link from "next/link";
 import {
 	ANCHORS,
-	GET_VIDEO_RESPONSE,
-	UPLOAD_SOURCES,
+	LINKS,
 	VIDEO_FLOW,
 	VIDEO_OUTPUTS,
+	VIDEO_STATUS_RESPONSE,
 } from "./content";
 import { PlatesArt } from "./Plain";
 import { Code, Section, SectionHeading } from "./shared";
+import { TEXT_LINK } from "./theme";
 
 export const Video = () => (
 	<section id={ANCHORS.video} className="scroll-mt-14 pt-16 lg:pt-10">
@@ -18,9 +20,9 @@ export const Video = () => (
 						className="max-w-[360px]"
 					>
 						<p>
-							Send a file from {UPLOAD_SOURCES[0]}, {UPLOAD_SOURCES[1]}, or{" "}
-							{UPLOAD_SOURCES[2]}. Cap encodes it once for every screen and
-							serves it from a CDN.
+							Your server creates an upload and gets a short-lived token. The
+							browser or your server sends the file with it, and Cap encodes it
+							for every screen.
 						</p>
 					</SectionHeading>
 				</div>
@@ -46,10 +48,18 @@ export const Video = () => (
 			<Code
 				className="mt-6 lg:mt-8"
 				samples={VIDEO_FLOW}
-				response={GET_VIDEO_RESPONSE}
+				response={VIDEO_STATUS_RESPONSE}
 				responseLabel="When it is ready"
-				label="Upload and fetch a video"
+				label="Create an upload and check its status"
 			/>
+			<p className="m-0 mt-4 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
+				Between the two requests, the file is sent in parts with the upload
+				token. See{" "}
+				<Link href={LINKS.uploadDocs} className={TEXT_LINK}>
+					Multipart Upload
+				</Link>{" "}
+				in the docs.
+			</p>
 		</Section>
 	</section>
 );

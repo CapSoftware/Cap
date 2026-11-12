@@ -43,19 +43,16 @@ export const Platform = () => (
 	<Section className="pt-16 lg:pt-20">
 		<Row
 			id={ANCHORS.speech}
-			title="Transcribe any file."
+			title="Transcribe audio or video."
 			samples={CREATE_TRANSCRIPT}
 			label="Create a transcript"
 		>
 			<p>
-				One request for any audio or video file, without hosting it on Cap.
-				Already on a speech SDK? Change its base URL and keep your code.
+				Send a public URL or upload an audio or video file and get text back,
+				with word and segment timings. No video hosting needed.
 			</p>
-			<p className="mt-3">
-				<span className="text-[#E8ECF4]">
-					{usd(PRICES.speechPerHour)} per audio hour.
-				</span>{" "}
-				Free for videos hosted on Cap Infra.
+			<p className="pt-3 text-[#E8ECF4]">
+				{usd(PRICES.speechPerHour)} per audio hour.
 			</p>
 		</Row>
 		<Row
@@ -66,8 +63,9 @@ export const Platform = () => (
 			group="player"
 		>
 			<p>
-				Every video has direct HLS and MP4 URLs that work in any player. Or drop
-				in the Cap player embed and build nothing.
+				Every ready video has HLS and MP4 URLs and a poster that work in any
+				player. Or use the hosted player link or the iframe embed and build
+				nothing.
 			</p>
 		</Row>
 	</Section>

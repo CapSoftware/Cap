@@ -9,10 +9,11 @@ import {
 	DEFAULT_TIER,
 	HEADLINE_LINES,
 	LINKS,
+	PREVIEW_NOTE,
 	PRICES,
-	SPEED_MINUTES_TO_FULLY_PROCESSED,
-	SPEED_SECONDS_TO_PLAYABLE,
-	SPEED_VIDEO_MINUTES,
+	SPEED_LONG_MINUTES,
+	SPEED_LONG_SECONDS,
+	SPEED_SHORT_CLIP_SECONDS,
 	usd,
 } from "./content";
 import { FilmButton } from "./Film";
@@ -24,19 +25,19 @@ import { BODY, H_DISPLAY, MONO } from "./theme";
 
 const PROOFS = [
 	{
-		href: `#${ANCHORS.compare}`,
-		figure: usd(PRICES.deliveryPer1000Minutes[DEFAULT_TIER]),
-		label: "per 1,000 minutes watched",
+		href: `#${ANCHORS.pricing}`,
+		figure: usd(PRICES.storagePer1000Minutes[DEFAULT_TIER]),
+		label: "per 1,000 minutes stored, per month",
 	},
 	{
 		href: `#${ANCHORS.speed}`,
-		figure: `<${SPEED_SECONDS_TO_PLAYABLE} sec`,
-		label: `until ${SPEED_VIDEO_MINUTES} minutes of 4K is playable`,
+		figure: `~${SPEED_SHORT_CLIP_SECONDS} sec`,
+		label: "after upload until a short clip is playable, in our tests",
 	},
 	{
 		href: `#${ANCHORS.speed}`,
-		figure: `${SPEED_MINUTES_TO_FULLY_PROCESSED} min`,
-		label: "until every resolution is ready",
+		figure: `~${SPEED_LONG_SECONDS} sec`,
+		label: `after upload until ${SPEED_LONG_MINUTES} minutes of 4K is playable, in our tests`,
 	},
 ] as const;
 
@@ -72,13 +73,18 @@ export const Hero = () => (
 				<p
 					className={`${BODY} mt-5 max-w-[450px] text-pretty text-[16px] leading-[1.6]`}
 				>
-					Upload a video, get back an adaptive stream up to 4K, an MP4 and a
-					transcript. Encoded free on Cap's own GPUs.
+					Upload a video and get back an adaptive stream up to 4K, an MP4, a
+					poster and a hosted player. Uploading and encoding are free.
 				</p>
 				<Actions
 					className="mt-8"
 					secondary={{ label: "Read the docs", href: LINKS.docs }}
 				/>
+				{PREVIEW_NOTE ? (
+					<p className="m-0 mt-4 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+						{PREVIEW_NOTE}
+					</p>
+				) : null}
 				<ul
 					className={`m-0 mt-11 grid list-none border-t p-0 sm:grid-cols-3 sm:pt-6 ${RULE}`}
 				>

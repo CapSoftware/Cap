@@ -2,16 +2,16 @@
 
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
-import Link from "next/link";
 import { type CSSProperties, useId, useState } from "react";
 import type { InfraResolutionTier } from "@/lib/infra-pricing";
-import { LINKS, PRICES, usd, usdWhole } from "./content";
+import { PRICES, usd, usdWhole } from "./content";
+import { StartLink } from "./shared";
 import { TierSwitch, useTier } from "./TierSwitch";
 import { BTN_PRIMARY, H_SECTION, MONO } from "./theme";
 
 const STEPS = 1000;
 
-type MeterKey = "stored" | "watched" | "audio";
+type MeterKey = "stored" | "audio";
 
 type Meter = {
 	key: MeterKey;
@@ -38,17 +38,6 @@ const METERS: readonly Meter[] = [
 		rateUnit: "per 1,000 minutes, per month",
 	},
 	{
-		key: "watched",
-		label: "Minutes watched per month",
-		unit: "min",
-		min: 100,
-		max: 100_000_000,
-		initial: 50_000,
-		rate: (tier) => PRICES.deliveryPer1000Minutes[tier],
-		per: 1000,
-		rateUnit: "per 1,000 minutes",
-	},
-	{
 		key: "audio",
 		label: "Hours transcribed per month",
 		unit: "hr",
@@ -63,7 +52,6 @@ const METERS: readonly Meter[] = [
 
 const BREAKDOWN_LABEL: Record<MeterKey, string> = {
 	stored: "Storage",
-	watched: "Delivery",
 	audio: "Speech to text",
 };
 
@@ -263,8 +251,7 @@ const MeterInput = ({
 export const Calculator = () => {
 	const [values, setValues] = useState<Record<MeterKey, number>>(() => ({
 		stored: METERS[0]?.initial ?? 0,
-		watched: METERS[1]?.initial ?? 0,
-		audio: METERS[2]?.initial ?? 0,
+		audio: METERS[1]?.initial ?? 0,
 	}));
 	const [pro, setPro] = useState(false);
 	const proId = useId();
@@ -287,7 +274,7 @@ export const Calculator = () => {
 					<div className="min-w-0">
 						<p className="m-0 text-[14.5px] text-[#E8ECF4]">Resolution</p>
 						<p className="m-0 mt-0.5 text-[13px] text-[rgba(232,236,244,0.42)]">
-							Sets the storage and delivery rates
+							Sets the storage rate
 						</p>
 					</div>
 					<TierSwitch label="Resolution to estimate" />
@@ -321,7 +308,9 @@ export const Calculator = () => {
 						</div>
 					))}
 					<div className={BREAKDOWN_ROW}>
-						<dt className="text-[rgba(232,236,244,0.5)]">Encoding</dt>
+						<dt className="text-[rgba(232,236,244,0.5)]">
+							Uploading and encoding
+						</dt>
 						<dd className={BREAKDOWN_FIGURE}>Free</dd>
 					</div>
 					{pro ? (
@@ -336,8 +325,8 @@ export const Calculator = () => {
 					className="flex cursor-pointer items-center justify-between gap-4 py-3.5 text-[13.5px] text-[rgba(232,236,244,0.7)] transition-colors duration-200 hover:text-[#E8ECF4]"
 				>
 					<span>
-						I have Cap Pro, with {usdWhole(PRICES.proMonthlyCredit)} of usage
-						included
+						I have Cap Pro, with {usdWhole(PRICES.proMonthlyCredit)} of credit a
+						month
 					</span>
 					<span className="relative inline-flex shrink-0">
 						<input
@@ -367,9 +356,7 @@ export const Calculator = () => {
 						</span>
 					</span>
 				</label>
-				<Link href={LINKS.start} className={`${BTN_PRIMARY} mt-4 self-start`}>
-					Start building
-				</Link>
+				<StartLink className={`${BTN_PRIMARY} mt-4 self-start`} />
 			</div>
 		</div>
 	);

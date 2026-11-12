@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { CodePanel } from "./CodePanel";
-import { type CodeSample, LINKS } from "./content";
+import { type CodeSample, START } from "./content";
 import { highlight } from "./highlight";
 import { BODY, BTN_GHOST, BTN_PRIMARY, H_SECTION } from "./theme";
 
@@ -97,6 +97,17 @@ export const Section = ({
 	</section>
 );
 
+export const StartLink = ({ className }: { className?: string }) =>
+	START.href.startsWith("/") ? (
+		<Link href={START.href} className={className}>
+			{START.label}
+		</Link>
+	) : (
+		<a href={START.href} className={className}>
+			{START.label}
+		</a>
+	);
+
 export const Actions = ({
 	secondary,
 	className,
@@ -105,9 +116,7 @@ export const Actions = ({
 	className?: string;
 }) => (
 	<div className={classNames("flex flex-wrap gap-2.5", className)}>
-		<Link href={LINKS.start} className={BTN_PRIMARY}>
-			Start building
-		</Link>
+		<StartLink className={BTN_PRIMARY} />
 		{secondary.href.startsWith("#") ? (
 			<a href={secondary.href} className={BTN_GHOST}>
 				{secondary.label}

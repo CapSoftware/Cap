@@ -160,7 +160,7 @@ export const PlatesArt = ({ className }: { className?: string }) => (
 			/>
 		</picture>
 		<figcaption className="sr-only">
-			Every upload is encoded to renditions at {LADDER.join(", ")}, never above
+			An upload is encoded to renditions from {LADDER.join(", ")}, never above
 			the source resolution.
 		</figcaption>
 		<ul aria-hidden="true" className="m-0 list-none p-0">
