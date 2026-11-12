@@ -9,7 +9,10 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { Effect, Layer, Option, Schema } from "effect";
-import { purgeDeletedDeveloperVideos } from "@/lib/developer-video-purge";
+import {
+	purgeDeletedDeveloperVideos,
+	purgeFailedDeveloperVideoFiles,
+} from "@/lib/developer-video-purge";
 import { removeUnrecordedInfraFiles } from "@/lib/infra-video-upload";
 import { apiToHandler } from "@/lib/server";
 
@@ -177,13 +180,27 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						),
 						Effect.mapError(() => new HttpApiError.InternalServerError()),
 					);
-					if (result.failed > 0 || purge.failed > 0)
+					const failedVideos = yield* Effect.tryPromise(() =>
+						purgeFailedDeveloperVideoFiles(),
+					).pipe(
+						Effect.tapError((error) =>
+							Effect.sync(() =>
+								console.error(
+									"[developer-upload-cleanup] Failed to purge failed videos",
+									error,
+								),
+							),
+						),
+						Effect.mapError(() => new HttpApiError.InternalServerError()),
+					);
+					const purgeFailed = purge.failed + failedVideos.failed;
+					if (result.failed > 0 || purgeFailed > 0)
 						return yield* new HttpApiError.InternalServerError();
 					return {
 						...result,
 						removed,
-						purged: purge.purged,
-						purgeFailed: purge.failed,
+						purged: purge.purged + failedVideos.purged,
+						purgeFailed,
 					};
 				}),
 			),

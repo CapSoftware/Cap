@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
+import { nanoId } from "@cap/database/helpers";
 import { developerApps, developerVideos } from "@cap/database/schema";
-import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
 	deleteDeveloperVideoObjects,
 	developerVideoPrefix,
@@ -15,9 +16,37 @@ export const DEVELOPER_VIDEO_LATE_WRITE_HOURS = 4;
 // the files is what takes a deleted video away from links already handed out.
 const PURGE_BATCH = 200;
 
+type PurgeRow = { id: string; appId: string };
+type PurgeResult = { purged: number; failed: number };
+
+async function purgeFiles(
+	rows: PurgeRow[],
+	purgedColumns: () => Partial<typeof developerVideos.$inferInsert>,
+): Promise<PurgeResult> {
+	let purged = 0;
+	let failed = 0;
+	for (const row of rows) {
+		try {
+			await deleteDeveloperVideoObjects(developerVideoPrefix(row));
+			await db()
+				.update(developerVideos)
+				.set(purgedColumns())
+				.where(eq(developerVideos.id, row.id));
+			purged++;
+		} catch (error) {
+			failed++;
+			console.error("[developer-video-purge] Failed to delete files", {
+				videoId: row.id,
+				error,
+			});
+		}
+	}
+	return { purged, failed };
+}
+
 export async function purgeDeletedDeveloperVideos(
 	limit = PURGE_BATCH,
-): Promise<{ purged: number; failed: number }> {
+): Promise<PurgeResult> {
 	const hours = sql.raw(String(DEVELOPER_VIDEO_LATE_WRITE_HOURS));
 	// A video counts as deleted when it was deleted itself or its app was.
 	// Apps deleted before videos were marked along with them only carry the
@@ -45,23 +74,60 @@ export async function purgeDeletedDeveloperVideos(
 		.orderBy(asc(deletedAt))
 		.limit(limit);
 
-	let purged = 0;
-	let failed = 0;
-	for (const row of rows) {
-		try {
-			await deleteDeveloperVideoObjects(developerVideoPrefix(row));
-			await db()
-				.update(developerVideos)
-				.set({ filesDeletedAt: new Date() })
-				.where(eq(developerVideos.id, row.id));
-			purged++;
-		} catch (error) {
-			failed++;
-			console.error("[developer-video-purge] Failed to delete files", {
-				videoId: row.id,
-				error,
-			});
-		}
+	return purgeFiles(rows, () => ({ filesDeletedAt: new Date() }));
+}
+
+// A failed video is not billed, so its files are kept for a day and then
+// removed. The day is counted from when processing started: that is the one
+// time on the row its owner cannot move (renaming the video moves updatedAt),
+// and it is past the late write window above by the time the files go.
+export const FAILED_VIDEO_FILES_KEPT_MS = 24 * 60 * 60 * 1000;
+
+function failedVideos(
+	startedBefore: number,
+	limit: number,
+	range: { after: string } | { upTo: string },
+): Promise<PurgeRow[]> {
+	return db()
+		.select({ id: developerVideos.id, appId: developerVideos.appId })
+		.from(developerVideos)
+		.where(
+			and(
+				eq(developerVideos.status, "errored"),
+				isNull(developerVideos.filesDeletedAt),
+				isNull(developerVideos.deletedAt),
+				sql`JSON_EXTRACT(${developerVideos.processing}, '$.startedAt') <= ${startedBefore}`,
+				"after" in range
+					? gt(developerVideos.id, range.after)
+					: lte(developerVideos.id, range.upTo),
+			),
+		)
+		.orderBy(asc(developerVideos.id))
+		.limit(limit);
+}
+
+// Removes the files of videos that failed more than a day ago and keeps their
+// rows, so the owner still sees the video and why it failed. Errored is a
+// final state: such a video is never encoded again and cannot take another
+// upload, so nothing later needs these files. Each run starts from a random
+// place and wraps around, so files that cannot be deleted do not hold up the
+// videos behind them.
+export async function purgeFailedDeveloperVideoFiles(
+	limit = PURGE_BATCH,
+	now: number = Date.now(),
+	start: string = nanoId(),
+): Promise<PurgeResult> {
+	const startedBefore = now - FAILED_VIDEO_FILES_KEPT_MS;
+	const rows = await failedVideos(startedBefore, limit, { after: start });
+	if (rows.length < limit) {
+		rows.push(
+			...(await failedVideos(startedBefore, limit - rows.length, {
+				upTo: start,
+			})),
+		);
 	}
-	return { purged, failed };
+	return purgeFiles(rows, () => ({
+		filesDeletedAt: new Date(),
+		storedBytes: 0,
+	}));
 }
