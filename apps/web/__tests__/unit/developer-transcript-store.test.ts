@@ -113,6 +113,7 @@ import {
 	expireStaleTranscripts,
 	getTranscript,
 	isTranscriptIdempotencyKey,
+	listConsoleTranscripts,
 	listTranscripts,
 	startTranscriptUpload,
 	transcriptIdForIdempotencyKey,
@@ -735,6 +736,18 @@ describe("reading and listing", () => {
 			"tr-never-set": true,
 		});
 		expect(listed.every((row) => !("text" in row))).toBe(true);
+
+		const { transcripts: shown } = await listConsoleTranscripts("app-1", 10);
+		expect(
+			Object.fromEntries(
+				shown.map((row) => [row.id, transcriptHasNoSpeech(row)]),
+			),
+		).toEqual({
+			"tr-old-text": false,
+			"tr-silent": true,
+			"tr-never-set": true,
+		});
+		expect(shown.every((row) => !("text" in row))).toBe(true);
 	});
 
 	it("pages by cursor without skipping or repeating", async () => {
