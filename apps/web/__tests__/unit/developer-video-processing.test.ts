@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	startJob: vi.fn(),
 	charge: vi.fn(),
 	deleteObjects: vi.fn(),
+	sniff: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -45,6 +46,9 @@ vi.mock("@/lib/developer-video-charge", () => ({
 vi.mock("@/lib/media-client", () => ({
 	tryProbeVideoViaMediaServer: mocks.probe,
 	startMediaServerVideoJob: mocks.startJob,
+}));
+vi.mock("@/lib/media-container", () => ({
+	sniffMediaUrl: mocks.sniff,
 }));
 
 const {
@@ -122,6 +126,7 @@ beforeEach(() => {
 	mocks.readText.mockResolvedValue(master);
 	mocks.charge.mockResolvedValue("charged");
 	mocks.deleteObjects.mockResolvedValue(0);
+	mocks.sniff.mockResolvedValue("media");
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -979,6 +984,183 @@ describe("developer video dispatch", () => {
 			prepareDeveloperVideoProcessing("video-1", "encode-1"),
 		).rejects.toThrow("The uploaded file is empty. Upload it again.");
 		expect(mocks.probe).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[
+			"a playlist",
+			"playlist",
+			"This file is a playlist, not a video. Upload the video file itself.",
+		],
+		[
+			"a file that is not media",
+			"unknown",
+			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+		],
+	])(
+		"refuses %s without asking the media server",
+		async (_label, sniffed, reason) => {
+			mocks.sniff.mockResolvedValue(sniffed);
+			mocks.store.video = developerVideo({
+				processing: processingState({ probe: null }),
+			});
+
+			const refusal = prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+			await expect(refusal).rejects.toBeInstanceOf(DeveloperVideoRejected);
+			await expect(refusal).rejects.toThrow(reason);
+			expect(mocks.probe).not.toHaveBeenCalled();
+			expect(mocks.charge).not.toHaveBeenCalled();
+			expect(video().processing?.probing).toBeUndefined();
+		},
+	);
+
+	it("reads the first bytes of the same file it sends to the media server", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 12, width: 1280, height: 720, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+		expect(mocks.sniff).toHaveBeenCalledTimes(1);
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
+		expect(mocks.sniff.mock.calls[0]?.[0]).toBe(mocks.probe.mock.calls[0]?.[0]);
+		expect(mocks.sniff.mock.invocationCallOrder[0]).toBeLessThan(
+			mocks.probe.mock.invocationCallOrder[0] ?? 0,
+		);
+	});
+
+	it("leaves the decision to the media server when the first bytes cannot be read", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		mocks.sniff.mockRejectedValue(
+			new Error("Could not read the stored file (503)"),
+		);
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 12, width: 1280, height: 720, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).resolves.toBe("ready");
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives the first read five seconds", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "ok",
+			metadata: { duration: 12, width: 1280, height: 720, fps: 30 },
+		});
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+		expect(mocks.sniff).toHaveBeenCalledWith(expect.any(String), 5_000);
+	});
+
+	it("renews its claim before the probe when the steps before it were slow", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(1_000_000);
+			mocks.sniff.mockImplementation(async () => {
+				vi.setSystemTime(1_004_000);
+				return "media";
+			});
+			let claimDuringProbe: number | undefined;
+			mocks.probe.mockImplementation(async () => {
+				claimDuringProbe = video().processing?.probing?.startedAt;
+				return {
+					status: "ok",
+					metadata: { duration: 12, width: 1280, height: 720, fps: 30 },
+				};
+			});
+			mocks.store.video = developerVideo({
+				processing: processingState({ probe: null }),
+			});
+
+			await expect(
+				prepareDeveloperVideoProcessing("video-1", "encode-1"),
+			).resolves.toBe("ready");
+			expect(claimDuringProbe).toBe(1_004_000);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the claim time when the steps before the probe were quick", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(1_000_000);
+			mocks.sniff.mockImplementation(async () => {
+				vi.setSystemTime(1_000_200);
+				return "media";
+			});
+			let claimDuringProbe: number | undefined;
+			mocks.probe.mockImplementation(async () => {
+				claimDuringProbe = video().processing?.probing?.startedAt;
+				return {
+					status: "ok",
+					metadata: { duration: 12, width: 1280, height: 720, fps: 30 },
+				};
+			});
+			mocks.store.video = developerVideo({
+				processing: processingState({ probe: null }),
+			});
+
+			await prepareDeveloperVideoProcessing("video-1", "encode-1");
+
+			expect(claimDuringProbe).toBe(1_000_000);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not probe when another caller took the claim over during a slow read", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(1_000_000);
+			mocks.sniff.mockImplementation(async () => {
+				vi.setSystemTime(1_070_000);
+				const current = video();
+				current.processing = {
+					...current.processing,
+					probing: { token: "other-caller", startedAt: 1_069_000 },
+				} as typeof current.processing;
+				return "media";
+			});
+			mocks.store.video = developerVideo({
+				processing: processingState({ probe: null }),
+			});
+
+			await expect(
+				prepareDeveloperVideoProcessing("video-1", "encode-1"),
+			).resolves.toBe("probing");
+			expect(mocks.probe).not.toHaveBeenCalled();
+			expect(video().processing?.probing?.token).toBe("other-caller");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not read an empty upload's bytes", async () => {
+		mocks.head.mockResolvedValue({ bytes: 0, contentType: "video/mp4" });
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).rejects.toThrow("The uploaded file is empty. Upload it again.");
+		expect(mocks.sniff).not.toHaveBeenCalled();
 	});
 
 	it("does not probe again once the video has been failed", async () => {

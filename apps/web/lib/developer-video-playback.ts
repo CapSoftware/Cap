@@ -25,6 +25,9 @@ const SIGNED_URL_SECONDS = 12 * 60 * 60;
 // for playback after a top-up.
 const CACHE_SECONDS = 60;
 
+const START_MAX_BANDWIDTH = 2_600_000;
+const START_MAX_SHORT_SIDE = 1080;
+
 export const PLAYBACK_CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
@@ -102,6 +105,79 @@ export async function signMediaPlaylist(
 	return lines.join("\n");
 }
 
+// Players start on the first rendition a master playlist lists, and the encoder
+// lists the largest first. Lead with the best rendition an ordinary connection
+// starts quickly and leave the others in their order, so the player steps up or
+// down from there. A master that does not read as expected is served as stored.
+export function leadWithStartRendition(master: string): string {
+	const lines = master.split(/\r?\n/).filter((line) => line.trim().length > 0);
+	const others: string[] = [];
+	const variants: {
+		bandwidth: number;
+		shortSide: number;
+		lines: string[];
+	}[] = [];
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		if (!line.startsWith("#EXT-X-STREAM-INF:")) {
+			others.push(line);
+			continue;
+		}
+		const uri = lines[index + 1];
+		const bandwidth = Number(line.match(/[:,]BANDWIDTH=(\d+)/)?.[1]);
+		const resolution = line.match(/[:,]RESOLUTION=(\d+)x(\d+)/);
+		if (!uri || uri.startsWith("#") || !Number.isFinite(bandwidth)) {
+			return master;
+		}
+		variants.push({
+			bandwidth,
+			shortSide: resolution
+				? Math.min(Number(resolution[1]), Number(resolution[2]))
+				: 0,
+			lines: [line, uri],
+		});
+		index++;
+	}
+	const [listedFirst] = variants;
+	if (!listedFirst) return master;
+
+	const quick = variants.filter(
+		(variant) =>
+			variant.bandwidth <= START_MAX_BANDWIDTH &&
+			variant.shortSide <= START_MAX_SHORT_SIDE,
+	);
+	const start =
+		quick.length > 0
+			? quick.reduce((best, variant) =>
+					variant.bandwidth > best.bandwidth ? variant : best,
+				)
+			: variants.reduce((best, variant) =>
+					variant.bandwidth < best.bandwidth ? variant : best,
+				);
+	if (start === listedFirst) return master;
+
+	return `${[
+		...others,
+		...start.lines,
+		...variants
+			.filter((variant) => variant !== start)
+			.flatMap((variant) => variant.lines),
+	].join("\n")}\n`;
+}
+
+// Sent as it is. The platform does not compress this content type, and a body
+// compressed here reaches the viewer without its Content-Encoding header, so a
+// player cannot read it.
+function playlistResponse(playlist: string): Response {
+	return new Response(playlist, {
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			...CACHEABLE,
+			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
+		},
+	});
+}
+
 async function findPlayableVideo(playbackId: string) {
 	const [row] = await db()
 		.select({ video: developerVideos })
@@ -165,21 +241,15 @@ export async function developerPlaybackResponse(
 
 	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
 	if (!playlist) return notFound();
-	const body =
+	return playlistResponse(
 		file === DEVELOPER_VIDEO_MASTER_PLAYLIST
-			? playlist
+			? leadWithStartRendition(playlist)
 			: await signMediaPlaylist(playlist, (name) =>
 					signedDeveloperVideoUrl(
 						`${keys.hlsPrefix}${name}`,
 						SIGNED_URL_SECONDS,
 						request,
 					),
-				);
-	return new Response(body, {
-		headers: {
-			...PLAYBACK_CORS_HEADERS,
-			...CACHEABLE,
-			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
-		},
-	});
+				),
+	);
 }
