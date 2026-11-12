@@ -232,4 +232,24 @@ describe("CapCardContent title edit", () => {
 
 		expect(editor()?.value).toBe("Launch demo v2");
 	});
+
+	it("shows the saved title when the field is cleared while it saves", async () => {
+		let finish = () => {};
+		mocks.editTitle.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = () => resolve({ success: true });
+			}),
+		);
+		mount();
+		await editTo("Launch demo");
+		await editTo("");
+
+		expect(editor()).toBeNull();
+		expect(title()).toBe("Demo");
+
+		await act(async () => finish());
+
+		expect(mocks.editTitle.mock.calls).toEqual([["video-1", "Launch demo"]]);
+		expect(title()).toBe("Launch demo");
+	});
 });

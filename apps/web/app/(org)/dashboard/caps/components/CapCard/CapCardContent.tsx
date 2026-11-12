@@ -43,8 +43,15 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 	const [savedTitle, setSavedTitle] = useState(cap.name);
 	const [isEditing, setIsEditing] = useState(false);
 	// The field stays editable while a save is in flight, so the save reads
-	// the latest draft to avoid replacing text typed after the blur.
+	// the latest draft and the editor state to avoid replacing text typed
+	// after the blur.
 	const draftRef = useRef(cap.name);
+	const editingRef = useRef(false);
+
+	const setEditing = (value: boolean) => {
+		editingRef.current = value;
+		setIsEditing(value);
+	};
 
 	const setDraft = (value: string) => {
 		draftRef.current = value;
@@ -55,7 +62,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 		const next = title.trim();
 		if (!next || next === savedTitle) {
 			setDraft(savedTitle);
-			setIsEditing(false);
+			setEditing(false);
 			return;
 		}
 
@@ -63,9 +70,9 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 			await editTitle(cap.id, next);
 			setSavedTitle(next);
 			toast.success("Video title updated");
-			if (draftRef.current.trim() === next) {
+			if (!editingRef.current || draftRef.current.trim() === next) {
 				setDraft(next);
-				setIsEditing(false);
+				setEditing(false);
 			}
 			router.refresh();
 		} catch (error) {
@@ -212,7 +219,7 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onClick={() => {
 							if (!sharedCapCard) {
 								if (userId === cap.ownerId) {
-									setIsEditing(true);
+									setEditing(true);
 								}
 							}
 						}}
