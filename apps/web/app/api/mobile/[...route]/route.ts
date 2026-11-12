@@ -3218,17 +3218,20 @@ const toHeaders = (headers: Record<string, string>) => {
 	return result;
 };
 
-// The app sends these signed in or not, so there is no auth middleware here: a
-// session the server no longer accepts must not turn a usage report into a 401,
-// which the app answers by signing the user out.
+// Signed-in sessions only, and limited per user: these are forwarded with the
+// server's analytics secret, so an open endpoint would let anyone write
+// made-up events into it. The user comes from the session, never the payload.
 const trackMobileEvents = Effect.fn("Mobile.trackEvents")(function* (
 	input: MobileEventsInput,
-	authorization: string | undefined,
 	request: HttpServerRequest.HttpServerRequest,
 ) {
+	const user = yield* CurrentUser;
 	const headers = toHeaders(request.headers);
 	const limited = yield* Effect.promise(() =>
-		isRateLimited(RATE_LIMIT_IDS.MOBILE_EVENTS, { headers }),
+		isRateLimited(RATE_LIMIT_IDS.MOBILE_EVENTS, {
+			key: `mobile-events:${user.id}`,
+			headers,
+		}),
 	);
 	if (limited) return yield* Effect.fail(new Mobile.MobileTooManyRequests());
 	if (!acceptsClientEvents()) return { success: true as const };
@@ -3236,23 +3239,9 @@ const trackMobileEvents = Effect.fn("Mobile.trackEvents")(function* (
 	const events = prepareMobileEvents(input, Date.now());
 	if (events.length === 0) return { success: true as const };
 
-	const apiKey = parseBearerToken(authorization);
-	let profileId: string | null = null;
-	if (apiKey?.length === 36) {
-		const database = yield* Database;
-		const [session] = yield* database.use((db) =>
-			db
-				.select({ userId: Db.authApiKeys.userId })
-				.from(Db.authApiKeys)
-				.where(eq(Db.authApiKeys.id, apiKey))
-				.limit(1),
-		);
-		profileId = session?.userId ?? null;
-	}
-
 	const result = yield* Effect.promise(() =>
 		sendClientEvents({
-			profileId,
+			profileId: user.id,
 			userAgent: mobileUserAgent(input.app),
 			ip: clientAddress(headers),
 			events,
@@ -3802,12 +3791,8 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("removePushToken", ({ payload }) =>
 						withMappedErrors(removePushToken(payload.token)),
 					)
-					.handle("trackEvents", ({ payload, headers, request }) =>
-						trackMobileEvents(payload, headers.authorization, request).pipe(
-							Effect.catchTag("DatabaseError", () =>
-								Effect.fail(new HttpApiError.InternalServerError()),
-							),
-						),
+					.handle("trackEvents", ({ payload, request }) =>
+						trackMobileEvents(payload, request),
 					)
 					.handle("bootstrap", () => withMappedErrors(getBootstrap()))
 					.handle("setActiveOrganization", ({ payload }) =>

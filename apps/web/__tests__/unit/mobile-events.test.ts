@@ -12,8 +12,7 @@ import {
 } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	session: undefined as { userId: string } | undefined,
-	lookups: 0,
+	signedIn: true,
 	limited: false,
 	rateLimitCalls: [] as { ruleId: string; key: string | undefined }[],
 	dispose: async () => {},
@@ -32,29 +31,18 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
 
 vi.mock("@/lib/server", async () => {
 	const { Database, Videos, VideosPolicy } = await import("@cap/web-backend");
-	const { HttpAuthMiddleware } = await import("@cap/web-domain");
+	const { HttpAuthMiddleware, Organisation, User } = await import(
+		"@cap/web-domain"
+	);
 	const { HttpApiBuilder, HttpApiError, HttpServer } = await import(
 		"@effect/platform"
 	);
-	const { Effect, Layer } = await import("effect");
-	const client = {
-		select: () => {
-			const query = {
-				from: () => query,
-				where: () => query,
-				limit: async () => {
-					mocks.lookups += 1;
-					return mocks.session ? [mocks.session] : [];
-				},
-			};
-			return query;
-		},
-	};
+	const { Effect, Layer, Option } = await import("effect");
 	const database = Layer.succeed(
 		Database,
 		Database.make({
 			use: (callback) =>
-				Effect.promise(() => callback(client as unknown as DbClient)),
+				Effect.promise(() => callback({} as unknown as DbClient)),
 		}),
 	);
 	const videos = Layer.succeed(
@@ -67,7 +55,16 @@ vi.mock("@/lib/server", async () => {
 	);
 	const auth = Layer.succeed(
 		HttpAuthMiddleware,
-		Effect.fail(new HttpApiError.Unauthorized()),
+		Effect.suspend(() =>
+			mocks.signedIn
+				? Effect.succeed({
+						id: User.UserId.make("user_1"),
+						email: "user@example.com",
+						activeOrganizationId: Organisation.OrganisationId.make("org"),
+						iconUrlOrKey: Option.none(),
+					})
+				: Effect.fail(new HttpApiError.Unauthorized()),
+		),
 	);
 	return {
 		apiToHandler: (
@@ -133,8 +130,7 @@ describe("mobile usage events", () => {
 	});
 
 	beforeEach(() => {
-		mocks.session = { userId: "user_1" };
-		mocks.lookups = 0;
+		mocks.signedIn = true;
 		mocks.limited = false;
 		mocks.rateLimitCalls = [];
 		forwarded = [];
@@ -160,31 +156,27 @@ describe("mobile usage events", () => {
 		await mocks.dispose();
 	});
 
-	const apiKey = "0f3a5c2e-6b4d-4a7f-9e1c-2d3b4a5c6d7e";
 	const app = {
 		version: "1.0.4",
 		build: "2026111201",
 		os: "26.1",
 		device: "phone",
 	};
-	const post = (
-		body: unknown,
-		{ authorized = true, ip = "203.0.113.7" } = {},
-	) =>
+	const post = (body: unknown, ip = "203.0.113.7") =>
 		route.POST(
 			new Request("http://localhost/api/mobile/events", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					"x-forwarded-for": ip,
-					...(authorized ? { Authorization: `Bearer ${apiKey}` } : {}),
+					Authorization: "Bearer 0f3a5c2e-6b4d-4a7f-9e1c-2d3b4a5c6d7e",
 				},
 				body: JSON.stringify(body),
 			}),
 		);
 	const batch = (events: unknown[], sentAt = NOW) => ({ sentAt, app, events });
 
-	it("forwards a signed-in batch with the user, the device and each event's own time", async () => {
+	it("forwards a batch with the session's user, the device and each event's own time", async () => {
 		const response = await post(
 			batch([
 				{
@@ -201,7 +193,6 @@ describe("mobile usage events", () => {
 		);
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ success: true });
-		expect(mocks.lookups).toBe(1);
 		expect(forwarded).toHaveLength(2);
 
 		const opened = forwarded.find(
@@ -237,19 +228,30 @@ describe("mobile usage events", () => {
 		);
 	});
 
-	it("keeps signed-out and unknown-session batches anonymous instead of rejecting them", async () => {
-		const events = [{ name: "auth_started", timestamp: NOW - 1_000 }];
-		expect((await post(batch(events), { authorized: false })).status).toBe(200);
-		expect(mocks.lookups).toBe(0);
+	it("turns away a batch that has no signed-in session before anything is forwarded", async () => {
+		mocks.signedIn = false;
+		const response = await post(
+			batch([{ name: "app_opened", timestamp: NOW }]),
+		);
+		expect(response.status).toBe(401);
+		expect(mocks.rateLimitCalls).toHaveLength(0);
+		expect(forwarded).toHaveLength(0);
+	});
 
-		mocks.session = undefined;
-		expect((await post(batch(events))).status).toBe(200);
-		expect(mocks.lookups).toBe(1);
-
-		expect(forwarded).toHaveLength(2);
-		for (const request of forwarded) {
-			expect(request.body.payload).not.toHaveProperty("profileId");
-		}
+	it("takes the user from the session, never from the batch", async () => {
+		await post(
+			batch([
+				{
+					name: "cap_opened",
+					timestamp: NOW,
+					properties: { profileId: "someone-else", user_id: "someone-else" },
+				},
+			]),
+		);
+		expect(forwarded[0]?.body.payload.profileId).toBe("user_1");
+		expect(forwarded[0]?.body.payload.properties).not.toHaveProperty(
+			"profileId",
+		);
 	});
 
 	it("corrects a wrong phone clock from the batch's own send time", async () => {
@@ -350,16 +352,15 @@ describe("mobile usage events", () => {
 		expect(forwarded).toHaveLength(50);
 	});
 
-	it("rate limits by address before any lookup or forwarding", async () => {
+	it("rate limits each user before anything is forwarded", async () => {
 		mocks.limited = true;
 		const response = await post(
 			batch([{ name: "app_opened", timestamp: NOW }]),
 		);
 		expect(response.status).toBe(429);
 		expect(mocks.rateLimitCalls).toEqual([
-			{ ruleId: "rl_mobile_events", key: undefined },
+			{ ruleId: "rl_mobile_events", key: "mobile-events:user_1" },
 		]);
-		expect(mocks.lookups).toBe(0);
 		expect(forwarded).toHaveLength(0);
 	});
 

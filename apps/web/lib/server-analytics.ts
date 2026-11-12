@@ -71,7 +71,7 @@ export type ClientEvent = {
 };
 
 export type ClientEventBatch = {
-	profileId: string | null;
+	profileId: string;
 	userAgent: string;
 	ip: string | undefined;
 	events: ClientEvent[];
@@ -121,7 +121,7 @@ export async function sendClientEvents(
 						type: "track",
 						payload: {
 							name: event.name,
-							...(batch.profileId ? { profileId: batch.profileId } : {}),
+							profileId: batch.profileId,
 							properties: {
 								...event.properties,
 								__timestamp: event.timestamp.toISOString(),

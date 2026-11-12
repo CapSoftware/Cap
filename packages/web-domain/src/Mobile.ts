@@ -774,9 +774,9 @@ export class MobileHttpApi extends HttpApiGroup.make("mobile")
 	)
 	.add(
 		HttpApiEndpoint.post("trackEvents", "/events")
-			.setHeaders(MobileAuthHeaders)
 			.setPayload(MobileEventsInput)
 			.addSuccess(MobileSuccessResponse)
+			.middleware(HttpAuthMiddleware)
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.BadRequest)
 			.addError(MobileTooManyRequests),

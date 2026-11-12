@@ -194,7 +194,7 @@ export const RATE_LIMIT_IDS = {
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
 	VIEWER_DOWNLOAD: "rl_viewer_download",
-	/** Usage event batches from the iOS app (OpenPanel ingest). Suggested: 240 / 1m per IP. */
+	/** Usage event batches from the iOS app (OpenPanel ingest). Suggested: 30 / 1m per key (user). */
 	MOBILE_EVENTS: "rl_mobile_events",
 } as const;
 
@@ -244,7 +244,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	},
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
-	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 240, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {
