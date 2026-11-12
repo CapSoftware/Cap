@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	isDefinitiveRejection,
 	partBytesFor,
+	presignBatch,
 	retryAfterMs,
 } from "@/lib/infra-upload";
 
@@ -52,5 +53,29 @@ describe("console upload completion outcome", () => {
 		for (const status of [0, 408, 429, 500, 502, 503]) {
 			expect(isDefinitiveRejection(status)).toBe(false);
 		}
+	});
+});
+
+describe("presignBatch", () => {
+	it("asks for up to 20 consecutive parts starting at the one needed", () => {
+		expect(presignBatch(1, 200)).toEqual(
+			Array.from({ length: 20 }, (_, index) => index + 1),
+		);
+		expect(presignBatch(21, 200)[0]).toBe(21);
+		expect(presignBatch(21, 200)).toHaveLength(20);
+	});
+
+	it("stops at the last part", () => {
+		expect(presignBatch(195, 200)).toEqual([195, 196, 197, 198, 199, 200]);
+		expect(presignBatch(9, 9)).toEqual([9]);
+		expect(presignBatch(1, 1)).toEqual([1]);
+	});
+
+	it("covers a 200 part upload in 10 requests", () => {
+		let requests = 0;
+		for (let part = 1; part <= 200; requests++) {
+			part += presignBatch(part, 200).length;
+		}
+		expect(requests).toBe(10);
 	});
 });

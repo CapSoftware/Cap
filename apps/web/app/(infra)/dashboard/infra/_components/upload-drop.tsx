@@ -10,6 +10,7 @@ import { infraAppPath } from "@/lib/infra-routes";
 import {
 	isDefinitiveRejection,
 	partBytesFor,
+	presignBatch,
 	retryAfterMs,
 } from "@/lib/infra-upload";
 import { Button, LIT, MONO, TEXT_LINK } from "./ui";
@@ -17,7 +18,7 @@ import { Button, LIT, MONO, TEXT_LINK } from "./ui";
 const PART_ATTEMPTS = 3;
 const COMPLETE_ATTEMPTS = 3;
 const RATE_LIMIT_ATTEMPTS = 6;
-const SDK = "/api/developer/sdk/v1";
+const UPLOAD_API = "/api/developer/console/upload";
 
 class UploadError extends Error {
 	constructor(
@@ -61,18 +62,14 @@ function pause(ms: number, signal: AbortSignal) {
 
 async function call<T>(
 	path: string,
-	publicKey: string,
 	body: unknown,
 	signal?: AbortSignal,
 	cancellable = true,
 ) {
 	for (let attempt = 1; ; attempt++) {
-		const res = await fetch(`${SDK}${path}`, {
+		const res = await fetch(`${UPLOAD_API}${path}`, {
 			method: "POST",
-			headers: {
-				Authorization: `Bearer ${publicKey}`,
-				"Content-Type": "application/json",
-			},
+			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
 			signal: cancellable ? signal : undefined,
 		});
@@ -173,13 +170,7 @@ function putPart(
 	});
 }
 
-export function UploadDrop({
-	appId,
-	publicKey,
-}: {
-	appId: string;
-	publicKey: string;
-}) {
+export function UploadDrop({ appId }: { appId: string }) {
 	const router = useRouter();
 	const input = useRef<HTMLInputElement>(null);
 	const controller = useRef<AbortController | null>(null);
@@ -208,18 +199,16 @@ export function UploadDrop({
 			const meta = await readVideo(file);
 			stopIfCancelled();
 			const created = await call<{ videoId: string }>(
-				"/videos/create",
-				publicKey,
-				{ name: name.slice(0, 255) },
+				"/create",
+				{ appId, name: name.slice(0, 255) },
 				signal,
 				false,
 			);
 			videoId = created.videoId;
 			stopIfCancelled();
 			const initiated = await call<{ uploadId: string }>(
-				"/upload/multipart/initiate",
-				publicKey,
-				{ videoId, contentType: file.type || "video/mp4" },
+				"/initiate",
+				{ appId, videoId, contentType: file.type || "video/mp4" },
 				signal,
 				false,
 			);
@@ -229,6 +218,30 @@ export function UploadDrop({
 			const partBytes = partBytesFor(file.size);
 			const parts: { partNumber: number; etag: string; size: number }[] = [];
 			const total = Math.max(1, Math.ceil(file.size / partBytes));
+			const urls = new Map<number, string>();
+			const urlFor = async (partNumber: number) => {
+				if (!urls.has(partNumber)) {
+					const batch = await call<{
+						parts: { partNumber: number; presignedUrl: string }[];
+					}>(
+						"/presign",
+						{
+							appId,
+							videoId,
+							uploadId,
+							partNumbers: presignBatch(partNumber, total),
+						},
+						signal,
+					);
+					for (const part of batch.parts) {
+						urls.set(part.partNumber, part.presignedUrl);
+					}
+				}
+				const url = urls.get(partNumber);
+				urls.delete(partNumber);
+				if (!url) throw new UploadError("A part of the file failed to upload");
+				return url;
+			};
 			for (let index = 0; index < total; index++) {
 				const blob = file.slice(index * partBytes, (index + 1) * partBytes);
 				const sent = index * partBytes;
@@ -236,12 +249,7 @@ export function UploadDrop({
 				for (let attempt = 1; !etag; attempt++) {
 					stopIfCancelled();
 					try {
-						const { presignedUrl } = await call<{ presignedUrl: string }>(
-							"/upload/multipart/presign-part",
-							publicKey,
-							{ videoId, uploadId, partNumber: index + 1 },
-							signal,
-						);
+						const presignedUrl = await urlFor(index + 1);
 						stopIfCancelled();
 						etag = await putPart(
 							presignedUrl,
@@ -263,7 +271,8 @@ export function UploadDrop({
 			outcome = "unconfirmed";
 			for (let attempt = 1; outcome !== "done"; attempt++) {
 				try {
-					await call("/upload/multipart/complete", publicKey, {
+					await call("/complete", {
+						appId,
 						videoId,
 						uploadId,
 						parts,
@@ -297,10 +306,7 @@ export function UploadDrop({
 				return;
 			}
 			if (videoId && uploadId) {
-				await call("/upload/multipart/abort", publicKey, {
-					videoId,
-					uploadId,
-				}).catch(() => {});
+				await call("/abort", { appId, videoId, uploadId }).catch(() => {});
 			}
 			if (videoId) await deleteDeveloperVideo(appId, videoId).catch(() => {});
 			if (signal.aborted) {

@@ -66,6 +66,11 @@ vi.mock("@cap/utils", () => ({
 	}),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@cap/web-backend", () => ({
+	provideOptionalAuth: <T>(effect: T) => effect,
+	S3Buckets: {},
+}));
+vi.mock("@/lib/server", () => ({ runPromise: vi.fn() }));
 vi.mock("@/lib/developer-stripe-customer", () => ({
 	ensureDeveloperStripeCustomer: mocks.ensureCustomer,
 }));
@@ -104,6 +109,10 @@ import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
 import { app as videoCreate } from "@/app/api/developer/sdk/v1/[...route]/video-create";
 import { createDeveloperCardCheckout } from "@/lib/developer-card-checkout";
+import {
+	ownsInfraApp,
+	presignInfraUploadParts,
+} from "@/lib/infra-video-upload";
 
 const preview = { id: "user-1", email: "richie@cap.so" };
 const outsider = { id: "user-2", email: "someone@example.com" };
@@ -177,6 +186,33 @@ describe("creating a video", () => {
 		expect(mocks.inserts).toEqual([
 			expect.objectContaining({ id: "video-1", appId: "app-1", name: "Demo" }),
 		]);
+	});
+});
+
+describe("console upload route", () => {
+	it("is refused for an account outside the preview list without reading the app", async () => {
+		expect(await ownsInfraApp(outsider as never, "app-1")).toBe(false);
+		expect(mocks.selects).toHaveLength(0);
+	});
+
+	it("is refused for an app the user does not own and allowed for one they do", async () => {
+		mocks.selects = [[], [{ id: "app-1" }]];
+
+		expect(await ownsInfraApp(preview as never, "app-1")).toBe(false);
+		expect(await ownsInfraApp(preview as never, "app-1")).toBe(true);
+	});
+
+	it("presigns at most 50 parts in one request", async () => {
+		const ask = (count: number) =>
+			presignInfraUploadParts({
+				appId: "app-1",
+				videoId: "video-1",
+				uploadId: "upload-1",
+				partNumbers: Array.from({ length: count }, (_, index) => index + 1),
+			});
+
+		expect((await ask(0)).status).toBe(400);
+		expect((await ask(51)).status).toBe(400);
 	});
 });
 
