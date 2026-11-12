@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { developerCreditAccounts, developerVideos } from "@cap/database/schema";
+import { developerVideos } from "@cap/database/schema";
 import { and, count, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -28,12 +28,7 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[account], [videoStats], billing, stored, speech] = await Promise.all([
-		db()
-			.select()
-			.from(developerCreditAccounts)
-			.where(eq(developerCreditAccounts.appId, appId))
-			.limit(1),
+	const [[videoStats], billing, stored, credit] = await Promise.all([
 		db()
 			.select({
 				createdVideos: count(),
@@ -51,7 +46,7 @@ app.get("/", async (c) => {
 		getSpeechUsage(appId),
 	]);
 
-	const balanceMicroCredits = account?.balanceMicroCredits ?? 0;
+	const { balanceMicroCredits, ...speech } = credit;
 	const { standing, upload } = infraBillingJson(billing);
 
 	return c.json({

@@ -53,7 +53,7 @@ beforeEach(() => {
 	mocks.rows = [
 		{
 			appId: "app-1",
-			balanceMicroCredits: 949_286,
+			balanceMicroCredits: 1,
 			createdVideos: 3,
 			uploadedVideos: 2,
 			totalDurationMinutes: 12.5,
@@ -61,6 +61,7 @@ beforeEach(() => {
 	];
 	mocks.speech.mockReset();
 	mocks.speech.mockResolvedValue({
+		balanceMicroCredits: 949_286,
 		availableMicroCredits: 909_286,
 		heldMicroCredits: 40_000,
 		speech: {

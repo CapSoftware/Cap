@@ -1071,4 +1071,46 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			Date.now() + 59 * 60 * 1000,
 		);
 	});
+
+	it("never reports more available than balance minus holds while a transcript settles", async () => {
+		const seen = new Set<number>();
+		for (let round = 0; round < 12; round++) {
+			const appId = await makeApp(50_000);
+			const transcriptId = await makeTranscript(appId);
+			await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+			const usages: Awaited<ReturnType<typeof getSpeechUsage>>[] = [];
+			let settling = true;
+			const readers = Array.from({ length: 6 }, async () => {
+				while (settling) usages.push(await getSpeechUsage(appId));
+				usages.push(await getSpeechUsage(appId));
+			});
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			const settled = await settle(transcriptId, 3600);
+			settling = false;
+			await Promise.all(readers);
+
+			expect(settled).toMatchObject({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+			});
+			for (const usage of usages) {
+				expect(usage.availableMicroCredits).toBe(
+					usage.balanceMicroCredits - usage.heldMicroCredits,
+				);
+				expect(usage.availableMicroCredits).toBe(40_000);
+				expect([
+					[50_000, 10_000],
+					[40_000, 0],
+				]).toContainEqual([usage.balanceMicroCredits, usage.heldMicroCredits]);
+				seen.add(usage.balanceMicroCredits);
+			}
+			expect(await getSpeechUsage(appId)).toMatchObject({
+				balanceMicroCredits: 40_000,
+				heldMicroCredits: 0,
+				availableMicroCredits: 40_000,
+			});
+		}
+		expect([...seen].sort()).toEqual([40_000, 50_000]);
+	});
 });

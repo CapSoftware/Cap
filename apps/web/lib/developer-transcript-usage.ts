@@ -1,20 +1,18 @@
-import { db } from "@cap/database";
 import { getTranscriptionUsageSince } from "@/lib/developer-transcript-store";
-import {
-	availableBalance,
-	heldTranscriptMicroCredits,
-} from "@/lib/infra-balance";
+import { readBalanceAndHolds } from "@/lib/infra-balance";
 import { utcMonthStart } from "@/lib/infra-usage";
 
 export async function getSpeechUsage(appId: string, now: Date = new Date()) {
 	const periodStart = utcMonthStart(now);
-	const [month, heldMicroCredits, available] = await Promise.all([
+	const [month, credit] = await Promise.all([
 		getTranscriptionUsageSince(appId, periodStart),
-		heldTranscriptMicroCredits(db(), appId),
-		availableBalance(appId),
+		readBalanceAndHolds(appId),
 	]);
+	const balanceMicroCredits = credit?.balanceMicroCredits ?? 0;
+	const heldMicroCredits = credit?.heldMicroCredits ?? 0;
 	return {
-		availableMicroCredits: available ?? 0,
+		balanceMicroCredits,
+		availableMicroCredits: balanceMicroCredits - heldMicroCredits,
 		heldMicroCredits,
 		speech: {
 			periodStart: periodStart.toISOString(),

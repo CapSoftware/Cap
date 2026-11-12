@@ -81,6 +81,7 @@ beforeEach(() => {
 describe("speech usage for an app", () => {
 	it("is empty for an app that has transcribed nothing this month", async () => {
 		expect(await getSpeechUsage("app-1", NOW)).toEqual({
+			balanceMicroCredits: 949_286,
 			availableMicroCredits: 949_286,
 			heldMicroCredits: 0,
 			speech: {
@@ -169,12 +170,14 @@ describe("speech usage for an app", () => {
 		const usage = await getSpeechUsage("app-1", NOW);
 
 		expect(usage.heldMicroCredits).toBe(45_000);
+		expect(usage.balanceMicroCredits).toBe(949_286);
 		expect(usage.availableMicroCredits).toBe(949_286 - 45_000);
 		expect(usage.speech.microCredits).toBe(0);
 	});
 
 	it("reports nothing available for an app with no credit account", async () => {
 		expect(await getSpeechUsage("app-without-account", NOW)).toMatchObject({
+			balanceMicroCredits: 0,
 			availableMicroCredits: 0,
 			heldMicroCredits: 0,
 		});

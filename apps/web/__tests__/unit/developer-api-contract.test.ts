@@ -71,6 +71,7 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 }));
 vi.mock("@/lib/developer-transcript-usage", () => ({
 	getSpeechUsage: async () => ({
+		balanceMicroCredits: mocks.accounts[0]?.balanceMicroCredits ?? 0,
 		availableMicroCredits: 0,
 		heldMicroCredits: 0,
 		speech: {
