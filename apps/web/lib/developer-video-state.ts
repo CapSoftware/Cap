@@ -5,7 +5,8 @@ import type {
 	DeveloperVideoStatus,
 } from "@cap/database/types";
 
-export const DEVELOPER_VIDEO_PARTS = ["hls", "mp4"] as const;
+// The MP4 comes first: it is the quicker output, so it is sent to the encoder first.
+export const DEVELOPER_VIDEO_PARTS = ["mp4", "hls"] as const;
 export const DEVELOPER_VIDEO_MAX_PART_ATTEMPTS = 2;
 
 const MAX_REASON_LENGTH = 500;
@@ -191,10 +192,15 @@ export function failUnfinishedParts(
 	return next;
 }
 
+// Puts adaptive streaming back in the queue for a video that already plays:
+// either the media server could not make it earlier, or its job was lost.
+// developerVideoRedrive decides when that is due.
 export function retryUnavailableHls(
 	state: DeveloperVideoProcessingState,
 ): DeveloperVideoProcessingState | null {
-	if (state.hls.state !== "unavailable") return null;
+	if (state.hls.state !== "unavailable" && state.hls.state !== "running") {
+		return null;
+	}
 	return { ...state, hls: { state: "pending" } };
 }
 
@@ -204,13 +210,15 @@ export function resolveDeveloperVideoStatus(
 ): { status: DeveloperVideoStatus; errorReason: string | null } {
 	if (previous === "ready") return { status: "ready", errorReason: null };
 	const parts = DEVELOPER_VIDEO_PARTS.map((part) => state[part]);
+	// A video is ready as soon as one output can be played. The other output
+	// keeps encoding and its URL appears when it is done.
+	if (parts.some((part) => part.state === "complete")) {
+		return { status: "ready", errorReason: null };
+	}
 	if (
 		parts.some((part) => part.state === "pending" || part.state === "running")
 	) {
 		return { status: "processing", errorReason: null };
-	}
-	if (parts.some((part) => part.state === "complete")) {
-		return { status: "ready", errorReason: null };
 	}
 	const failure =
 		[state.mp4, state.hls].find((part) => part.state === "failed") ??
@@ -262,7 +270,13 @@ export function developerVideoRedrive(
 	}
 	if (video.status === "ready") {
 		const hls = video.processing?.hls;
-		return hls?.state === "unavailable" && hls.retryAt <= now
+		if (hls?.state === "unavailable") {
+			return hls.retryAt <= now ? "retry-hls" : null;
+		}
+		// The video went ready on its MP4 while adaptive streaming was still
+		// encoding. If that job has been running for hours it was lost.
+		return hls?.state === "running" &&
+			now - hls.startedAt >= STALE_PROCESSING_MS
 			? "retry-hls"
 			: null;
 	}
