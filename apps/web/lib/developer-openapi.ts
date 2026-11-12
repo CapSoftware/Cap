@@ -208,7 +208,8 @@ const playbackProperties = {
 	},
 	errorReason: {
 		type: ["string", "null"],
-		description: "Why processing failed, when status is errored.",
+		description:
+			"Why processing failed, when status is errored. A failed video is not billed and its files are removed 24 hours after processing started.",
 	},
 	playbackId: {
 		type: ["string", "null"],
@@ -309,7 +310,8 @@ const developerVideoSchema = {
 		},
 		storedBytes: {
 			type: ["integer", "null"],
-			description: "Bytes stored for the source and every encoded output.",
+			description:
+				"Bytes stored for the source and every encoded output. 0 once a failed video's files have been removed.",
 		},
 		deletedAt: {
 			type: ["string", "null"],
@@ -697,7 +699,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag) or part_too_small (a part other than the last is under 5 MB), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),

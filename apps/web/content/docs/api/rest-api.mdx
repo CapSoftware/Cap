@@ -437,6 +437,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 
 The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
 
+A failed video is not billed. It stays in the list with its `errorReason`, and its uploaded file is removed 24 hours after processing started, after which `storedBytes` is `0`. It cannot be processed again, so create a new video and upload the file to that one.
+
 Poll this endpoint every few seconds after completing an upload, and stop when `status` is `ready` or `errored`. Each call counts toward the key's 60 requests per minute.
 
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
@@ -756,7 +758,7 @@ The SDK API uploads a video's file from a browser or app. Every endpoint takes t
 After creating an upload, send its file in parts with the upload token:
 
 1. Initiate the upload to get an `uploadId`.
-2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts.
+2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts. The whole file can be up to 36 GB.
 3. For each part, get a presigned URL, `PUT` the bytes to it and keep the `ETag` response header.
 4. Complete the upload with the list of parts.
 
@@ -887,6 +889,7 @@ A mistake in the request returns one of these:
 | `400` | `parts_required` | `parts` is empty. | Send the `partNumber` and ETag of every part you uploaded. |
 | `400` | `parts_mismatch` | A listed part is missing from storage, is listed twice or has a different ETag. | Upload the missing part again, then send each part once with the ETag its `PUT` returned. |
 | `400` | `part_too_small` | A part other than the last is under 5 MB. | Initiate again and upload the file in larger parts. |
+| `400` | `file_too_large` | The parts add up to more than 36 GB. The upload was aborted and its parts were discarded. | Export the video at a lower bitrate or split it, then initiate again on the same video and upload the smaller file. |
 | `404` | `upload_not_found` | No open upload matches the `uploadId`. It was aborted or the ID is wrong. | Initiate again and upload the parts again. |
 
 The balance must cover 7 days of storage for everything the app stores including this video. If it does not, complete returns `402` with the same body as [Create Upload](/docs/api/rest-api#create-upload), and the upload stays open so the same request succeeds after a top-up. The one exception is when several uploads finish at once and together exceed the balance: the `402` then carries `"fileRemoved": true`, the file that was just assembled has been removed, and it must be uploaded again once credit is added.
@@ -1080,7 +1083,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 ></iframe>
 ```
 
-Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it shows `errorReason`. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it says so. It gives the reason only when the reason is about the file itself, such as a file with no video track. Any other reason, such as a credit shortfall, is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
 ## Video Object Reference
 
@@ -1103,7 +1106,7 @@ The full video object returned by list and get endpoints:
 | `playbackId` | string \| null | Unguessable ID the playback URLs are built from |
 | `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
 | `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate` (average bits per second), `bytes` and `codecs`. Empty until `hlsUrl` is set |
-| `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
+| `storedBytes` | number \| null | Bytes stored for the source and every encoded output. `0` once a failed video's files have been removed |
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
