@@ -110,8 +110,6 @@ const escapeAttribute = (value: string) =>
 		.replaceAll("<", "&lt;")
 		.replaceAll(">", "&gt;");
 
-// The iframe a customer pastes into a page. It keeps the video's own shape, or
-// 16:9 until the video has been measured.
 export function infraVideoEmbedCode(
 	embedUrl: string,
 	video: { name: string; width: number | null; height: number | null },
