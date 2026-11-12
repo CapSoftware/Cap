@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { trackEvent } from "@/app/utils/analytics";
 import { CapPlayer } from "@/components/cap-player/CapPlayer";
@@ -18,7 +18,17 @@ export const FilmButton = ({ files }: { files: FilmFiles }) => {
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const warmed = useRef(false);
 	const scroll = useRef("");
+	const locked = useRef(false);
 	const [open, setOpen] = useState(false);
+
+	useEffect(
+		() => () => {
+			if (!locked.current) return;
+			locked.current = false;
+			document.documentElement.style.overflow = scroll.current;
+		},
+		[],
+	);
 
 	const warm = () => {
 		if (warmed.current) return;
@@ -32,6 +42,7 @@ export const FilmButton = ({ files }: { files: FilmFiles }) => {
 		if (!dialog || dialog.open) return;
 		warm();
 		scroll.current = document.documentElement.style.overflow;
+		locked.current = true;
 		document.documentElement.style.overflow = "hidden";
 		dialog.showModal();
 		flushSync(() => setOpen(true));
@@ -41,6 +52,7 @@ export const FilmButton = ({ files }: { files: FilmFiles }) => {
 
 	const closed = () => {
 		setOpen(false);
+		locked.current = false;
 		document.documentElement.style.overflow = scroll.current;
 		announce(false);
 	};
