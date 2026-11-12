@@ -357,6 +357,30 @@ describe("completing a developer video upload", () => {
 		expect(stored).toEqual([storedKey()]);
 	});
 
+	it("charges only for the copy it keeps when overlapping completions claim different lengths", async () => {
+		context.probe = null;
+		const id = await createAndUpload(1_000_000);
+		const results = await Promise.all([
+			completeDeveloperVideoUpload("app-1", id, { durationSeconds: 60 }),
+			completeDeveloperVideoUpload("app-1", id, { durationSeconds: 120 }),
+		]);
+
+		expect(results.every((result) => result.ok)).toBe(true);
+		const kept = videos()[0]?.duration as number;
+		expect([60, 120]).toContain(kept);
+		expect(ledger()).toHaveLength(1);
+		expect(ledger()[0]).toMatchObject({
+			metadata: { durationSeconds: kept },
+		});
+		expect(account()?.balanceMicroCredits).toBe(
+			1_000_000 - Math.floor((kept / 60) * 5_000),
+		);
+		const charged = results.map((result) =>
+			result.ok ? result.chargedMicroCredits : -1,
+		);
+		expect(charged.filter((value) => value > 0)).toHaveLength(1);
+	});
+
 	it("falls back to the claim with a size floor when it cannot measure", async () => {
 		context.probe = null;
 		const id = await createAndUpload(250_000_000);

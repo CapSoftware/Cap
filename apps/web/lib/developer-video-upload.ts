@@ -108,36 +108,53 @@ export function developerVideoUploadMicroCredits(durationSeconds: number) {
 	return Math.floor((durationSeconds / 60) * UPLOAD_MICRO_CREDITS_PER_MINUTE);
 }
 
-type DeveloperVideoCharge = "charged" | "insufficient" | "no-account";
+type DeveloperVideoCharge =
+	| "recorded"
+	| "superseded"
+	| "missing"
+	| "insufficient"
+	| "no-account";
 
-async function chargeDeveloperVideoUpload(input: {
+async function chargeAndRecordDeveloperVideo(input: {
 	appId: string;
 	videoId: string;
 	durationSeconds: number;
 	metadata: Record<string, unknown>;
+	record: Partial<typeof developerVideos.$inferInsert>;
 }): Promise<DeveloperVideoCharge> {
 	const owed = developerVideoUploadMicroCredits(input.durationSeconds);
-	if (owed <= 0) return "charged";
 
 	return db().transaction(async (tx) => {
-		await tx
-			.select({ id: developerVideos.id })
+		const [locked] = await tx
+			.select({
+				duration: developerVideos.duration,
+				deletedAt: developerVideos.deletedAt,
+			})
 			.from(developerVideos)
 			.where(eq(developerVideos.id, input.videoId))
 			.limit(1)
 			.for("update");
+		if (!locked || locked.deletedAt) return "missing";
+		if (locked.duration !== null) return "superseded";
 
-		const debit = await debitDeveloperUsage(tx, {
-			appId: input.appId,
-			microCredits: owed,
-			type: "video_create",
-			referenceId: input.videoId,
-			referenceType: "developer_video",
-			metadata: input.metadata,
-		});
-		if (debit.state === "no_account") return "no-account";
-		if (debit.state === "insufficient") return "insufficient";
-		return "charged";
+		if (owed > 0) {
+			const debit = await debitDeveloperUsage(tx, {
+				appId: input.appId,
+				microCredits: owed,
+				type: "video_create",
+				referenceId: input.videoId,
+				referenceType: "developer_video",
+				metadata: input.metadata,
+			});
+			if (debit.state === "no_account") return "no-account";
+			if (debit.state === "insufficient") return "insufficient";
+		}
+
+		await tx
+			.update(developerVideos)
+			.set(input.record)
+			.where(eq(developerVideos.id, input.videoId));
+		return "recorded";
 	});
 }
 
@@ -158,11 +175,6 @@ async function developerVideoPaidMicroCredits(videoId: string) {
 		);
 	return Number(paid?.total ?? 0) || 0;
 }
-
-const affectedRows = (result: unknown) =>
-	Array.isArray(result)
-		? ((result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
-		: ((result as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
 
 export type DeveloperVideoView = {
 	id: string;
@@ -393,17 +405,7 @@ export async function completeDeveloperVideoUpload(
 			totalBytes,
 		});
 
-		const current = await findVideo(appId, video.id);
-		if (!current) return NOT_FOUND;
-		if (current.duration !== null) {
-			return {
-				ok: true,
-				video: toDeveloperVideoView(current),
-				chargedMicroCredits: 0,
-			};
-		}
-
-		const charge = await chargeDeveloperVideoUpload({
+		const outcome = await chargeAndRecordDeveloperVideo({
 			appId,
 			videoId: video.id,
 			durationSeconds,
@@ -412,26 +414,19 @@ export async function completeDeveloperVideoUpload(
 				totalBytes,
 				measured: measuredSeconds !== null,
 			},
-		});
-		if (charge !== "charged") return INSUFFICIENT;
-
-		const stored = await db()
-			.update(developerVideos)
-			.set({
+			record: {
 				s3Key: storedKey,
 				duration: durationSeconds,
 				width: width === null ? undefined : Math.round(width),
 				height: height === null ? undefined : Math.round(height),
 				fps: fps === null ? undefined : Math.round(fps),
-			})
-			.where(
-				and(
-					eq(developerVideos.id, video.id),
-					isNull(developerVideos.duration),
-					isNull(developerVideos.deletedAt),
-				),
-			);
-		kept = affectedRows(stored) > 0;
+			},
+		});
+		if (outcome === "missing") return NOT_FOUND;
+		if (outcome === "insufficient" || outcome === "no-account") {
+			return INSUFFICIENT;
+		}
+		kept = outcome === "recorded";
 
 		const completed = await findVideo(appId, video.id);
 		if (!completed) return NOT_FOUND;
