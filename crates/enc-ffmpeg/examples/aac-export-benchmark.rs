@@ -37,6 +37,17 @@ fn decode_to_stereo(path: &Path) -> Vec<f32> {
     .unwrap();
 
     let mut samples = Vec::new();
+    let mut append_samples = |resampled: &frame::Audio| {
+        if resampled.samples() == 0 {
+            return;
+        }
+        let bytes = resampled.samples() * 2 * std::mem::size_of::<f32>();
+        samples.extend(
+            resampled.data(0)[..bytes]
+                .chunks_exact(std::mem::size_of::<f32>())
+                .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
+        );
+    };
     let mut decoded = frame::Audio::empty();
     let mut resampled = frame::Audio::empty();
     for (stream, packet) in input.packets() {
@@ -47,13 +58,22 @@ fn decode_to_stereo(path: &Path) -> Vec<f32> {
         while decoder.receive_frame(&mut decoded).is_ok() {
             decoded.set_channel_layout(input_layout);
             resampler.run(&decoded, &mut resampled).unwrap();
-            let bytes = resampled.samples() * 2 * std::mem::size_of::<f32>();
-            samples.extend(
-                resampled.data(0)[..bytes]
-                    .chunks_exact(std::mem::size_of::<f32>())
-                    .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
-            );
+            append_samples(&resampled);
         }
+    }
+    decoder.send_eof().unwrap();
+    while decoder.receive_frame(&mut decoded).is_ok() {
+        decoded.set_channel_layout(input_layout);
+        resampler.run(&decoded, &mut resampled).unwrap();
+        append_samples(&resampled);
+    }
+    while resampler.delay().is_some() {
+        let mut tail = frame::Audio::new(Sample::F32(Type::Packed), 0, ChannelLayout::STEREO);
+        resampler.flush(&mut tail).unwrap();
+        if tail.samples() == 0 {
+            break;
+        }
+        append_samples(&tail);
     }
     samples
 }
@@ -156,4 +176,56 @@ fn main() {
         times[0],
         times[times.len() - 1]
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_preserves_full_resampled_audio() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.wav");
+
+        for (input_rate, input_samples) in [
+            (44_100u32, 44_100u32),
+            (48_000, 48_000),
+            (96_000, 96_000),
+            (44_100, 441),
+        ] {
+            let data_bytes = input_samples * 2;
+            let mut wav = Vec::new();
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt ");
+            wav.extend_from_slice(&16u32.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes());
+            wav.extend_from_slice(&input_rate.to_le_bytes());
+            wav.extend_from_slice(&(input_rate * 2).to_le_bytes());
+            wav.extend_from_slice(&2u16.to_le_bytes());
+            wav.extend_from_slice(&16u16.to_le_bytes());
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&data_bytes.to_le_bytes());
+            for _ in 0..input_samples {
+                wav.extend_from_slice(&8192i16.to_le_bytes());
+            }
+            std::fs::write(&path, wav).unwrap();
+
+            let samples = decode_to_stereo(&path);
+            let expected_samples =
+                u64::from(input_samples) * u64::from(RATE) / u64::from(input_rate);
+            assert_eq!(
+                samples.len(),
+                expected_samples as usize * 2,
+                "{input_samples} samples at {input_rate} Hz"
+            );
+            assert!(
+                samples[samples.len() - 2..]
+                    .iter()
+                    .all(|sample| *sample > 0.1)
+            );
+        }
+    }
 }
