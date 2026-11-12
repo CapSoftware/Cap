@@ -574,6 +574,12 @@ pub struct AgentApiError {
     pub retryable: bool,
     pub retry_after_ms: Option<u64>,
     pub request_id: Option<String>,
+    #[serde(flatten)]
+    pub context: Box<AgentErrorContext>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct AgentErrorContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     #[serde(flatten, skip_deserializing)]
@@ -598,25 +604,25 @@ impl AgentApiError {
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
+        self.context.hint = Some(hint.into());
         self
     }
 
     pub fn with_detail(mut self, key: &str, value: impl Into<Value>) -> Self {
-        self.details.insert(key.to_string(), value.into());
+        self.context.details.insert(key.to_string(), value.into());
         self
     }
 
     pub fn describe(&self) -> String {
         let mut text = self.to_string();
-        for (key, value) in &self.details {
+        for (key, value) in &self.context.details {
             let value = match value {
                 Value::String(value) => value.clone(),
                 other => other.to_string(),
             };
             text.push_str(&format!("\n{key}: {value}"));
         }
-        if let Some(hint) = &self.hint
+        if let Some(hint) = &self.context.hint
             && !self.message.contains(hint.as_str())
         {
             text.push_str(&format!("\nhint: {hint}"));
@@ -750,12 +756,11 @@ impl AgentClient {
                         retryable: true,
                         retry_after_ms: Some(500),
                         request_id: None,
-                        hint: Some(
-                            "Cap could not be reached. Check the network and CAP_SERVER_URL, then retry."
-                                .to_string(),
-                        ),
                         ..Default::default()
-                    };
+                    }
+                    .with_hint(
+                        "Cap could not be reached. Check the network and CAP_SERVER_URL, then retry.",
+                    );
                     if attempt >= 2 {
                         return Err(error);
                     }

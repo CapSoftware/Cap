@@ -960,3 +960,220 @@ pub fn write_json_line<T: Serialize>(value: &T) -> Result<(), String> {
     writeln!(&mut stdout).map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use clap::{CommandFactory, error::ErrorKind};
+
+    use super::{Cli, args_request_json, failure_json, usage_error_json};
+
+    fn string_literals(source: &str) -> Vec<String> {
+        let mut literals = Vec::new();
+        let mut chars = source.chars();
+        while let Some(quote) = chars.next() {
+            if quote == '"' || quote == '\'' {
+                literals.push(chars.by_ref().take_while(|next| *next != quote).collect());
+            }
+        }
+        literals
+    }
+
+    fn read_web_file(relative: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web")
+            .join(relative);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("could not read {}: {error}", path.display()))
+    }
+
+    fn prompt_commands() -> Vec<String> {
+        let source = read_web_file("data/infra-agent-prompt.ts");
+        let block = source
+            .split("const commands = {")
+            .nth(1)
+            .and_then(|rest| rest.split("} as const;").next())
+            .expect("the prompt keeps its commands in one object");
+        string_literals(block)
+            .into_iter()
+            .filter(|literal| literal.starts_with("cap "))
+            .collect()
+    }
+
+    fn docs_commands() -> Vec<String> {
+        read_web_file("content/docs/agents/workflows.mdx")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("cap developers "))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn tokens(command: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        let mut quoted = false;
+        for character in command.chars() {
+            match character {
+                '"' => quoted = !quoted,
+                ' ' if !quoted => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                other => current.push(other),
+            }
+        }
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
+            .into_iter()
+            .map(|token| {
+                match token
+                    .strip_prefix('<')
+                    .and_then(|rest| rest.strip_suffix('>'))
+                {
+                    Some(placeholder) => placeholder
+                        .split('|')
+                        .next()
+                        .unwrap_or_default()
+                        .replace(' ', "-"),
+                    None => token,
+                }
+            })
+            .collect()
+    }
+
+    fn assert_command_exists(command: &str) {
+        let tokens = tokens(command);
+        match Cli::command().try_get_matches_from(&tokens) {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::DisplayHelp => {}
+            Err(error) => panic!("`{command}` is not a valid cap command: {error}"),
+        }
+        let mut leaf = Cli::command();
+        for token in tokens
+            .iter()
+            .skip(1)
+            .filter(|token| !token.starts_with('-'))
+        {
+            match leaf.find_subcommand(token).cloned() {
+                Some(next) => leaf = next,
+                None => break,
+            }
+        }
+        let confirmable = leaf
+            .get_arguments()
+            .any(|argument| argument.get_id().as_str() == "yes");
+        if confirmable {
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token == "--yes" || token == "--dry-run"),
+                "`{command}` changes something and must pass --yes or --dry-run"
+            );
+        }
+    }
+
+    #[test]
+    fn every_command_in_the_cap_infra_agent_prompt_exists() {
+        let commands = prompt_commands();
+        assert!(commands.len() >= 15, "found only {commands:?}");
+        for expected in [
+            "cap agents install",
+            "cap developers videos upload",
+            "cap developers videos get",
+            "cap developers usage",
+            "cap developers keys rotate",
+            "cap developers credits purchase",
+        ] {
+            assert!(
+                commands.iter().any(|command| command.starts_with(expected)),
+                "the prompt no longer names `{expected}`"
+            );
+        }
+        for command in &commands {
+            assert_command_exists(command);
+        }
+    }
+
+    #[test]
+    fn every_developer_command_in_the_agent_docs_exists() {
+        let commands = docs_commands();
+        assert!(commands.len() >= 6, "found only {commands:?}");
+        for command in &commands {
+            assert_command_exists(command);
+        }
+    }
+
+    #[test]
+    fn a_command_that_does_not_exist_is_caught() {
+        for command in [
+            "cap developers videos status <app> <video>",
+            "cap developers videos upload <app> <file> --block",
+            "cap developers credits purchase <app> --amount-cents ten --yes",
+        ] {
+            let result = std::panic::catch_unwind(|| assert_command_exists(command));
+            assert!(result.is_err(), "`{command}` should not validate");
+        }
+        let unconfirmed =
+            std::panic::catch_unwind(|| assert_command_exists("cap developers delete <app>"));
+        assert!(unconfirmed.is_err());
+    }
+
+    #[test]
+    fn json_is_detected_from_the_raw_arguments() {
+        let detect = |args: &[&str]| args_request_json(args.iter().map(|arg| arg.to_string()));
+        assert!(detect(&["developers", "list", "--json"]));
+        assert!(detect(&["--json", "developers", "list"]));
+        assert!(detect(&["developers", "list", "--format", "json"]));
+        assert!(detect(&["developers", "list", "--format=json"]));
+        assert!(!detect(&["developers", "list"]));
+        assert!(!detect(&["developers", "list", "--format", "text"]));
+        assert!(!detect(&["developers", "get", "json"]));
+        assert!(!detect(&["developers", "get", "--", "--json"]));
+    }
+
+    #[test]
+    fn usage_errors_keep_the_missing_arguments_and_the_tip() {
+        let missing = usage_error_json(
+            "error: the following required arguments were not provided:\n  <VIDEO>\n\nUsage: cap developers videos get --json <APP> <VIDEO>\n\nFor more information, try '--help'.\n",
+        );
+        assert_eq!(missing["code"], "USAGE");
+        assert_eq!(
+            missing["message"],
+            "the following required arguments were not provided: <VIDEO>"
+        );
+        assert_eq!(missing["error"], missing["message"]);
+        assert_eq!(
+            missing["hint"],
+            "Usage: cap developers videos get --json <APP> <VIDEO>"
+        );
+
+        let unknown = usage_error_json(
+            "error: unrecognized subcommand 'transcript'\n\n  tip: a similar subcommand exists: 'transcripts'\n\nUsage: cap developers [OPTIONS] <COMMAND>\n",
+        );
+        assert_eq!(unknown["message"], "unrecognized subcommand 'transcript'");
+        assert_eq!(
+            unknown["hint"],
+            "a similar subcommand exists: 'transcripts'"
+        );
+    }
+
+    #[test]
+    fn plain_failures_become_one_json_object() {
+        let coded = failure_json("NOT_FOUND: Cap not found\nhint: check the id");
+        assert_eq!(coded["code"], "NOT_FOUND");
+        assert_eq!(coded["message"], "Cap not found");
+        assert_eq!(coded["error"], "Cap not found");
+
+        let plain = failure_json("Image must be a PNG or JPEG");
+        assert_eq!(plain["code"], "COMMAND_FAILED");
+        assert_eq!(plain["message"], "Image must be a PNG or JPEG");
+
+        let url = failure_json("Failed to open http://localhost: refused");
+        assert_eq!(url["code"], "COMMAND_FAILED");
+    }
+}

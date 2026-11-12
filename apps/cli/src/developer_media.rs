@@ -803,4 +803,100 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn video_paths_accept_ids_that_begin_with_a_dash() {
+        assert_eq!(
+            super::video_path("app_1", "-Vid0000000dash").unwrap(),
+            "/developer/apps/app_1/videos/-Vid0000000dash"
+        );
+        assert_eq!(
+            transcript_path("app_1", "-EDG5hrbuAwXDNY", false).unwrap(),
+            "/developer/apps/app_1/transcripts/-EDG5hrbuAwXDNY"
+        );
+        assert!(super::video_path("app_1", "../video").is_err());
+    }
+
+    #[test]
+    fn failed_waits_keep_the_id_they_waited_on() {
+        let transcript = transcript_failure(
+            &json!({
+                "transcript": {
+                    "status": "error",
+                    "errorCode": "source_unreachable",
+                    "errorMessage": "The URL answered 404",
+                },
+                "requestId": "r1",
+            }),
+            "-EDG5hrbuAwXDNY",
+        );
+        assert_eq!(
+            transcript.context.details["transcriptId"],
+            "-EDG5hrbuAwXDNY"
+        );
+        assert_eq!(transcript.context.details["status"], "error");
+        assert!(transcript.context.hint.is_some());
+
+        let video = super::video_failure(
+            &json!({
+                "video": { "status": "errored", "errorReason": "The file could not be decoded" },
+                "requestId": "r2",
+            }),
+            "video-1",
+        );
+        assert_eq!(video.code, "VIDEO_FAILED");
+        assert_eq!(video.message, "The file could not be decoded");
+        assert_eq!(video.context.details["videoId"], "video-1");
+        assert_eq!(video.request_id.as_deref(), Some("r2"));
+
+        let serialized = serde_json::to_value(&video).unwrap();
+        assert_eq!(serialized["videoId"], "video-1");
+        assert_eq!(serialized["code"], "VIDEO_FAILED");
+        assert!(serialized["hint"].is_string());
+        assert!(video.describe().contains("videoId: video-1"));
+    }
+
+    #[test]
+    fn server_hints_survive_parsing_and_extra_fields_are_dropped() {
+        let error: crate::caps::AgentApiError = serde_json::from_value(json!({
+            "_tag": "AgentForbiddenError",
+            "code": "FORBIDDEN",
+            "message": "The developer:read permission is required. Run `cap auth login --profile full`.",
+            "retryable": false,
+            "retryAfterMs": null,
+            "requestId": "r3",
+            "hint": "Run `cap auth login --profile full`.",
+            "requiredScopes": ["developer:read"],
+        }))
+        .unwrap();
+        assert_eq!(
+            error.context.hint.as_deref(),
+            Some("Run `cap auth login --profile full`.")
+        );
+        assert!(error.context.details.is_empty());
+        assert!(!error.describe().contains("hint:"));
+        let serialized = serde_json::to_value(&error).unwrap();
+        assert!(serialized.get("_tag").is_none());
+        assert_eq!(serialized["hint"], "Run `cap auth login --profile full`.");
+    }
+
+    #[test]
+    fn domains_resolve_by_id_or_by_origin() {
+        let context = json!({
+            "domains": [
+                { "id": "dom-1", "domain": "https://app.example.com" },
+                { "id": "-dom-2", "domain": "https://www.example.com" },
+            ],
+        });
+        let id = |value: &str| {
+            super::domain_entry(&context, value)
+                .and_then(|entry| entry.get("id"))
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(id("dom-1").as_deref(), Some("dom-1"));
+        assert_eq!(id("https://app.example.com/").as_deref(), Some("dom-1"));
+        assert_eq!(id("HTTPS://WWW.EXAMPLE.COM").as_deref(), Some("-dom-2"));
+        assert_eq!(id("https://other.example.com"), None);
+    }
 }
