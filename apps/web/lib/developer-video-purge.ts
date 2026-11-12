@@ -10,7 +10,10 @@ import {
 // video was deleted can write files after the first purge. One more pass once
 // that window has closed catches them.
 export const DEVELOPER_VIDEO_LATE_WRITE_HOURS = 4;
-const PURGE_BATCH = 100;
+// Runs every five minutes, so a batch only has to keep up with deletes. The
+// CDN re-checks these files with storage on the same interval, so removing
+// the files is what takes a deleted video away from links already handed out.
+const PURGE_BATCH = 200;
 
 export async function purgeDeletedDeveloperVideos(
 	limit = PURGE_BATCH,

@@ -1,3 +1,4 @@
+import { type HdrTransfer, hdrToSdrFilter, SDR_COLOR_ARGS } from "./hdr";
 import { NVENC_HWACCEL_INPUT_ARGS, type NvencOptions } from "./nvenc-encoder";
 
 export const HLS_LADDER_MASTER_PLAYLIST = "master.m3u8";
@@ -174,6 +175,12 @@ export interface HlsLadderArgsInput {
 	extraInputArgs?: string[];
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
 	range?: HlsLadderRange | null;
+	hdr?: HdrTransfer | null;
+}
+
+// An HDR source is converted on the CPU, so it is never decoded on the GPU.
+function decodesOnGpu(input: HlsLadderArgsInput): boolean {
+	return Boolean(input.nvenc?.gpuDecode) && !input.hdr;
 }
 
 export interface HlsLadderRange {
@@ -232,9 +239,10 @@ function sliceTrimFilter(range: HlsLadderRange | null | undefined): string {
 
 function ladderFilterGraph(input: HlsLadderArgsInput): string {
 	const { rungs, nvenc } = input;
-	const fpsFilter = `fps=${hlsLadderFrameRate(input.sourceFps)},${sliceTrimFilter(input.range)}`;
+	const toSdr = input.hdr ? `${hdrToSdrFilter(input.hdr, rungs[0])},` : "";
+	const fpsFilter = `fps=${hlsLadderFrameRate(input.sourceFps)},${sliceTrimFilter(input.range)}${toSdr}`;
 	const head = nvenc
-		? nvenc.gpuDecode
+		? decodesOnGpu(input)
 			? `[0:v]${fpsFilter}`
 			: `[0:v]${fpsFilter}format=nv12,hwupload_cuda,`
 		: `[0:v]${fpsFilter}`;
@@ -255,7 +263,7 @@ export function buildHlsLadderArgs(input: HlsLadderArgsInput): string[] {
 		"ffmpeg",
 		"-threads",
 		input.decodeThreads,
-		...(nvenc?.gpuDecode
+		...(decodesOnGpu(input)
 			? [...NVENC_HWACCEL_INPUT_ARGS, "-c:v", `${input.videoCodec}_cuvid`]
 			: []),
 		...(input.extraInputArgs ?? []),
@@ -325,6 +333,7 @@ export function buildHlsLadderArgs(input: HlsLadderArgsInput): string[] {
 		keyframes,
 		"-fps_mode:v",
 		"passthrough",
+		...(input.hdr ? SDR_COLOR_ARGS : []),
 	);
 
 	if (input.hasAudio) {

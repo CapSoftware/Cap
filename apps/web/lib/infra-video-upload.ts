@@ -8,6 +8,7 @@ import type { User } from "@cap/web-domain";
 import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
+import { developerVideoPageUrls } from "@/lib/developer-video-api";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
@@ -268,13 +269,10 @@ export async function createInfraVideo({
 			maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 		});
 
-	const webUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
-
 	return ok({
 		videoId,
 		playbackId,
-		shareUrl: `${webUrl}/dev/${videoId}`,
-		embedUrl: `${webUrl}/embed/${videoId}?sdk=1`,
+		...developerVideoPageUrls(playbackId, buildEnv.NEXT_PUBLIC_WEB_URL),
 	});
 }
 

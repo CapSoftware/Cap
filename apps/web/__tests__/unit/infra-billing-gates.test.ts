@@ -198,6 +198,11 @@ describe("creating a video", () => {
 		const playbackId = mocks.inserts[0]?.playbackId;
 		expect(typeof playbackId).toBe("string");
 		expect(String(playbackId).length).toBeGreaterThan(8);
+		expect(body).toMatchObject({
+			playbackId,
+			shareUrl: `https://cap.test/dev/${playbackId}`,
+			embedUrl: `https://cap.test/dev/${playbackId}/embed`,
+		});
 		expect(mocks.inserts[0]?.maxResolutionTier).toBeTruthy();
 	});
 });

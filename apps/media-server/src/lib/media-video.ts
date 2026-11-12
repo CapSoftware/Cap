@@ -11,6 +11,12 @@ import {
 } from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
 import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
+import {
+	type HdrTransfer,
+	hdrToSdrFilter,
+	hdrTransferFrom,
+	SDR_COLOR_ARGS,
+} from "./hdr";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
@@ -1535,6 +1541,7 @@ async function probeVideoStreamEntries(
 	inputPath: string,
 	showEntries: string,
 	abortSignal?: AbortSignal,
+	keyed = false,
 ): Promise<string | null> {
 	const proc = registerSubprocess(
 		spawn({
@@ -1547,7 +1554,7 @@ async function probeVideoStreamEntries(
 				"-show_entries",
 				showEntries,
 				"-of",
-				"default=noprint_wrappers=1:nokey=1",
+				`default=noprint_wrappers=1:nokey=${keyed ? 0 : 1}`,
 				inputPath,
 			],
 			stdout: "pipe",
@@ -1636,6 +1643,35 @@ export async function probeVideoRotation(
 	return Number.isFinite(rotation) ? rotation : null;
 }
 
+export interface VideoSourceTraits {
+	rotation: number | null;
+	hdr: HdrTransfer | null;
+}
+
+// One ffprobe for the two things that decide how a source is decoded: a
+// rotated source cannot be decoded on the GPU, and an HDR source has to be
+// converted to standard range on the CPU.
+export async function probeVideoSourceTraits(
+	inputPath: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoSourceTraits> {
+	const stdout = await probeVideoStreamEntries(
+		inputPath,
+		"stream=color_transfer:stream_side_data=rotation",
+		abortSignal,
+		true,
+	);
+	if (stdout === null) return { rotation: null, hdr: null };
+	const value = (key: string) =>
+		stdout.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? null;
+	const rawRotation = value("rotation");
+	const rotation = rawRotation === null ? 0 : Number.parseFloat(rawRotation);
+	return {
+		rotation: Number.isFinite(rotation) ? rotation : null,
+		hdr: hdrTransferFrom(value("color_transfer")),
+	};
+}
+
 export async function processVideo(
 	inputPath: string,
 	metadata: VideoMetadata,
@@ -1649,7 +1685,6 @@ export async function processVideo(
 		Object.entries(options).filter(([, value]) => value !== undefined),
 	) as VideoProcessingOptions;
 	const opts = { ...DEFAULT_OPTIONS, ...definedOptions };
-	const outputTempFile = await createTempFile(".mp4");
 
 	const remuxOnly = opts.remuxOnly;
 	const [sourceH264Level, sourcePixelFormat] =
@@ -1663,6 +1698,16 @@ export async function processVideo(
 	const browserPixelFormat =
 		sourcePixelFormat === null ||
 		BROWSER_H264_PIXEL_FORMATS.has(sourcePixelFormat);
+	// 8-bit H.264 is never HDR, so the common source is not probed for it.
+	const traits =
+		remuxOnly || (metadata.videoCodec === "h264" && browserPixelFormat)
+			? null
+			: await probeVideoSourceTraits(inputPath, abortSignal);
+	abortSignal?.throwIfAborted();
+	const hdr = traits?.hdr ?? null;
+	// Created only once nothing above can throw, so a job cancelled while its
+	// source is probed leaves no output path behind.
+	const outputTempFile = await createTempFile(".mp4");
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
 	const normalizeH264Level =
 		opts.normalizeH264Level &&
@@ -1674,7 +1719,8 @@ export async function processVideo(
 		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
-		: !browserPixelFormat ||
+		: hdr !== null ||
+			!browserPixelFormat ||
 			needsVideoTranscode(metadata, opts, sourceH264Level);
 	const audioTranscode = remuxOnly ? false : needsAudioTranscode(metadata);
 	const extraInputArgs = resilientFlags
@@ -1688,7 +1734,9 @@ export async function processVideo(
 		opts.timeoutMs,
 	);
 	const capcodec =
-		videoTranscode && !normalizeH264Level ? capcodecOptionsForJob(opts) : null;
+		videoTranscode && !normalizeH264Level && hdr === null
+			? capcodecOptionsForJob(opts)
+			: null;
 	if (capcodec) {
 		try {
 			await processVideoWithCapcodec(
@@ -1726,6 +1774,7 @@ export async function processVideo(
 		extraOutputArgs,
 		sourceWidth: metadata.width,
 		sourceHeight: metadata.height,
+		hdr,
 		// NVENC leaves the CPU free, so decode (and scale) can use every core.
 		decodeThreads: decodeThreadsFromEnv(
 			"MEDIA_SERVER_PROCESS_DECODE_THREADS",
@@ -1738,11 +1787,15 @@ export async function processVideo(
 
 	try {
 		if (nvenc) {
-			const gpuDecode = canDecodeOnGpu(
-				metadata.videoCodec,
-				await probeVideoRotation(inputPath, abortSignal),
-				nvenc.gpuDecodeCodecs,
-			);
+			const gpuDecode =
+				hdr === null &&
+				canDecodeOnGpu(
+					metadata.videoCodec,
+					traits
+						? traits.rotation
+						: await probeVideoRotation(inputPath, abortSignal),
+					nvenc.gpuDecodeCodecs,
+				);
 			try {
 				await runTranscodeCommand(
 					buildProcessVideoArgs({
@@ -1809,19 +1862,35 @@ export interface ProcessVideoArgsInput {
 	decodeThreads: string;
 	sourceWidth?: number;
 	sourceHeight?: number;
+	hdr?: HdrTransfer | null;
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
 }
 
 export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 	const { opts, nvenc } = input;
+	const hdr = input.hdr ?? null;
 	const gpuDecode = Boolean(
-		nvenc?.gpuDecode && input.sourceWidth && input.sourceHeight,
+		hdr === null && nvenc?.gpuDecode && input.sourceWidth && input.sourceHeight,
 	);
 	const source = {
 		width: input.sourceWidth ?? 0,
 		height: input.sourceHeight ?? 0,
 	};
-	const cpuScaleFilter = `scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
+	const fitScaleFilter = `scale='min(${opts.maxWidth},iw)':'min(${opts.maxHeight},ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2`;
+	const cpuScaleFilter =
+		hdr === null
+			? fitScaleFilter
+			: `${hdrToSdrFilter(
+					hdr,
+					source.width > 0 && source.height > 0
+						? fitWithinEven(
+								source.width,
+								source.height,
+								opts.maxWidth,
+								opts.maxHeight,
+							)
+						: undefined,
+				)},${fitScaleFilter}`;
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
@@ -1881,6 +1950,7 @@ export function buildProcessVideoArgs(input: ProcessVideoArgsInput): string[] {
 		} else {
 			ffmpegArgs.push("-level:v", input.targetH264Level);
 		}
+		if (hdr !== null) ffmpegArgs.push(...SDR_COLOR_ARGS);
 		if (input.videoCodec === "vp8" || input.videoCodec === "vp9") {
 			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
 			ffmpegArgs.push("-bf", "0");

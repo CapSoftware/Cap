@@ -190,6 +190,11 @@ const errorSchema = {
 	},
 };
 
+const PLAYER_PAGE_DESCRIPTION =
+	"Hosted player page for the video, built from its playbackId. Public, needs no API key and works before the video is ready.";
+const PLAYER_EMBED_DESCRIPTION =
+	"The hosted player with nothing around it, for an iframe on any origin. Built from the playbackId.";
+
 const playbackProperties = {
 	status: {
 		type: "string",
@@ -283,6 +288,16 @@ const developerVideoSchema = {
 			description: "Metadata passed to createSdkVideo.",
 		},
 		...playbackProperties,
+		shareUrl: {
+			type: ["string", "null"],
+			format: "uri",
+			description: `${PLAYER_PAGE_DESCRIPTION} Null only for a video with no playbackId.`,
+		},
+		embedUrl: {
+			type: ["string", "null"],
+			format: "uri",
+			description: `${PLAYER_EMBED_DESCRIPTION} Null only for a video with no playbackId.`,
+		},
 		maxResolutionTier: {
 			type: "string",
 			enum: ["1080p", "1440p", "2160p"],
@@ -1109,8 +1124,16 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: {
 					videoId: { type: "string" },
 					playbackId: { type: "string" },
-					shareUrl: { type: "string", format: "uri" },
-					embedUrl: { type: "string", format: "uri" },
+					shareUrl: {
+						type: "string",
+						format: "uri",
+						description: PLAYER_PAGE_DESCRIPTION,
+					},
+					embedUrl: {
+						type: "string",
+						format: "uri",
+						description: PLAYER_EMBED_DESCRIPTION,
+					},
 				},
 			},
 			InitiateUploadRequest: {
