@@ -58,7 +58,25 @@ vi.mock("@cap/ui", async () => ({
 	...(await import("../../../../packages/ui/src/components/Button")),
 	...(await import("../../../../packages/ui/src/components/Dialog")),
 	...(await import("../../../../packages/ui/src/components/input/Form")),
-	Select: () => null,
+	Select: ({
+		value,
+		disabled,
+		onValueChange,
+	}: {
+		value: string;
+		disabled?: boolean;
+		onValueChange: (value: string) => void;
+	}) =>
+		React.createElement(
+			"button",
+			{
+				type: "button",
+				disabled,
+				"data-role-picker": "",
+				onClick: () => onValueChange(value === "admin" ? "member" : "admin"),
+			},
+			`role:${value}`,
+		),
 }));
 
 import { MembersIndicator } from "@/app/(org)/dashboard/spaces/[spaceId]/components/MembersIndicator";
@@ -125,6 +143,21 @@ describe("space members dialog", () => {
 		await click("2 members");
 
 		expect(listed("Bob")).toBe(true);
+	});
+
+	it("drops a role change that was closed without saving", async () => {
+		const bobRole = () =>
+			[
+				...document.querySelectorAll<HTMLButtonElement>("[data-role-picker]"),
+			].find((picker) => !picker.disabled);
+		await click("2 members");
+		expect(bobRole()?.textContent).toBe("role:member");
+		await act(async () => bobRole()?.click());
+		expect(bobRole()?.textContent).toBe("role:admin");
+		await click("Close");
+		await click("2 members");
+
+		expect(bobRole()?.textContent).toBe("role:member");
 	});
 
 	it("stays open with the edits when saving fails", async () => {
