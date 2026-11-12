@@ -1076,10 +1076,29 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
   allow="fullscreen; picture-in-picture"
   allowfullscreen
+  loading="lazy"
 ></iframe>
 ```
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it says so. It gives the reason only when the reason is about the file itself, such as a file with no video track. Any other reason, such as a credit shortfall, is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+
+### Embed Parameters
+
+Add these to `embedUrl` as query parameters, for example `https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed?t=90&loop=1`.
+
+| Parameter | What it does |
+|-----------|--------------|
+| `autoplay=1` | Starts playing when the player loads. A browser that refuses to autoplay with sound gets the video muted, and one that refuses autoplay altogether shows the paused player |
+| `muted=1` | Starts with the sound off. The viewer can turn it on |
+| `loop=1` | Starts again from the beginning when the video ends |
+| `t=90` | Starts at that many seconds. Decimals work, such as `t=12.5`. A time past the end is ignored. `shareUrl` takes this parameter too |
+| `controls=0` | Hides the control bar. A play button stays on a paused video and the keyboard keeps working |
+
+A value the player does not understand is ignored, and so is a parameter it does not know. To let an embed autoplay with sound where the browser permits it, add `autoplay` to the iframe's `allow` list.
+
+### What the Player Loads
+
+Before the viewer presses play, the player loads the poster, the playlists and at most the first few seconds of video, so a page can hold several embeds without downloading them. It never holds back the load event of the page it sits on. `loading="lazy"` in the snippet goes further and leaves an embed below the fold unloaded until the viewer scrolls near it. An embed that is already in view loads at once.
 
 ## Video Object Reference
 

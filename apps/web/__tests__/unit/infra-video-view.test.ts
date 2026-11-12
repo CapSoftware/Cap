@@ -275,7 +275,7 @@ describe("console video payload", () => {
 
 			expect(detail.shareUrl).toBe(PAGE);
 			expect(detail.embedCode).toBe(
-				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`,
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`,
 			);
 		});
 
@@ -316,7 +316,7 @@ describe("console video payload", () => {
 				'title="Demo &quot;one&quot; &lt;script&gt;alert(1)&lt;/script&gt; &amp; more"',
 			);
 			expect(code.match(/<script/g)).toBeNull();
-			expect(code.split('"').length).toBe(9);
+			expect(code.split('"').length).toBe(11);
 		});
 	});
 
