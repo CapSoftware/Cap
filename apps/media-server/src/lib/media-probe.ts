@@ -6,9 +6,11 @@ import type {
 } from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
 import {
+	createGuardedMediaFetch,
 	createMediaInput,
 	getSourceSize,
 	isHlsPath,
+	mediaInputRefusal,
 	normalizeLocalPath,
 	withTimeout,
 } from "./media-common";
@@ -75,7 +77,7 @@ export function isUnreadableMediaInput(error: unknown): boolean {
 // null when it cannot be fetched.
 async function readHttpHead(path: string): Promise<Uint8Array | null> {
 	try {
-		const response = await probeFetch(path, {
+		const response = await createGuardedMediaFetch(path)(path, {
 			headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -100,8 +102,89 @@ async function readHttpHead(path: string): Promise<Uint8Array | null> {
 		}
 		await reader.cancel().catch(() => {});
 		return head.subarray(0, length);
-	} catch {
+	} catch (error) {
+		if (error instanceof MediaInputPolicyError) throw error;
 		return null;
+	}
+}
+
+const MAX_PLAYLIST_BYTES = 1_000_000;
+const MAX_NESTED_PLAYLISTS = 16;
+const OFF_HOST_PLAYLIST =
+	"a remote playlist may only reference files on its own host";
+
+async function readBoundedText(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
+	if (!reader) return "";
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	while (length < MAX_PLAYLIST_BYTES) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		length += value.length;
+	}
+	await reader.cancel().catch(() => {});
+	return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+export function playlistReferences(playlist: string): string[] {
+	const references: string[] = [];
+	for (const raw of playlist.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line) continue;
+		if (!line.startsWith("#")) {
+			references.push(line);
+			continue;
+		}
+		for (const match of line.matchAll(/URI="([^"]*)"/g)) {
+			if (match[1]) references.push(match[1]);
+		}
+	}
+	return references;
+}
+
+// Read before the demuxer sees a remote playlist, so one that names another
+// host is refused without any of its entries being requested. Playlists it
+// links to on its own host are checked the same way.
+async function assertRemotePlaylistStaysOnHost(rootUrl: string): Promise<void> {
+	const root = new URL(rootUrl);
+	const fetchPlaylist = createGuardedMediaFetch(rootUrl);
+	const queue = [rootUrl];
+	const seen = new Set<string>();
+	while (queue.length > 0) {
+		const current = queue.shift() as string;
+		if (seen.has(current)) continue;
+		seen.add(current);
+		if (seen.size > MAX_NESTED_PLAYLISTS) {
+			throw new MediaInputPolicyError(
+				"the playlist links to too many other playlists",
+			);
+		}
+		const response = await fetchPlaylist(current, {
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			continue;
+		}
+		for (const reference of playlistReferences(
+			await readBoundedText(response),
+		)) {
+			let target: URL;
+			try {
+				target = new URL(reference, current);
+			} catch {
+				throw new MediaInputPolicyError(OFF_HOST_PLAYLIST);
+			}
+			if (target.origin !== root.origin) {
+				throw new MediaInputPolicyError(OFF_HOST_PLAYLIST);
+			}
+			if (isHlsPath(target.href)) {
+				if (!target.search) target.search = root.search;
+				queue.push(target.href);
+			}
+		}
 	}
 }
 
@@ -119,61 +202,76 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 				"the file is a playlist or resource list, not a media file",
 			);
 		}
+		if (isHlsPath(path)) await assertRemotePlaylistStaysOnHost(path);
 	}
 
 	const input = createMediaInput(path);
 
 	try {
-		const canRead = await input.canRead();
-		if (!canRead) {
-			throw new UnreadableMediaInputError("Media input could not be read");
-		}
-
-		const videoTrack = await input.getPrimaryVideoTrack();
-		if (!videoTrack) {
-			throw new UnreadableMediaInputError("No video stream found");
-		}
-
-		const audioTrack = await input.getPrimaryAudioTrack();
-		const duration =
-			(await input.getDurationFromMetadata(undefined, {
-				skipLiveWait: true,
-			})) ??
-			(await input.computeDuration(undefined, {
-				skipLiveWait: true,
-			}));
-		const packetStats = await videoTrack
-			.computePacketStats(120, { skipLiveWait: true })
-			.catch(() => null);
-		const videoBitrate =
-			(await videoTrack.getAverageBitrate()) ??
-			(await videoTrack.getBitrate()) ??
-			packetStats?.averageBitrate ??
-			0;
-		const audioBitrate = audioTrack
-			? ((await audioTrack.getAverageBitrate()) ??
-				(await audioTrack.getBitrate()) ??
-				0)
-			: 0;
-		const fileSize = await getSourceSize(path);
-		const bitrateFromSize =
-			duration > 0 && fileSize > 0 ? Math.round((fileSize * 8) / duration) : 0;
-
-		return {
-			duration,
-			width: await videoTrack.getDisplayWidth(),
-			height: await videoTrack.getDisplayHeight(),
-			fps: roundFps(packetStats?.averagePacketRate ?? 0),
-			videoCodec: mapVideoCodec(await videoTrack.getCodec()),
-			audioCodec: mapAudioCodec((await audioTrack?.getCodec()) ?? null),
-			audioChannels: audioTrack ? await audioTrack.getNumberOfChannels() : null,
-			sampleRate: audioTrack ? await audioTrack.getSampleRate() : null,
-			bitrate: Math.round(videoBitrate + audioBitrate) || bitrateFromSize,
-			fileSize,
-		};
+		return await readMediaMetadata(input, path);
+	} catch (error) {
+		const refusal = mediaInputRefusal(input);
+		if (refusal) throw new MediaInputPolicyError(refusal);
+		throw error;
 	} finally {
 		input.dispose();
 	}
+}
+
+async function readMediaMetadata(
+	input: ReturnType<typeof createMediaInput>,
+	path: string,
+): Promise<VideoMetadata> {
+	const canRead = await input.canRead();
+	if (!canRead) {
+		throw new UnreadableMediaInputError("Media input could not be read");
+	}
+
+	const videoTrack = await input.getPrimaryVideoTrack();
+	if (!videoTrack) {
+		throw new UnreadableMediaInputError("No video stream found");
+	}
+
+	const audioTrack = await input.getPrimaryAudioTrack();
+	const duration =
+		(await input.getDurationFromMetadata(undefined, {
+			skipLiveWait: true,
+		})) ??
+		(await input.computeDuration(undefined, {
+			skipLiveWait: true,
+		}));
+	const packetStats = await videoTrack
+		.computePacketStats(120, { skipLiveWait: true })
+		.catch(() => null);
+	const videoBitrate =
+		(await videoTrack.getAverageBitrate()) ??
+		(await videoTrack.getBitrate()) ??
+		packetStats?.averageBitrate ??
+		0;
+	const audioBitrate = audioTrack
+		? ((await audioTrack.getAverageBitrate()) ??
+			(await audioTrack.getBitrate()) ??
+			0)
+		: 0;
+	const fileSize = await getSourceSize(path);
+	const bitrateFromSize =
+		duration > 0 && fileSize > 0 ? Math.round((fileSize * 8) / duration) : 0;
+
+	const metadata: VideoMetadata = {
+		duration,
+		width: await videoTrack.getDisplayWidth(),
+		height: await videoTrack.getDisplayHeight(),
+		fps: roundFps(packetStats?.averagePacketRate ?? 0),
+		videoCodec: mapVideoCodec(await videoTrack.getCodec()),
+		audioCodec: mapAudioCodec((await audioTrack?.getCodec()) ?? null),
+		audioChannels: audioTrack ? await audioTrack.getNumberOfChannels() : null,
+		sampleRate: audioTrack ? await audioTrack.getSampleRate() : null,
+		bitrate: Math.round(videoBitrate + audioBitrate) || bitrateFromSize,
+		fileSize,
+	};
+	const refusal = mediaInputRefusal(input);
+	if (refusal) throw new MediaInputPolicyError(refusal);
+	return metadata;
 }
 
 export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {

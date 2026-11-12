@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	checkVideoAccessible,
 	isUnreadableMediaInput,
+	playlistReferences,
 	probeVideo,
 } from "../../lib/media-probe";
 
@@ -193,6 +194,165 @@ describe("mediaProbe integration tests", () => {
 
 				expect(isUnreadableMediaInput(error)).toBe(true);
 				expect(isUnreadableMediaInput(new Error("Server is busy"))).toBe(false);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		test("refuses a remote playlist that points at another host, without contacting it", async () => {
+			const elsewhere: string[] = [];
+			const other = Bun.serve({
+				port: 0,
+				fetch(request) {
+					elsewhere.push(new URL(request.url).pathname);
+					return new Response("secret");
+				},
+			});
+			const server = serve(
+				[
+					"#EXTM3U",
+					"#EXT-X-VERSION:3",
+					"#EXT-X-TARGETDURATION:4",
+					"#EXTINF:4,",
+					`${other.url}latest/meta-data/`,
+					"#EXT-X-ENDLIST",
+					"",
+				].join("\n"),
+			);
+
+			try {
+				const unhandled = await unhandledDuring(async () => {
+					await expect(probeVideo(`${server.url}stream.m3u8`)).rejects.toThrow(
+						"a remote playlist may only reference files on its own host",
+					);
+				});
+
+				expect(elsewhere).toEqual([]);
+				expect(unhandled).toEqual([]);
+			} finally {
+				await server.stop(true);
+				await other.stop(true);
+			}
+		});
+
+		test("refuses a playlist whose variant playlist points at another host", async () => {
+			const elsewhere: string[] = [];
+			const other = Bun.serve({
+				port: 0,
+				fetch(request) {
+					elsewhere.push(new URL(request.url).pathname);
+					return new Response("secret");
+				},
+			});
+			const server = Bun.serve({
+				port: 0,
+				fetch(request) {
+					const path = new URL(request.url).pathname;
+					if (path === "/master.m3u8") {
+						return new Response(
+							"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvariant.m3u8\n",
+						);
+					}
+					return new Response(
+						`#EXTM3U\n#EXT-X-MAP:URI="${other.url}init.mp4"\n#EXTINF:4,\nseg.ts\n#EXT-X-ENDLIST\n`,
+					);
+				},
+			});
+
+			try {
+				await expect(probeVideo(`${server.url}master.m3u8`)).rejects.toThrow(
+					"a remote playlist may only reference files on its own host",
+				);
+				expect(elsewhere).toEqual([]);
+			} finally {
+				await server.stop(true);
+				await other.stop(true);
+			}
+		});
+
+		test("lists every file a playlist refers to", () => {
+			expect(
+				playlistReferences(
+					[
+						"#EXTM3U",
+						'#EXT-X-KEY:METHOD=AES-128,URI="https://keys.example/k"',
+						'#EXT-X-MAP:URI="init.mp4",BYTERANGE="800@0"',
+						'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",URI="audio.m3u8"',
+						"#EXTINF:4,",
+						"seg0.ts",
+						"",
+						"  https://cdn.example/seg1.ts  ",
+					].join("\r\n"),
+				),
+			).toEqual([
+				"https://keys.example/k",
+				"init.mp4",
+				"audio.m3u8",
+				"seg0.ts",
+				"https://cdn.example/seg1.ts",
+			]);
+		});
+
+		test("refuses a redirect to a private address", async () => {
+			const server = Bun.serve({
+				port: 0,
+				fetch() {
+					return new Response(null, {
+						status: 302,
+						headers: {
+							Location: "http://169.254.169.254/latest/meta-data/",
+						},
+					});
+				},
+			});
+
+			try {
+				const started = Date.now();
+				await expect(probeVideo(`${server.url}video.mp4`)).rejects.toThrow(
+					"redirected to an address that is not allowed",
+				);
+				expect(Date.now() - started).toBeLessThan(5_000);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
+		test("follows a redirect that stays on the same host", async () => {
+			const videoData = readFileSync(TEST_VIDEO_WITH_AUDIO_PATH);
+			const server = Bun.serve({
+				port: 0,
+				fetch(request) {
+					const url = new URL(request.url);
+					if (url.pathname === "/moved.mp4") {
+						return new Response(null, {
+							status: 302,
+							headers: { Location: "/real.mp4" },
+						});
+					}
+					const match = request.headers
+						.get("range")
+						?.match(/^bytes=(\d+)-(\d*)$/);
+					const start = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
+					const end = Math.min(
+						match?.[2] ? Number.parseInt(match[2], 10) : videoData.length - 1,
+						videoData.length - 1,
+					);
+					return new Response(videoData.subarray(start, end + 1), {
+						status: match ? 206 : 200,
+						headers: {
+							"Accept-Ranges": "bytes",
+							"Content-Range": `bytes ${start}-${end}/${videoData.length}`,
+							"Content-Type": "video/mp4",
+						},
+					});
+				},
+			});
+
+			try {
+				const metadata = await probeVideo(`${server.url}moved.mp4`);
+
+				expect(metadata.duration).toBeGreaterThan(0);
+				expect(metadata.videoCodec).toBeTruthy();
 			} finally {
 				await server.stop(true);
 			}

@@ -24,6 +24,7 @@ import {
 	UrlSource,
 } from "mediabunny";
 import { registerMediaEngine } from "./media-engine";
+import { MediaInputPolicyError } from "./media-input-policy";
 
 export type ProgressCallback = (progress: number, message: string) => void;
 
@@ -85,8 +86,96 @@ function isHttpUrl(path: string): boolean {
 }
 
 export function isHlsPath(path: string): boolean {
-	const normalized = (path.split("?")[0] ?? "").toLowerCase();
+	let name = path.split("?")[0] ?? "";
+	if (isHttpUrl(path)) name = new URL(path).pathname;
+	const normalized = name.toLowerCase();
 	return normalized.endsWith(".m3u8") || normalized.endsWith(".m3u");
+}
+
+const MAX_MEDIA_REDIRECTS = 5;
+
+// Loopback, private, link-local (cloud metadata) and unspecified addresses,
+// written as literals. Names are not resolved here.
+export function isPrivateHostLiteral(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	if (host === "localhost" || host.endsWith(".localhost")) return true;
+	const mapped = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+	const v4 = (mapped?.[1] ?? host).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+	if (v4) {
+		const [a, b] = [Number(v4[1]), Number(v4[2])];
+		return (
+			a === 0 ||
+			a === 10 ||
+			a === 127 ||
+			(a === 100 && b >= 64 && b <= 127) ||
+			(a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168)
+		);
+	}
+	if (!host.includes(":")) return false;
+	return (
+		host === "::" ||
+		host === "::1" ||
+		/^f[cd][0-9a-f]{2}:/.test(host) ||
+		/^fe[89ab][0-9a-f]:/.test(host)
+	);
+}
+
+function isHttpProtocol(url: URL): boolean {
+	return url.protocol === "http:" || url.protocol === "https:";
+}
+
+// A remote input is only ever given by the web app, but what it leads to is
+// not: a playlist names other files and a server can redirect. Both are held
+// to the host the input came from, so neither can point this server at an
+// address of someone's choosing.
+export function createGuardedMediaFetch(rootUrl: string): typeof fetch {
+	const root = new URL(rootUrl);
+	const guarded = async (
+		input: Parameters<typeof fetch>[0],
+		init?: Parameters<typeof fetch>[1],
+	): Promise<Response> => {
+		let url = new URL(
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url,
+		);
+		for (let hop = 0; hop <= MAX_MEDIA_REDIRECTS; hop++) {
+			const response = await mediaFetch(url, { ...init, redirect: "manual" });
+			const location = response.headers.get("location");
+			if (response.status < 300 || response.status >= 400 || !location) {
+				return response;
+			}
+			await response.body?.cancel().catch(() => {});
+			const next = new URL(location, url);
+			if (
+				!isHttpProtocol(next) ||
+				(next.origin !== root.origin && isPrivateHostLiteral(next.hostname))
+			) {
+				throw new MediaInputPolicyError(
+					"the media location redirected to an address that is not allowed",
+				);
+			}
+			url = next;
+		}
+		throw new Error("Media input redirected too many times");
+	};
+	return guarded as typeof fetch;
+}
+
+function childRefusal(child: string, root: URL): string | null {
+	let url: URL;
+	try {
+		url = new URL(child);
+	} catch {
+		return "a remote playlist referenced a file this server cannot address";
+	}
+	return url.origin === root.origin
+		? null
+		: "a remote playlist may only reference files on its own host";
 }
 
 function withInheritedQuery(path: string, query: string): string {
@@ -102,21 +191,29 @@ function withInheritedQuery(path: string, query: string): string {
 	}
 }
 
-function createHttpSource(path: string): Source {
-	const query = new URL(path).search;
+// A refused entry is answered with an empty file, not an exception: thrown
+// from here the error escapes MediaBunny unhandled. The reason is reported
+// through onRefused so the caller can fail the input for what it was.
+function createHttpSource(
+	path: string,
+	onRefused: (reason: string) => void,
+): Source {
+	const root = new URL(path);
 	const options = {
-		fetchFn: mediaFetch,
+		fetchFn: createGuardedMediaFetch(path),
 		getRetryDelay: () => null,
 	};
 
-	return new CustomPathedSource(
-		path,
-		(request) =>
-			new UrlSource(
-				request.isRoot ? request.path : withInheritedQuery(request.path, query),
-				options,
-			),
-	);
+	return new CustomPathedSource(path, (request) => {
+		if (request.isRoot) return new UrlSource(request.path, options);
+		const child = withInheritedQuery(request.path, root.search);
+		const refusal = childRefusal(child, root);
+		if (refusal) {
+			onRefused(refusal);
+			return new BufferSource(new Uint8Array(0));
+		}
+		return new UrlSource(child, options);
+	});
 }
 
 function createLocalHlsSource(path: string): Source {
@@ -152,15 +249,26 @@ function withSafeDispose<S extends Source>(input: Input<S>): Input<S> {
 	return input;
 }
 
+const refusedInputs = new WeakMap<Input<Source>, string>();
+
+// Why a remote input was not allowed to read something it referenced, if it
+// was. An input that was refused anything must not be used.
+export function mediaInputRefusal(input: Input<Source>): string | undefined {
+	return refusedInputs.get(input);
+}
+
 export function createMediaInput(path: string): Input<Source> {
 	registerMediaEngine();
 	if (isHttpUrl(path)) {
-		return withSafeDispose(
+		const input: Input<Source> = withSafeDispose(
 			new Input({
-				source: createHttpSource(path),
+				source: createHttpSource(path, (reason) => {
+					if (!refusedInputs.has(input)) refusedInputs.set(input, reason);
+				}),
 				formats: ALL_FORMATS,
 			}),
 		);
+		return input;
 	}
 
 	const normalizedPath = normalizeLocalPath(path);
