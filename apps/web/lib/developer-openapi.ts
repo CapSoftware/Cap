@@ -362,6 +362,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with three exceptions that say to wait and repeat it: 408, 429 and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
 			"",
 			"Each key and each upload token is limited to 60 requests per minute across every operation. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset (seconds until the window resets), and a 429 also carries Retry-After. The counts are kept by the server that answers, so Remaining can differ between responses: treat it as a guide and a 429 with its Retry-After as the instruction.",
+			"",
+			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },

@@ -4,7 +4,6 @@ import {
 	developerApiError,
 	developerApiNotFound,
 	developerRateLimiter,
-	developerSdkCors,
 } from "../../../utils";
 
 import * as transcripts from "./transcripts";
@@ -14,7 +13,6 @@ import * as videos from "./videos";
 
 const app = new Hono()
 	.basePath("/api/developer/v1")
-	.use(developerSdkCors)
 	.use(developerRateLimiter)
 	.route("/videos", videos.app)
 	.route("/uploads", uploads.app)

@@ -49,7 +49,7 @@ Authorization: Bearer cut_your_upload_token_here
 
 An upload token works for one video and for a limited time, so it is safe to send to the browser. A public key on its own cannot start an upload: the SDK API answers `403` with code `public_key_not_allowed`.
 
-Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly.
+Keep your secret key private. Never expose it in client-side code, commit it to version control, or share it publicly. The REST API sends no CORS headers, so a page cannot call it. Call it from your server, and give the page an upload token for the SDK API.
 
 ## OpenAPI
 

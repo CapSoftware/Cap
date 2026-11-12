@@ -288,6 +288,108 @@ describe("rate limit headers", () => {
 	});
 });
 
+describe("browser access", () => {
+	const ORIGIN_HEADERS = { Origin: "https://app.example" };
+	const PREFLIGHT_HEADERS = {
+		...ORIGIN_HEADERS,
+		"Access-Control-Request-Method": "GET",
+		"Access-Control-Request-Headers": "authorization,content-type",
+	};
+	const corsHeaders = (response: Response) =>
+		[...response.headers.keys()].filter((name) =>
+			name.toLowerCase().startsWith("access-control-"),
+		);
+
+	it("sends no CORS header on any answer of the secret-key API", async () => {
+		const key = freshKey("csk");
+		const from = (method: Method, path: string, withKey = true) =>
+			call(rest, method, path, {
+				key: withKey ? key : undefined,
+				headers: ORIGIN_HEADERS,
+			});
+
+		const answers = [
+			await from("GET", "/api/developer/v1/usage"),
+			await from("GET", "/api/developer/v1/videos?limit=0"),
+			await from("GET", "/api/developer/v1/videos?userId="),
+			await from("GET", "/api/developer/v1/usage", false),
+			await from("GET", "/api/developer/v1/nope"),
+			await from("POST", "/api/developer/v1/usage"),
+		];
+		const sentWithKey = answers.length - 1;
+		for (let request = sentWithKey; request < 60; request++) {
+			await from("GET", "/api/developer/v1/usage");
+		}
+		answers.push(await from("GET", "/api/developer/v1/usage"));
+
+		expect(answers.map((response) => response.status)).toEqual([
+			200, 400, 400, 401, 404, 405, 429,
+		]);
+		for (const response of answers) {
+			expect(corsHeaders(response)).toEqual([]);
+			expect(response.headers.get("Vary")).toBeNull();
+		}
+	});
+
+	it.each([
+		"/api/developer/v1/videos",
+		"/api/developer/v1/videos/video-1",
+		"/api/developer/v1/videos/video-1/status",
+		"/api/developer/v1/uploads",
+		"/api/developer/v1/transcripts",
+		"/api/developer/v1/usage",
+		"/api/developer/v1/nope",
+	])("refuses a preflight for %s", async (path) => {
+		const preflight = await call(rest, "OPTIONS", path, {
+			headers: PREFLIGHT_HEADERS,
+		});
+
+		expect(preflight.ok).toBe(false);
+		expect(corsHeaders(preflight)).toEqual([]);
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+
+	it("still answers a preflight for the upload routes", async () => {
+		const preflight = await call(
+			sdk,
+			"OPTIONS",
+			"/api/developer/sdk/v1/upload/multipart/presign-part",
+			{
+				headers: {
+					...PREFLIGHT_HEADERS,
+					"Access-Control-Request-Method": "POST",
+				},
+			},
+		);
+
+		expect(preflight.status).toBe(204);
+		expect(Object.fromEntries(preflight.headers)).toEqual({
+			"access-control-allow-origin": "*",
+			"access-control-allow-methods": "GET,POST,OPTIONS",
+			"access-control-allow-headers": "Content-Type,Authorization",
+			"access-control-expose-headers":
+				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+			vary: "Access-Control-Request-Headers",
+		});
+	});
+
+	it("still lets a page read an upload route's answer", async () => {
+		const response = await call(
+			sdk,
+			"POST",
+			"/api/developer/sdk/v1/upload/multipart/initiate",
+			{
+				key: freshKey("cut"),
+				headers: { ...ORIGIN_HEADERS, "Content-Type": "application/json" },
+				body: "{}",
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+});
+
 describe("wrong method and unknown path", () => {
 	it.each([
 		[rest, "PATCH", "/api/developer/v1/videos/video-1", "csk", "GET, DELETE"],
