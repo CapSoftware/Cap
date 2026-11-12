@@ -741,7 +741,7 @@ describe("nvenc jobs on hosts without an NVENC device", () => {
 					controller.signal,
 				),
 			),
-		).rejects.toThrow("Video processing was cancelled");
+		).rejects.toThrow(/aborted|cancelled/);
 		expect(getVideoEncoderStatus(enabled).nvenc?.attempts ?? 0).toBe(attempts);
 	});
 

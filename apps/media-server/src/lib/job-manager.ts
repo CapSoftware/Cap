@@ -1,9 +1,15 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
 	getContainerCpuLimit,
 	getContainerCpuUsageMicros,
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
+import type { HlsLadderResult } from "./hls-ladder-encode";
+import {
+	INPUT_POLICY_VIOLATION,
+	isInputPolicyViolationMessage,
+} from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
@@ -25,7 +31,8 @@ export type RecordingErrorCode =
 	| "source-changed"
 	| "output-invalid"
 	| "processing-unavailable"
-	| "processing-budget-exhausted";
+	| "processing-budget-exhausted"
+	| typeof INPUT_POLICY_VIOLATION;
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -78,6 +85,7 @@ export interface JobProgress {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -139,6 +147,7 @@ export interface Job {
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	deferredSourceKey?: string;
+	ladder?: HlsLadderResult;
 	createdAt: number;
 	updatedAt: number;
 	inputTempFile?: TempFileHandle;
@@ -354,7 +363,7 @@ export function canAcceptNewVideoProcess(
 }
 
 export function generateJobId(): string {
-	return `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+	return `job_${Date.now()}_${randomUUID()}`;
 }
 
 export function createJob(
@@ -408,6 +417,7 @@ export function updateJob(
 			| "recordingVerification"
 			| "outputUrl"
 			| "deferredSourceKey"
+			| "ladder"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -430,6 +440,21 @@ export function updateJob(
 		if (job.phase === "complete") jobTotals.completed++;
 		else if (job.phase === "error") jobTotals.errored++;
 		else jobTotals.cancelled++;
+		if (
+			job.phase === "error" &&
+			!job.errorCode &&
+			isInputPolicyViolationMessage(job.error)
+		) {
+			job.errorCode = INPUT_POLICY_VIOLATION;
+			console.warn(
+				JSON.stringify({
+					event: "input_policy_violation",
+					jobId: job.jobId,
+					videoId: job.videoId,
+					userId: job.userId,
+				}),
+			);
+		}
 	}
 	if (!isActivePhase(job.phase) && job.webhookInFlight)
 		job.webhookPending = true;
@@ -693,6 +718,7 @@ export function getJobProgress(job: Job): JobProgress {
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
+		ladder: job.ladder,
 	};
 }
 
@@ -889,10 +915,18 @@ export function sendWebhook(
 			acknowledgement = await deliverWebhook(job, getJobProgress(job));
 		}
 		return acknowledgement;
-	})().finally(() => {
-		job.webhookInFlight = false;
-		job.webhookPromise = undefined;
-	});
+	})()
+		.catch((error: unknown) => {
+			console.error(
+				`[job-manager] Webhook delivery failed for job ${job.jobId}:`,
+				error,
+			);
+			return undefined;
+		})
+		.finally(() => {
+			job.webhookInFlight = false;
+			job.webhookPromise = undefined;
+		});
 	return job.webhookPromise;
 }
 

@@ -1,6 +1,16 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import app from "../../app";
 import { setDraining } from "../../lib/lifecycle";
+
+const previousPublicStatus = process.env.MEDIA_SERVER_PUBLIC_STATUS;
+beforeAll(() => {
+	process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+});
+afterAll(() => {
+	if (previousPublicStatus === undefined)
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+	else process.env.MEDIA_SERVER_PUBLIC_STATUS = previousPublicStatus;
+});
 
 const SECRET = "test-secret";
 process.env.MEDIA_SERVER_WEBHOOK_SECRET = SECRET;

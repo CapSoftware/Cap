@@ -1,9 +1,11 @@
 import { isValidStripePlanPriceId, STRIPE_PLAN_IDS } from "@cap/utils";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
+	listSubscriptions: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
 	getCurrentUser: vi.fn(),
 	dbUpdate: vi.fn(),
@@ -59,12 +61,18 @@ vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: checkoutMocks.track,
 }));
 
+vi.mock("@/lib/checkout/stripe", () => ({
+	checkoutStripe: () => ({
+		subscriptions: { list: checkoutMocks.listSubscriptions },
+	}),
+}));
+
 const makeSubscribeRequest = (body: Record<string, unknown>) =>
-	new Request("https://cap.so/api/settings/billing/subscribe", {
+	new NextRequest("https://cap.so/api/settings/billing/subscribe", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("Stripe plan allowlist", () => {
 	it("rejects IDs that are not a Pro plan price in either environment", () => {
@@ -130,6 +138,56 @@ describe("POST /api/settings/billing/subscribe", () => {
 			id: "cs_test",
 			url: "https://pay.cap.so/session",
 		});
+		checkoutMocks.listSubscriptions.mockResolvedValue({ data: [] });
+	});
+
+	it.each(["active", "trialing", "past_due"])(
+		"does not open a hosted checkout when Stripe shows a %s Pro subscription the account has not recorded",
+		async (status) => {
+			checkoutMocks.listSubscriptions.mockResolvedValue({
+				data: [
+					{ id: "sub_old", status: "canceled", metadata: {} },
+					{ id: "sub_live", status, metadata: {} },
+				],
+			});
+
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity: 1,
+				}),
+			);
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({
+				error: true,
+				subscription: true,
+			});
+			expect(checkoutMocks.listSubscriptions).toHaveBeenCalledWith({
+				customer: "cus_123",
+				limit: 100,
+			});
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("opens a hosted checkout when the customer's only live subscription is the BAA add-on", async () => {
+		checkoutMocks.listSubscriptions.mockResolvedValue({
+			data: [
+				{ id: "sub_old", status: "canceled", metadata: {} },
+				{ id: "sub_baa", status: "active", metadata: { type: "signed_baa" } },
+			],
+		});
+
+		const response = await subscribe(
+			makeSubscribeRequest({
+				priceId: STRIPE_PLAN_IDS.development.monthly,
+				quantity: 1,
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.create).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects arbitrary price IDs with 400", async () => {

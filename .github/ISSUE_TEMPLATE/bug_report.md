@@ -24,6 +24,6 @@ assignees: ""
 Cap's debug logs can be found in the following locations:
 
 macOS: /Users/{your username}/Library/Logs/so.cap.desktop
-Linux: /home/{your username}/.config/so.cap.desktop/logs
-Windows: C:\Users\{your username}\AppData\Roaming\so.cap.desktop\logs
+Linux: /home/{your username}/.local/share/so.cap.desktop/logs
+Windows: C:\Users\{your username}\AppData\Local\so.cap.desktop\logs
 -->

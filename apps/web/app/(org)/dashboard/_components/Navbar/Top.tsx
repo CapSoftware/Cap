@@ -9,8 +9,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@cap/ui";
-import { faBell } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBell } from "@fortawesome/free-solid-svg-icons/faBell";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -33,6 +32,7 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { resetUser } from "@/app/utils/analytics";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { LazyUpgradeModal } from "@/components/LazyUpgradeModal";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext, useTheme } from "../../Contexts";
@@ -75,10 +75,6 @@ const Top = () => {
 		"/dashboard/analytics": "Analytics",
 		[`/dashboard/folder/${params.id}`]: "Caps",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
-		"/dashboard/developers": "Developers",
-		"/dashboard/developers/apps": "Developer Apps",
-		"/dashboard/developers/usage": "Developer Usage",
-		"/dashboard/developers/credits": "Developer Credits",
 	};
 
 	const title = activeSpace ? activeSpace.name : titles[pathname] || "";

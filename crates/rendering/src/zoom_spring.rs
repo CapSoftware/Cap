@@ -1377,6 +1377,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments,
                 image_segments: Vec::new(),
+                shape_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -1876,6 +1877,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             },
             TimelineSegment {
@@ -1886,6 +1888,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             },
         ];
@@ -2344,6 +2347,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             }];
             let cursor = CursorEvents {
@@ -2721,6 +2725,7 @@ mod tests {
                 speed_audio_mode: None,
                 volume: None,
                 hide_cursor: None,
+                voice_eq: None,
             });
         }
         project
@@ -3069,6 +3074,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             }],
             transitions: vec![],
@@ -3076,6 +3082,7 @@ mod tests {
             scene_segments: vec![],
             style_segments: vec![],
             image_segments: vec![],
+            shape_segments: Vec::new(),
             mask_segments: vec![],
             text_segments: vec![],
             caption_segments: vec![],
@@ -3130,6 +3137,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 },
                 TimelineSegment {
@@ -3140,6 +3148,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 },
             ],
@@ -3152,6 +3161,7 @@ mod tests {
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),

@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 	invalidateQuota: vi.fn(),
 	audio: vi.fn(),
 	signal: vi.fn(),
+	strike: vi.fn(),
+	developerVideo: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -30,6 +32,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => ({ db: mocks.db }));
+vi.mock("@/lib/developer-video-processing", () => ({
+	applyDeveloperVideoProgress: mocks.developerVideo,
+}));
 vi.mock("@/lib/audio-level-publication", () => ({
 	handleAudioLevelPublication: mocks.audio,
 }));
@@ -78,6 +83,9 @@ vi.mock("@/lib/queue-video-transcription", () => ({
 
 vi.mock("@/lib/loom-import-signal", () => ({
 	signalLoomImportFinished: mocks.signal,
+}));
+vi.mock("@/lib/media-input-policy-strikes", () => ({
+	recordMediaInputPolicyStrike: mocks.strike,
 }));
 
 import { POST } from "@/app/api/webhooks/media-server/progress/route";
@@ -297,6 +305,7 @@ describe("media-server recording progress webhook", () => {
 		mocks.invalidateQuota.mockResolvedValue(undefined);
 		mocks.retry.mockResolvedValue(true);
 		mocks.blocked.mockResolvedValue(true);
+		mocks.strike.mockReset().mockResolvedValue(null);
 		vi.spyOn(console, "log").mockImplementation(() => undefined);
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -341,6 +350,29 @@ describe("media-server recording progress webhook", () => {
 			expect(mocks.transcribe).not.toHaveBeenCalled();
 		},
 	);
+
+	it("hands developer video callbacks to their own handler after authenticating", async () => {
+		mocks.developerVideo
+			.mockReset()
+			.mockResolvedValue({ success: true, applied: true });
+		const body = { videoId: "developer-video", phase: "complete" };
+		const search = "?developerVideo=hls&token=attempt-1";
+
+		expect((await request(body, "wrong-secret", search)).status).toBe(401);
+		expect(mocks.developerVideo).not.toHaveBeenCalled();
+
+		const response = await request(body, "media-secret", search);
+
+		expect(await response.json()).toEqual({ success: true, applied: true });
+		expect(mocks.developerVideo).toHaveBeenCalledExactlyOnceWith(
+			body,
+			"hls",
+			"attempt-1",
+		);
+		expect(mocks.db).not.toHaveBeenCalled();
+		expect(mocks.getState).not.toHaveBeenCalled();
+		expect(mocks.strike).not.toHaveBeenCalled();
+	});
 
 	it("refuses callbacks when the webhook secret is not configured", async () => {
 		databaseFixture();
@@ -988,6 +1020,74 @@ describe("Loom importer completions", () => {
 			videoId,
 			"error",
 		);
+	});
+
+	it("records a strike and stops retrying when the input is rejected", async () => {
+		const database = loomVideo();
+		const response = await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 0,
+				error: "Input is a playlist",
+				errorCode: "input-policy-violation",
+			},
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.strike).toHaveBeenCalledWith({ videoId });
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.uploads,
+			values: expect.objectContaining({
+				phase: "error",
+				processingError: "media-input-rejected: Input is a playlist",
+			}),
+		});
+	});
+
+	it("keeps ordinary worker errors retryable without recording a strike", async () => {
+		const database = loomVideo();
+		await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 10,
+				error: "Server busy",
+				errorCode: "processing-unavailable",
+			},
+			"media-secret",
+			"?retryable=true",
+		);
+		expect(mocks.strike).not.toHaveBeenCalled();
+		expect(database.mutations).toContainEqual({
+			operation: "update",
+			table: mocks.tables.uploads,
+			values: expect.objectContaining({
+				phase: "processing",
+				processingError: "Server busy",
+			}),
+		});
+	});
+
+	it("still processes the update when a strike cannot be recorded", async () => {
+		loomVideo();
+		mocks.strike.mockRejectedValue(new Error("database unavailable"));
+		const response = await request(
+			{
+				jobId: "media-job-1",
+				videoId,
+				phase: "error",
+				progress: 0,
+				error: "Input is a playlist",
+				errorCode: "input-policy-violation",
+			},
+			"media-secret",
+		);
+		expect(response.status).toBe(200);
 	});
 
 	it("does not wake the import for progress updates", async () => {

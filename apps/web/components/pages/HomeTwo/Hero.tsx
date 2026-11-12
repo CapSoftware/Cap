@@ -14,14 +14,12 @@ import { MenuBar } from "./demo/MacDesktop";
 import { AppleGlyph } from "./glyphs";
 import { HeroHeadline } from "./HeroHeadline";
 import { HeroSky } from "./HeroSky";
-import { BTN_PUMPKIN, HALLOWEEN, PUMPKIN_CHIP } from "./halloween";
 import { Fit, noop, useInView } from "./scenes/engine";
 import {
 	BODY_TEXT,
 	BTN_PRIMARY,
 	BTN_SECONDARY,
 	MODE_THEME,
-	MONO,
 	meshStyle,
 } from "./theme";
 
@@ -117,7 +115,7 @@ export const Hero = () => {
 
 	return (
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
-			<HeroSky halloween={HALLOWEEN} />
+			<HeroSky />
 			<span
 				data-header-sentinel
 				aria-hidden="true"
@@ -134,10 +132,7 @@ export const Hero = () => {
 					}
 					className="ht-rise group mb-7 inline-flex [--d:0.04s] max-w-full items-center gap-2.5 rounded-full bg-[#111111] py-1.5 pl-1.5 pr-3.5 text-[13px] leading-none text-white shadow-[0_1px_2px_rgba(17,17,17,0.12),0_10px_24px_-14px_rgba(17,17,17,0.6)] transition-colors duration-200 hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-2 focus-visible:ring-offset-[#EDF1F6] md:mb-9"
 				>
-					<span
-						className={`${MONO} rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[10.5px] uppercase leading-none tracking-[0.06em] text-[#111111]`}
-						style={HALLOWEEN ? { backgroundColor: PUMPKIN_CHIP } : undefined}
-					>
+					<span className="rounded-full bg-[#8DBCF0] px-2 py-[5px] text-[12px] leading-none text-[#111111]">
 						New
 					</span>
 					<span className="truncate">Cap's migration to GPUI</span>
@@ -171,7 +166,7 @@ export const Hero = () => {
 								is_intel: Boolean(isIntel),
 							})
 						}
-						className={HALLOWEEN ? BTN_PUMPKIN : BTN_PRIMARY}
+						className={BTN_PRIMARY}
 					>
 						{isWindows ? (
 							<WindowsGlyph className="mr-2.5 size-[18px]" />

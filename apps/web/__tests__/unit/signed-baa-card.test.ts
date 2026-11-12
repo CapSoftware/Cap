@@ -54,7 +54,7 @@ vi.mock("sonner", () => ({
 	toast: { success: mocks.success, error: mocks.error },
 }));
 
-vi.mock("@fortawesome/react-fontawesome", () => ({
+vi.mock("@/components/FontAwesomeIcon", () => ({
 	FontAwesomeIcon: () => null,
 }));
 
