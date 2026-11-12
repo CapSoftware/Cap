@@ -8,7 +8,9 @@ export const ENCODE_START_STALL_MS = 10 * 60_000;
 export const ENCODE_STALL_MS = 5 * 60_000;
 const CHECK_INTERVAL_MS = 15_000;
 
-const PROGRESS_FIELD = /^(out_time_us|frame|total_size)=(\d+)\s*$/;
+// -progress prints one counter a line. Without it FFmpeg prints the same
+// counters padded on a single status line, which is what an edit produces.
+const PROGRESS_FIELDS = /(?:^|\s)(out_time_us|frame|total_size|size)=\s*(\d+)/g;
 
 export interface EncodeStallWindows {
 	startMs: number;
@@ -17,7 +19,7 @@ export interface EncodeStallWindows {
 }
 
 export interface EncodeStallWatch {
-	observe(line: string): void;
+	observe(text: string): void;
 	stalled: Promise<never>;
 	stop(): void;
 }
@@ -65,14 +67,14 @@ export function watchEncodeProgress(
 	timer.unref?.();
 
 	return {
-		observe(line) {
-			const field = PROGRESS_FIELD.exec(line);
-			if (!field) return;
-			const value = Number(field[2]);
-			if (value <= (highest.get(field[1] as string) ?? 0)) return;
-			highest.set(field[1] as string, value);
-			lastAdvanceAt = performance.now();
-			advanced = true;
+		observe(text) {
+			for (const field of text.matchAll(PROGRESS_FIELDS)) {
+				const value = Number(field[2]);
+				if (value <= (highest.get(field[1] as string) ?? 0)) continue;
+				highest.set(field[1] as string, value);
+				lastAdvanceAt = performance.now();
+				advanced = true;
+			}
 		},
 		stalled,
 		stop() {

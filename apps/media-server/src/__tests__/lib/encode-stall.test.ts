@@ -13,6 +13,8 @@ import {
 	isEncodeDeadlineError,
 } from "../../lib/ffmpeg-errors";
 import { PROCESS_TIMEOUT_MS, withTimeout } from "../../lib/media-common";
+import { runFfmpegCommand as runEditCommand } from "../../lib/media-edit";
+import { spawn } from "../../lib/media-spawn";
 import {
 	getProcessTimeoutMs,
 	runTranscodeCommand,
@@ -101,6 +103,52 @@ describe("watchEncodeProgress", () => {
 		}
 	});
 
+	test("reads the status line FFmpeg prints without -progress", async () => {
+		const watch = watchEncodeProgress(join(dir, "status.mp4"), WINDOWS);
+		const status = (frame: number, size: number) =>
+			`frame=${String(frame).padStart(5)} fps= 25 q=28.0 size=${String(size).padStart(8)}KiB time=00:00:01.00 bitrate= 100.0kbits/s dup_frames=9999 speed=1x    \r`;
+		try {
+			for (let step = 1; step <= 8; step++) {
+				watch.observe(status(step * 10, step * 64));
+				await Bun.sleep(50);
+			}
+			expect(await settledWithin(watch, 20)).toBe("running");
+			for (let step = 0; step < 8; step++) {
+				watch.observe(status(80, 512));
+				await Bun.sleep(50);
+			}
+			expect(await settledWithin(watch, 500)).toBeInstanceOf(
+				EncodeStalledError,
+			);
+		} finally {
+			watch.stop();
+		}
+	});
+
+	test("FFmpeg prints that status line when its output is a pipe", async () => {
+		const proc = spawn({
+			cmd: [
+				"ffmpeg",
+				"-hide_banner",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc=size=64x64:rate=25:duration=1",
+				"-f",
+				"null",
+				"-",
+			],
+			stdout: "ignore",
+			stderr: "pipe",
+		});
+		const [stderr, code] = await Promise.all([
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		expect(code).toBe(0);
+		expect(stderr).toMatch(/(?:^|\s)frame=\s*\d+/);
+	});
+
 	test("a file still being written is not stalled", async () => {
 		const output = join(dir, "finishing.mp4");
 		await writeFile(output, "moov");
@@ -157,6 +205,40 @@ describe("runTranscodeCommand", () => {
 			10_000_000,
 			60_000,
 			undefined,
+			undefined,
+			WINDOWS,
+		).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(FfmpegExitError);
+		expect((error as Error).message).toContain("FFmpeg exited with code 3");
+	}, 20_000);
+});
+
+describe("edit renders", () => {
+	test("stop when FFmpeg's status line stops advancing", async () => {
+		const active = getActiveSubprocessCount();
+		const stalledEdit = [
+			"bun",
+			"-e",
+			'const line = "frame=   12 fps= 25 q=28.0 size=      64KiB time=00:00:00.48 speed=1x    \\r"; process.stderr.write(line); setInterval(() => process.stderr.write(line), 20);',
+			join(dir, "stalled-edit.mp4"),
+		];
+		const started = performance.now();
+		const error = await runEditCommand(
+			stalledEdit,
+			60_000,
+			undefined,
+			WINDOWS,
+		).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(EncodeStalledError);
+		expect(nvencFallbackReason(error, false)).toBeNull();
+		expect(performance.now() - started).toBeLessThan(5_000);
+		expect(getActiveSubprocessCount()).toBe(active);
+	}, 20_000);
+
+	test("still report an FFmpeg failure as itself", async () => {
+		const error = await runEditCommand(
+			["bun", "-e", 'console.error("Invalid argument"); process.exit(3);'],
+			60_000,
 			undefined,
 			WINDOWS,
 		).catch((caught: unknown) => caught);
