@@ -1,54 +1,84 @@
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";
+import { apiErrorBody } from "@/lib/api-errors";
+import { CREATE_UPLOAD_PATH } from "@/lib/developer-upload-token";
 import {
 	abortInfraUpload,
 	completeInfraUpload,
 	initiateInfraUpload,
 	presignInfraUploadParts,
 } from "@/lib/infra-video-upload";
-import { zValidator } from "@/utils/zod-validator";
-import { withDeveloperPublicAuth } from "../../../../utils";
+import { developerZValidator } from "@/utils/zod-validator";
+import { withDeveloperUploadToken } from "../../../../utils";
 
-export const app = new Hono<{
-	Variables: {
-		developerAppId: string;
-		developerKeyType: "public";
-	};
-}>().use(withDeveloperPublicAuth);
+type Variables = {
+	developerAppId: string;
+	developerVideoId: string;
+	developerUploadCompleted: boolean;
+};
+
+export const app = new Hono<{ Variables: Variables }>().use(
+	withDeveloperUploadToken,
+);
+
+const videoMismatch = apiErrorBody(
+	"video_mismatch",
+	"This upload token is for a different video",
+	"Leave videoId out, or send the videoId returned with this token. Each token uploads one video.",
+);
+
+const tokenUsed = apiErrorBody(
+	"upload_already_completed",
+	"Upload already completed",
+	`This upload token has been used. Create a new upload with POST ${CREATE_UPLOAD_PATH}.`,
+);
+
+function boundUpload(
+	c: Context<{ Variables: Variables }>,
+	requestedVideoId: string | undefined,
+) {
+	const videoId = c.get("developerVideoId");
+	if (requestedVideoId !== undefined && requestedVideoId !== videoId) {
+		return null;
+	}
+	return { appId: c.get("developerAppId"), videoId };
+}
 
 app.post(
 	"/initiate",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
-			videoId: z.string(),
+			videoId: z.string().optional(),
 			contentType: z.string().optional(),
 		}),
 	),
 	async (c) => {
-		const result = await initiateInfraUpload({
-			appId: c.get("developerAppId"),
-			...c.req.valid("json"),
-		});
+		const { videoId, contentType } = c.req.valid("json");
+		const upload = boundUpload(c, videoId);
+		if (!upload) return c.json(videoMismatch, 403);
+		const result = await initiateInfraUpload({ ...upload, contentType });
 		return c.json(result.body, result.status);
 	},
 );
 
 app.post(
 	"/presign-part",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
-			videoId: z.string(),
+			videoId: z.string().optional(),
 			uploadId: z.string(),
 			partNumber: z.number().int().min(1).max(10000),
 		}),
 	),
 	async (c) => {
 		const { videoId, uploadId, partNumber } = c.req.valid("json");
+		const upload = boundUpload(c, videoId);
+		if (!upload) return c.json(videoMismatch, 403);
 		const result = await presignInfraUploadParts({
-			appId: c.get("developerAppId"),
-			videoId,
+			...upload,
 			uploadId,
 			partNumbers: [partNumber],
 		});
@@ -59,10 +89,10 @@ app.post(
 
 app.post(
 	"/complete",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
-			videoId: z.string(),
+			videoId: z.string().optional(),
 			uploadId: z.string(),
 			parts: z.array(
 				z.object({
@@ -78,28 +108,29 @@ app.post(
 		}),
 	),
 	async (c) => {
-		const result = await completeInfraUpload({
-			appId: c.get("developerAppId"),
-			...c.req.valid("json"),
-		});
+		const { videoId, ...body } = c.req.valid("json");
+		const upload = boundUpload(c, videoId);
+		if (!upload) return c.json(videoMismatch, 403);
+		const result = await completeInfraUpload({ ...upload, ...body });
 		return c.json(result.body, result.status);
 	},
 );
 
 app.post(
 	"/abort",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
-			videoId: z.string(),
+			videoId: z.string().optional(),
 			uploadId: z.string(),
 		}),
 	),
 	async (c) => {
-		const result = await abortInfraUpload({
-			appId: c.get("developerAppId"),
-			...c.req.valid("json"),
-		});
+		const { videoId, uploadId } = c.req.valid("json");
+		const upload = boundUpload(c, videoId);
+		if (!upload) return c.json(videoMismatch, 403);
+		if (c.get("developerUploadCompleted")) return c.json(tokenUsed, 409);
+		const result = await abortInfraUpload({ ...upload, uploadId });
 		return c.json(result.body, result.status);
 	},
 );

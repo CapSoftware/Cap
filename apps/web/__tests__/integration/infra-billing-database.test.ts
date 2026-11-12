@@ -36,6 +36,9 @@ vi.mock("@/lib/developer-video-storage", () => ({
 vi.mock("@/lib/media-client", () => ({
 	tryProbeVideoViaMediaServer: fixture.probe,
 }));
+vi.mock("@/lib/media-container", () => ({
+	sniffMediaUrl: async () => "media",
+}));
 vi.mock("@cap/web-backend", () => ({
 	provideOptionalAuth: <T>(effect: T) => effect,
 	S3Buckets: {

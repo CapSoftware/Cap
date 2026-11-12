@@ -51,8 +51,13 @@ import {
 	renderEditedVideo,
 } from "../lib/media-edit";
 import {
+	INPUT_POLICY_VIOLATION,
+	MediaInputPolicyError,
+} from "../lib/media-input-policy";
+import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
 	getActiveProbeOperationCount as getActiveProbeProcessCount,
+	isUnreadableMediaInput,
 	probeTrackSpans,
 	probeVideo,
 	probeVideoFile,
@@ -131,6 +136,7 @@ const RECORDING_VERIFICATION_RETRY_ERROR =
 	"Recording verification temporarily unavailable (503)";
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
+const UNREADABLE_INPUT_CODE = "UNREADABLE_INPUT";
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
 const VIDEO_MEMORY_PRESSURE_ERROR =
 	"SERVER_BUSY: container memory pressure is too high";
@@ -575,6 +581,22 @@ video.post("/probe", async (c) => {
 		const metadata = await probeVideo(result.data.videoUrl);
 		return c.json({ metadata });
 	} catch (err) {
+		if (isUnreadableMediaInput(err)) {
+			const details = err instanceof Error ? err.message : String(err);
+			console.warn("[video/probe] Unreadable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+
 		console.error("[video/probe] Error:", err);
 
 		if (isBusyError(err)) {
@@ -1515,24 +1537,26 @@ async function encodeLadderAsync(
 					throw error;
 				}),
 			);
-			const failed = (await Promise.allSettled(uploads)).find(
+			const posterUrl = options.thumbnailPresignedUrl;
+			const poster = posterUrl
+				? generateThumbnail(
+						ladder.poster.path,
+						ladder.poster.durationSeconds,
+						{},
+						uploadSignal,
+					)
+						.then((image) =>
+							uploadToS3(image, posterUrl, "image/jpeg", uploadSignal),
+						)
+						.catch((error) => {
+							uploadsStopped.abort();
+							throw error;
+						})
+				: null;
+			const failed = (await Promise.allSettled([...uploads, poster])).find(
 				(upload) => upload.status === "rejected",
 			);
 			if (failed?.status === "rejected") throw failed.reason;
-			if (options.thumbnailPresignedUrl) {
-				const thumbnailData = await generateThumbnail(
-					input.path,
-					metadata.duration,
-					{},
-					signal,
-				);
-				await uploadToS3(
-					thumbnailData,
-					options.thumbnailPresignedUrl,
-					"image/jpeg",
-					signal,
-				);
-			}
 		});
 		signal.throwIfAborted();
 

@@ -20,8 +20,16 @@
 			"schedule": "29 * * * *"
 		},
 		{
+			"path": "/api/cron/developer-video-purge",
+			"schedule": "*/5 * * * *"
+		},
+		{
 			"path": "/api/cron/developer-storage",
 			"schedule": "41 */6 * * *"
+		},
+		{
+			"path": "/api/cron/developer-transcripts-cleanup",
+			"schedule": "47 * * * *"
 		}
 	],
 	"functions": {

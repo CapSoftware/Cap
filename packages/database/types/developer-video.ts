@@ -34,6 +34,8 @@ export type DeveloperVideoPartState =
 			token: string;
 			jobId: string | null;
 			startedAt: number;
+			checkedAt?: number;
+			notFoundAt?: number;
 	  }
 	| { state: "complete"; output: string }
 	| { state: "failed"; reason: string }
@@ -50,9 +52,11 @@ export interface DeveloperVideoProcessingState {
 	encodeId: string;
 	startedAt: number;
 	probe: DeveloperVideoProbe | null;
+	probing?: { token: string; startedAt: number };
 	hls: DeveloperVideoPartState;
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;
+	lostJobs?: Partial<Record<DeveloperVideoPart, number>>;
 	unavailableChecks: number;
 	poster: { output: string } | null;
 	bytes: {

@@ -94,6 +94,8 @@ public struct APIRequest: Sendable {
     public var body: Data?
     public var authenticated: Bool
     public var videoAccess: CapID?
+    /// The request is only sent while this user is the one signed in.
+    public var requiredUserId: String?
 
     public init(method: HTTPMethod = .get, path: [String], query: [URLQueryItem] = [], body: Data? = nil, authenticated: Bool = true, videoAccess: CapID? = nil) {
         self.method = method
@@ -210,6 +212,7 @@ public final class CapAPI: Sendable {
         var snapshot: CredentialSnapshot?
         if request.authenticated {
             guard let current = credentials() else { throw CapAPIError.missingSession }
+            if let required = request.requiredUserId, current.userId != required { throw CapAPIError.missingSession }
             snapshot = current
             urlRequest.setValue("Bearer \(current.apiKey)", forHTTPHeaderField: "Authorization")
             if let id = request.videoAccess, let token = videoAccessToken(for: id) {
@@ -580,6 +583,13 @@ extension CapAPI {
 
     public func completeRecording(_ id: CapID, _ completion: RecordingCompletion) async throws(CapAPIError) {
         try await expectSuccess(mobile(.post, "recordings", id.rawValue, "complete", body: Self.body(completion)))
+    }
+
+    /// The batch goes out under that user's session or not at all.
+    public func trackEvents(_ batch: AnalyticsBatch, userId: String) async throws(CapAPIError) {
+        var request = mobile(.post, "events", body: try Self.body(batch))
+        request.requiredUserId = userId
+        try await expectSuccess(request)
     }
 
     public func plan() async throws(CapAPIError) -> PlanStatus {

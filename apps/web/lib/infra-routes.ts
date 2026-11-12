@@ -4,6 +4,7 @@ export const INFRA_APP_COOKIE = "capInfraApp";
 export const INFRA_SECTIONS = [
 	{ slug: "", name: "Overview" },
 	{ slug: "videos", name: "Videos" },
+	{ slug: "audio", name: "Audio" },
 	{ slug: "usage", name: "Usage" },
 	{ slug: "billing", name: "Billing" },
 	{ slug: "keys", name: "API keys" },

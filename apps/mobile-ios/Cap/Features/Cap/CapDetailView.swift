@@ -82,6 +82,7 @@ struct CapDetailView: View {
             .alert("Editing is part of Cap Pro", isPresented: $showingProRequired) {
                 if upgrade.isAllowed {
                     Button("Upgrade in your Cap dashboard") {
+                        Usage.track("upgrade_clicked", ["source": "editor"])
                         UIApplication.shared.open(session.services.environment.upgradeURL)
                     }
                 }
@@ -319,6 +320,7 @@ struct CapDetailView: View {
     private func copyLink(_ detail: CapDetail, at time: Double?) {
         if let time {
             UIPasteboard.general.url = session.services.environment.shareURL(for: target.id, at: time)
+            Usage.track("cap_link_copied", ["timestamp": true])
             session.toasts.show("Link at \(CapFormat.timestamp(time)) copied", systemImage: "link")
         } else {
             CapActions.copyLink(detail.shareUrl, session: session)

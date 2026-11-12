@@ -56,6 +56,12 @@ export interface DeveloperVideoStore {
 	updates: Partial<DeveloperVideoFixture>[];
 }
 
+// MySQL compares the externalUserId column with utf8mb4_0900_ai_ci, which
+// treats case and accent variants as equal. The fake does the same so a query
+// that relies on plain equality behaves here as it does in the database.
+const equalInColumnCollation = (left: string, right: string) =>
+	left.localeCompare(right, "en", { sensitivity: "base" }) === 0;
+
 export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 	const { MySqlDialect } = await import("drizzle-orm/mysql-core");
 	const dialect = new MySqlDialect();
@@ -77,7 +83,20 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 				query.params.includes(video.appId);
 			const live =
 				!query.sql.includes("`deletedAt` is null") || video.deletedAt === null;
-			if (!identified || !scoped || !live) return [];
+			const externalUserId = video.externalUserId;
+			const owned =
+				!query.sql.includes("`externalUserId` = ?") ||
+				(externalUserId !== null &&
+					query.params.some(
+						(param) =>
+							typeof param === "string" &&
+							(query.sql.includes(
+								"`externalUserId` AS BINARY) = CAST(? AS BINARY)",
+							)
+								? param === externalUserId
+								: equalInColumnCollation(param, externalUserId)),
+					));
+			if (!identified || !scoped || !live || !owned) return [];
 			return fields && "video" in fields ? [{ video }] : [video];
 		};
 		const chain = {
