@@ -2,7 +2,7 @@ import Link from "next/link";
 import { CAP_INFRA_POINTER_PROMPT } from "@/data/infra-agent-prompt";
 import { CopyPointerButton } from "./AgentCopy";
 import { AgentPrompt } from "./AgentPrompt";
-import { ANCHORS, LINKS, PREVIEW_NOTE } from "./content";
+import { AGENT_SUMMARY, ANCHORS, LINKS, PREVIEW_NOTE } from "./content";
 import { Section, SectionHeading, StartLink } from "./shared";
 import { BTN_GHOST, MONO, TEXT_LINK } from "./theme";
 
@@ -10,11 +10,7 @@ export const Agent = () => (
 	<Section id={ANCHORS.agents} className="pt-20 lg:pt-28">
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-8">
 			<SectionHeading title="Bring your agent.">
-				<p>
-					One prompt sets up Cap Infra in your project. Your agent installs the
-					Cap CLI, creates an app, stores the keys and wires up uploads and
-					playback.
-				</p>
+				<p>{AGENT_SUMMARY}</p>
 				{PREVIEW_NOTE ? <p className="pt-3">{PREVIEW_NOTE}</p> : null}
 			</SectionHeading>
 			<div className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
@@ -36,10 +32,10 @@ export const Agent = () => (
 			<div className="flex flex-wrap items-center gap-x-5 gap-y-3 self-start lg:col-start-1 lg:row-start-2">
 				<StartLink className={BTN_GHOST} />
 				<Link
-					href={LINKS.agentDocs}
+					href={LINKS.docs}
 					className={`${TEXT_LINK} text-[14px] text-[rgba(232,236,244,0.6)] hover:text-[#E8ECF4]`}
 				>
-					Agent docs
+					API reference
 				</Link>
 			</div>
 		</div>

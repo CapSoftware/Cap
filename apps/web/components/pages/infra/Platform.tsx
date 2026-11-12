@@ -67,6 +67,10 @@ export const Platform = () => (
 				player. Or use the hosted player link or the iframe embed and build
 				nothing.
 			</p>
+			<p className="pt-3">
+				The embed takes autoplay, muted, loop, start time and controls as query
+				parameters.
+			</p>
 		</Row>
 	</Section>
 );

@@ -97,7 +97,6 @@ const DOCS = "/docs/api/rest-api";
 export const LINKS = {
 	docs: DOCS,
 	uploadDocs: `${DOCS}#multipart-upload`,
-	agentDocs: "/docs/agents",
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -260,6 +259,7 @@ export const PLAYER: readonly CodeSample[] = [
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
   allow="fullscreen; picture-in-picture"
   allowfullscreen
+  loading="lazy"
 ></iframe>`,
 	},
 	{
@@ -292,8 +292,11 @@ export const PRO_CREDIT_COVERS = [
 	},
 ] as const;
 
+export const AGENT_SUMMARY =
+	"One prompt sets up Cap Infra in your project. Your agent reads the API docs, wires up uploads and playback, and keeps your secret key on the server.";
+
 export const AGENT_TOOLS =
-	"Works in Claude Code, Codex, Cursor and any agent that can run shell commands.";
+	"Works in Claude Code, Codex, Cursor and any coding agent that can work in your project.";
 
 export const VIDEO_OUTPUTS = [
 	{

@@ -14,6 +14,7 @@ vi.mock("@cap/database/helpers", () => ({
 }));
 
 import { parseAmount } from "@/components/pages/infra/amount";
+import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
@@ -56,6 +57,7 @@ describe("the Cap Infra landing page", () => {
 			content.GET_VIDEO_STATUS,
 			content.VIDEO_STATUS_RESPONSE,
 			...content.CREATE_TRANSCRIPT.map((entry) => entry.code),
+			content.PLAYER.find((entry) => entry.id === "embed")?.code,
 		]) {
 			expect(rest).toContain(sample);
 		}
@@ -172,6 +174,40 @@ describe("the Cap Infra landing page", () => {
 		const heading = content.LINKS.uploadDocs.split("#")[1];
 		expect(rest).toMatch(/^#+ Multipart Upload$/m);
 		expect(heading).toBe("multipart-upload");
+	});
+});
+
+describe("the agent section", () => {
+	const CLI = /\bCLI\b|install-cli|\bcap (?:auth|developers|guide|version)\b/i;
+
+	it("describes a CLI only when the prompt uses one", async () => {
+		const content = await load("true");
+		const section = fs.readFileSync(path.join(PAGE_DIR, "Agent.tsx"), "utf8");
+		const copy = [content.AGENT_SUMMARY, content.AGENT_TOOLS, section];
+
+		expect(CLI.test("Your agent installs the Cap CLI")).toBe(true);
+		expect(CLI.test("run cap developers list --json")).toBe(true);
+		if (!CLI.test(CAP_INFRA_AGENT_PROMPT)) {
+			for (const text of copy) expect(text).not.toMatch(CLI);
+		}
+		for (const text of [content.AGENT_SUMMARY, content.AGENT_TOOLS]) {
+			expect(text).not.toMatch(/\binstalls?\b/i);
+		}
+	});
+
+	it("promises only what the prompt asks the agent to do", async () => {
+		const content = await load("true");
+
+		expect(content.AGENT_SUMMARY).toContain("reads the API docs");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			"https://cap.so/docs/api/rest-api",
+		);
+		expect(content.AGENT_SUMMARY).toContain("uploads and playback");
+		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/upload/i);
+		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/embed/i);
+		expect(content.AGENT_SUMMARY).toContain("secret key on the server");
+		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/secret key/i);
+		expect(CAP_INFRA_AGENT_PROMPT).toMatch(/on the server|from the server/i);
 	});
 });
 
