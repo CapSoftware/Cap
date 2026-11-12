@@ -144,6 +144,25 @@ describe("tryProbeVideoViaMediaServer", () => {
 		expect(await tryProbeVideoViaMediaServer("https://storage/video")).toEqual({
 			status: "rejected",
 			message: "Invalid data found",
+			unusable: false,
+		});
+	});
+
+	it("marks a 422 as a file the media server says cannot be used", async () => {
+		mockFetch.mockResolvedValue(
+			json(
+				{
+					error: "Media input cannot be used",
+					details: "Media input could not be read",
+				},
+				422,
+			),
+		);
+
+		expect(await tryProbeVideoViaMediaServer("https://storage/video")).toEqual({
+			status: "rejected",
+			message: "Media input could not be read",
+			unusable: true,
 		});
 	});
 });
