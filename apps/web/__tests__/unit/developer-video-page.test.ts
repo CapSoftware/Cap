@@ -1,6 +1,11 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type DeveloperVideoPlayback,
+	type DeveloperVideoQuery,
+	developerVideoPlayback,
+} from "@/lib/developer-video-params";
 import type { DeveloperVideoPlayer } from "@/lib/developer-video-player";
 
 const mocks = vi.hoisted(() => ({ load: vi.fn() }));
@@ -45,11 +50,15 @@ const paused: DeveloperVideoPlayer = { ...frame, kind: "paused" };
 const render = (
 	player: DeveloperVideoPlayer,
 	variant: "share" | "embed" = "share",
+	playback?: DeveloperVideoPlayback,
 ) =>
-	renderToStaticMarkup(createElement(DeveloperVideoView, { player, variant }));
+	renderToStaticMarkup(
+		createElement(DeveloperVideoView, { player, variant, playback }),
+	);
 
-const params = (playbackId = PLAYBACK_ID) => ({
+const params = (query: DeveloperVideoQuery = {}, playbackId = PLAYBACK_ID) => ({
 	params: Promise.resolve({ playbackId }),
+	searchParams: Promise.resolve(query),
 });
 
 beforeEach(() => {
@@ -160,6 +169,77 @@ describe("developer video page states", () => {
 	});
 });
 
+describe("developer video page parameters", () => {
+	const embed = (query: DeveloperVideoQuery) =>
+		render(playing, "embed", developerVideoPlayback(query, "embed"));
+
+	it("asks the browser to preload nothing until the player decides", () => {
+		expect(render(playing)).toContain('preload="none"');
+		expect(embed({})).toContain('preload="none"');
+	});
+
+	it("shows the control bar and no centre button by default", () => {
+		const html = embed({});
+
+		expect(html).toContain('data-controls="true"');
+		expect(html.match(/aria-label="Play"/g)).toHaveLength(1);
+		expect(html).not.toContain("loop");
+	});
+
+	it("keeps a labelled play button when the control bar is hidden", () => {
+		const html = embed({ controls: "0" });
+
+		expect(html).toContain('data-controls="false"');
+		expect(html.match(/aria-label="Play"/g)).toHaveLength(2);
+		expect(html.indexOf('aria-label="Play"')).toBeLessThan(
+			html.indexOf('role="slider"'),
+		);
+	});
+
+	it("loops when asked", () => {
+		expect(embed({ loop: "1" })).toContain("loop");
+	});
+
+	it("starts the sound button in its muted state", () => {
+		expect(embed({ muted: "1" })).toContain('aria-label="Unmute"');
+		expect(embed({})).toContain('aria-label="Mute"');
+	});
+
+	it("renders the same page for malformed and unknown parameters", () => {
+		expect(
+			embed({
+				autoplay: "yes",
+				muted: "x",
+				loop: "2",
+				controls: "off",
+				t: "-1",
+			}),
+		).toBe(embed({}));
+		expect(embed({ nope: "1" })).toBe(embed({}));
+	});
+
+	it("keeps the embed-only switches off the share page", () => {
+		const query = { autoplay: "1", muted: "1", loop: "1", controls: "0" };
+
+		expect(
+			render(playing, "share", developerVideoPlayback(query, "share")),
+		).toBe(render(playing));
+	});
+
+	it.each([
+		["processing", processing],
+		["failed", failed],
+		["paused", paused],
+	])("leaves the %s state alone", (_, player) => {
+		const query = { autoplay: "1", controls: "0", t: "30" };
+
+		expect(embed({})).not.toBe(embed(query));
+		expect(
+			render(player, "embed", developerVideoPlayback(query, "embed")),
+		).toBe(render(player, "embed"));
+	});
+});
+
 describe("developer video page routes", () => {
 	it.each([
 		["share", sharePage],
@@ -203,9 +283,13 @@ describe("developer video page routes", () => {
 
 			const route = await page.default(params());
 			await expect(
-				DeveloperVideoPage({ playbackId: PLAYBACK_ID, variant }),
+				DeveloperVideoPage({ playbackId: PLAYBACK_ID, variant, query: {} }),
 			).rejects.toThrow("NOT_FOUND");
-			expect(route.props).toEqual({ playbackId: PLAYBACK_ID, variant });
+			expect(route.props).toEqual({
+				playbackId: PLAYBACK_ID,
+				variant,
+				query: {},
+			});
 			expect(await page.generateMetadata(params())).toMatchObject({
 				title: "Video not found",
 				description: null,
@@ -219,8 +303,16 @@ describe("developer video page routes", () => {
 		const share = await sharePage.default(params());
 		const embed = await embedPage.default(params());
 
-		expect(share.props).toEqual({ playbackId: PLAYBACK_ID, variant: "share" });
-		expect(embed.props).toEqual({ playbackId: PLAYBACK_ID, variant: "embed" });
+		expect(share.props).toEqual({
+			playbackId: PLAYBACK_ID,
+			variant: "share",
+			query: {},
+		});
+		expect(embed.props).toEqual({
+			playbackId: PLAYBACK_ID,
+			variant: "embed",
+			query: {},
+		});
 		expect(sharePage.dynamic).toBe("force-dynamic");
 		expect(embedPage.dynamic).toBe("force-dynamic");
 	});
@@ -229,9 +321,44 @@ describe("developer video page routes", () => {
 		mocks.load.mockResolvedValue(failed);
 
 		const html = renderToStaticMarkup(
-			await DeveloperVideoPage({ playbackId: PLAYBACK_ID, variant: "embed" }),
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: {},
+			}),
 		);
 
 		expect(html).toContain("This file has no video track.");
+	});
+
+	it("hands the query of each route to the player", async () => {
+		const query = { controls: "0", t: "12", loop: "1" };
+		const route = await embedPage.default(params(query));
+
+		expect(route.props.query).toEqual(query);
+
+		const html = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query,
+			}),
+		);
+
+		expect(html).toContain('data-controls="false"');
+		expect(html).toContain("loop");
+	});
+
+	it("answers a malformed query with the plain player, not an error", async () => {
+		const html = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: { t: ["x", "y"], autoplay: "%00", controls: "" },
+			}),
+		);
+
+		expect(html).toContain("<video");
+		expect(html).toContain('data-controls="true"');
 	});
 });
