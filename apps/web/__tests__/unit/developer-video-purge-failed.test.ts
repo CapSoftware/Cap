@@ -196,6 +196,52 @@ describe("failed developer video file purge", () => {
 		expect(stored("b-due")?.filesDeletedAt).toBeInstanceOf(Date);
 	});
 
+	it("stops taking videos once its minute is up and leaves the rest for a later run", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			mocks.videos = [
+				video("n-due", 48),
+				video("o-due", 48),
+				video("p-due", 48),
+			];
+			mocks.deleteObjects.mockImplementation(async () => {
+				vi.setSystemTime(Date.now() + 40_000);
+				return 3;
+			});
+
+			expect(await purge()).toEqual({ purged: 2, failed: 0 });
+			expect(stored("p-due")).toMatchObject({
+				filesDeletedAt: null,
+				storedBytes: 5_000_000,
+			});
+
+			expect(await purge()).toEqual({ purged: 1, failed: 0 });
+			expect(stored("p-due")?.filesDeletedAt).toBeInstanceOf(Date);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives up on a deletion that hangs, leaves that video unmarked and moves on", async () => {
+		vi.useFakeTimers();
+		try {
+			mocks.videos = [video("n-due", 48), video("o-due", 48)];
+			mocks.deleteObjects.mockImplementationOnce(() => new Promise(() => {}));
+
+			const run = purge();
+			await vi.advanceTimersByTimeAsync(20_000);
+
+			expect(await run).toEqual({ purged: 1, failed: 1 });
+			expect(stored("n-due")).toMatchObject({
+				filesDeletedAt: null,
+				storedBytes: 5_000_000,
+			});
+			expect(stored("o-due")?.filesDeletedAt).toBeInstanceOf(Date);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("starts after the given video and wraps around to the ones before it", async () => {
 		mocks.videos = [video("a-due", 48), video("n-due", 48), video("z-due", 48)];
 

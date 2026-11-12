@@ -19,15 +19,28 @@ const PURGE_BATCH = 200;
 type PurgeRow = { id: string; appId: string };
 type PurgeResult = { purged: number; failed: number };
 
+type PurgeBudget = { stopAt: number; perVideoMs: number };
+
+function within<T>(work: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timedOut = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error("Deletion timed out")), ms);
+	});
+	return Promise.race([work, timedOut]).finally(() => clearTimeout(timer));
+}
+
 async function purgeFiles(
 	rows: PurgeRow[],
 	purgedColumns: () => Partial<typeof developerVideos.$inferInsert>,
+	budget?: PurgeBudget,
 ): Promise<PurgeResult> {
 	let purged = 0;
 	let failed = 0;
 	for (const row of rows) {
+		if (budget && Date.now() >= budget.stopAt) break;
 		try {
-			await deleteDeveloperVideoObjects(developerVideoPrefix(row));
+			const deletion = deleteDeveloperVideoObjects(developerVideoPrefix(row));
+			await (budget ? within(deletion, budget.perVideoMs) : deletion);
 			await db()
 				.update(developerVideos)
 				.set(purgedColumns())
@@ -82,6 +95,12 @@ export async function purgeDeletedDeveloperVideos(
 // time on the row its owner cannot move (renaming the video moves updatedAt),
 // and it is past the late write window above by the time the files go.
 export const FAILED_VIDEO_FILES_KEPT_MS = 24 * 60 * 60 * 1000;
+// This pass shares the hourly cleanup's five minutes with three others, so it
+// stops taking videos after a minute and gives up on a deletion that hangs.
+// A video it did not reach, or whose deletion it stopped waiting for, is not
+// marked and is picked up by a later run.
+const FAILED_PURGE_BUDGET_MS = 60_000;
+const FAILED_PURGE_DELETE_TIMEOUT_MS = 20_000;
 
 function failedVideos(
 	startedBefore: number,
@@ -126,8 +145,12 @@ export async function purgeFailedDeveloperVideoFiles(
 			})),
 		);
 	}
-	return purgeFiles(rows, () => ({
-		filesDeletedAt: new Date(),
-		storedBytes: 0,
-	}));
+	return purgeFiles(
+		rows,
+		() => ({ filesDeletedAt: new Date(), storedBytes: 0 }),
+		{
+			stopAt: Date.now() + FAILED_PURGE_BUDGET_MS,
+			perVideoMs: FAILED_PURGE_DELETE_TIMEOUT_MS,
+		},
+	);
 }
