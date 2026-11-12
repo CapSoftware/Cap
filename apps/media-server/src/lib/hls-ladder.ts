@@ -74,6 +74,26 @@ function tierIndexForShortSide(shortSide: number): number {
 	return HLS_LADDER_TIERS.length - 1;
 }
 
+const WIDESCREEN = 16 / 9;
+
+// A source wider than 16:9 has more pixels than its short side suggests:
+// 1920x804 is as large as a 1080p frame cropped, not a 720p one. Tiers meet at
+// the same point as tierIndexForShortSide for a 16:9 frame.
+function tierIndexForPixels(pixels: number): number {
+	for (let index = 0; index < HLS_LADDER_TIERS.length - 1; index++) {
+		const upper = HLS_LADDER_TIERS[index];
+		const lower = HLS_LADDER_TIERS[index + 1];
+		if (
+			upper &&
+			lower &&
+			pixels >= WIDESCREEN * upper.shortSide * lower.shortSide
+		) {
+			return index;
+		}
+	}
+	return HLS_LADDER_TIERS.length - 1;
+}
+
 export function planHlsLadder(
 	source: HlsLadderSource,
 	options: { maxTier?: HlsLadderTierName } = {},
@@ -89,7 +109,14 @@ export function planHlsLadder(
 	const maxTier = HLS_LADDER_TIERS[maxTierIndex] ?? HLS_LADDER_TIERS[0];
 	const sourceShort = Math.min(size.width, size.height);
 	const topShort = Math.min(sourceShort, maxTier.shortSide);
-	const topIndex = Math.max(maxTierIndex, tierIndexForShortSide(topShort));
+	const top = fitShortSide(size, topShort);
+	const topIndex = Math.max(
+		maxTierIndex,
+		Math.min(
+			tierIndexForShortSide(topShort),
+			tierIndexForPixels(top.width * top.height),
+		),
+	);
 	const rungs: HlsLadderRung[] = [];
 	for (let index = topIndex; index < HLS_LADDER_TIERS.length; index++) {
 		const tier = HLS_LADDER_TIERS[index];
