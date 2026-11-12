@@ -390,6 +390,28 @@ describe("standing through the ledger", () => {
 		expect(storageRows()).toHaveLength(2);
 	});
 
+	it("charges today once after a top-up that follows an unpaid run the same day", async () => {
+		await charge();
+		advanceDays(1);
+		expect(await charge()).toMatchObject({ state: "unpaid" });
+		expect(ledger.snapshots.at(-1)?.microCreditsCharged).toBe(0);
+
+		credit(500_000);
+		const afterTopUp = await charge();
+
+		expect(afterTopUp).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 144,
+			shortSince: null,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(500_000 - 144);
+		expect(ledger.snapshots.at(-1)?.microCreditsCharged).toBe(144);
+
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.account.balanceMicroCredits).toBe(500_000 - 144);
+		expect(storageRows()).toHaveLength(2);
+	});
+
 	it("starts a new grace period if it falls short again after being restored", async () => {
 		await charge();
 		const firstShort = new Date(ledger.now);

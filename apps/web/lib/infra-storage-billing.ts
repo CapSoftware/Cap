@@ -94,7 +94,10 @@ export async function chargeStorageDay({
 		if (billed) return { state: "skipped" as const };
 
 		const [snapshot] = await tx
-			.select({ processedAt: developerDailyStorageSnapshots.processedAt })
+			.select({
+				processedAt: developerDailyStorageSnapshots.processedAt,
+				microCreditsCharged: developerDailyStorageSnapshots.microCreditsCharged,
+			})
 			.from(developerDailyStorageSnapshots)
 			.where(
 				and(
@@ -103,7 +106,9 @@ export async function chargeStorageDay({
 				),
 			)
 			.limit(1);
-		if (snapshot?.processedAt) return { state: "skipped" as const };
+		if (snapshot?.processedAt && Number(snapshot.microCreditsCharged) > 0) {
+			return { state: "skipped" as const };
+		}
 
 		const chargedSinceDayStart = await tx
 			.select({ metadata: developerCreditTransactions.metadata })
