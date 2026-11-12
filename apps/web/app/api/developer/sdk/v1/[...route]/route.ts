@@ -3,8 +3,8 @@ import { handle } from "hono/vercel";
 import {
 	developerApiError,
 	developerApiNotFound,
-	developerRateLimiter,
 	developerSdkCors,
+	developerUploadRateLimiter,
 	refuseDeveloperPublicKey,
 } from "../../../../utils";
 import * as upload from "./upload";
@@ -12,7 +12,7 @@ import * as upload from "./upload";
 const app = new Hono()
 	.basePath("/api/developer/sdk/v1")
 	.use(developerSdkCors)
-	.use(developerRateLimiter)
+	.use(developerUploadRateLimiter)
 	.use(refuseDeveloperPublicKey)
 	.route("/upload/multipart", upload.app)
 	.onError(developerApiError);
