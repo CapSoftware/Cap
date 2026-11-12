@@ -64,12 +64,18 @@ export function Shell({
 	const current = apps.find((app) => app.id === appId) ?? null;
 	const contentId = useId();
 	const tabs = useRef<HTMLElement>(null);
-	const [moreTabs, setMoreTabs] = useState(false);
+	const [tabsBeyond, setTabsBeyond] = useState({ left: false, right: false });
 
 	const measureTabs = useCallback(() => {
 		const strip = tabs.current;
 		if (!strip) return;
-		setMoreTabs(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 4);
+		const left = strip.scrollLeft > 4;
+		const right = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 4;
+		setTabsBeyond((current) =>
+			current.left === left && current.right === right
+				? current
+				: { left, right },
+		);
 	}, []);
 
 	useEffect(() => {
@@ -196,7 +202,14 @@ export function Shell({
 					onScroll={measureTabs}
 					className={clsx(
 						"flex gap-1 overflow-x-auto px-2 [scrollbar-width:none]",
-						moreTabs &&
+						tabsBeyond.left &&
+							tabsBeyond.right &&
+							"[mask-image:linear-gradient(to_right,transparent,#000_44px,#000_calc(100%-44px),transparent)]",
+						tabsBeyond.left &&
+							!tabsBeyond.right &&
+							"[mask-image:linear-gradient(to_right,transparent,#000_44px)]",
+						!tabsBeyond.left &&
+							tabsBeyond.right &&
 							"[mask-image:linear-gradient(to_right,#000_calc(100%-44px),transparent)]",
 					)}
 				>

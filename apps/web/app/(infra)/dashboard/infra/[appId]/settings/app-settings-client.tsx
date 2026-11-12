@@ -108,7 +108,7 @@ export function AppSettingsClient({
 
 				<Split
 					title="Delete app"
-					description="Revokes both API keys straight away and deletes its videos. Any credit left in the app goes with it."
+					description="Revokes its API key straight away and deletes its videos. Any credit left in the app goes with it."
 				>
 					<Button variant="danger" onClick={() => setConfirmDelete(true)}>
 						Delete app
@@ -121,7 +121,7 @@ export function AppSettingsClient({
 				title="Delete app"
 				description={
 					<>
-						Delete {initialName}? Its API keys stop working straight away
+						Delete {initialName}? Its API key stops working straight away
 						{videoCount > 0 &&
 							` and its ${videoCount.toLocaleString("en-US")} ${videoCount === 1 ? "video is" : "videos are"} deleted`}
 						.{" "}
