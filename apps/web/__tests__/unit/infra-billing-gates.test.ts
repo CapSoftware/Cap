@@ -57,7 +57,10 @@ vi.mock("@cap/env", () => ({
 		NEXT_PUBLIC_IS_CAP: "true",
 		NEXT_PUBLIC_WEB_URL: "https://cap.test",
 	},
-	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
+	serverEnv: () => ({
+		WEB_URL: "https://cap.test",
+		NEXTAUTH_SECRET: "unit-test-signing-secret",
+	}),
 }));
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
@@ -102,9 +105,9 @@ vi.mock("@/app/api/utils", async () => {
 			c.set("user", mocks.user);
 			await next();
 		}),
-		withDeveloperPublicAuth: createMiddleware(async (c, next) => {
+		withDeveloperSecretAuth: createMiddleware(async (c, next) => {
 			c.set("developerAppId", "app-1");
-			c.set("developerKeyType", "public");
+			c.set("developerKeyType", "secret");
 			await next();
 		}),
 	};
@@ -112,7 +115,7 @@ vi.mock("@/app/api/utils", async () => {
 
 import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card";
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
-import { app as videoCreate } from "@/app/api/developer/sdk/v1/[...route]/video-create";
+import { app as uploads } from "@/app/api/developer/v1/[...route]/uploads";
 import { createDeveloperCardCheckout } from "@/lib/developer-card-checkout";
 import {
 	ownsInfraApp,
@@ -151,9 +154,9 @@ beforeEach(() => {
 	mocks.ensureCustomer.mockResolvedValue("cus_1");
 });
 
-describe("creating a video", () => {
+describe("creating an upload", () => {
 	const create = () =>
-		videoCreate.request("/create", {
+		uploads.request("/", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ name: "Demo" }),
@@ -184,12 +187,18 @@ describe("creating a video", () => {
 		const response = await create();
 
 		expect(response.status).toBe(200);
-		const body = await response.json();
-		expect(body).toMatchObject({ videoId: "video-1" });
-		expect(Object.keys(body).sort()).toEqual([
+		const { data } = await response.json();
+		expect(data).toMatchObject({ id: "video-1", videoId: "video-1" });
+		expect(Object.keys(data).sort()).toEqual([
+			"corsOrigin",
 			"embedUrl",
+			"expiresAt",
+			"id",
 			"playbackId",
 			"shareUrl",
+			"status",
+			"token",
+			"uploadUrl",
 			"videoId",
 		]);
 		expect(mocks.inserts).toEqual([
@@ -198,7 +207,7 @@ describe("creating a video", () => {
 		const playbackId = mocks.inserts[0]?.playbackId;
 		expect(typeof playbackId).toBe("string");
 		expect(String(playbackId).length).toBeGreaterThan(8);
-		expect(body).toMatchObject({
+		expect(data).toMatchObject({
 			playbackId,
 			shareUrl: `https://cap.test/dev/${playbackId}`,
 			embedUrl: `https://cap.test/dev/${playbackId}/embed`,

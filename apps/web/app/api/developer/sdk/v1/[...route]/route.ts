@@ -5,15 +5,15 @@ import {
 	developerApiNotFound,
 	developerRateLimiter,
 	developerSdkCors,
+	refuseDeveloperPublicKey,
 } from "../../../../utils";
 import * as upload from "./upload";
-import * as videoCreate from "./video-create";
 
 const app = new Hono()
 	.basePath("/api/developer/sdk/v1")
 	.use(developerSdkCors)
 	.use(developerRateLimiter)
-	.route("/videos", videoCreate.app)
+	.use(refuseDeveloperPublicKey)
 	.route("/upload/multipart", upload.app)
 	.onError(developerApiError);
 

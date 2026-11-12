@@ -220,12 +220,13 @@ vi.mock("@/lib/server", async () => {
 });
 
 vi.mock("@/app/api/utils", () => ({
-	withDeveloperPublicAuth: async (
+	withDeveloperUploadToken: async (
 		c: { set: (key: string, value: unknown) => void },
 		next: () => Promise<void>,
 	) => {
 		c.set("developerAppId", "app-1");
-		c.set("developerKeyType", "public");
+		c.set("developerVideoId", "video-1");
+		c.set("developerUploadCompleted", false);
 		await next();
 	},
 }));

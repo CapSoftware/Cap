@@ -82,9 +82,10 @@ vi.mock("@/lib/server", async () => {
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
-		withDeveloperPublicAuth: createMiddleware(async (c, next) => {
+		withDeveloperUploadToken: createMiddleware(async (c, next) => {
 			c.set("developerAppId", "app-1");
-			c.set("developerKeyType", "public");
+			c.set("developerVideoId", "video-1");
+			c.set("developerUploadCompleted", false);
 			await next();
 		}),
 	};
