@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { CapRecorder } from "../src/index";
+import { createUpload } from "./create-upload";
 
 class Track {
 	readyState = "live";
@@ -92,7 +93,7 @@ test("destroy cancels pending camera startup without requesting the microphone",
 			: Promise.resolve(new Stream([microphone])),
 	);
 	setGlobal("navigator", { mediaDevices: { getUserMedia } });
-	const recorder = new CapRecorder({ publicKey: "fixture", mode: "camera" });
+	const recorder = new CapRecorder({ createUpload, mode: "camera" });
 
 	try {
 		const starting = recorder.start();
@@ -122,7 +123,7 @@ test("destroy releases the screen while microphone permission is pending", async
 		},
 	});
 	const recorder = new CapRecorder({
-		publicKey: "fixture",
+		createUpload,
 		camera: { enabled: false },
 	});
 
@@ -151,7 +152,7 @@ test("destroy releases streams returned before start resumes", async () => {
 		mediaDevices: { getUserMedia: () => permission.promise },
 	});
 	const recorder = new CapRecorder({
-		publicKey: "fixture",
+		createUpload,
 		mode: "camera",
 		microphone: { enabled: false },
 	});
@@ -181,7 +182,7 @@ test.each(["grant", "deny"] as const)(
 			.mockImplementationOnce(async () => new Stream([newScreen]));
 		setGlobal("navigator", { mediaDevices: { getDisplayMedia } });
 		const recorder = new CapRecorder({
-			publicKey: "fixture",
+			createUpload,
 			camera: { enabled: false },
 			microphone: { enabled: false },
 		});
@@ -240,7 +241,7 @@ test.each(["resolve", "reject"] as const)(
 			},
 		);
 		const recorder = new CapRecorder({
-			publicKey: "fixture",
+			createUpload,
 			camera: { enabled: false },
 			systemAudio: true,
 		});
@@ -272,7 +273,7 @@ test("an error handler can destroy and start a replacement recording", async () 
 		.mockResolvedValueOnce(new Stream([camera]));
 	setGlobal("navigator", { mediaDevices: { getDisplayMedia } });
 	const recorder = new CapRecorder({
-		publicKey: "fixture",
+		createUpload,
 		camera: { enabled: false },
 		microphone: { enabled: false },
 	});

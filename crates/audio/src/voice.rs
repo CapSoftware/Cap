@@ -193,10 +193,10 @@ impl VoiceEnhancer {
 }
 
 pub struct VoiceAudio {
-    samples: Vec<f32>,
-    channels: u16,
-    start: usize,
-    total_samples: usize,
+    pub(crate) samples: Vec<f32>,
+    pub(crate) channels: u16,
+    pub(crate) start: usize,
+    pub(crate) total_samples: usize,
 }
 
 impl VoiceAudio {

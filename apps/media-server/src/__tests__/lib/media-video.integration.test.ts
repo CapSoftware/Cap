@@ -1572,6 +1572,42 @@ describe("processVideo integration tests", () => {
 			rmSync(workDir, { recursive: true, force: true });
 		}
 	}, 120000);
+
+	test("keeps audio in a codec the probe cannot name, as AAC", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-unnamed-audio-"));
+		try {
+			const losslessPath = join(workDir, "input.mov");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"copy",
+				"-c:a",
+				"alac",
+				losslessPath,
+			]);
+
+			const metadata = await probeVideo(`file://${losslessPath}`);
+			expect(metadata.audioCodec).toBeNull();
+			expect(metadata.audioChannels).not.toBeNull();
+
+			for (const options of [{}, { remuxOnly: true }]) {
+				const tempFile = await processVideo(losslessPath, metadata, options);
+				tempFiles.push(tempFile.path);
+				const output = await probeVideo(`file://${tempFile.path}`);
+				expect(output.videoCodec).toBe("h264");
+				expect(output.audioCodec).toBe("aac");
+				expect(output.audioChannels).toBe(metadata.audioChannels);
+				await tempFile.cleanup();
+			}
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {

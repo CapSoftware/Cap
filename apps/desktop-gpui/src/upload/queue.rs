@@ -1223,6 +1223,8 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
     if !project.exists() {
         return Ok(());
     }
+    crate::library::ensure_not_recording_in_progress(&project)?;
+    let _deleting = crate::library::ProjectBeingDeleted::begin(&project)?;
     let canonical = project.canonicalize().map_err(|error| error.to_string())?;
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
@@ -1987,6 +1989,90 @@ mod tests {
         );
         assert_eq!(next.backend.transfers.load(Ordering::Acquire), 0);
         fixture.assert_retained();
+    }
+
+    #[test]
+    fn deleting_the_recording_in_progress_leaves_its_upload_and_files_alone() {
+        let fixture = Fixture::new();
+        let store = fixture.0.join("store");
+        std::fs::write(
+            &store,
+            serde_json::to_vec(&json!({
+                "general_settings": { "recordingsPath": fixture.0 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let worker_store = store.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+            })
+            .build()
+            .unwrap();
+        let before = read_state(&fixture.project()).unwrap().unwrap();
+
+        let recording = crate::library::RecordingInProgress::begin(&fixture.project());
+        assert_eq!(
+            runtime.block_on(delete_recording(fixture.project())),
+            Err(tr::dialog::delete_recording::recording_active().to_string())
+        );
+        fixture.assert_retained();
+        assert_eq!(
+            read_state(&fixture.project()).unwrap().unwrap().phase,
+            before.phase,
+            "the upload is not cancelled"
+        );
+
+        drop(recording);
+        runtime
+            .block_on(delete_recording(fixture.project()))
+            .unwrap();
+        assert!(!fixture.project().exists());
+    }
+
+    #[test]
+    fn deleting_a_recording_open_in_the_editor_leaves_its_upload_and_files_alone() {
+        let fixture = Fixture::new();
+        let store = fixture.0.join("store");
+        std::fs::write(
+            &store,
+            serde_json::to_vec(&json!({
+                "general_settings": { "recordingsPath": fixture.0 }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let worker_store = store.clone();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .on_thread_start(move || {
+                crate::store::set_test_tauri_store_path(Some(worker_store.clone()));
+            })
+            .build()
+            .unwrap();
+        let before = read_state(&fixture.project()).unwrap().unwrap();
+
+        let editor =
+            crate::library::ProjectOpenInEditor::begin(&fixture.project().canonicalize().unwrap())
+                .unwrap();
+        assert_eq!(
+            runtime.block_on(delete_recording(fixture.project())),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        fixture.assert_retained();
+        assert_eq!(
+            read_state(&fixture.project()).unwrap().unwrap().phase,
+            before.phase,
+            "the upload is not cancelled"
+        );
+
+        drop(editor);
+        runtime
+            .block_on(delete_recording(fixture.project()))
+            .unwrap();
+        assert!(!fixture.project().exists());
     }
 
     #[test]

@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractAudio } from "../../lib/media-audio";
+import { MediaInputPolicyError } from "../../lib/media-input-policy";
 import { probeVideo } from "../../lib/media-probe";
 import { downloadVideoToTemp, generateThumbnail } from "../../lib/media-video";
 import { verifyRecording } from "../../lib/recording-verification";
+import { BlockedUrlError } from "../../lib/url-policy";
 
 const video = readFileSync(
 	join(import.meta.dir, "..", "fixtures", "test-with-audio.mp4"),
@@ -61,8 +63,25 @@ describe("redirects to a private address", () => {
 		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
 		const target = privateRedirectServer();
 		try {
-			await expect(probeVideo(target.url)).rejects.toThrow("private address");
+			await expect(probeVideo(target.url)).rejects.toBeInstanceOf(
+				MediaInputPolicyError,
+			);
 			expect(target.firstHits()).toBeGreaterThan(0);
+			expect(target.secretHits()).toBe(0);
+		} finally {
+			target.server.stop(true);
+		}
+	});
+
+	test("probe preserves URL policy refusals before reading the input", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		const target = privateRedirectServer();
+		delete process.env.S3_INTERNAL_ENDPOINT;
+		try {
+			await expect(probeVideo(target.url)).rejects.toBeInstanceOf(
+				BlockedUrlError,
+			);
+			expect(target.firstHits()).toBe(0);
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);

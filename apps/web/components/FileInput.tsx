@@ -2,16 +2,14 @@
 
 import { Button, Input, LoadingSpinner } from "@cap/ui";
 import { ImageUpload } from "@cap/web-domain";
-import {
-	faCloudUpload,
-	faSpinner,
-	faTrash,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCloudUpload } from "@fortawesome/free-solid-svg-icons/faCloudUpload";
+import { faSpinner } from "@fortawesome/free-solid-svg-icons/faSpinner";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "./SignedImageUrl";
 import { Tooltip } from "./Tooltip";
 

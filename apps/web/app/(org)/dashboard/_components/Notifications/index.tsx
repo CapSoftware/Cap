@@ -1,13 +1,13 @@
 "use client";
 
-import { faBellSlash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBellSlash } from "@fortawesome/free-solid-svg-icons/faBellSlash";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { type MotionProps, motion } from "framer-motion";
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useApiClient } from "@/utils/web-api";
 import {
 	FilterLabels,
@@ -35,7 +35,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
 			queryKey: ["notifications", activeOrganization?.organization.id],
 			queryFn: async () => {
 				const resp = await api.notifications.get();
-				if (resp.status !== 200) {
+				if (!resp.ok) {
 					toast.error("Failed to fetch notifications");
 					return { notifications: [], count: {} };
 				}

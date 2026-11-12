@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 use reqwest::Method;
 use serde_json::{Map, Value, json};
@@ -5,7 +7,9 @@ use serde_json::{Map, Value, json};
 use crate::{
     OutputFormat, agent_client,
     caps::{AgentClient, opaque_id},
-    confirmation, resolve_format,
+    confirmation,
+    developer_media::{self, TranscriptOptions},
+    resolve_format,
 };
 
 #[derive(Args)]
@@ -26,6 +30,8 @@ enum DeveloperCommands {
     AutoTopUp(DeveloperAutoTopUpArgs),
     Credits(DeveloperCreditsArgs),
     Videos(DeveloperVideosArgs),
+    /// Turn audio or video into text, billed per audio hour from the app's credits
+    Transcripts(DeveloperTranscriptsArgs),
     Transactions(DeveloperTransactionsArgs),
 }
 
@@ -196,7 +202,143 @@ struct DeveloperVideosArgs {
 #[derive(Subcommand)]
 enum DeveloperVideoCommands {
     List(DeveloperVideoListArgs),
+    /// Upload a local video file to the app. Uploading is free; stored video is billed daily
+    Upload(DeveloperVideoUploadArgs),
     Delete(DeveloperVideoDeleteArgs),
+}
+
+#[derive(Args)]
+struct DeveloperVideoUploadArgs {
+    app: String,
+    file: PathBuf,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    user_id: Option<String>,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptsArgs {
+    #[command(subcommand)]
+    command: DeveloperTranscriptCommands,
+}
+
+#[derive(Subcommand)]
+enum DeveloperTranscriptCommands {
+    /// Transcribe a local file or a public URL
+    Create(DeveloperTranscriptCreateArgs),
+    /// Show a transcript with its status, cost and text
+    Get(DeveloperTranscriptGetArgs),
+    /// Print only the transcript text
+    Text(DeveloperTranscriptTargetArgs),
+    /// Wait until a transcript is complete
+    Wait(DeveloperTranscriptWaitArgs),
+    List(DeveloperTranscriptListArgs),
+    Delete(DeveloperTranscriptDeleteArgs),
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptCreateArgs {
+    app: String,
+    /// Local audio or video file, up to 2 GB
+    #[arg(long, conflicts_with = "url")]
+    file: Option<PathBuf>,
+    /// Public http or https URL of an audio or video file
+    #[arg(long, conflicts_with = "file")]
+    url: Option<String>,
+    #[arg(long)]
+    name: Option<String>,
+    /// Two-letter language code, or auto to detect it
+    #[arg(long)]
+    language: Option<String>,
+    #[arg(long)]
+    user_id: Option<String>,
+    /// Wait for the transcript and print its text
+    #[arg(long)]
+    wait: bool,
+    #[arg(long)]
+    timeout_seconds: Option<u64>,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptGetArgs {
+    app: String,
+    transcript: String,
+    /// Include timed segments
+    #[arg(long)]
+    segments: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptTargetArgs {
+    app: String,
+    transcript: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptWaitArgs {
+    app: String,
+    transcript: String,
+    #[arg(long)]
+    timeout_seconds: Option<u64>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptListArgs {
+    app: String,
+    #[arg(long)]
+    status: Option<String>,
+    #[arg(long)]
+    user_id: Option<String>,
+    #[arg(long)]
+    cursor: Option<String>,
+    #[arg(long, default_value_t = 50)]
+    limit: u16,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct DeveloperTranscriptDeleteArgs {
+    app: String,
+    transcript: String,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+fn print_transcript_text(value: &Value, format: OutputFormat) -> Result<(), String> {
+    match format {
+        OutputFormat::Json => agent_client::print_value(value, format),
+        OutputFormat::Text => {
+            if developer_media::transcript_has_no_speech(value) {
+                eprintln!("{}", developer_media::NO_SPEECH_NOTE);
+            }
+            println!(
+                "{}",
+                value
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            );
+            Ok(())
+        }
+    }
 }
 
 #[derive(Args)]
@@ -422,6 +564,24 @@ impl DevelopersArgs {
                     )
                     .await
                 }
+                DeveloperVideoCommands::Upload(args) => {
+                    confirmation::require(
+                        args.yes,
+                        "Upload the video to the app, where its storage is billed daily from the app's credits",
+                    )?;
+                    let client =
+                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let value = developer_media::upload_video(
+                        &client,
+                        &args.app,
+                        &args.file,
+                        args.name.as_deref(),
+                        args.user_id.as_deref(),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    agent_client::print_value(&value, resolve_format(global_json, args.format))
+                }
                 DeveloperVideoCommands::Delete(args) => {
                     confirmation::require(args.yes, "Delete the developer SDK video")?;
                     let id = opaque_id(&args.app, "Developer app ID")
@@ -431,6 +591,126 @@ impl DevelopersArgs {
                     agent_client::mutate_confirmed(
                         Method::DELETE,
                         &format!("/developer/apps/{id}/videos/{video_id}"),
+                        &json!({}),
+                        global_json,
+                        args.format,
+                    )
+                    .await
+                }
+            },
+            DeveloperCommands::Transcripts(args) => match args.command {
+                DeveloperTranscriptCommands::Create(args) => {
+                    confirmation::require(
+                        args.yes,
+                        "Create the transcript and charge the app's credits per audio hour",
+                    )?;
+                    let timeout = developer_media::validate_wait_seconds(args.timeout_seconds)
+                        .map_err(|error| error.to_string())?;
+                    let options = TranscriptOptions {
+                        name: args.name,
+                        language: args.language,
+                        user_id: args.user_id,
+                    };
+                    let client =
+                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let created = match (args.file, args.url) {
+                        (Some(file), None) => {
+                            developer_media::create_transcript_from_file(
+                                &client, &args.app, &file, &options,
+                            )
+                            .await
+                        }
+                        (None, Some(url)) => {
+                            developer_media::create_transcript_from_url(
+                                &client, &args.app, &url, &options,
+                            )
+                            .await
+                        }
+                        _ => return Err("Provide exactly one of --file or --url".to_string()),
+                    }
+                    .map_err(|error| error.to_string())?;
+                    let format = resolve_format(global_json, args.format);
+                    if !args.wait {
+                        return agent_client::print_value(&created, format);
+                    }
+                    let id = created
+                        .get("transcript")
+                        .and_then(|transcript| transcript.get("id"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "Cap returned a transcript without an ID".to_string())?;
+                    let value =
+                        developer_media::wait_for_transcript(&client, &args.app, id, timeout)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    print_transcript_text(&value, format)
+                }
+                DeveloperTranscriptCommands::Get(args) => {
+                    let path = developer_media::transcript_path(
+                        &args.app,
+                        &args.transcript,
+                        args.segments,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    agent_client::read(&path, global_json, args.format).await
+                }
+                DeveloperTranscriptCommands::Text(args) => {
+                    let path = developer_media::transcript_path(&args.app, &args.transcript, false)
+                        .map_err(|error| error.to_string())?;
+                    let client =
+                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let value = client
+                        .get_json(&path)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    match developer_media::transcript_status(&value) {
+                        Some("complete") => {
+                            print_transcript_text(&value, resolve_format(global_json, args.format))
+                        }
+                        Some("error") => Err(developer_media::transcript_failure(&value).to_string()),
+                        _ => Err("NOT_READY: The transcript is not complete yet. Run `cap developers transcripts wait`.".to_string()),
+                    }
+                }
+                DeveloperTranscriptCommands::Wait(args) => {
+                    let timeout = developer_media::validate_wait_seconds(args.timeout_seconds)
+                        .map_err(|error| error.to_string())?;
+                    let client =
+                        AgentClient::from_credentials().map_err(|error| error.to_string())?;
+                    let value = developer_media::wait_for_transcript(
+                        &client,
+                        &args.app,
+                        &args.transcript,
+                        timeout,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    agent_client::print_value(&value, resolve_format(global_json, args.format))
+                }
+                DeveloperTranscriptCommands::List(args) => {
+                    if !(1..=100).contains(&args.limit) {
+                        return Err("--limit must be between 1 and 100".to_string());
+                    }
+                    let id = opaque_id(&args.app, "Developer app ID")
+                        .map_err(|error| error.to_string())?;
+                    let query = agent_client::query(&[
+                        ("status", args.status),
+                        ("userId", args.user_id),
+                        ("cursor", args.cursor),
+                        ("limit", Some(args.limit.to_string())),
+                    ]);
+                    agent_client::read(
+                        &format!("/developer/apps/{id}/transcripts?{query}"),
+                        global_json,
+                        args.format,
+                    )
+                    .await
+                }
+                DeveloperTranscriptCommands::Delete(args) => {
+                    confirmation::require(args.yes, "Delete the transcript")?;
+                    let path = developer_media::transcript_path(&args.app, &args.transcript, false)
+                        .map_err(|error| error.to_string())?;
+                    agent_client::mutate_confirmed(
+                        Method::DELETE,
+                        &path,
                         &json!({}),
                         global_json,
                         args.format,

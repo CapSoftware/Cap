@@ -75,6 +75,7 @@ async function render(
 		currentFolderId: null,
 	},
 	organizationId?: Organisation.OrganisationId,
+	open = true,
 ) {
 	await act(async () => {
 		root.render(
@@ -82,7 +83,7 @@ async function render(
 				QueryClientProvider,
 				{ client: queryClient },
 				React.createElement(MoveItemsDialog, {
-					open: true,
+					open,
 					onOpenChange: mocks.close,
 					location: { type: "personal" },
 					rootLabel: "My Caps",
@@ -161,5 +162,35 @@ describe("moving Caps from My Caps to a team location", () => {
 		expect(document.querySelector("select")).toBeNull();
 		expect(mocks.destinations).not.toHaveBeenCalled();
 		expect(mocks.folders).toHaveBeenCalledWith({ type: "personal" });
+	});
+});
+
+describe("reopening the Move dialog", () => {
+	it("lists a folder created since it was last open", async () => {
+		await render();
+		await chooseTeam();
+		expect(document.body.textContent).not.toContain("New team folder");
+		await render(undefined, undefined, false);
+
+		mocks.destinations.mockResolvedValue([
+			{ name: "My Caps", location: { type: "personal" }, folders: [] },
+			{
+				name: "All team members",
+				location: { type: "organization" },
+				folders: [
+					{ id: folderId, name: "Team folder", parentId: null },
+					{
+						id: Folder.FolderId.make("new-team-folder"),
+						name: "New team folder",
+						parentId: null,
+					},
+				],
+			},
+		]);
+		await render();
+		await chooseTeam();
+
+		expect(mocks.destinations).toHaveBeenCalledTimes(2);
+		expect(document.body.textContent).toContain("New team folder");
 	});
 });

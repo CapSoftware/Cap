@@ -9,13 +9,13 @@ import {
 } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { faGear } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGear } from "@fortawesome/free-solid-svg-icons/faGear";
 import clsx from "clsx";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../Contexts";
 import type { OrganizationSettings } from "../../dashboard-data";
@@ -31,9 +31,11 @@ interface SettingsDialogProps {
 	onSaved?: () => void;
 }
 
+type SettingKey = ViewerSettingKey | "disableDownloads";
+
 const options: {
 	label: string;
-	value: ViewerSettingKey;
+	value: SettingKey;
 	description: string;
 	pro?: boolean;
 }[] = [
@@ -70,6 +72,11 @@ const options: {
 		description: "Enabling this also allows summary and chapters",
 		pro: true,
 	},
+	{
+		label: "Enable downloads",
+		value: "disableDownloads",
+		description: "Allow viewers to download this cap",
+	},
 ];
 
 export const SettingsDialog = ({
@@ -95,6 +102,7 @@ export const SettingsDialog = ({
 			disableChapters: data?.disableChapters,
 			disableReactions: data?.disableReactions,
 			disableTranscript: data?.disableTranscript,
+			disableDownloads: data?.disableDownloads,
 			defaultPlaybackSpeed: data?.defaultPlaybackSpeed,
 		}),
 		[],
@@ -130,7 +138,7 @@ export const SettingsDialog = ({
 	};
 
 	const toggleSettingHandler = useCallback(
-		(value: ViewerSettingKey) => {
+		(value: SettingKey) => {
 			setSettings((prev) => {
 				const key = value;
 				const currentValue = prev?.[key];
@@ -156,9 +164,18 @@ export const SettingsDialog = ({
 		[organizationSettings],
 	);
 
-	const getEffectiveValue = (key: ViewerSettingKey) => {
-		const inheritedSources = inheritedSpaceSettings?.[key];
+	const getInheritedSources = (key: SettingKey) =>
+		key === "disableDownloads" ? undefined : inheritedSpaceSettings?.[key];
+
+	// Downloads turned off for the organization stay off on every cap.
+	const isLockedByOrganization = (key: SettingKey) =>
+		key === "disableDownloads" &&
+		organizationSettings?.disableDownloads === true;
+
+	const getEffectiveValue = (key: SettingKey) => {
+		const inheritedSources = getInheritedSources(key);
 		if (inheritedSources && inheritedSources.length > 0) return true;
+		if (isLockedByOrganization(key)) return true;
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
 		return videoValue !== undefined || videoValue === true
@@ -166,8 +183,8 @@ export const SettingsDialog = ({
 			: orgValue;
 	};
 
-	const getInheritedLabel = (key: ViewerSettingKey) => {
-		const sources = inheritedSpaceSettings?.[key];
+	const getInheritedLabel = (key: SettingKey) => {
+		const sources = getInheritedSources(key);
 		if (!sources || sources.length === 0) return null;
 		if (sources.length === 1) return `Required by ${sources[0]?.name}`;
 		return `Required by ${sources.length} spaces`;
@@ -191,7 +208,7 @@ export const SettingsDialog = ({
 					<DialogTitle>Settings</DialogTitle>
 				</DialogHeader>
 				<div className="grid grid-cols-2 gap-3 p-5">
-					{options.map((option) => {
+					{options.map((option, index) => {
 						const key = option.value;
 						const effectiveValue = getEffectiveValue(key);
 						const orgValue = organizationSettings?.[key] ?? false;
@@ -199,7 +216,12 @@ export const SettingsDialog = ({
 						return (
 							<div
 								key={option.value}
-								className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
+								className={clsx(
+									"flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1",
+									options.length % 2 === 1 &&
+										index === options.length - 1 &&
+										"col-span-2",
+								)}
 							>
 								<div
 									className={clsx(
@@ -226,6 +248,7 @@ export const SettingsDialog = ({
 								<Switch
 									disabled={
 										Boolean(inheritedLabel) ||
+										isLockedByOrganization(key) ||
 										(option.pro && !user?.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue("disableTranscript"))

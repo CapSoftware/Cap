@@ -15,7 +15,10 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::caps::{AgentApiError, AgentClient, cap_id, opaque_id};
+use crate::{
+    caps::{AgentApiError, AgentClient, cap_id, opaque_id},
+    developer_media::{self, TranscriptOptions},
+};
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -363,6 +366,73 @@ struct DeveloperVideoListInput {
 struct DeveloperVideoDeleteInput {
     app_id: String,
     video_id: String,
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperVideoUploadInput {
+    app_id: String,
+    file_path: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperTranscriptCreateInput {
+    app_id: String,
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    wait: bool,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperTranscriptInput {
+    app_id: String,
+    transcript_id: String,
+    #[serde(default)]
+    include_segments: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperTranscriptWaitInput {
+    app_id: String,
+    transcript_id: String,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperTranscriptListInput {
+    app_id: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeveloperTranscriptDeleteInput {
+    app_id: String,
+    transcript_id: String,
     confirmed: bool,
 }
 
@@ -2392,6 +2462,236 @@ impl CapMcpServer {
     }
 
     #[tool(
+        name = "developer_video_upload",
+        description = "Upload a local video file to a developer app after explicit user confirmation. Only files that contain a video stream are accepted. Uploading is free and the stored video is billed daily from the app's credits. Returns the video, which is processing until its playback files are ready",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_video_upload(
+        &self,
+        Parameters(input): Parameters<DeveloperVideoUploadInput>,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        if let Some(result) = Self::require_confirmation(
+            input.confirmed,
+            "upload the video, whose storage is billed daily from the app's credits",
+        ) {
+            return result;
+        }
+        let upload = developer_media::upload_video(
+            &self.client,
+            &input.app_id,
+            std::path::Path::new(&input.file_path),
+            input.name.as_deref(),
+            input.user_id.as_deref(),
+        );
+        Self::result(tokio::select! {
+            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
+            result = upload => result,
+        })
+    }
+
+    #[tool(
+        name = "developer_transcript_create",
+        description = "Turn a local audio or video file (file_path) or a public URL (url) into text after explicit user confirmation. Only files that contain an audio track are accepted. Charges the app's credits per audio hour. Audio with no speech is billed for its length and completes with empty text and a wordCount of 0; a transcript that fails is not charged. Set wait=true to block until the text is ready and return it",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_transcript_create(
+        &self,
+        Parameters(input): Parameters<DeveloperTranscriptCreateInput>,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        if let Some(result) = Self::require_confirmation(
+            input.confirmed,
+            "create the transcript and charge the app's credits",
+        ) {
+            return result;
+        }
+        let timeout = match developer_media::validate_wait_seconds(input.timeout_seconds) {
+            Ok(timeout) => timeout,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let options = TranscriptOptions {
+            name: input.name,
+            language: input.language,
+            user_id: input.user_id,
+        };
+        let work = async {
+            let created = match (input.file_path.as_deref(), input.url.as_deref()) {
+                (Some(file_path), None) => {
+                    developer_media::create_transcript_from_file(
+                        &self.client,
+                        &input.app_id,
+                        std::path::Path::new(file_path),
+                        &options,
+                    )
+                    .await?
+                }
+                (None, Some(url)) => {
+                    developer_media::create_transcript_from_url(
+                        &self.client,
+                        &input.app_id,
+                        url,
+                        &options,
+                    )
+                    .await?
+                }
+                _ => return Err(Self::invalid("provide exactly one of file_path or url")),
+            };
+            if !input.wait {
+                return Ok(created);
+            }
+            let id = created
+                .get("transcript")
+                .and_then(|transcript| transcript.get("id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| Self::invalid("Cap returned a transcript without an ID"))?;
+            developer_media::wait_for_transcript(&self.client, &input.app_id, id, timeout).await
+        };
+        Self::result(tokio::select! {
+            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
+            result = work => result,
+        })
+    }
+
+    #[tool(
+        name = "developer_transcript_get",
+        description = "Get a developer transcript with its status, duration, cost and text. A complete transcript with empty text and a wordCount of 0 had no speech and was billed for its length. Set include_segments=true for timed segments",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_transcript_get(
+        &self,
+        Parameters(input): Parameters<DeveloperTranscriptInput>,
+    ) -> CallToolResult {
+        let path = match developer_media::transcript_path(
+            &input.app_id,
+            &input.transcript_id,
+            input.include_segments,
+        ) {
+            Ok(path) => path,
+            Err(error) => return Self::result(Err(error)),
+        };
+        Self::result(self.client.get_json(&path).await)
+    }
+
+    #[tool(
+        name = "developer_transcript_wait",
+        description = "Wait until a developer transcript is complete and return it with its text. Never starts or charges for a transcript",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_transcript_wait(
+        &self,
+        Parameters(input): Parameters<DeveloperTranscriptWaitInput>,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        let timeout = match developer_media::validate_wait_seconds(input.timeout_seconds) {
+            Ok(timeout) => timeout,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let wait = developer_media::wait_for_transcript(
+            &self.client,
+            &input.app_id,
+            &input.transcript_id,
+            timeout,
+        );
+        Self::result(tokio::select! {
+            _ = context.ct.cancelled() => Err(Self::invalid("The MCP request was cancelled")),
+            result = wait => result,
+        })
+    }
+
+    #[tool(
+        name = "developer_transcripts_list",
+        description = "List transcripts for a developer app with cursor pagination and optional status and external user ID filters. Does not return transcript text",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_transcripts_list(
+        &self,
+        Parameters(input): Parameters<DeveloperTranscriptListInput>,
+    ) -> CallToolResult {
+        let id = match opaque_id(&input.app_id, "Developer app ID") {
+            Ok(id) => id,
+            Err(error) => return Self::result(Err(error)),
+        };
+        let limit = input.limit.unwrap_or(50);
+        if !(1..=100).contains(&limit) {
+            return Self::result(Err(Self::invalid("limit must be between 1 and 100")));
+        }
+        let query = {
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer.append_pair("limit", &limit.to_string());
+            if let Some(status) = input.status {
+                serializer.append_pair("status", &status);
+            }
+            if let Some(user_id) = input.user_id {
+                serializer.append_pair("userId", &user_id);
+            }
+            if let Some(cursor) = input.cursor {
+                serializer.append_pair("cursor", &cursor);
+            }
+            serializer.finish()
+        };
+        Self::result(
+            self.client
+                .get_json(&format!("/developer/apps/{id}/transcripts?{query}"))
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "developer_transcript_delete",
+        description = "Delete a developer transcript and its stored result after explicit user confirmation",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn developer_transcript_delete(
+        &self,
+        Parameters(input): Parameters<DeveloperTranscriptDeleteInput>,
+    ) -> CallToolResult {
+        if let Some(result) = Self::require_confirmation(input.confirmed, "delete the transcript") {
+            return result;
+        }
+        let path =
+            match developer_media::transcript_path(&input.app_id, &input.transcript_id, false) {
+                Ok(path) => path,
+                Err(error) => return Self::result(Err(error)),
+            };
+        Self::result(
+            self.client
+                .mutate_json_confirmed(Method::DELETE, &path, &json!({}))
+                .await,
+        )
+    }
+
+    #[tool(
         name = "developer_app_update",
         description = "Update developer app metadata after explicit user confirmation",
         annotations(
@@ -3477,7 +3777,7 @@ impl ServerHandler for CapMcpServer {
         )
         .with_server_info(Implementation::new("cap", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Use Cap resources for large transcript and activity data. Passwords, S3 credentials, image files, and newly issued developer credentials are never accepted or returned by MCP; use the corresponding `cap caps`, `cap organizations`, `cap account`, or `cap developers` command in a secure terminal.",
+            "Use Cap resources for large transcript and activity data. Passwords, S3 credentials, image files, and newly issued developer credentials are never accepted or returned by MCP; use the corresponding `cap caps`, `cap organizations`, `cap account`, or `cap developers` command in a secure terminal. Developer video uploads and transcripts take a local file path or a public URL, spend the app's credits, and never return signed upload URLs.",
         )
     }
 

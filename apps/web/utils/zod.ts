@@ -10,3 +10,8 @@ export const stringOrNumberOptional = z.preprocess((val) => {
 	}
 	return val; // numbers pass through
 }, z.number().optional());
+
+// zod 4's .int() also rejects integers beyond Number.MAX_SAFE_INTEGER, which
+// zod 3 accepted; this keeps the zod 3 check.
+export const integer = () =>
+	z.number().refine(Number.isInteger, "Expected integer, received float");

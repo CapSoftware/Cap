@@ -2,8 +2,7 @@
 // effect runtime (~250 KB gz) into the share page's entry chunk. The branded
 // ids carry no constraints, so plain casts replace `.make()` losslessly.
 import type { Comment, User, Video } from "@cap/web-domain";
-import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCommentSlash } from "@fortawesome/free-solid-svg-icons/faCommentSlash";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
@@ -20,6 +19,7 @@ import {
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { CommentType } from "../../../Share";
 import { ActivityComposer } from "./ActivityComposer";
 import CommentComponent from "./Comment";
@@ -134,19 +134,15 @@ export const Comments = Object.assign(
 				setOptimisticComments(optimisticComment);
 			});
 
-			try {
-				const data = await newComment({
-					content,
-					videoId,
-					authorImage: user.imageUrl,
-					parentCommentId: "" as Comment.CommentId,
-					type: "text",
-					timestamp: currentTime,
-				});
-				handleCommentSuccess(data);
-			} catch (error) {
-				console.error("Error posting comment:", error);
-			}
+			const data = await newComment({
+				content,
+				videoId,
+				authorImage: user.imageUrl,
+				parentCommentId: "" as Comment.CommentId,
+				type: "text",
+				timestamp: currentTime,
+			});
+			handleCommentSuccess(data);
 		};
 
 		const handleReply = useCallback(
@@ -187,29 +183,25 @@ export const Comments = Object.assign(
 					setOptimisticComments(optimisticReply);
 				});
 
-				try {
-					const data = await newComment({
-						content,
-						videoId,
-						parentCommentId: actualParentId,
-						type: "text",
-						timestamp: currentTime,
-						authorImage: user.imageUrl,
+				const data = await newComment({
+					content,
+					videoId,
+					parentCommentId: actualParentId,
+					type: "text",
+					timestamp: currentTime,
+					authorImage: user.imageUrl,
+				});
+
+				handleCommentSuccess(data);
+
+				const newReplyElement = document.getElementById(`comment-${data.id}`);
+				if (newReplyElement) {
+					newReplyElement.scrollIntoView({
+						behavior: "smooth",
+						block: "center",
 					});
-
-					handleCommentSuccess(data);
-
-					const newReplyElement = document.getElementById(`comment-${data.id}`);
-					if (newReplyElement) {
-						newReplyElement.scrollIntoView({
-							behavior: "smooth",
-							block: "center",
-						});
-					}
-					setReplyingTo(null);
-				} catch (error) {
-					console.error("Error posting reply:", error);
 				}
+				setReplyingTo(null);
 			},
 			[
 				user,
@@ -313,7 +305,7 @@ export const Comments = Object.assign(
 			props: PropsWithChildren<{
 				setShowAuthOverlay: (v: boolean) => void;
 				commentInputProps?: {
-					onSubmit?: (content: string) => void;
+					onSubmit?: (content: string) => void | Promise<void>;
 					disabled?: boolean;
 				};
 				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
