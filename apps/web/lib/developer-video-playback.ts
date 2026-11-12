@@ -13,13 +13,17 @@ import {
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
+import { getInfraAppStanding } from "./infra-standing";
 
 const PLAYBACK_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const HLS_FILE_PATTERN = /^[A-Za-z0-9_-]+\.(m3u8|m4s)$/;
 const MEDIA_FILE_PATTERN = /^[A-Za-z0-9_-]+\.m4s$/;
 
 const SIGNED_URL_SECONDS = 12 * 60 * 60;
-const CACHE_SECONDS = 300;
+// How long an answer may be served from a shared cache. It bounds how long a
+// deleted video keeps answering new viewers, and how long a paused app waits
+// for playback after a top-up.
+const CACHE_SECONDS = 60;
 
 export const PLAYBACK_CORS_HEADERS = {
 	"Access-Control-Allow-Origin": "*",
@@ -38,6 +42,20 @@ function notFound(): Response {
 		status: 404,
 		headers: { ...PLAYBACK_CORS_HEADERS, "Cache-Control": "no-store" },
 	});
+}
+
+function paused(): Response {
+	return new Response(
+		"Playback is paused because the account that hosts this video is out of credit.",
+		{
+			status: 402,
+			headers: {
+				...PLAYBACK_CORS_HEADERS,
+				...CACHEABLE,
+				"Content-Type": "text/plain; charset=utf-8",
+			},
+		},
+	);
 }
 
 async function redirectTo(key: string, request: Request): Promise<Response> {
@@ -114,6 +132,9 @@ export async function developerPlaybackResponse(
 
 	const video = await findPlayableVideo(playbackId);
 	if (!video?.processing) return notFound();
+	if ((await getInfraAppStanding(video.appId)).state === "paused") {
+		return paused();
+	}
 
 	const { processing } = video;
 	const outputs = developerVideoOutputs(video);

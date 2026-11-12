@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	readText: vi.fn(),
 	sign: vi.fn(),
+	standing: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -21,6 +22,9 @@ vi.mock("@cap/database", async () => {
 });
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://web.example" }),
+}));
+vi.mock("@/lib/infra-standing", () => ({
+	getInfraAppStanding: mocks.standing,
 }));
 vi.mock("@/lib/developer-video-storage", () => ({
 	readDeveloperVideoText: mocks.readText,
@@ -77,6 +81,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.store.video = ready();
 	mocks.store.appDeleted = false;
+	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
 	mocks.sign.mockImplementation(
 		async (key: string, expiresIn: number) =>
 			`https://cdn.example/${key}?expires=${expiresIn}&sig=a,b`,
@@ -102,7 +107,7 @@ describe("developer video playback route", () => {
 		);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("cache-control")).toBe(
-			"public, max-age=300, s-maxage=300",
+			"public, max-age=60, s-maxage=60",
 		);
 	});
 
@@ -148,7 +153,7 @@ describe("developer video playback route", () => {
 			`https://cdn.example/${key}?expires=43200&sig=a,b`,
 		);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
-		expect(response.headers.get("cache-control")).toContain("max-age=300");
+		expect(response.headers.get("cache-control")).toContain("max-age=60");
 	});
 
 	it.each([
@@ -186,6 +191,45 @@ describe("developer video playback route", () => {
 			expect((await play(file)).status).toBe(404);
 		}
 		expect(mocks.sign).not.toHaveBeenCalled();
+	});
+
+	it("refuses every file of a paused app and says why", async () => {
+		mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+
+		for (const file of [
+			"master.m3u8",
+			"1080p.m3u8",
+			"1080p.m4s",
+			"video.mp4",
+			"poster.jpg",
+		]) {
+			const response = await play(file);
+			expect(response.status).toBe(402);
+			expect(await response.text()).toContain("out of credit");
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
+		}
+		expect(mocks.standing).toHaveBeenCalledWith("app-1");
+		expect(mocks.sign).not.toHaveBeenCalled();
+	});
+
+	it("keeps playing during the grace period", async () => {
+		mocks.standing.mockResolvedValue({
+			state: "grace",
+			pausesAt: new Date("2026-12-01T00:00:00Z"),
+		});
+
+		expect((await play("video.mp4")).status).toBe(302);
+		expect((await play("master.m3u8")).status).toBe(200);
+	});
+
+	it("does not look up standing for a video that does not exist", async () => {
+		mocks.store.video = null;
+
+		expect((await play("video.mp4")).status).toBe(404);
+		expect(mocks.standing).not.toHaveBeenCalled();
 	});
 
 	it("answers 404 once the app is deleted", async () => {
