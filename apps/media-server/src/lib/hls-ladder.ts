@@ -1,4 +1,9 @@
-import { type HdrTransfer, hdrToSdrFilter, SDR_COLOR_ARGS } from "./hdr";
+import {
+	type HdrColor,
+	type HdrTransfer,
+	hdrToSdrFilter,
+	SDR_COLOR_ARGS,
+} from "./hdr";
 import { NVENC_HWACCEL_INPUT_ARGS, type NvencOptions } from "./nvenc-encoder";
 
 export const HLS_LADDER_MASTER_PLAYLIST = "master.m3u8";
@@ -208,6 +213,7 @@ export interface HlsLadderArgsInput {
 	nvenc?: { options: NvencOptions; gpuDecode: boolean } | null;
 	range?: HlsLadderRange | null;
 	hdr?: HdrTransfer | null;
+	hdrColor?: HdrColor | null;
 }
 
 // An HDR source is converted on the CPU, so it is never decoded on the GPU.
@@ -278,7 +284,9 @@ function sliceTrimFilter(range: HlsLadderRange | null | undefined): string {
 
 function ladderFilterGraph(input: HlsLadderArgsInput): string {
 	const { rungs, nvenc } = input;
-	const toSdr = input.hdr ? `${hdrToSdrFilter(input.hdr, rungs[0])},` : "";
+	const toSdr = input.hdr
+		? `${hdrToSdrFilter(input.hdr, rungs[0], input.hdrColor)},`
+		: "";
 	const fpsFilter = `fps=${hlsLadderFrameRate(input.sourceFps)},${sliceTrimFilter(input.range)}${toSdr}`;
 	const head = nvenc
 		? decodesOnGpu(input)

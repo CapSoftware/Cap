@@ -335,6 +335,64 @@ describe("buildHlsLadderArgs", () => {
 		);
 	});
 
+	test("converts an HDR source from the colours it declares", () => {
+		const filter = (hdrColor: HlsLadderArgsInput["hdrColor"]) =>
+			valueAfter(
+				buildHlsLadderArgs(
+					argsInput({ videoCodec: "hevc", hdr: "arib-std-b67", hdrColor }),
+				),
+				"-filter_complex",
+			);
+		const head = (primaries: string, matrix: string) =>
+			`[0:v]fps=30,zscale=w=1920:h=1080:tin=arib-std-b67:pin=${primaries}:min=${matrix}:t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,`;
+		expect(filter({ primaries: "bt709", matrix: "bt709" })).toStartWith(
+			head("bt709", "bt709"),
+		);
+		expect(filter({ primaries: "smpte432", matrix: "bt2020nc" })).toStartWith(
+			head("smpte432", "bt2020nc"),
+		);
+		expect(filter({ primaries: "bt2020", matrix: "ictcp" })).toStartWith(
+			head("bt2020", "ictcp"),
+		);
+	});
+
+	test("treats missing or unusable HDR colour tags as BT.2020", () => {
+		const filter = (hdrColor: HlsLadderArgsInput["hdrColor"]) =>
+			valueAfter(
+				buildHlsLadderArgs(
+					argsInput({ videoCodec: "hevc", hdr: "smpte2084", hdrColor }),
+				),
+				"-filter_complex",
+			);
+		const tagged = filter({ primaries: "bt2020", matrix: "bt2020nc" });
+		expect(tagged).toContain(
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:min=bt2020nc:t=linear:npl=203,",
+		);
+		expect(filter(undefined)).toBe(tagged);
+		expect(filter(null)).toBe(tagged);
+		expect(filter({ primaries: "bt2020", matrix: null })).toBe(tagged);
+		expect(filter({ primaries: "bt2020", matrix: "smpte2085" })).toBe(tagged);
+
+		const untagged = filter({ primaries: null, matrix: null });
+		expect(untagged).toContain(
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:p=bt2020:min=bt2020nc:t=linear:npl=203,",
+		);
+		expect(untagged.replace(":p=bt2020", "")).toBe(tagged);
+		expect(filter({})).toBe(untagged);
+		expect(filter({ primaries: "unknown", matrix: "unknown" })).toBe(untagged);
+		expect(filter({ primaries: "reserved", matrix: "bt2020nc" })).toBe(
+			untagged,
+		);
+	});
+
+	test("ignores declared colours on a standard range source", () => {
+		expect(
+			buildHlsLadderArgs(
+				argsInput({ hdrColor: { primaries: "bt709", matrix: "bt709" } }),
+			),
+		).toEqual(buildHlsLadderArgs(argsInput()));
+	});
+
 	test("leaves a standard range source exactly as it was", () => {
 		for (const nvenc of [
 			null,

@@ -23,7 +23,7 @@ import {
 import { probeFastestFrameRate } from "./media-probe";
 import {
 	getProcessTimeoutMs,
-	probeVideoSourceTraits,
+	requireVideoSourceTraits,
 	runTranscodeCommand,
 	sourceHasAudio,
 } from "./media-video";
@@ -86,8 +86,8 @@ export async function encodeHlsLadder(
 	abortSignal?: AbortSignal,
 ): Promise<EncodedHlsLadder> {
 	abortSignal?.throwIfAborted();
-	const [{ rotation, hdr }, fastestFps] = await Promise.all([
-		probeVideoSourceTraits(inputPath, abortSignal),
+	const [{ rotation, hdr, hdrColor }, fastestFps] = await Promise.all([
+		requireVideoSourceTraits(inputPath, abortSignal),
 		probeFastestFrameRate(inputPath, abortSignal).catch((error) => {
 			if (!abortSignal?.aborted) {
 				console.warn(
@@ -137,6 +137,7 @@ export async function encodeHlsLadder(
 		rungs,
 		range,
 		hdr,
+		hdrColor,
 	};
 
 	const encodeVideo = async (): Promise<"nvenc" | "libx264"> => {
