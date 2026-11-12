@@ -178,26 +178,57 @@ describe("creating an upload with the secret key", () => {
 		expect(state.admission).toHaveBeenCalledExactlyOnceWith("app1");
 	});
 
+	const storedUserId = () => {
+		const [query, params] = inserts()[0] ?? [];
+		const text = String(query);
+		const columns = [
+			...(
+				text.slice(text.indexOf("("), text.indexOf(") values")) ?? ""
+			).matchAll(/`(\w+)`/g),
+		].map((match) => match[1]);
+		const values = text
+			.slice(
+				text.indexOf("values (") + "values (".length,
+				text.lastIndexOf(")"),
+			)
+			.split(",")
+			.map((value) => value.trim());
+		const index = columns.indexOf("externalUserId");
+		if (index < 0 || values.length !== columns.length) {
+			throw new Error("Could not read the inserted columns");
+		}
+		if (values[index] !== "?") return values[index];
+		const bound = values
+			.slice(0, index)
+			.filter((value) => value === "?").length;
+		return (params as unknown[])[bound];
+	};
+
+	it("stores a plain user id as sent", async () => {
+		await created({ name: "Demo", userId: "user_42" });
+
+		expect(storedUserId()).toBe("user_42");
+	});
+
 	it.each([
 		["  user_42  ", "user_42"],
 		["user_42\n", "user_42"],
 	])("stores the user id %j without its padding", async (sent, stored) => {
 		await created({ name: "Demo", userId: sent });
 
-		const [, params] = inserts()[0] ?? [];
-		expect(params).toContain(stored);
-		expect(params).not.toContain(sent);
+		expect(storedUserId()).toBe(stored);
 	});
 
 	it.each(["", "   "])("stores no user id for %j", async (sent) => {
 		await created({ name: "Demo", userId: sent });
 
-		const [query, params] = inserts()[0] ?? [];
-		expect(params).not.toContain(sent);
-		expect(String(query)).toMatch(/^insert/);
-		expect(
-			(params as unknown[]).filter((value) => typeof value === "string"),
-		).not.toContain("");
+		expect(storedUserId()).toBeNull();
+	});
+
+	it("stores no user id when none is sent", async () => {
+		await created({ name: "Demo" });
+
+		expect(storedUserId()).toBeNull();
 	});
 
 	it("refuses with 402 and makes neither a video nor a token when the app cannot take an upload", async () => {
