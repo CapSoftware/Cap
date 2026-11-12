@@ -51,6 +51,7 @@ import {
 	developerCreditTransactions,
 	developerTranscripts,
 } from "@cap/database/schema";
+import { debitDeveloperUsage } from "@/lib/developer-credits";
 import {
 	getAvailableTranscriptBalance,
 	hasMinimumTranscriptBalance,
@@ -375,6 +376,132 @@ describe("transcript holds", () => {
 			state: "insufficient_credits",
 		});
 		expect(await getAvailableTranscriptBalance("app-1")).toBeNull();
+	});
+});
+
+describe("holds and other usage", () => {
+	const reserve = (transcriptId: string, durationSeconds: number) =>
+		reserveTranscriptCredits({ transcriptId, durationSeconds });
+	const otherUsage = (microCredits: number, referenceId: string) =>
+		(
+			fake().db as {
+				transaction: <T>(run: (tx: never) => Promise<T>) => Promise<T>;
+			}
+		).transaction((tx) =>
+			debitDeveloperUsage(tx, {
+				appId: "app-1",
+				microCredits,
+				type: "video_create",
+				referenceId,
+				referenceType: "developer_video",
+			}),
+		);
+	const setBalance = (value: number) => {
+		const current = account();
+		if (current) current.balanceMicroCredits = value;
+	};
+
+	it("does not let other usage spend credits held for a running transcript", async () => {
+		setBalance(12_000);
+		await reserve("tr-1", ONE_HOUR);
+
+		expect(await otherUsage(5_000, "video-1")).toEqual({
+			state: "insufficient",
+		});
+		expect(account()?.balanceMicroCredits).toBe(12_000);
+		expect(await otherUsage(2_000, "video-2")).toMatchObject({
+			state: "debited",
+			balanceAfter: 10_000,
+		});
+
+		expect(await settle()).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(account()?.balanceMicroCredits).toBe(0);
+	});
+
+	it("settles a held transcript even when other usage raced it", async () => {
+		setBalance(20_000);
+		await reserve("tr-1", ONE_HOUR);
+
+		const [settled, ...videos] = await Promise.all([
+			settle(),
+			...Array.from({ length: 6 }, (_, index) =>
+				otherUsage(5_000, `video-${index}`),
+			),
+		]);
+
+		expect(settled).toMatchObject({ state: "complete" });
+		expect(videos.filter((video) => video.state === "debited")).toHaveLength(2);
+		expect(account()?.balanceMicroCredits).toBe(0);
+		expect(transcript()).toMatchObject({
+			status: "complete",
+			billedMicroCredits: 10_000,
+		});
+	});
+
+	it("frees held credits for other usage once the transcript is settled or failed", async () => {
+		setBalance(12_000);
+		await reserve("tr-1", ONE_HOUR);
+		expect((await otherUsage(5_000, "video-1")).state).toBe("insufficient");
+
+		const current = transcript();
+		if (current) current.status = "error";
+		expect((await otherUsage(5_000, "video-1")).state).toBe("debited");
+	});
+
+	it("does not count its own hold against its settle", async () => {
+		setBalance(10_000);
+		await reserve("tr-1", ONE_HOUR);
+		expect((await settle()).state).toBe("complete");
+	});
+
+	it("still counts other transcripts' holds against a settle", async () => {
+		addTranscript("tr-2");
+		setBalance(15_000);
+		await reserve("tr-2", ONE_HOUR);
+
+		expect(await settle(ONE_HOUR, "tr-1")).toEqual({
+			state: "insufficient_credits",
+		});
+		expect(account()?.balanceMicroCredits).toBe(15_000);
+		expect((await settle(ONE_HOUR, "tr-2")).state).toBe("complete");
+	});
+
+	it("never charges more than was held", async () => {
+		await reserve("tr-1", ONE_HOUR);
+
+		expect(await settle(2 * ONE_HOUR)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(transcript()).toMatchObject({
+			billedMicroCredits: 10_000,
+			reservedMicroCredits: 0,
+		});
+		expect(ledger()[0]).toMatchObject({ amountMicroCredits: -10_000 });
+		expect(account()?.balanceMicroCredits).toBe(40_000);
+	});
+
+	it("charges the measured cost when it is below the hold", async () => {
+		await reserve("tr-1", ONE_HOUR);
+		expect(await settle(1800)).toMatchObject({ chargedMicroCredits: 5_000 });
+		expect(account()?.balanceMicroCredits).toBe(45_000);
+	});
+
+	it("ignores holds on deleted transcripts and other apps", async () => {
+		setBalance(10_000);
+		addTranscript("tr-deleted", {
+			reservedMicroCredits: 9_000,
+			deletedAt: new Date(),
+		});
+		fake().seed(developerTranscripts, {
+			id: "tr-other-app",
+			appId: "app-2",
+			reservedMicroCredits: 9_000,
+		});
+		expect((await otherUsage(10_000, "video-1")).state).toBe("debited");
 	});
 });
 

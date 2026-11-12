@@ -306,6 +306,62 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 		}
 	});
 
+	it("never lets racing video debits make a held transcript's settle fail", async () => {
+		for (let round = 0; round < 8; round++) {
+			const appId = await makeApp(20_000);
+			const transcriptId = await makeTranscript(appId);
+			expect(
+				await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 }),
+			).toEqual({ state: "reserved", reservedMicroCredits: 10_000 });
+
+			const videoDebits = Array.from({ length: 8 }, (_, index) =>
+				database().transaction((tx) =>
+					debitDeveloperUsage(tx, {
+						appId,
+						microCredits: 5_000,
+						type: "video_create",
+						referenceId: `video-${index}-${appId}`,
+						referenceType: "developer_video",
+					}),
+				),
+			);
+			const [settled, debited] = await Promise.all([
+				settle(transcriptId, 3600),
+				Promise.all(videoDebits),
+			]);
+
+			expect(settled).toEqual({
+				state: "complete",
+				chargedMicroCredits: 10_000,
+				alreadySettled: false,
+			});
+			expect(
+				debited.filter((result) => result.state === "debited"),
+			).toHaveLength(2);
+			expect(
+				debited.filter((result) => result.state === "insufficient"),
+			).toHaveLength(6);
+			expect(await balanceOf(appId)).toBe(0);
+			expect(await getTranscript(appId, transcriptId)).toMatchObject({
+				status: "complete",
+				billedMicroCredits: 10_000,
+				reservedMicroCredits: 0,
+			});
+		}
+	});
+
+	it("never charges a transcript more than its hold", async () => {
+		const appId = await makeApp(50_000);
+		const transcriptId = await makeTranscript(appId);
+		await reserveTranscriptCredits({ transcriptId, durationSeconds: 3600 });
+
+		expect(await settle(transcriptId, 7200)).toMatchObject({
+			state: "complete",
+			chargedMicroCredits: 10_000,
+		});
+		expect(await balanceOf(appId)).toBe(40_000);
+	});
+
 	it("withholds the text and charges nothing when the balance ran out", async () => {
 		const appId = await makeApp(9_999);
 		const transcriptId = await makeTranscript(appId);

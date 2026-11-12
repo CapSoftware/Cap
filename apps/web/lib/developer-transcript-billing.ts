@@ -3,8 +3,12 @@ import {
 	developerCreditAccounts,
 	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
-import { debitDeveloperUsage } from "@/lib/developer-credits";
+import { eq } from "drizzle-orm";
+import {
+	debitDeveloperUsage,
+	getAvailableDeveloperBalance,
+	heldTranscriptMicroCredits,
+} from "@/lib/developer-credits";
 import {
 	transcriptionBilledSeconds,
 	transcriptionMicroCredits,
@@ -17,8 +21,6 @@ import {
 export const INSUFFICIENT_CREDITS_MESSAGE =
 	"The credit balance could not cover this transcript. Nothing was charged.";
 
-type Executor = Pick<ReturnType<typeof db>, "select">;
-
 export type TranscriptReservation =
 	| { state: "reserved"; reservedMicroCredits: number }
 	| { state: "insufficient_credits" }
@@ -29,41 +31,7 @@ export type TranscriptSettlement =
 	| { state: "insufficient_credits" }
 	| { state: "skipped"; reason: "missing" | "deleted" | "not_processing" };
 
-async function heldByOtherTranscripts(
-	executor: Executor,
-	appId: string,
-	transcriptId: string | null,
-) {
-	const [held] = await executor
-		.select({
-			total: sql<
-				string | number | null
-			>`COALESCE(SUM(${developerTranscripts.reservedMicroCredits}), 0)`,
-		})
-		.from(developerTranscripts)
-		.where(
-			and(
-				eq(developerTranscripts.appId, appId),
-				eq(developerTranscripts.status, "processing"),
-				isNull(developerTranscripts.deletedAt),
-				transcriptId ? ne(developerTranscripts.id, transcriptId) : undefined,
-			),
-		);
-	return Number(held?.total ?? 0) || 0;
-}
-
-export async function getAvailableTranscriptBalance(appId: string) {
-	const [account] = await db()
-		.select({
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-		})
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
-	if (!account) return null;
-	const held = await heldByOtherTranscripts(db(), appId, null);
-	return account.balanceMicroCredits - held;
-}
+export const getAvailableTranscriptBalance = getAvailableDeveloperBalance;
 
 export async function hasMinimumTranscriptBalance(appId: string) {
 	const available = await getAvailableTranscriptBalance(appId);
@@ -118,7 +86,11 @@ export async function reserveTranscriptCredits(input: {
 			return { state: "skipped" };
 		}
 
-		const held = await heldByOtherTranscripts(tx, appId, input.transcriptId);
+		const held = await heldTranscriptMicroCredits(
+			tx,
+			appId,
+			input.transcriptId,
+		);
 		if (account.balanceMicroCredits - held < cost) {
 			return { state: "insufficient_credits" };
 		}
@@ -160,6 +132,7 @@ export async function settleTranscript(input: {
 				id: developerTranscripts.id,
 				status: developerTranscripts.status,
 				deletedAt: developerTranscripts.deletedAt,
+				reservedMicroCredits: developerTranscripts.reservedMicroCredits,
 			})
 			.from(developerTranscripts)
 			.where(eq(developerTranscripts.id, input.transcriptId))
@@ -179,14 +152,18 @@ export async function settleTranscript(input: {
 			return { state: "skipped", reason: "not_processing" };
 		}
 
+		const held = Number(transcript.reservedMicroCredits) || 0;
+		const charge = held > 0 ? Math.min(cost, held) : cost;
+
 		const debit =
-			cost > 0
+			charge > 0
 				? await debitDeveloperUsage(tx, {
 						appId,
-						microCredits: cost,
+						microCredits: charge,
 						type: "transcription",
 						referenceId: transcript.id,
 						referenceType: "developer_transcript",
+						settlesTranscriptId: transcript.id,
 						metadata: {
 							durationSeconds: input.durationSeconds,
 							billedSeconds: transcriptionBilledSeconds(input.durationSeconds),
@@ -221,7 +198,7 @@ export async function settleTranscript(input: {
 				wordCount: input.wordCount,
 				resultKey: input.resultKey,
 				reservedMicroCredits: 0,
-				billedMicroCredits: cost,
+				billedMicroCredits: charge,
 				errorCode: null,
 				errorMessage: null,
 				completedAt: new Date(),

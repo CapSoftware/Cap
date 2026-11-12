@@ -5,8 +5,9 @@ import {
 	type DeveloperCreditTransactionType,
 	developerCreditAccounts,
 	developerCreditTransactions,
+	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 
 export async function addCreditsToAccount({
@@ -109,6 +110,33 @@ const affectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
+type DeveloperCreditReader = Pick<DeveloperCreditTransaction, "select">;
+
+export async function heldTranscriptMicroCredits(
+	reader: DeveloperCreditReader,
+	appId: string,
+	exceptTranscriptId: string | null = null,
+) {
+	const [held] = await reader
+		.select({
+			total: sql<
+				string | number | null
+			>`COALESCE(SUM(${developerTranscripts.reservedMicroCredits}), 0)`,
+		})
+		.from(developerTranscripts)
+		.where(
+			and(
+				eq(developerTranscripts.appId, appId),
+				eq(developerTranscripts.status, "processing"),
+				isNull(developerTranscripts.deletedAt),
+				exceptTranscriptId
+					? ne(developerTranscripts.id, exceptTranscriptId)
+					: undefined,
+			),
+		);
+	return Number(held?.total ?? 0) || 0;
+}
+
 export async function debitDeveloperUsage(
 	tx: DeveloperCreditTransaction,
 	input: {
@@ -118,6 +146,7 @@ export async function debitDeveloperUsage(
 		referenceId: string;
 		referenceType: DeveloperCreditReferenceType;
 		metadata?: Record<string, unknown>;
+		settlesTranscriptId?: string;
 	},
 ): Promise<DeveloperUsageDebit> {
 	const [account] = await tx
@@ -127,7 +156,8 @@ export async function debitDeveloperUsage(
 		})
 		.from(developerCreditAccounts)
 		.where(eq(developerCreditAccounts.appId, input.appId))
-		.limit(1);
+		.limit(1)
+		.for("update");
 
 	if (!account) return { state: "no_account" };
 
@@ -148,6 +178,12 @@ export async function debitDeveloperUsage(
 	const remaining = Math.floor(input.microCredits) - Number(paid?.total ?? 0);
 	if (remaining <= 0) return { state: "already_paid" };
 
+	const heldForOthers = await heldTranscriptMicroCredits(
+		tx,
+		input.appId,
+		input.settlesTranscriptId ?? null,
+	);
+
 	const result = await tx
 		.update(developerCreditAccounts)
 		.set({
@@ -156,7 +192,7 @@ export async function debitDeveloperUsage(
 		.where(
 			and(
 				eq(developerCreditAccounts.id, account.id),
-				sql`${developerCreditAccounts.balanceMicroCredits} >= ${remaining}`,
+				sql`${developerCreditAccounts.balanceMicroCredits} >= ${remaining + heldForOthers}`,
 			),
 		);
 
@@ -199,4 +235,10 @@ export async function getDeveloperBalance(appId: string) {
 		.where(eq(developerCreditAccounts.appId, appId))
 		.limit(1);
 	return account ? account.balanceMicroCredits : null;
+}
+
+export async function getAvailableDeveloperBalance(appId: string) {
+	const balance = await getDeveloperBalance(appId);
+	if (balance === null) return null;
+	return balance - (await heldTranscriptMicroCredits(db(), appId));
 }
