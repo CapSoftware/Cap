@@ -300,7 +300,7 @@ export function Figure({
 				className={clsx(
 					MONO,
 					"m-0 text-[17px] leading-none tracking-[-0.04em] tabular-nums",
-					"sm:text-[28px]",
+					"sm:text-[22px] xl:text-[28px]",
 					lead ? "text-white" : "text-[rgba(232,236,244,0.82)]",
 				)}
 			>

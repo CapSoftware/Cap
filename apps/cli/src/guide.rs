@@ -344,7 +344,7 @@ fn build() -> Guide {
             ),
             cmd(
                 "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transcripts|transactions",
-                "Manage developer apps, SDK videos, transcripts, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file>` uploads a local video. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. New credentials are returned only by confirmed CLI commands.",
+                "Manage developer apps, SDK videos, transcripts, credit history, domains, credentials, auto top-up, and credit checkout. `developers videos upload <app> <file>` uploads a local video. `developers transcripts create <app> --file <path>|--url <url> --wait` turns audio or video into text, and `developers transcripts text` prints it. Audio with no speech completes with empty text and is billed for its length. Transcripts spend the app's credits, uploads are free and their storage is billed daily, and both need confirmation. New credentials are returned only by confirmed CLI commands.",
                 OutputMode::SingleJson,
                 &[],
             ),

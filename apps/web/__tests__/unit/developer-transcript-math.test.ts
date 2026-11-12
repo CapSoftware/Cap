@@ -15,9 +15,11 @@ import {
 	serializeTranscript,
 	type TranscriptSummaryRow,
 	toAgentDeveloperTranscript,
+	transcriptHasNoSpeech,
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptWordCount,
 } from "@/lib/developer-transcripts";
 
 const row = (
@@ -379,5 +381,102 @@ describe("transcript inputs", () => {
 		expect(
 			transcriptObjectKeys("app-2", "tr-1").source.includes("/app-1/"),
 		).toBe(false);
+	});
+});
+
+describe("audio with no speech", () => {
+	it("builds an empty result with no words or segments", () => {
+		expect(
+			buildTranscriptResult({
+				text: undefined,
+				words: undefined,
+				language: undefined,
+				durationSeconds: 42.5,
+			}),
+		).toEqual({
+			text: "",
+			language: null,
+			durationSeconds: 42.5,
+			words: [],
+			segments: [],
+		});
+	});
+
+	it("counts no words for an empty result and at least one for any text", () => {
+		expect(transcriptWordCount({ text: "", words: [] })).toBe(0);
+		expect(transcriptWordCount({ text: "   ", words: [] })).toBe(0);
+		expect(transcriptWordCount({ text: "one  two\nthree", words: [] })).toBe(3);
+		expect(
+			transcriptWordCount({
+				text: "hello world",
+				words: [
+					{ text: "hello", start: 0, end: 0.4, confidence: null },
+					{ text: "world", start: 0.5, end: 0.9, confidence: null },
+				],
+			}),
+		).toBe(2);
+	});
+
+	it("is a complete transcript with a word count of zero, in every response shape", () => {
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: 0 })).toBe(
+			true,
+		);
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: 5 })).toBe(
+			false,
+		);
+		expect(transcriptHasNoSpeech({ status: "complete", wordCount: null })).toBe(
+			false,
+		);
+		expect(transcriptHasNoSpeech({ status: "error", wordCount: 0 })).toBe(
+			false,
+		);
+		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 1 }),
+		).toBe(false);
+		expect(
+			transcriptHasNoSpeech({ status: "complete", wordCount: 0, hasText: 0 }),
+		).toBe(true);
+		expect(
+			transcriptHasNoSpeech({ status: "processing", wordCount: null }),
+		).toBe(false);
+
+		const silent = row({
+			status: "complete",
+			text: "",
+			wordCount: 0,
+			language: null,
+			durationSeconds: 600,
+			billedMicroCredits: 1_666,
+		});
+		expect(serializeTranscript(silent, { includeText: true })).toMatchObject({
+			status: "complete",
+			text: "",
+			wordCount: 0,
+			language: null,
+			costMicroCredits: 1_666,
+			costDollars: 0.01666,
+			error: null,
+		});
+		expect(toAgentDeveloperTranscript(silent)).toMatchObject({
+			status: "complete",
+			wordCount: 0,
+			costMicroCredits: 1_666,
+			errorCode: null,
+			errorMessage: null,
+		});
+	});
+
+	it("still serializes a transcript that failed as no speech before the change", () => {
+		const old = row({
+			status: "error",
+			errorCode: "no_speech",
+			errorMessage: "No speech was found in the audio",
+			billedMicroCredits: 0,
+		});
+		expect(serializeTranscript(old)).toMatchObject({
+			status: "error",
+			costMicroCredits: 0,
+			error: { code: "no_speech", message: "No speech was found in the audio" },
+		});
 	});
 });

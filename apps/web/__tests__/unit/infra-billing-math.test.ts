@@ -233,9 +233,23 @@ describe("upload admission", () => {
 		expect(admission.allowed).toBe(false);
 		expect(admission.reason).toBe("insufficient_credits");
 		expect(admission.shortfallMicroCredits).toBe(1);
-		expect(admission.message).toContain("$0.20");
-		expect(admission.message).toContain("7 days of storage");
-		expect(admission.message).toContain("add at least $0.01");
+		expect(admission.message).toBe(
+			"Uploading needs $0.19834 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.19833, so add at least $0.00001.",
+		);
+	});
+
+	it("names amounts that add up when the balance is under a cent", () => {
+		const admission = uploadAdmission({
+			balanceMicroCredits: 967,
+			standing: active,
+			lastOwedMicroCredits: 0,
+			usage: { monthlyMicroCredits: 4_675 },
+		});
+		expect(admission.requiredMicroCredits).toBe(1_091);
+		expect(admission.shortfallMicroCredits).toBe(124);
+		expect(admission.message).toBe(
+			"Uploading needs $0.01091 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.00967, so add at least $0.00124.",
+		);
 	});
 
 	it("refuses at zero balance even with nothing stored", () => {
@@ -264,7 +278,9 @@ describe("upload admission", () => {
 			expect(admission.reason).toBe("out_of_credit");
 			expect(admission.requiredMicroCredits).toBe(1012);
 			expect(admission.shortfallMicroCredits).toBe(962);
-			expect(admission.message).toContain("Add at least $0.01");
+			expect(admission.message).toBe(
+				"This app is out of credit, so uploads are blocked. Add at least $0.00962 to upload again.",
+			);
 		}
 	});
 
@@ -297,7 +313,7 @@ describe("upload admission", () => {
 			requiredMicroCredits: 1012,
 			shortfallMicroCredits: 1012,
 		});
-		expect(body.message).toContain("$0.02");
+		expect(body.message).toContain("Add at least $0.01012 ");
 	});
 });
 
