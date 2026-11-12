@@ -16,6 +16,7 @@ import {
 	withTimeout,
 } from "./media-common";
 import {
+	exceedsSourceFrameLimit,
 	looksLikeTextContainer,
 	MediaInputPolicyError,
 } from "./media-input-policy";
@@ -64,6 +65,11 @@ const SNIFF_BYTES = 4096;
 export class UnreadableMediaInputError extends Error {
 	override name = "UnreadableMediaInputError";
 }
+
+// Not a policy violation: those count against the uploader, and a camera
+// original that is simply too big should not.
+export const FRAME_TOO_LARGE_MESSAGE =
+	"Video frame is larger than 8K, the largest size this server accepts";
 
 export function isUnreadableMediaInput(error: unknown): boolean {
 	return (
@@ -256,6 +262,18 @@ async function readMediaMetadata(
 	const videoTrack = await input.getPrimaryVideoTrack();
 	if (!videoTrack) {
 		throw new UnreadableMediaInputError("No video stream found");
+	}
+	if (
+		exceedsSourceFrameLimit(
+			await videoTrack.getCodedWidth(),
+			await videoTrack.getCodedHeight(),
+		) ||
+		exceedsSourceFrameLimit(
+			await videoTrack.getDisplayWidth(),
+			await videoTrack.getDisplayHeight(),
+		)
+	) {
+		throw new UnreadableMediaInputError(FRAME_TOO_LARGE_MESSAGE);
 	}
 
 	const audioTrack = await input.getPrimaryAudioTrack();

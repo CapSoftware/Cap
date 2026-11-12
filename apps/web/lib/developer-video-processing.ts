@@ -273,6 +273,8 @@ const PLAYLIST_FILE =
 	"This file is a playlist, not a video. Upload the video file itself.";
 const UNENCODABLE_FILE =
 	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
+const OVERSIZED_FILE =
+	"This video is larger than 8K. Export it at 8K or smaller and upload that.";
 
 // The media server's wording is for operators and can name internals, so the
 // customer gets one of a few fixed sentences.
@@ -286,6 +288,9 @@ function fileProblem(message: string, fallback: string): string {
 	if (/\bempty\b/i.test(message)) {
 		return "The uploaded file is empty. Upload it again.";
 	}
+	if (/larger than 8K|max pixel count/i.test(message)) {
+		return OVERSIZED_FILE;
+	}
 	return fallback;
 }
 
@@ -293,7 +298,7 @@ function fileProblem(message: string, fallback: string): string {
 // (422) or names a problem with the file. Anything else may be a storage or
 // server fault that clears up, so it must not end the video.
 const FILE_PROBLEM =
-	/playlist|resource list|could not be read|unsupported or unrecognizable format|no video (stream|track)|input is empty/i;
+	/playlist|resource list|could not be read|unsupported or unrecognizable format|no video (stream|track)|input is empty|larger than 8K/i;
 
 function probeFoundFileProblem(probed: {
 	message: string;

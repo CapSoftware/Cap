@@ -4,6 +4,7 @@ import { spawn as bunSpawn } from "bun";
 import {
 	getSafeDemuxerWhitelist,
 	isTrustedLocalPlaylist,
+	MAX_DECODE_PIXELS,
 } from "./media-input-policy";
 
 const SENSITIVE_ENV_KEY =
@@ -86,6 +87,39 @@ export function hardenMediaCommand(cmd: readonly string[]): string[] {
 	return [...cmd];
 }
 
+const FRAME_SIZE_LIMIT = ["-max_pixels", String(MAX_DECODE_PIXELS)];
+
+// Applied to what is spawned rather than in hardenMediaCommand, so a decoder
+// refuses an oversized frame even when the probe was told a smaller size.
+export function limitDecodedFrameSize(cmd: readonly string[]): string[] {
+	const tool = basename(cmd[0] ?? "");
+	if (cmd.includes("-max_pixels")) return [...cmd];
+	if (tool === "ffprobe")
+		return [cmd[0] as string, ...FRAME_SIZE_LIMIT, ...cmd.slice(1)];
+	if (tool !== "ffmpeg") return [...cmd];
+	const out: string[] = [cmd[0] as string];
+	let group: string[] = [];
+	for (let i = 1; i < cmd.length; i++) {
+		const arg = cmd[i] as string;
+		if (arg !== "-i" || i + 1 >= cmd.length) {
+			group.push(arg);
+			continue;
+		}
+		const forcedFormat = group.indexOf("-f");
+		if (forcedFormat === -1 || group[forcedFormat + 1] !== "lavfi")
+			group.push(...FRAME_SIZE_LIMIT);
+		out.push(...group, "-i", cmd[i + 1] as string);
+		group = [];
+		i++;
+	}
+	out.push(...group);
+	return out;
+}
+
+function prepareMediaCommand(cmd: readonly string[]): string[] {
+	return limitDecodedFrameSize(hardenMediaCommand(cmd));
+}
+
 type BunSpawnOptions = {
 	cmd?: string[];
 	env?: Record<string, string | undefined>;
@@ -99,7 +133,7 @@ const rawBunSpawn = bunSpawn as unknown as (
 export const spawn = ((first: unknown, second?: unknown) => {
 	if (Array.isArray(first)) {
 		const options = (second ?? {}) as BunSpawnOptions;
-		return rawBunSpawn(hardenMediaCommand(first), {
+		return rawBunSpawn(prepareMediaCommand(first), {
 			...options,
 			env: childProcessEnv(options.env),
 		});
@@ -107,7 +141,7 @@ export const spawn = ((first: unknown, second?: unknown) => {
 	const options = first as BunSpawnOptions & { cmd: string[] };
 	return rawBunSpawn({
 		...options,
-		cmd: hardenMediaCommand(options.cmd),
+		cmd: prepareMediaCommand(options.cmd),
 		env: childProcessEnv(options.env),
 	});
 }) as unknown as typeof bunSpawn;
@@ -123,7 +157,7 @@ export const spawnNode = ((
 		const opts = (args ?? {}) as NodeSpawnOptions;
 		return nodeSpawn(command, { ...opts, env: childProcessEnv(opts.env) });
 	}
-	const [hardenedCommand, ...hardenedArgs] = hardenMediaCommand([
+	const [hardenedCommand, ...hardenedArgs] = prepareMediaCommand([
 		command,
 		...(args as string[]),
 	]);
