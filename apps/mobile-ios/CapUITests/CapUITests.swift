@@ -579,7 +579,6 @@ final class CapUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         let first = waitForUsageBatches(1)
         XCTAssertEqual(first.count, 1)
-        XCTAssertEqual(first[0]["signed"] as? Bool, true)
         let appInfo = first[0]["app"] as? [String: String] ?? [:]
         XCTAssertEqual(appInfo["device"], "phone")
         XCTAssertNotNil(appInfo["version"]?.range(of: #"^\d+(\.\d+){0,3}$"#, options: .regularExpression))
@@ -599,8 +598,8 @@ final class CapUITests: XCTestCase {
         XCTAssertEqual(usageEvents(second[1]).filter { $0.name == "app_opened" }.count, 1)
     }
 
-    /// What happens before sign-in goes out without a session, and the sign-in itself under the new one.
-    func testUsageBeforeSignInIsSentUnsigned() {
+    /// Nothing is sent while signed out. What happened before sign-in goes out with the new session, in order.
+    func testUsageBeforeSignInIsSentOnceSignedIn() {
         _ = usageBatches(reset: true)
         let app = launch(key: nil)
         let email = app.textFields["Email address"]
@@ -609,19 +608,23 @@ final class CapUITests: XCTestCase {
         email.typeText("richie@cap.so")
         app.buttons["Continue with email"].tap()
         waitFor(app.staticTexts["Check your email"])
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(usageBatches().isEmpty, "a signed-out app sends nothing")
+
+        app.activate()
+        waitFor(app.staticTexts["Check your email"])
         app.typeText("123456")
         waitFor(app.buttons["Caps"], 15)
-
         XCUIDevice.shared.press(.home)
-        let batches = waitForUsageBatches(2)
-        XCTAssertEqual(batches.count, 2)
-        let unsigned = batches.first { $0["signed"] as? Bool == false }.map(usageEvents) ?? []
-        let signed = batches.first { $0["signed"] as? Bool == true }.map(usageEvents) ?? []
-        XCTAssertEqual(unsigned.map(\.name), ["app_opened", "screen_view", "auth_started", "auth_email_sent"])
-        XCTAssertEqual(unsigned.first?.properties["signed_in"] as? Bool, false)
-        XCTAssertEqual(signed.first?.name, "user_signed_in")
-        XCTAssertEqual(signed.first?.properties["method"] as? String, "email")
-        XCTAssertTrue(signed.contains { $0.name == "screen_view" && $0.properties["screen"] as? String == "caps" })
+        let batches = waitForUsageBatches(1)
+        XCTAssertEqual(batches.count, 1)
+        let events = usageEvents(batches[0])
+        XCTAssertEqual(Array(events.map(\.name).prefix(4)), ["app_opened", "screen_view", "auth_started", "auth_email_sent"])
+        XCTAssertEqual(events.first?.properties["signed_in"] as? Bool, false)
+        let signedIn = events.first { $0.name == "user_signed_in" }
+        XCTAssertEqual(signedIn?.properties["method"] as? String, "email")
+        XCTAssertTrue(events.contains { $0.name == "screen_view" && $0.properties["screen"] as? String == "caps" })
     }
 
     func testEmptyAccount() {
