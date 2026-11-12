@@ -3,6 +3,7 @@ import {
 	assertMediaUrlAllowed,
 	classifyHostLiteral,
 	createGuardedMediaFetch,
+	fetchCheckedMediaUrl,
 	MediaAddressError,
 	type MediaAddressPolicy,
 	parsePrivateMediaHosts,
@@ -57,8 +58,6 @@ describe("classifyHostLiteral", () => {
 		["100.64.0.1", "private"],
 		["100.100.100.200", "private"],
 		["198.18.0.1", "private"],
-		["localhost", "private"],
-		["storage.localhost.", "private"],
 		["[::1]", "private"],
 		["[fc00::1]", "private"],
 		["[fd12:3456::1]", "private"],
@@ -88,6 +87,8 @@ describe("classifyHostLiteral", () => {
 	test("a name is not an address", () => {
 		expect(classifyHostLiteral("169.254.169.254.nip.io")).toBeNull();
 		expect(classifyHostLiteral("localtest.me")).toBeNull();
+		expect(classifyHostLiteral("localhost")).toBeNull();
+		expect(classifyHostLiteral("storage.localhost.")).toBeNull();
 	});
 });
 
@@ -174,6 +175,19 @@ describe("assertMediaUrlAllowed", () => {
 		}
 	});
 
+	test("a localhost name is judged by what it resolves to as well", async () => {
+		await expect(
+			assertMediaUrlAllowed("http://metadata.localhost/", {
+				privateHosts: ANY,
+				resolveHost: resolvesTo("169.254.169.254"),
+			}),
+		).rejects.toBeInstanceOf(MediaAddressError);
+		await assertMediaUrlAllowed("http://storage.localhost:9000/a.mp4", {
+			privateHosts: ANY,
+			resolveHost: resolvesTo("127.0.0.1"),
+		});
+	});
+
 	test("a private host is allowed only by its own name", async () => {
 		const policy = {
 			privateHosts: parsePrivateMediaHosts(" MinIO , [::1] "),
@@ -244,6 +258,86 @@ describe("createGuardedMediaFetch", () => {
 		expect(origin.hits).toEqual([]);
 	});
 
+	test("connects to the address that was checked, under the name it was given", async () => {
+		const seen: (string | null)[] = [];
+		const origin = serve((request) => {
+			seen.push(request.headers.get("host"));
+			return new Response("media");
+		});
+		const port = new URL(origin.url).port;
+		const lookups: string[] = [];
+		const url = `http://storage.internal:${port}/video.mp4`;
+		const response = await createGuardedMediaFetch(url, {
+			privateHosts: new Set(["storage.internal"]),
+			resolveHost: async (hostname) => {
+				lookups.push(hostname);
+				return lookups.length === 1 ? ["127.0.0.1"] : ["169.254.169.254"];
+			},
+		})(url, { headers: { Range: "bytes=0-4" } });
+		expect(await response.text()).toBe("media");
+		expect(seen).toEqual([`storage.internal:${port}`]);
+		expect(lookups).toEqual(["storage.internal"]);
+	});
+
+	test("pins the request to a checked address and falls back to the next one", async () => {
+		const calls: { target: string; host: string; serverName?: string }[] = [];
+		const fetchImpl = (async (
+			input: Parameters<typeof fetch>[0],
+			init?: Parameters<typeof fetch>[1],
+		) => {
+			const pinned = init as RequestInit & { tls?: { serverName: string } };
+			calls.push({
+				target: String(input),
+				host: new Headers(init?.headers).get("host") ?? "",
+				serverName: pinned.tls?.serverName,
+			});
+			if (calls.length === 1) throw new Error("ECONNREFUSED");
+			return new Response("ok");
+		}) as typeof fetch;
+		const url = "https://media.example:8443/a/video.mp4?sig=1";
+		const response = await createGuardedMediaFetch(url, {
+			privateHosts: NONE,
+			resolveHost: resolvesTo(
+				"2606:2800:220:1::1",
+				"93.184.216.34",
+				"93.184.216.35",
+			),
+			fetchImpl,
+		})(url);
+		expect(await response.text()).toBe("ok");
+		expect(calls).toEqual([
+			{
+				target: "https://93.184.216.34:8443/a/video.mp4?sig=1",
+				host: "media.example:8443",
+				serverName: "media.example",
+			},
+			{
+				target: "https://93.184.216.35:8443/a/video.mp4?sig=1",
+				host: "media.example:8443",
+				serverName: "media.example",
+			},
+		]);
+	});
+
+	test("does not try another address once the request was cancelled", async () => {
+		const controller = new AbortController();
+		let attempts = 0;
+		const fetchImpl = (async () => {
+			attempts++;
+			controller.abort();
+			throw new Error("aborted");
+		}) as unknown as typeof fetch;
+		const url = "http://media.example/video.mp4";
+		await expect(
+			createGuardedMediaFetch(url, {
+				privateHosts: NONE,
+				resolveHost: resolvesTo("93.184.216.34", "93.184.216.35"),
+				fetchImpl,
+			})(url, { signal: controller.signal }),
+		).rejects.toThrow("aborted");
+		expect(attempts).toBe(1);
+	});
+
 	test("checks every hop of a redirect before following it", async () => {
 		const internal = serve(() => new Response("internal"));
 		const origin = serve((request) => {
@@ -308,6 +402,40 @@ describe("createGuardedMediaFetch", () => {
 				resolveHost: resolvesTo("10.0.0.5"),
 			})(url),
 		).rejects.toBeInstanceOf(MediaInputPolicyError);
+	});
+});
+
+describe("fetchCheckedMediaUrl", () => {
+	test("makes one checked, pinned request and leaves redirects to the caller", async () => {
+		const origin = serve((request) =>
+			new URL(request.url).pathname === "/moved"
+				? new Response(null, { status: 302, headers: { Location: "/here" } })
+				: new Response(request.headers.get("host")),
+		);
+		const port = new URL(origin.url).port;
+		const policy = {
+			privateHosts: new Set(["storage.internal"]),
+			resolveHost: resolvesTo("127.0.0.1"),
+		};
+		const response = await fetchCheckedMediaUrl(
+			`http://storage.internal:${port}/here`,
+			{ redirect: "error" },
+			policy,
+		);
+		expect(await response.text()).toBe(`storage.internal:${port}`);
+		await expect(
+			fetchCheckedMediaUrl(
+				`http://storage.internal:${port}/moved`,
+				{ redirect: "error" },
+				policy,
+			),
+		).rejects.toThrow();
+		await expect(
+			fetchCheckedMediaUrl(`${origin.url}/here`, undefined, {
+				privateHosts: NONE,
+			}),
+		).rejects.toBeInstanceOf(MediaAddressError);
+		expect(origin.hits).toEqual(["/here", "/moved"]);
 	});
 });
 

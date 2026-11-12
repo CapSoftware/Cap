@@ -11,7 +11,7 @@ import {
 	type SourceRef,
 	StreamSource,
 } from "mediabunny";
-import { assertMediaUrlAllowed } from "./media-address-guard";
+import { fetchCheckedMediaUrl } from "./media-address-guard";
 
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_LONG_RECORDING_METADATA_BYTES = 1024 * 1024 * 1024;
@@ -444,17 +444,20 @@ export async function readRecordingVideoTiming(
 		checkActive();
 		let response: Response;
 		try {
-			await assertMediaUrlAllowed(path);
-			response = await fetch(path, {
-				headers: {
-					Range: `bytes=${start}-${end - 1}`,
-					"If-Match": remoteObject.objectIdentity,
-					"X-Cap-Recording-Verification": "1",
-					"Accept-Encoding": "identity",
+			response = await fetchCheckedMediaUrl(
+				path,
+				{
+					headers: {
+						Range: `bytes=${start}-${end - 1}`,
+						"If-Match": remoteObject.objectIdentity,
+						"X-Cap-Recording-Verification": "1",
+						"Accept-Encoding": "identity",
+					},
+					signal: controller.signal,
+					redirect: "error",
 				},
-				signal: controller.signal,
-				redirect: "error",
-			});
+				{ fetchImpl: fetch },
+			);
 		} catch {
 			checkActive();
 			throw new RecordingTimingError("Recording timing request failed", true);

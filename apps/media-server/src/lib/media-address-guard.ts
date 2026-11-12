@@ -4,6 +4,7 @@ import { MediaInputPolicyError } from "./media-input-policy";
 const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 const MAX_MEDIA_REDIRECTS = 5;
+const MAX_ADDRESSES_TRIED = 4;
 
 // "private" addresses are only reachable from inside a network, and are
 // fetched only for hosts the operator has named. "reserved" ones (link-local,
@@ -111,11 +112,11 @@ function normalizeHost(hostname: string): string {
 		.replace(/\.$/, "");
 }
 
-// The class of an address written as a literal, or null for a name that has
-// to be resolved first.
+// The class of an address written as a literal, or null for a name, which
+// says nothing until it is resolved. That includes localhost names: resolvers
+// are not bound to answer them with loopback.
 export function classifyHostLiteral(hostname: string): HostAddressClass | null {
 	const host = normalizeHost(hostname);
-	if (host === "localhost" || host.endsWith(".localhost")) return "private";
 	const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
 	if (v4) return classifyIpv4(Number(v4[1]), Number(v4[2]), Number(v4[3]));
 	const groups = ipv6Groups(host);
@@ -123,7 +124,12 @@ export function classifyHostLiteral(hostname: string): HostAddressClass | null {
 }
 
 export function isPrivateHostLiteral(hostname: string): boolean {
-	return (classifyHostLiteral(hostname) ?? "public") !== "public";
+	const host = normalizeHost(hostname);
+	return (
+		host === "localhost" ||
+		host.endsWith(".localhost") ||
+		(classifyHostLiteral(host) ?? "public") !== "public"
+	);
 }
 
 function isHttpProtocol(url: URL): boolean {
@@ -174,8 +180,9 @@ async function lookupHost(hostname: string): Promise<string[]> {
 	return records.map((record) => record.address);
 }
 
-// Held as long as fetch holds its own DNS answers, so a probe's many range
-// requests cost one lookup.
+// Held for a short while so a probe's many range requests cost one lookup.
+// Requests connect to these same addresses, so a held answer is never used
+// for anything it was not checked for.
 function resolveHostCached(hostname: string): Promise<string[]> {
 	const now = Date.now();
 	const cached = resolvedHosts.get(hostname);
@@ -200,13 +207,20 @@ const CLASS_RANK: Record<HostAddressClass, number> = {
 	reserved: 2,
 };
 
+interface CheckedMediaUrl {
+	url: URL;
+	// The addresses the host resolved to, all of them checked, or null when
+	// the host is itself an address.
+	addresses: string[] | null;
+}
+
 // The one decision on whether a media URL may be requested. A name is judged
 // by every address it resolves to, so one that also answers with a private
 // address is treated as private.
-export async function assertMediaUrlAllowed(
+async function checkMediaUrl(
 	value: string | URL,
-	policy: MediaAddressPolicy = {},
-): Promise<void> {
+	policy: MediaAddressPolicy,
+): Promise<CheckedMediaUrl> {
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -218,10 +232,11 @@ export async function assertMediaUrlAllowed(
 	}
 	const host = normalizeHost(url.hostname);
 	let addressClass = classifyHostLiteral(host);
+	let addresses: string[] | null = null;
 	if (addressClass === null) {
-		const addresses = await (policy.resolveHost ?? resolveHostCached)(
-			host,
-		).catch(() => []);
+		addresses = await (policy.resolveHost ?? resolveHostCached)(host).catch(
+			() => [],
+		);
 		// A lookup that fails is a fault that may clear, not a refusal.
 		if (addresses.length === 0) {
 			throw new Error("Media host could not be resolved");
@@ -233,18 +248,80 @@ export async function assertMediaUrlAllowed(
 				addressClass = resolved;
 		}
 	}
-	if (addressClass === "public") return;
 	const privateHosts = privateMediaHosts(policy);
 	if (
-		addressClass === "private" &&
-		(privateHosts.has("*") || privateHosts.has(host))
+		addressClass === "public" ||
+		(addressClass === "private" &&
+			(privateHosts.has("*") || privateHosts.has(host)))
 	) {
-		return;
+		return { url, addresses };
 	}
 	throw new MediaAddressError(
 		addressClass === "private"
 			? "Media address is on a private network. Name its host in MEDIA_SERVER_INTERNAL_MEDIA_HOSTS to read from it."
 			: "Media address is not one this server may read from",
+	);
+}
+
+export async function assertMediaUrlAllowed(
+	value: string | URL,
+	policy: MediaAddressPolicy = {},
+): Promise<void> {
+	await checkMediaUrl(value, policy);
+}
+
+// A request to a name is sent to one of the addresses that were checked,
+// with the name kept for the Host header and the certificate. Left to resolve
+// the name again, the connection could go somewhere the check never saw.
+async function fetchChecked(
+	{ url, addresses }: CheckedMediaUrl,
+	init: Parameters<typeof fetch>[1],
+	fetchImpl: typeof fetch,
+): Promise<Response> {
+	if (addresses === null) return fetchImpl(url, init);
+	const given = init?.headers;
+	let headers: NonNullable<typeof given>;
+	if (given instanceof Headers || Array.isArray(given)) {
+		headers = new Headers(given);
+		headers.set("Host", url.host);
+	} else {
+		headers = { ...given, Host: url.host };
+	}
+	const pinnedInit = {
+		...init,
+		headers,
+		...(url.protocol === "https:" && {
+			tls: { serverName: normalizeHost(url.hostname) },
+		}),
+	};
+	const ordered = [
+		...addresses.filter((address) => !address.includes(":")),
+		...addresses.filter((address) => address.includes(":")),
+	].slice(0, MAX_ADDRESSES_TRIED);
+	let lastError: unknown;
+	for (const address of ordered) {
+		const target = new URL(url);
+		target.hostname = address.includes(":") ? `[${address}]` : address;
+		try {
+			return await fetchImpl(target, pinnedInit);
+		} catch (error) {
+			if (init?.signal?.aborted) throw error;
+			lastError = error;
+		}
+	}
+	throw lastError;
+}
+
+// One checked request, for callers that handle a redirect themselves.
+export async function fetchCheckedMediaUrl(
+	value: string | URL,
+	init?: Parameters<typeof fetch>[1],
+	policy: MediaAddressPolicy = {},
+): Promise<Response> {
+	return fetchChecked(
+		await checkMediaUrl(value, policy),
+		init,
+		policy.fetchImpl ?? mediaFetch,
 	);
 }
 
@@ -293,9 +370,10 @@ export function createGuardedMediaFetch(
 			// given, not for wherever that address leads: anywhere else has to
 			// be public.
 			const elsewhere = url.origin !== root.origin;
+			let checked: CheckedMediaUrl;
 			try {
-				await untilAborted(
-					assertMediaUrlAllowed(
+				checked = await untilAborted(
+					checkMediaUrl(
 						url,
 						elsewhere ? { ...policy, privateHosts: NO_PRIVATE_HOSTS } : policy,
 					),
@@ -307,10 +385,11 @@ export function createGuardedMediaFetch(
 					"the media location redirected to an address that is not allowed",
 				);
 			}
-			const response = await (policy.fetchImpl ?? mediaFetch)(url, {
-				...init,
-				redirect: "manual",
-			});
+			const response = await fetchChecked(
+				checked,
+				{ ...init, redirect: "manual" },
+				policy.fetchImpl ?? mediaFetch,
+			);
 			const location = response.headers.get("location");
 			if (response.status < 300 || response.status >= 400 || !location) {
 				return response;
