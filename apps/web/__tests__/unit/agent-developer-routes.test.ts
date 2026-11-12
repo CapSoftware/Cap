@@ -372,6 +372,12 @@ describe("developer routes of the agent API", () => {
 
 		state.redrive.mockReset();
 		state.redrive.mockResolvedValue(false);
+		state.videos = [stalled];
+		const previewed = await call("GET", `${path}?restart=false`);
+
+		expect(state.redrive).not.toHaveBeenCalled();
+		expect(previewed.body.video.status).toBe("uploading");
+
 		state.videos = [videoRow()];
 		const ready = await call("GET", path);
 

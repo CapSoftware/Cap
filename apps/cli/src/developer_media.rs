@@ -597,7 +597,9 @@ pub async fn preview_video_delete(
     app_id: &str,
     video_id: &str,
 ) -> Result<Value, AgentApiError> {
-    let value = get_video(client, app_id, video_id).await?;
+    let value = client
+        .get_json(&format!("{}?restart=false", video_path(app_id, video_id)?))
+        .await?;
     Ok(preview(
         "delete_developer_video",
         "Deletes the video and stops its playback, share and embed links.",

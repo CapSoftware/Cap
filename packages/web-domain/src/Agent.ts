@@ -1087,6 +1087,10 @@ export const AgentDeveloperVideoParams = Schema.Struct({
 	limit: Schema.optional(Schema.String),
 });
 
+export const AgentDeveloperVideoReadParams = Schema.Struct({
+	restart: Schema.optional(Schema.String),
+});
+
 export const AgentDeveloperVideo = Schema.Struct({
 	id: Schema.String,
 	appId: Schema.String,
@@ -1759,6 +1763,7 @@ export class AgentManagementHttpApi extends HttpApiGroup.make("agentManagement")
 			),
 		)
 			.setPath(AgentDeveloperVideoPath)
+			.setUrlParams(AgentDeveloperVideoReadParams)
 			.addSuccess(AgentDeveloperVideoResponse),
 	)
 	.add(

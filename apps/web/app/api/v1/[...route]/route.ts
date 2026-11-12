@@ -3820,7 +3820,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getDeveloperVideo", ({ path }) => {
+			.handle("getDeveloperVideo", ({ path, urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3838,6 +3838,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							return yield* developerResourceNotFound(requestId, "Video");
 						}
 						if (
+							urlParams.restart === "false" ||
 							!developerVideoRedrive({ ...video, deletedAt: null }, Date.now())
 						) {
 							return { video: toAgentDeveloperVideo(video), requestId };

@@ -2677,6 +2677,9 @@ fn developer_dry_runs_show_the_target_and_change_nothing() {
     ]);
     assert_eq!(video["target"]["videoId"], INFRA_DASH_VIDEO);
     assert_eq!(video["target"]["status"], "ready");
+    assert!(stub.requests().contains(&format!(
+        "GET /api/v1/developer/apps/{INFRA_APP}/videos/{INFRA_DASH_VIDEO}?restart=false"
+    )));
 
     let transcript = preview(&[
         "developers",
