@@ -1,7 +1,7 @@
 "use client";
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { infraMono, infraSans } from "./fonts";
 import { Button } from "./ui";
 
@@ -10,19 +10,41 @@ export function Modal({
 	onOpenChange,
 	title,
 	description,
+	dismissible = true,
 	children,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	title: string;
 	description?: ReactNode;
+	dismissible?: boolean;
 	children: ReactNode;
 }) {
+	const opener = useRef<Element | null>(null);
+
+	// Escape, a click outside and focus leaving all reach the dialog as a
+	// request to close. Refusing the request here covers every one of them,
+	// whichever handler the library happens to be holding.
 	return (
-		<DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+		<DialogPrimitive.Root
+			open={open}
+			onOpenChange={(next) => {
+				if (next || dismissible) onOpenChange(next);
+			}}
+		>
 			<DialogPrimitive.Portal>
 				<DialogPrimitive.Overlay className="fixed inset-0 z-[600] bg-[rgba(2,2,3,0.72)] backdrop-blur-[2px]" />
 				<DialogPrimitive.Content
+					onOpenAutoFocus={() => {
+						opener.current = document.activeElement;
+					}}
+					onCloseAutoFocus={(event) => {
+						const target = opener.current;
+						if (target instanceof HTMLElement && target.isConnected) {
+							event.preventDefault();
+							target.focus();
+						}
+					}}
 					className={`${infraSans.variable} ${infraMono.variable} fixed left-1/2 top-1/2 z-[601] w-[calc(100%-32px)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-[14px] bg-[#0B0C0E] p-6 text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_24px_80px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif] focus:outline-none`}
 				>
 					<DialogPrimitive.Title className="m-0 text-[17px] font-medium leading-[1.3] tracking-[-0.02em] text-[#E8ECF4]">
