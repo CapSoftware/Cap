@@ -180,7 +180,7 @@ const playbackProperties = {
 		type: "string",
 		enum: ["uploading", "processing", "ready", "errored"],
 		description:
-			"uploading until the upload completes, processing while it encodes, then ready or errored.",
+			"uploading until the upload completes, processing until the first output can be played, then ready or errored.",
 	},
 	errorReason: {
 		type: ["string", "null"],
@@ -192,7 +192,8 @@ const playbackProperties = {
 	},
 	renditions: {
 		type: "array",
-		description: "Encoded HLS renditions, largest first. Empty until ready.",
+		description:
+			"Encoded HLS renditions, largest first. Empty until hlsUrl is set.",
 		items: {
 			type: "object",
 			required: ["name", "width", "height", "bitrate", "bytes"],
@@ -213,12 +214,13 @@ const playbackProperties = {
 		type: ["string", "null"],
 		format: "uri",
 		description:
-			"Adaptive HLS master playlist. Null until ready, or when only the MP4 is available.",
+			"Adaptive HLS master playlist. Null until it is encoded, which can be after the video is ready.",
 	},
 	mp4Url: {
 		type: ["string", "null"],
 		format: "uri",
-		description: "Progressive MP4. Null until ready.",
+		description:
+			"Progressive MP4. Null until it is encoded, which can be after the video is ready.",
 	},
 	posterUrl: {
 		type: ["string", "null"],

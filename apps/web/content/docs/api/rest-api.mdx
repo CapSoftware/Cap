@@ -215,7 +215,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
 
 ### Get Video Status
 
-Check whether a video is fully processed and ready for playback.
+Check whether a video can be played yet.
 
 ```
 GET /api/developer/v1/videos/:id/status
@@ -260,7 +260,9 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
 
 The `status` field moves from `uploading` to `processing` when the upload completes, then to `ready` or `errored`. `ready` is `true` when `status` is `ready`. When `status` is `errored`, `errorReason` says why.
 
-The playback URLs are `null` until the video is ready. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted. `hlsUrl` can be `null` on a ready video when only the MP4 is available; it is filled in later without the video leaving `ready`.
+A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key, can be loaded from any origin and stop working when the video is deleted.
+
+On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present.
 
 The `transcriptionStatus` field can be one of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, or `NO_AUDIO`.
 
@@ -750,8 +752,8 @@ The full video object returned by list and get endpoints:
 | `maxResolutionTier` | string | Highest resolution the video is encoded at: `1080p`, `1440p` or `2160p` |
 | `renditions` | array | Encoded HLS renditions, largest first, each with `name`, `width`, `height`, `bitrate`, `bytes` and `codecs` |
 | `storedBytes` | number \| null | Bytes stored for the source and every encoded output |
-| `hlsUrl` | string \| null | Adaptive HLS master playlist (null until ready) |
-| `mp4Url` | string \| null | Progressive MP4 (null until ready) |
+| `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
+| `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
@@ -760,7 +762,7 @@ The full video object returned by list and get endpoints:
 ## Best Practices
 
 - **Use secret keys server-side only.** The `csk_` key should never appear in client-side code. Use `cpk_` public keys for browser integrations.
-- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true` before displaying the video.
+- **Poll video status after upload.** After completing a multipart upload, poll `GET /videos/:id/status` until `ready` is `true`, then play `hlsUrl` when it is present and `mp4Url` otherwise.
 - **Store your keys securely.** Use environment variables or a secrets manager.
 - **Set up allowed domains for production.** Production apps require an `Origin` header matching a configured domain. Add your domains in your app's settings in Cap Infra.
 - **Monitor your credit balance.** Use the usage endpoint to track the balance, `standing` and `upload.allowed`, and top up from your app's Billing page in Cap Infra. Auto top-up on that page adds credits from a saved card when the balance runs low.
