@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
 import { actionFailure } from "@/lib/infra-action-result";
 
 const MAX_NAME_LENGTH = 255;
@@ -15,7 +16,7 @@ export async function renameDeveloperVideo(
 	name: string,
 ) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
 	const trimmed = name.trim();
 	if (!trimmed) return actionFailure("Give the video a name.");
