@@ -77,6 +77,41 @@ private struct Rig {
     var hasStoredQueue: Bool { FileManager.default.fileExists(atPath: storage.path()) }
 }
 
+/// Holds every request until `open`, like a connection that has stalled.
+private final class GatedTransport: HTTPTransport {
+    private struct State {
+        var requests: [URLRequest] = []
+        var held: [CheckedContinuation<Void, Never>] = []
+        var isOpen = false
+    }
+
+    private let state = Mutex(State())
+
+    var requests: [URLRequest] { state.withLock { $0.requests } }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        await withCheckedContinuation { continuation in
+            let passes = state.withLock { state in
+                state.requests.append(request)
+                if !state.isOpen { state.held.append(continuation) }
+                return state.isOpen
+            }
+            if passes { continuation.resume() }
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        return (Data(#"{"success":true}"#.utf8), response)
+    }
+
+    func open() {
+        let held = state.withLock { state in
+            state.isOpen = true
+            defer { state.held = [] }
+            return state.held
+        }
+        for continuation in held { continuation.resume() }
+    }
+}
+
 private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     for _ in 0..<500 {
         if condition() { return true }
@@ -241,6 +276,61 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         #expect(ContinuousClock.now - started >= .milliseconds(270))
     }
 
+    @Test func savesWhatIsWaitingWhileARequestIsStillOut() async throws {
+        let transport = GatedTransport()
+        let storage = FileManager.default.temporaryDirectory
+            .appending(path: "analytics-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "queue.json")
+        var configuration = Analytics.Configuration()
+        configuration.flushInterval = .seconds(600)
+        let analytics = Analytics(
+            api: CapAPI(environment: .production, transport: transport, credentials: { testCredentials }),
+            app: Rig.app,
+            storage: storage,
+            configuration: configuration,
+            currentUserId: { testCredentials.userId }
+        )
+        let saved: @Sendable () -> [String] = {
+            guard let data = try? Data(contentsOf: storage),
+                  let events = try? JSONDecoder().decode([Analytics.StoredEvent].self, from: data)
+            else { return [] }
+            return events.map(\.name)
+        }
+
+        analytics.track("app_opened")
+        let first = Task { await analytics.flush() }
+        #expect(await eventually { transport.requests.count == 1 })
+
+        // The app leaves the screen while that request hangs.
+        analytics.track("cap_opened")
+        let second = Task { await analytics.flush() }
+        #expect(await eventually { saved() == ["app_opened", "cap_opened"] })
+        #expect(transport.requests.count == 1)
+
+        transport.open()
+        await first.value
+        await second.value
+        #expect(transport.requests.count == 2)
+        let later = try #require(try bodyJSON(transport.requests[1])["events"] as? [[String: Any]])
+        #expect(later.compactMap { $0["name"] as? String } == ["cap_opened"])
+        #expect(saved().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: storage.path()))
+    }
+
+    @Test func leavesNoTimerRunningForEventsItMayNotSend() async throws {
+        let rig = Rig { $0.flushInterval = .milliseconds(30) }
+        rig.status.value = 0
+        rig.analytics.track("cap_opened")
+        await rig.analytics.flush()
+        rig.status.value = 200
+        rig.credentials.value = nil
+        await rig.analytics.flush()
+        let settled = rig.requests.count
+        try? await Task.sleep(for: .milliseconds(300))
+        #expect(rig.requests.count == settled)
+        #expect(settled == 1)
+    }
+
     @Test func sendsWhatAnEarlierLaunchCouldNot() async throws {
         let first = Rig()
         first.status.value = 0
@@ -355,7 +445,7 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
     }
 
     @Test func recordingAnEventCostsMicroseconds() async throws {
-        let rig = Rig { $0.capacity = 20_000; $0.batchLimit = 50 }
+        let rig = Rig { $0.capacity = 20_000; $0.flushThreshold = 1_000_000 }
         let count = 10_000
         let clock = ContinuousClock()
         let elapsed = clock.measure {

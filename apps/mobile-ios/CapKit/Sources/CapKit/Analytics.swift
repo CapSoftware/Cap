@@ -128,16 +128,14 @@ public final class Analytics: Sendable {
         case timer(Int)
         case flush(CheckedContinuation<Void, Never>)
         case signedOut
+        case sent([UInt64], CapAPIError?)
     }
-
-    private static let bufferedCommands = 2048
 
     private let commands: AsyncStream<Command>.Continuation
     private let currentUserId: @Sendable () -> String?
     private let now: @Sendable () -> Date
     private let isEnabled: Bool
 
-    /// - Parameter storage: The file that holds unsent events between launches, or nil to keep them in memory only.
     public init(
         api: CapAPI,
         app: AnalyticsApp,
@@ -147,7 +145,9 @@ public final class Analytics: Sendable {
         currentUserId: @escaping @Sendable () -> String?,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        let (stream, continuation) = AsyncStream.makeStream(of: Command.self, bufferingPolicy: .bufferingNewest(Self.bufferedCommands))
+        // Unbounded, because losing the result of a send would leave the worker waiting for it forever. The worker
+        // never waits on the network, so nothing builds up here.
+        let (stream, continuation) = AsyncStream.makeStream(of: Command.self)
         commands = continuation
         self.currentUserId = currentUserId
         self.now = now
@@ -167,7 +167,7 @@ public final class Analytics: Sendable {
                 commands: continuation
             )
             for await command in stream {
-                await worker.handle(command)
+                worker.handle(command)
             }
         }
     }
@@ -189,32 +189,21 @@ public final class Analytics: Sendable {
                 cleaned[key] = value
             }
         }
-        send(.event(StoredEvent(name: name, time: Self.milliseconds(now()), properties: cleaned, userId: currentUserId())))
+        commands.yield(.event(StoredEvent(name: name, time: Self.milliseconds(now()), properties: cleaned, userId: currentUserId())))
     }
 
-    /// Sends what is waiting now and saves whatever could not be sent. Call it before the app is suspended.
+    /// Saves what is waiting, then sends it, and returns once the attempt is over. Call it before the app is
+    /// suspended: the save happens first, even while an earlier request is still out.
     public func flush() async {
         guard isEnabled else { return }
         await withCheckedContinuation { continuation in
-            send(.flush(continuation))
+            if case .terminated = commands.yield(.flush(continuation)) { continuation.resume() }
         }
     }
 
     /// Forgets the unsent events of the user who just signed out; nothing may send them any more.
     public func signedOut() {
-        send(.signedOut)
-    }
-
-    private func send(_ command: Command) {
-        switch commands.yield(command) {
-        case let .dropped(.flush(continuation)):
-            // Pushed out of a full buffer before it was read; its caller must not wait forever.
-            continuation.resume()
-        case .terminated:
-            if case let .flush(continuation) = command { continuation.resume() }
-        default:
-            break
-        }
+        commands.yield(.signedOut)
     }
 
     static let textLimit = 120
@@ -232,8 +221,14 @@ public final class Analytics: Sendable {
 }
 
 extension Analytics {
-    /// Only ever touched by the one task that reads the command stream.
+    /// Only ever touched by the one task that reads the command stream. It never waits: a request runs in its own
+    /// task and reports back through the stream, so events keep queueing and the queue can be saved meanwhile.
     struct Worker {
+        private struct Queued {
+            let id: UInt64
+            let event: StoredEvent
+        }
+
         let api: CapAPI
         let app: AnalyticsApp
         let storage: URL?
@@ -242,13 +237,20 @@ extension Analytics {
         let now: @Sendable () -> Date
         let commands: AsyncStream<Command>.Continuation
 
-        private var pending: [StoredEvent] = []
+        private var pending: [Queued] = []
+        private var nextId: UInt64 = 0
         private var loaded = false
         private var stored = false
         private var unsupported = false
         private var failures = 0
         private var timer: Task<Void, Never>?
         private var timerGeneration = 0
+        private var sending = false
+        /// A round of sends covers the events queued before it began, so later ones still wait to be batched.
+        private var roundEnd: UInt64 = 0
+        /// The session changed mid-round; the signed-in events wait for the next one.
+        private var skipsUser = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
 
         init(
             api: CapAPI,
@@ -268,86 +270,122 @@ extension Analytics {
             self.commands = commands
         }
 
-        mutating func handle(_ command: Command) async {
+        mutating func handle(_ command: Command) {
             switch command {
             case let .event(event):
                 guard !unsupported else { return }
                 load()
-                pending.append(event)
+                enqueue(event)
                 trim()
+                guard !sending else { return }
                 if failures == 0, pending.count >= configuration.flushThreshold {
-                    await flush()
+                    beginRound()
                 } else if timer == nil {
                     schedule(after: configuration.flushInterval)
                 }
             case let .timer(generation):
                 guard generation == timerGeneration else { return }
                 timer = nil
-                await flush()
+                if !sending { beginRound() }
             case let .flush(continuation):
                 load()
-                // Saved first: the app may be suspended, then closed, while the request is still out.
                 save()
-                await flush()
-                save()
-                continuation.resume()
+                waiters.append(continuation)
+                if sending {
+                    roundEnd = nextId
+                } else {
+                    beginRound()
+                }
             case .signedOut:
                 load()
-                pending.removeAll { $0.userId != nil }
+                pending.removeAll { $0.event.userId != nil }
                 if stored { save() }
+            case let .sent(ids, error):
+                sending = false
+                finished(ids, error)
             }
         }
 
-        private mutating func flush() async {
-            cancelTimer()
-            guard !unsupported else { return }
-            let oldest = Analytics.milliseconds(now().addingTimeInterval(-configuration.maxAge))
-            pending.removeAll { $0.time < oldest }
+        private mutating func enqueue(_ event: StoredEvent) {
+            pending.append(Queued(id: nextId, event: event))
+            nextId += 1
+        }
 
-            // Events from before sign-in go without a session; the rest only with the session they were recorded in.
-            let user = currentUserId()
+        private mutating func beginRound() {
+            cancelTimer()
+            guard !unsupported else { return endRound() }
+            let oldest = Analytics.milliseconds(now().addingTimeInterval(-configuration.maxAge))
+            pending.removeAll { $0.event.time < oldest }
+            roundEnd = nextId
+            skipsUser = false
+            sendNext()
+        }
+
+        /// Events from before sign-in go without a session; the rest only with the session they were recorded in.
+        private mutating func sendNext() {
+            let user = skipsUser ? nil : currentUserId()
             let senders: [String?] = user == nil ? [nil] : [nil, user]
+            let end = roundEnd
             for sender in senders {
-                sending: while true {
-                    let indices = pending.indices.filter { pending[$0].userId == sender }.prefix(configuration.batchLimit)
-                    guard !indices.isEmpty else { break }
-                    let batch = AnalyticsBatch(
-                        sentAt: Analytics.milliseconds(now()),
-                        app: app,
-                        events: indices.map { index in
-                            let event = pending[index]
-                            return AnalyticsBatch.Event(name: event.name, timestamp: event.time, properties: event.properties.isEmpty ? nil : event.properties)
-                        }
-                    )
+                let batch = pending.filter { $0.id < end && $0.event.userId == sender }.prefix(configuration.batchLimit)
+                guard !batch.isEmpty else { continue }
+                let ids = batch.map(\.id)
+                let body = AnalyticsBatch(
+                    sentAt: Analytics.milliseconds(now()),
+                    app: app,
+                    events: batch.map { AnalyticsBatch.Event(name: $0.event.name, timestamp: $0.event.time, properties: $0.event.properties.isEmpty ? nil : $0.event.properties) }
+                )
+                sending = true
+                let api = api
+                let commands = commands
+                Task.detached(priority: .utility) {
                     do {
-                        try await api.trackEvents(batch, userId: sender)
+                        try await api.trackEvents(body, userId: sender)
+                        commands.yield(.sent(ids, nil))
                     } catch {
-                        switch error {
-                        case .notFound:
-                            // A server from before this endpoint existed. Stop asking until the next launch.
-                            unsupported = true
-                            pending.removeAll()
-                            save()
-                            return
-                        case .missingSession:
-                            // The session changed while this was being sent. These wait for their user to be back.
-                            break sending
-                        case .badRequest, .payloadTooLarge, .conflict, .forbidden, .unauthorized, .unexpectedStatus:
-                            // Refused for what it contains, so sending it again cannot work.
-                            remove(indices)
-                            continue sending
-                        case .offline, .timedOut, .cancelled, .rateLimited, .server, .transport, .invalidResponse:
-                            failures += 1
-                            save()
-                            schedule(after: retryDelay)
-                            return
-                        }
+                        commands.yield(.sent(ids, CapAPIError.from(error)))
                     }
-                    remove(indices)
-                    failures = 0
                 }
+                return
             }
-            if stored { save() }
+            endRound()
+        }
+
+        private mutating func finished(_ ids: [UInt64], _ error: CapAPIError?) {
+            switch error {
+            case nil:
+                remove(ids)
+                failures = 0
+                sendNext()
+            case .notFound:
+                // A server from before this endpoint existed. Stop asking until the next launch.
+                unsupported = true
+                pending.removeAll()
+                endRound()
+            case .missingSession:
+                skipsUser = true
+                sendNext()
+            case .badRequest, .payloadTooLarge, .conflict, .forbidden, .unauthorized, .unexpectedStatus:
+                // Refused for what it contains, so sending it again cannot work.
+                remove(ids)
+                sendNext()
+            case .offline, .timedOut, .cancelled, .rateLimited, .server, .transport, .invalidResponse:
+                failures += 1
+                schedule(after: retryDelay)
+                endRound(saving: true)
+            }
+        }
+
+        private mutating func endRound(saving: Bool = false) {
+            if saving || stored || !waiters.isEmpty { save() }
+            for waiter in waiters { waiter.resume() }
+            waiters.removeAll()
+            guard timer == nil, !unsupported else { return }
+            // Only for events this session may send; another user's wait for sign-in without a timer running.
+            let user = currentUserId()
+            if pending.contains(where: { $0.event.userId == nil || $0.event.userId == user }) {
+                schedule(after: configuration.flushInterval)
+            }
         }
 
         private var retryDelay: Duration {
@@ -355,8 +393,9 @@ extension Analytics {
             return min(doubled, configuration.maxRetryDelay)
         }
 
-        private mutating func remove(_ indices: some Collection<Int>) {
-            for index in indices.reversed() { pending.remove(at: index) }
+        private mutating func remove(_ ids: [UInt64]) {
+            let sent = Set(ids)
+            pending.removeAll { sent.contains($0.id) }
         }
 
         private mutating func trim() {
@@ -389,14 +428,16 @@ extension Analytics {
             guard let storage, let data = try? Data(contentsOf: storage) else { return }
             stored = true
             guard let events = try? JSONDecoder().decode([StoredEvent].self, from: data) else { return }
-            pending.insert(contentsOf: events, at: 0)
+            let waiting = pending.map(\.event)
+            pending.removeAll()
+            for event in events + waiting { enqueue(event) }
             trim()
         }
 
         private mutating func save() {
             guard let storage else { return }
             let fileManager = FileManager.default
-            guard !pending.isEmpty, let data = try? JSONEncoder().encode(pending) else {
+            guard !pending.isEmpty, let data = try? JSONEncoder().encode(pending.map(\.event)) else {
                 if stored { try? fileManager.removeItem(at: storage) }
                 stored = false
                 return
