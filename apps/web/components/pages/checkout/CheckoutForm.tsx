@@ -33,7 +33,7 @@ import {
 import { Segmented } from "@/components/pages/pricing/controls";
 import { homepageCopy } from "@/data/homepage-copy";
 import type { CheckoutPlan } from "@/lib/checkout/plans";
-import { formatUsEin } from "@/lib/checkout/us-ein";
+import { formatUsEin, usEinChange } from "@/lib/checkout/us-ein";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import {
 	CARD,
@@ -672,26 +672,21 @@ function PaymentForm({
 	};
 
 	const applyUsEin = async () => {
-		const value = usCompany ? ein.trim() : "";
-		const formatted = value ? formatUsEin(value) : null;
-		if (value && !formatted) {
+		const change = usEinChange({ ein, usCompany, appliedEin });
+		if (change.state === "invalid") {
 			setEinError("Enter your EIN as 9 digits, like 12-3456789.");
 			return false;
 		}
-		if (
-			usCompany ? formatted !== null && formatted === appliedEin : !appliedEin
-		) {
-			return true;
-		}
+		if (change.state === "unchanged") return true;
 		const result = await setProCheckoutUsEin({
 			clientSecret: await clientSecret,
-			ein: formatted ?? "",
+			ein: change.ein ?? "",
 		});
 		if (!result.ok) {
 			setError("Couldn't save your EIN. Please try again.");
 			return false;
 		}
-		setAppliedEin(formatted);
+		setAppliedEin(change.ein);
 		return true;
 	};
 
