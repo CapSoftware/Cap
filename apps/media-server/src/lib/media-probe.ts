@@ -416,6 +416,9 @@ export async function probeFastestFrameRate(
 	filePath: string,
 	abortSignal?: AbortSignal,
 ): Promise<number | null> {
+	if (!canAcceptNewProbeOperation()) {
+		throw new Error("Server is busy, please try again later");
+	}
 	const stopped = new AbortController();
 	const signal = abortSignal
 		? AbortSignal.any([abortSignal, stopped.signal])

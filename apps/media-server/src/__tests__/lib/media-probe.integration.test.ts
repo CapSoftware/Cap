@@ -4,6 +4,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	getMaxConcurrentProbeOperations,
+	registerMediaOperation,
+	unregisterMediaOperation,
+} from "../../lib/media-operations";
+import {
 	assertRemotePlaylistStaysOnHost,
 	checkVideoAccessible,
 	fastestFrameRate,
@@ -584,6 +589,23 @@ describe("fastest frame rate", () => {
 		expect(
 			await probeFastestFrameRate(join(FIXTURES_DIR, "test-offset-start.m2ts")),
 		).toBeNull();
+	});
+
+	test("does not start when the probe pool is full", async () => {
+		const running = Array.from(
+			{ length: getMaxConcurrentProbeOperations() },
+			() => registerMediaOperation("probe", () => {}),
+		);
+		try {
+			await expect(
+				probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH),
+			).rejects.toThrow("Server is busy");
+		} finally {
+			for (const operation of running) unregisterMediaOperation(operation);
+		}
+		expect(
+			await probeFastestFrameRate(TEST_VIDEO_WITH_AUDIO_PATH),
+		).not.toBeNull();
 	});
 
 	test("stops when the job is cancelled", async () => {
