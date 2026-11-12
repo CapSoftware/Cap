@@ -268,6 +268,7 @@ describe("Stripe webhook — developer credits", () => {
 			payment_status: "paid",
 			payment_intent: null,
 			amount_total: 0,
+			amount_subtotal: 2500,
 		});
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "checkout.session.completed",
@@ -299,6 +300,7 @@ describe("Stripe webhook — developer credits", () => {
 			payment_status: "no_payment_required",
 			payment_intent: null,
 			amount_total: 0,
+			amount_subtotal: 2500,
 		});
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "checkout.session.completed",
@@ -324,6 +326,7 @@ describe("Stripe webhook — developer credits", () => {
 			payment_status: "paid",
 			payment_intent: null,
 			amount_total: 0,
+			amount_subtotal: 2500,
 		});
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "checkout.session.completed",
@@ -343,6 +346,11 @@ describe("Stripe webhook — developer credits", () => {
 		["the payment is unpaid", { payment_status: "unpaid" }],
 		["it is not a payment checkout", { mode: "setup" }],
 		["the total is unknown", { amount_total: null }],
+		[
+			"the price before the code is not the amount being granted",
+			{ amount_subtotal: 500 },
+		],
+		["the price before the code is unknown", { amount_subtotal: null }],
 	])("grants nothing without a payment when %s", async (_label, overrides) => {
 		const session = makeCheckoutSession({
 			mode: "payment",
@@ -350,6 +358,7 @@ describe("Stripe webhook — developer credits", () => {
 			payment_status: "paid",
 			payment_intent: null,
 			amount_total: 0,
+			amount_subtotal: 2500,
 			...overrides,
 		});
 		mockStripe.webhooks.constructEvent.mockReturnValue({

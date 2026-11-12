@@ -62,7 +62,7 @@ async function grantDeveloperCredits(
 	const { accountId, amountCents } = session.metadata ?? {};
 	const paymentIntentId =
 		typeof session.payment_intent === "string" ? session.payment_intent : null;
-	const free = isFreeCreditCheckout(session);
+	const free = isFreeCreditCheckout(session, Number(amountCents));
 	const reference = paymentIntentId
 		? ({ id: paymentIntentId, type: "stripe_payment_intent" } as const)
 		: free

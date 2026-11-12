@@ -404,13 +404,16 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(500);
 	});
 
+	let buyers = 0;
 	const readyToBuy = () => {
+		const id = `user-buyer-${++buyers}`;
 		mockGetCurrentUser.mockResolvedValue({
 			...mockUser,
+			id,
 			stripeCustomerId: "cus_exist",
 		});
 		mockDb.limit
-			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([{ ...mockApp, ownerId: id }])
 			.mockResolvedValueOnce([
 				{ ...mockAccount, stripeCustomerId: "cus_exist" },
 			]);
@@ -420,7 +423,18 @@ describe("POST /api/developer/credits/checkout", () => {
 	};
 
 	const promotion = (coupon: Record<string, unknown>) => ({
-		data: [{ id: "promo_123", coupon: { valid: true, ...coupon } }],
+		data: [
+			{
+				id: "promo_123",
+				coupon: {
+					valid: true,
+					amount_off: 500,
+					currency: "usd",
+					percent_off: null,
+					...coupon,
+				},
+			},
+		],
 	});
 
 	it("sends no discount when no code is given", async () => {
@@ -471,6 +485,38 @@ describe("POST /api/developer/credits/checkout", () => {
 		[
 			"has a coupon that is no longer valid",
 			promotion({ valid: false, applies_to: { products: ["prod_dev_test"] } }),
+		],
+		[
+			"takes a percentage off",
+			promotion({
+				amount_off: null,
+				currency: null,
+				percent_off: 100,
+				applies_to: { products: ["prod_dev_test"] },
+			}),
+		],
+		[
+			"takes half off",
+			promotion({
+				amount_off: null,
+				currency: null,
+				percent_off: 50,
+				applies_to: { products: ["prod_dev_test"] },
+			}),
+		],
+		[
+			"is priced in another currency",
+			promotion({
+				currency: "eur",
+				applies_to: { products: ["prod_dev_test"] },
+			}),
+		],
+		[
+			"takes nothing off",
+			promotion({
+				amount_off: 0,
+				applies_to: { products: ["prod_dev_test"] },
+			}),
 		],
 		["does not exist", { data: [] }],
 	])("refuses a code that %s", async (_label, found) => {

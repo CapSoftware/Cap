@@ -8,10 +8,20 @@ export async function findCreditCode(code: string) {
 		limit: 1,
 		expand: ["data.coupon.applies_to"],
 	});
-	const promotion = found.data[0];
-	if (!promotion?.coupon.valid) return null;
+	const coupon = found.data[0]?.coupon;
+	if (!coupon?.valid) return null;
+	if (coupon.percent_off !== null && coupon.percent_off !== undefined) {
+		return null;
+	}
+	if (
+		typeof coupon.amount_off !== "number" ||
+		coupon.amount_off <= 0 ||
+		coupon.currency !== "usd"
+	) {
+		return null;
+	}
 	const product = developerCreditsProductId();
-	const products = promotion.coupon.applies_to?.products ?? [];
+	const products = coupon.applies_to?.products ?? [];
 	if (!product || !products.includes(product)) return null;
-	return promotion.id;
+	return found.data[0]?.id ?? null;
 }
