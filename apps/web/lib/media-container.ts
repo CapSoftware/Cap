@@ -12,6 +12,8 @@ const startsWith = (bytes: Uint8Array, signature: readonly number[]) =>
 
 const ISO_BOX_TYPES = ["ftyp", "moov", "mdat", "wide", "free", "skip"];
 const TS_PACKET_BYTES = 188;
+const M2TS_PACKET_BYTES = 192;
+const M2TS_SYNC_OFFSET = 4;
 
 export const MEDIA_CONTAINER_SNIFF_BYTES = 4096;
 
@@ -42,5 +44,13 @@ export function isSelfContainedMedia(bytes: Uint8Array) {
 	) {
 		return true;
 	}
+	if (
+		bytes.length > M2TS_PACKET_BYTES + M2TS_SYNC_OFFSET &&
+		bytes[M2TS_SYNC_OFFSET] === 0x47 &&
+		bytes[M2TS_PACKET_BYTES + M2TS_SYNC_OFFSET] === 0x47
+	) {
+		return true;
+	}
+	if (startsWith(bytes, [0x00, 0x00, 0x01, 0xba])) return true;
 	return false;
 }

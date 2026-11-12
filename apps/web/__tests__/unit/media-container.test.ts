@@ -36,6 +36,14 @@ describe("self-contained media check", () => {
 		ts[0] = 0x47;
 		ts[188] = 0x47;
 		expect(isSelfContainedMedia(ts), "mpeg-ts").toBe(true);
+		const m2ts = new Uint8Array(400);
+		m2ts[4] = 0x47;
+		m2ts[196] = 0x47;
+		expect(isSelfContainedMedia(m2ts), "camcorder m2ts").toBe(true);
+		expect(
+			isSelfContainedMedia(bytes(0x00, 0x00, 0x01, 0xba, 0x44, 0x00)),
+			"mpeg program stream",
+		).toBe(true);
 	});
 
 	it("refuses playlists and other files that can point somewhere else", () => {
@@ -60,6 +68,8 @@ describe("self-contained media check", () => {
 				Uint8Array.from([...text("RIFF"), 1, 2, 3, 4, ...text("WEBP")]),
 			],
 			["one stray sync byte", bytes(0x47, 0, 0, 0, 0)],
+			["one stray m2ts sync byte", bytes(0, 0, 0, 0, 0x47, 0, 0, 0)],
+			["mpeg start code that is not a pack", bytes(0x00, 0x00, 0x01, 0x00)],
 			["too short", bytes(0x1a, 0x45)],
 			["empty", new Uint8Array(0)],
 		];
