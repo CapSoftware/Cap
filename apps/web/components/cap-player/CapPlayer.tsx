@@ -16,6 +16,10 @@ export interface CapPlayerProps {
 	poster?: string;
 	aspectRatio?: string;
 	autoPlay?: boolean;
+	muted?: boolean;
+	loop?: boolean;
+	controls?: boolean;
+	startAt?: number;
 	focusOnMount?: boolean;
 	className?: string;
 	onFirstPlay?: () => void;
@@ -24,6 +28,7 @@ export interface CapPlayerProps {
 
 const IDLE_AFTER_MS = 2200;
 const SEEK_STEP_SECONDS = 5;
+const HOVER_INTENT_MS = 100;
 
 const clock = (seconds: number) => {
 	const whole = Math.max(0, Math.floor(seconds));
@@ -103,6 +108,10 @@ export const CapPlayer = ({
 	poster,
 	aspectRatio = "16 / 9",
 	autoPlay = false,
+	muted: startMuted = false,
+	loop = false,
+	controls = true,
+	startAt = 0,
 	focusOnMount = false,
 	className,
 	onFirstPlay,
@@ -115,26 +124,33 @@ export const CapPlayer = ({
 	const bufferedRef = useRef<HTMLDivElement>(null);
 	const timeRef = useRef<HTMLSpanElement>(null);
 	const qualityRef = useRef<HTMLSpanElement>(null);
+	const warmSource = useRef<() => void>(() => undefined);
 	const callbacks = useRef({ onFirstPlay, onEnded });
 	callbacks.current = { onFirstPlay, onEnded };
 
 	const [playing, setPlaying] = useState(false);
-	const [muted, setMuted] = useState(false);
+	const [muted, setMuted] = useState(startMuted);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [failed, setFailed] = useState(false);
 
 	const { hls, mp4 } = source;
 
 	useLayoutEffect(() => {
+		if (videoRef.current) videoRef.current.muted = startMuted;
+	}, [startMuted]);
+
+	useLayoutEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
 		setFailed(false);
-		return attachSource(
+		const attached = attachSource(
 			video,
 			{ hls, mp4 },
-			{ autoPlay, onFatal: () => setFailed(true) },
+			{ autoPlay, startAt, onFatal: () => setFailed(true) },
 		);
-	}, [hls, mp4, autoPlay]);
+		warmSource.current = attached.warm;
+		return attached.stop;
+	}, [hls, mp4, autoPlay, startAt]);
 
 	useLayoutEffect(() => {
 		if (!focusOnMount) return;
@@ -152,6 +168,7 @@ export const CapPlayer = ({
 		let frame = 0;
 		let idleTimer = 0;
 		let waitTimer = 0;
+		let intentTimer = 0;
 		let shownText = "";
 		let scrubbing = false;
 		let resumeAfterScrub = false;
@@ -331,6 +348,29 @@ export const CapPlayer = ({
 			wake();
 		};
 
+		// Loading may start a moment before the click that plays: when the
+		// mouse rests on a play button, or is pressed anywhere that plays. A
+		// mouse that only crosses the player must not start a download.
+		const onIntent = (event: PointerEvent) => {
+			window.clearTimeout(intentTimer);
+			if (event.pointerType !== "mouse") return;
+			if (!(event.target instanceof Element)) return;
+			if (event.type === "pointerdown") {
+				if (event.button !== 0) return;
+				if (event.target.closest('[data-action="toggle"]')) {
+					warmSource.current();
+				}
+			} else if (
+				event.type === "pointerover" &&
+				event.target.closest('button[data-action="toggle"]')
+			) {
+				intentTimer = window.setTimeout(
+					() => warmSource.current(),
+					HOVER_INTENT_MS,
+				);
+			}
+		};
+
 		const onAction = (event: Event) => {
 			const target = event.target;
 			if (!(target instanceof Element)) return;
@@ -366,6 +406,9 @@ export const CapPlayer = ({
 		track.addEventListener("pointerup", onTrackUp);
 		track.addEventListener("pointercancel", onTrackUp);
 		root.addEventListener("keydown", onKey);
+		root.addEventListener("pointerover", onIntent);
+		root.addEventListener("pointerleave", onIntent);
+		root.addEventListener("pointerdown", onIntent);
 		root.addEventListener("click", onAction);
 		root.addEventListener("pointermove", wake);
 		root.addEventListener("focusin", wake);
@@ -380,6 +423,7 @@ export const CapPlayer = ({
 			cancelAnimationFrame(frame);
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(waitTimer);
+			window.clearTimeout(intentTimer);
 			for (const [name, handler] of videoEvents) {
 				video.removeEventListener(name, handler);
 			}
@@ -388,6 +432,9 @@ export const CapPlayer = ({
 			track.removeEventListener("pointerup", onTrackUp);
 			track.removeEventListener("pointercancel", onTrackUp);
 			root.removeEventListener("keydown", onKey);
+			root.removeEventListener("pointerover", onIntent);
+			root.removeEventListener("pointerleave", onIntent);
+			root.removeEventListener("pointerdown", onIntent);
 			root.removeEventListener("click", onAction);
 			root.removeEventListener("pointermove", wake);
 			root.removeEventListener("focusin", wake);
@@ -401,6 +448,7 @@ export const CapPlayer = ({
 			className={`${styles.player} ${className ?? ""}`}
 			style={{ "--cap-player-ratio": aspectRatio } as CSSProperties}
 			data-playing={playing}
+			data-controls={controls}
 			data-idle="false"
 			data-waiting="false"
 		>
@@ -408,7 +456,8 @@ export const CapPlayer = ({
 				ref={videoRef}
 				className={styles.video}
 				poster={poster}
-				preload="auto"
+				preload="none"
+				loop={loop}
 				playsInline
 				data-action="toggle"
 				aria-label={title}
@@ -421,6 +470,16 @@ export const CapPlayer = ({
 					This video could not be played.
 				</p>
 			) : null}
+			{controls || failed ? null : (
+				<button
+					type="button"
+					className={styles.cover}
+					data-action="toggle"
+					aria-label={playing ? "Pause" : "Play"}
+				>
+					{playing ? <PauseIcon /> : <PlayIcon />}
+				</button>
+			)}
 			<div className={styles.bar}>
 				<button
 					type="button"
