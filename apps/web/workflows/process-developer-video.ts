@@ -26,6 +26,8 @@ const TIMED_OUT =
 	"Processing took too long and was stopped. Upload the video again.";
 const INTERNAL_FAILURE =
 	"Processing failed because of a problem on our side. Upload the video again.";
+const UNOPENABLE = "The uploaded file could not be opened. Upload it again.";
+const MAX_UNCLEAR_PROBES = 4;
 
 type Prepared = DeveloperVideoPreparation | { refused: string };
 
@@ -39,7 +41,7 @@ export async function processDeveloperVideoWorkflow(
 	try {
 		const deadline = Date.now() + PROCESSING_DEADLINE_MS;
 
-		for (;;) {
+		for (let unclear = 0; ; ) {
 			const prepared = await prepareVideo(videoId, encodeId);
 			if (typeof prepared === "object") {
 				await failVideo(videoId, encodeId, prepared.refused);
@@ -47,6 +49,10 @@ export async function processDeveloperVideoWorkflow(
 			}
 			if (prepared === "stale") return { success: false };
 			if (prepared === "ready") break;
+			if (prepared === "unclear" && ++unclear >= MAX_UNCLEAR_PROBES) {
+				await failVideo(videoId, encodeId, UNOPENABLE);
+				return { success: false };
+			}
 			if (Date.now() >= deadline) {
 				await failVideo(videoId, encodeId, TIMED_OUT);
 				return { success: false };

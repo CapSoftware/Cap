@@ -882,6 +882,7 @@ describe("developer video dispatch", () => {
 		mocks.probe.mockResolvedValue({
 			status: "rejected",
 			message: "Invalid data found when processing input",
+			unusable: true,
 		});
 		mocks.store.video = developerVideo({
 			processing: processingState({ probe: null }),
@@ -902,22 +903,23 @@ describe("developer video dispatch", () => {
 			"This file is a playlist, not a video. Upload the video file itself.",
 		],
 		["No video stream found", "This file has no video track."],
+		["Media input is empty", "The uploaded file is empty. Upload it again."],
 		[
-			"Media input is not accessible",
-			"The uploaded file is empty or could not be opened. Upload it again.",
-		],
-		[
-			"Error fetching https://storage.example/secret/path?sig=abc 403 Forbidden",
+			"Media input could not be read",
 			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
 		],
 		[
-			"Assertion failed.",
+			"Input has an unsupported or unrecognizable format.",
 			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
 		],
 	])(
 		"turns the probe error %j into a plain reason",
 		async (message, reason) => {
-			mocks.probe.mockResolvedValue({ status: "rejected", message });
+			mocks.probe.mockResolvedValue({
+				status: "rejected",
+				message,
+				unusable: false,
+			});
 			mocks.store.video = developerVideo({
 				processing: processingState({ probe: null }),
 			});
@@ -927,6 +929,45 @@ describe("developer video dispatch", () => {
 			).rejects.toThrow(reason);
 		},
 	);
+
+	it.each([
+		"Media input is not accessible",
+		"Error fetching https://storage.example/secret/path?sig=abc 503 Service Unavailable",
+		"Assertion failed.",
+	])(
+		"does not refuse a video for the probe error %j, which may clear up",
+		async (message) => {
+			mocks.probe.mockResolvedValue({
+				status: "rejected",
+				message,
+				unusable: false,
+			});
+			mocks.store.video = developerVideo({
+				processing: processingState({ probe: null }),
+			});
+
+			expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
+				"unclear",
+			);
+			expect(video().status).toBe("processing");
+			expect(video().processing?.probing).toBeUndefined();
+		},
+	);
+
+	it("trusts the media server when it says the file cannot be used", async () => {
+		mocks.probe.mockResolvedValue({
+			status: "rejected",
+			message: "Some new wording",
+			unusable: true,
+		});
+		mocks.store.video = developerVideo({
+			processing: processingState({ probe: null }),
+		});
+
+		await expect(
+			prepareDeveloperVideoProcessing("video-1", "encode-1"),
+		).rejects.toBeInstanceOf(DeveloperVideoRejected);
+	});
 
 	it("refuses an empty upload without asking the media server", async () => {
 		mocks.head.mockResolvedValue({ bytes: 0, contentType: "video/mp4" });

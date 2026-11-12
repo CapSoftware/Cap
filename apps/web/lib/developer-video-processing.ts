@@ -70,7 +70,12 @@ export interface DeveloperVideoClaim {
 	encodeId: string;
 }
 
-export type DeveloperVideoPreparation = "ready" | "retry" | "stale" | "probing";
+export type DeveloperVideoPreparation =
+	| "ready"
+	| "retry"
+	| "stale"
+	| "probing"
+	| "unclear";
 
 export type DeveloperVideoDispatch =
 	| "dispatched"
@@ -275,10 +280,23 @@ function fileProblem(message: string, fallback: string): string {
 	if (/no video (stream|track)/i.test(message)) {
 		return "This file has no video track.";
 	}
-	if (/\bempty\b|not accessible/i.test(message)) {
-		return "The uploaded file is empty or could not be opened. Upload it again.";
+	if (/\bempty\b/i.test(message)) {
+		return "The uploaded file is empty. Upload it again.";
 	}
 	return fallback;
+}
+
+// A probe error only proves the file is bad when the media server says so
+// (422) or names a problem with the file. Anything else may be a storage or
+// server fault that clears up, so it must not end the video.
+const FILE_PROBLEM =
+	/playlist|resource list|could not be read|unsupported or unrecognizable format|no video (stream|track)|input is empty/i;
+
+function probeFoundFileProblem(probed: {
+	message: string;
+	unusable: boolean;
+}): boolean {
+	return probed.unusable || FILE_PROBLEM.test(probed.message);
 }
 
 export function isDeveloperVideoRefusal(
@@ -438,8 +456,13 @@ export async function prepareDeveloperVideoProcessing(
 		if (probed.status === "rejected") {
 			console.warn("[developer-video] Probe rejected the upload", {
 				videoId,
-				message: probed.message,
+				message: developerVideoFailureReason(probed.message),
+				unusable: probed.unusable,
 			});
+			if (!probeFoundFileProblem(probed)) {
+				await releaseProbe(videoId, encodeId, token);
+				return "unclear";
+			}
 			throw new DeveloperVideoRejected(
 				fileProblem(probed.message, UNREADABLE_FILE),
 			);
