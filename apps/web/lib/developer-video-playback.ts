@@ -10,6 +10,7 @@ import {
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
 import {
+	developerVideoUrlAnswersAnyOrigin,
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
@@ -99,22 +100,20 @@ async function redirectTo(key: string, request: Request): Promise<Response> {
 // longer than this signs only its init section and first segment, which is all
 // a player needs for the first frame. It lists the later segments by file
 // name, which a player resolves to this route and follows its redirect to the
-// same signed URL.
+// same signed URL. `reachedByRedirect` says whether media at a signed URL can
+// be fetched that way. Where it cannot, every segment stays signed.
 const FULLY_SIGNED_SEGMENTS = 15;
 
 export async function signMediaPlaylist(
 	playlist: string,
 	sign: (name: string) => Promise<string>,
+	reachedByRedirect: (signedUrl: string) => boolean,
 ): Promise<string> {
 	const signed = new Map<string, string>();
-	const mediaFile = (name: string) => {
+	const resolve = async (name: string) => {
 		if (!MEDIA_FILE_PATTERN.test(name)) {
 			throw new Error("Playlist references an unexpected file");
 		}
-		return name;
-	};
-	const resolve = async (name: string) => {
-		mediaFile(name);
 		const existing = signed.get(name);
 		if (existing) return existing;
 		const url = await sign(name);
@@ -126,7 +125,7 @@ export async function signMediaPlaylist(
 	const segments = source.filter(
 		(line) => line.length > 0 && !line.startsWith("#"),
 	).length;
-	const signedSegments = segments > FULLY_SIGNED_SEGMENTS ? 1 : segments;
+	const long = segments > FULLY_SIGNED_SEGMENTS;
 	let segment = 0;
 
 	const lines: string[] = [];
@@ -137,9 +136,9 @@ export async function signMediaPlaylist(
 			const url = await resolve(uri[1]);
 			lines.push(line.replace(uri[0], () => `URI="${url}"`));
 		} else if (line.length > 0 && !line.startsWith("#")) {
-			lines.push(
-				segment++ < signedSegments ? await resolve(line) : mediaFile(line),
-			);
+			const url = await resolve(line);
+			lines.push(long && segment > 0 && reachedByRedirect(url) ? line : url);
+			segment++;
 		} else {
 			lines.push(line);
 		}
@@ -286,12 +285,15 @@ export async function developerPlaybackResponse(
 	return playlistResponse(
 		file === DEVELOPER_VIDEO_MASTER_PLAYLIST
 			? leadWithStartRendition(playlist)
-			: await signMediaPlaylist(playlist, (name) =>
-					signedDeveloperVideoUrl(
-						`${keys.hlsPrefix}${name}`,
-						signedUrlValidity(),
-						request,
-					),
+			: await signMediaPlaylist(
+					playlist,
+					(name) =>
+						signedDeveloperVideoUrl(
+							`${keys.hlsPrefix}${name}`,
+							signedUrlValidity(),
+							request,
+						),
+					developerVideoUrlAnswersAnyOrigin,
 				),
 	);
 }

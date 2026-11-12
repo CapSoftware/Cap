@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	readText: vi.fn(),
 	sign: vi.fn(),
+	answersAnyOrigin: vi.fn(),
 	standing: vi.fn(),
 }));
 
@@ -32,6 +33,7 @@ vi.mock("@/lib/infra-standing", () => ({
 	getInfraAppStanding: mocks.standing,
 }));
 vi.mock("@/lib/developer-video-storage", () => ({
+	developerVideoUrlAnswersAnyOrigin: mocks.answersAnyOrigin,
 	readDeveloperVideoText: mocks.readText,
 	signedDeveloperVideoUrl: mocks.sign,
 }));
@@ -137,6 +139,7 @@ beforeEach(() => {
 	mocks.store.video = ready();
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
+	mocks.answersAnyOrigin.mockReturnValue(true);
 	mocks.sign.mockImplementation(
 		async (key: string, validity: { signingDate: Date; expiresIn: number }) =>
 			`https://cdn.example/${key}?expires=${cloudFrontExpiresAt(validity, Date.now())}&sig=a,b`,
@@ -411,6 +414,18 @@ describe("developer video playback route", () => {
 			].join("\n"),
 		);
 		expect(mocks.sign).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps every segment of a long playlist signed where media cannot be reached through a redirect", async () => {
+		mocks.readText.mockResolvedValue(storedRendition(40));
+		mocks.answersAnyOrigin.mockReturnValue(false);
+		const signed = `https://cdn.example/${HLS_PREFIX}1080p.m4s?expires=${EXPIRES}&sig=a,b`;
+
+		const lines = (await (await play("1080p.m3u8")).text()).split("\n");
+
+		expect(lines.filter((line) => line === signed)).toHaveLength(40);
+		expect(lines).not.toContain("1080p.m4s");
+		expect(mocks.answersAnyOrigin).toHaveBeenCalledWith(signed);
 	});
 
 	it("serves a 21 minute playlist in about 21 KB instead of 250 KB", async () => {
