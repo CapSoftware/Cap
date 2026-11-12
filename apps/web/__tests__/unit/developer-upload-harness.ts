@@ -147,6 +147,7 @@ export async function storageMock() {
 			storage(() => state.presign(...args) ?? "https://storage.test/part"),
 		complete: (...args: unknown[]) => storage(() => state.complete(...args)),
 		abort: (...args: unknown[]) => storage(() => state.abort(...args)),
+		listUploads: () => storage(() => ({ Uploads: [] })),
 		listParts: () =>
 			storage(() => [{ PartNumber: 1, ETag: '"etag-1"', Size: 1_048_576 }]),
 	};
