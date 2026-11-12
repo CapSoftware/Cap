@@ -6,6 +6,7 @@ import {
 	developerTranscripts,
 	users,
 } from "@cap/database/schema";
+import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
 import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { start } from "workflow/api";
 import { developerIdFromKey } from "@/lib/developer-ids";
@@ -21,14 +22,15 @@ import {
 	presignDeveloperUpload,
 } from "@/lib/developer-transcript-storage";
 import {
+	publicTranscriptWords,
 	TRANSCRIPT_MAX_METADATA_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_LENGTH,
-	TRANSCRIPT_UPLOAD_URL_TTL_SECONDS,
 	type TranscriptResultObject,
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import { canUseInfra } from "@/lib/infra-access";
 import {
@@ -70,6 +72,52 @@ const IDEMPOTENCY_CONFLICT = fail(
 	"Idempotency key was already used for a different request",
 	"Use a new Idempotency-Key for a new transcript.",
 );
+
+const idempotencyMismatch = (field: string) =>
+	fail(
+		409,
+		"idempotency_conflict",
+		`Idempotency key was already used with a different ${field}`,
+		"Send the same request to repeat it, or use a new Idempotency-Key for a new transcript.",
+	);
+
+const canonicalJson = (value: unknown): string => {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value !== null && typeof value === "object") {
+		return `{${Object.entries(value)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+};
+
+function replayedWithDifferent(
+	existing: Pick<
+		typeof developerTranscripts.$inferSelect,
+		"name" | "requestedLanguage" | "externalUserId" | "metadata"
+	>,
+	request: {
+		name: string;
+		requestedLanguage: string | null;
+		externalUserId: string | null;
+		metadata: Record<string, unknown> | null;
+	},
+) {
+	if (existing.name !== request.name) return "name";
+	if ((existing.requestedLanguage ?? null) !== request.requestedLanguage) {
+		return "language";
+	}
+	if ((existing.externalUserId ?? null) !== request.externalUserId) {
+		return "userId";
+	}
+	if (
+		canonicalJson(existing.metadata ?? null) !== canonicalJson(request.metadata)
+	) {
+		return "metadata";
+	}
+	return null;
+}
 
 const IDEMPOTENCY_KEY_RETIRED = fail(
 	409,
@@ -145,7 +193,7 @@ export function validateTranscriptOptions(input: TranscriptOptionsInput):
 			400,
 			"invalid_language",
 			"Language is not supported",
-			'Use "auto" or a supported two-letter language code such as "en".',
+			`Use "auto" or one of ${AI_GENERATION_LANGUAGE_CODES.join(", ")}.`,
 		);
 	}
 	const externalUserId = input.userId?.trim() || null;
@@ -327,13 +375,22 @@ export async function createTranscriptFromUrl(
 		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
 		: nanoId();
 
+	const differsFromRequest = (existing: TranscriptRow) => {
+		if (existing.sourceType !== "url") return IDEMPOTENCY_CONFLICT;
+		if (existing.sourceUrl !== url) return idempotencyMismatch("url");
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? transcriptNameFromUrl(url),
+		});
+		if (different) return idempotencyMismatch(different);
+		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
+	};
+
 	if (input.idempotencyKey) {
 		const existing = await findTranscriptAnyState(appId, id);
 		if (existing) {
-			if (existing.sourceType !== "url" || existing.sourceUrl !== url) {
-				return IDEMPOTENCY_CONFLICT;
-			}
-			if (existing.deletedAt) return IDEMPOTENCY_KEY_RETIRED;
+			const conflict = differsFromRequest(existing);
+			if (conflict) return conflict;
 			if (existing.status === "queued") {
 				await dispatchTranscript(id, "queued");
 			}
@@ -378,6 +435,11 @@ export async function createTranscriptFromUrl(
 		})
 		.onDuplicateKeyUpdate({ set: { id } });
 
+	const stored = await findTranscriptAnyState(appId, id);
+	if (!stored) return NOT_FOUND;
+	const conflict = differsFromRequest(stored);
+	if (conflict) return conflict;
+
 	const dispatched = await dispatchTranscript(id, "queued");
 	if (dispatched === "failed") {
 		await db()
@@ -395,9 +457,6 @@ export async function createTranscriptFromUrl(
 
 	const transcript = await findTranscript(appId, id);
 	if (!transcript) return NOT_FOUND;
-	if (transcript.sourceType !== "url" || transcript.sourceUrl !== url) {
-		return IDEMPOTENCY_CONFLICT;
-	}
 	return { ok: true, transcript };
 }
 
@@ -408,17 +467,30 @@ export type TranscriptUploadTarget = {
 	expiresAt: string;
 };
 
-async function uploadTargetFor(
+async function issueUploadTarget(
+	transcriptId: string,
 	key: string,
 	contentLength: number,
-): Promise<TranscriptUploadTarget> {
+): Promise<{ target: TranscriptUploadTarget; issuedAt: Date }> {
+	const url = await presignDeveloperUpload(key, contentLength);
+	const issuedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+	await db()
+		.update(developerTranscripts)
+		.set({ updatedAt: issuedAt })
+		.where(
+			and(
+				eq(developerTranscripts.id, transcriptId),
+				eq(developerTranscripts.status, "uploading"),
+			),
+		);
 	return {
-		method: "PUT",
-		url: await presignDeveloperUpload(key, contentLength),
-		headers: { "Content-Length": String(contentLength) },
-		expiresAt: new Date(
-			Date.now() + TRANSCRIPT_UPLOAD_URL_TTL_SECONDS * 1000,
-		).toISOString(),
+		issuedAt,
+		target: {
+			method: "PUT",
+			url,
+			headers: { "Content-Length": String(contentLength) },
+			expiresAt: transcriptUploadExpiry({ updatedAt: issuedAt }).toISOString(),
+		},
 	};
 }
 
@@ -467,20 +539,28 @@ export async function createTranscriptUpload(
 	const keys = transcriptObjectKeys(appId, id);
 
 	const replay = async (existing: TranscriptRow) => {
-		if (
-			existing.sourceType !== "upload" ||
-			existing.sourceBytes !== input.contentLength
-		) {
-			return IDEMPOTENCY_CONFLICT;
+		if (existing.sourceType !== "upload") return IDEMPOTENCY_CONFLICT;
+		if (existing.sourceBytes !== input.contentLength) {
+			return idempotencyMismatch("contentLength");
 		}
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? transcriptNameFromFile(input.fileName),
+		});
+		if (different) return idempotencyMismatch(different);
 		if (existing.deletedAt) return IDEMPOTENCY_KEY_RETIRED;
+		if (existing.status !== "uploading") {
+			return { ok: true as const, transcript: existing, upload: null };
+		}
+		const issued = await issueUploadTarget(
+			existing.id,
+			keys.source,
+			input.contentLength,
+		);
 		return {
 			ok: true as const,
-			transcript: existing,
-			upload:
-				existing.status === "uploading"
-					? await uploadTargetFor(keys.source, input.contentLength)
-					: null,
+			transcript: { ...existing, updatedAt: issued.issuedAt },
+			upload: issued.target,
 		};
 	};
 
@@ -535,7 +615,7 @@ export async function startTranscriptUpload(
 			409,
 			"upload_not_found",
 			"The file has not been uploaded yet",
-			"PUT the file to the upload URL, then start the transcript again.",
+			"PUT the file to the upload URL, then start the transcript again. If the URL has expired, repeat the create request with the same Idempotency-Key to get a new one.",
 		);
 	}
 	if (size > TRANSCRIPT_MAX_UPLOAD_BYTES) {
@@ -571,7 +651,8 @@ export async function getTranscriptResult(
 	const stored = await getDeveloperObjectText(transcript.resultKey);
 	if (stored === null) return null;
 	try {
-		return JSON.parse(stored) as TranscriptResultObject;
+		const result = JSON.parse(stored) as TranscriptResultObject;
+		return { ...result, words: publicTranscriptWords(result.words ?? []) };
 	} catch {
 		return null;
 	}
@@ -766,6 +847,9 @@ export async function expireStaleTranscripts(now = new Date()) {
 				and(
 					eq(developerTranscripts.id, row.id),
 					eq(developerTranscripts.status, row.status),
+					uploading
+						? lt(developerTranscripts.updatedAt, uploadCutoff)
+						: undefined,
 				),
 			);
 		if (affectedRows(result) === 0) continue;

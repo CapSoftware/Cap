@@ -11,6 +11,7 @@ export const TRANSCRIPT_MAX_DURATION_SECONDS = 4 * 60 * 60;
 export const TRANSCRIPT_DURATION_SLACK_SECONDS = 1;
 export const TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS = 1_000;
 export const TRANSCRIPT_UPLOAD_URL_TTL_SECONDS = 60 * 60;
+export const TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 export const TRANSCRIPT_MAX_URL_LENGTH = 2_048;
 export const TRANSCRIPT_MAX_METADATA_BYTES = 8_192;
 
@@ -40,7 +41,6 @@ export type TranscriptWord = {
 	text: string;
 	start: number;
 	end: number;
-	confidence: number | null;
 };
 
 export type TranscriptSegment = {
@@ -126,6 +126,33 @@ export function microCreditsToDollars(microCredits: number) {
 
 const iso = (value: Date | null) => (value ? value.toISOString() : null);
 
+export function publicSourceUrl(url: string | null) {
+	if (!url) return null;
+	const end = url.search(/[?#]/);
+	return end === -1 ? url : url.slice(0, end);
+}
+
+const lastUpdate = (row: { updatedAt: Date; completedAt: Date | null }) =>
+	row.completedAt && row.completedAt.getTime() > row.updatedAt.getTime()
+		? row.completedAt
+		: row.updatedAt;
+
+export function transcriptUploadExpiry(row: { updatedAt: Date }) {
+	return new Date(
+		row.updatedAt.getTime() + TRANSCRIPT_UPLOAD_URL_TTL_SECONDS * 1000,
+	);
+}
+
+export function publicTranscriptWords(
+	words: readonly TranscriptWord[],
+): TranscriptWord[] {
+	return words.map((word) => ({
+		text: word.text,
+		start: word.start,
+		end: word.end,
+	}));
+}
+
 export function serializeTranscript(
 	row: TranscriptSummaryRow & { text?: string | null },
 	options: { includeText?: boolean } = {},
@@ -137,7 +164,7 @@ export function serializeTranscript(
 		name: row.name,
 		source:
 			row.sourceType === "url"
-				? { type: "url" as const, url: row.sourceUrl }
+				? { type: "url" as const, url: publicSourceUrl(row.sourceUrl) }
 				: { type: "upload" as const, url: null },
 		durationSeconds: row.durationSeconds,
 		language: row.language,
@@ -157,7 +184,7 @@ export function serializeTranscript(
 		userId: row.externalUserId,
 		metadata: row.metadata ?? null,
 		createdAt: row.createdAt.toISOString(),
-		updatedAt: row.updatedAt.toISOString(),
+		updatedAt: lastUpdate(row).toISOString(),
 		completedAt: iso(row.completedAt),
 	};
 }
@@ -171,7 +198,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		status: row.status,
 		name: row.name,
 		sourceType: row.sourceType,
-		sourceUrl: row.sourceUrl,
+		sourceUrl: publicSourceUrl(row.sourceUrl),
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -180,7 +207,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		errorMessage: row.status === "error" ? row.errorMessage : null,
 		externalUserId: row.externalUserId,
 		createdAt: row.createdAt.toISOString(),
-		updatedAt: row.updatedAt.toISOString(),
+		updatedAt: lastUpdate(row).toISOString(),
 		completedAt: row.completedAt?.toISOString() ?? null,
 	};
 }
@@ -211,10 +238,6 @@ export function buildTranscriptResult(input: {
 		text: word.text,
 		start: seconds(word.start),
 		end: seconds(word.end),
-		confidence:
-			typeof word.confidence === "number" && Number.isFinite(word.confidence)
-				? word.confidence
-				: null,
 	}));
 
 	const segments: TranscriptSegment[] = [];
