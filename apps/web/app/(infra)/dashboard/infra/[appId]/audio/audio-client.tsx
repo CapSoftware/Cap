@@ -15,7 +15,7 @@ import {
 } from "@/actions/developers/transcripts";
 import { TRANSCRIPT_MAX_UPLOAD_BYTES } from "@/lib/developer-transcripts";
 import { infraAppPath } from "@/lib/infra-routes";
-import { isDefinitiveRejection } from "@/lib/infra-upload";
+import { isDefinitiveRejection, retryAfterMs } from "@/lib/infra-upload";
 import { formatCharge, formatDuration } from "@/lib/infra-usage";
 import { CopyButton, CopyTextButton } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
@@ -37,6 +37,7 @@ const POLL_INTERVAL_MS = 2500;
 const PAGE_STEP = 50;
 const PUT_ATTEMPTS = 3;
 const START_ATTEMPTS = 3;
+const RATE_LIMIT_ATTEMPTS = 6;
 const CANCELLED = "Upload cancelled";
 const NEEDS_CREDITS = "insufficient_credits";
 
@@ -46,6 +47,8 @@ const dateFormat = new Intl.DateTimeFormat("en-US", {
 	year: "numeric",
 	timeZone: "UTC",
 });
+
+const NONE = <span className="text-[rgba(232,236,244,0.3)]">none</span>;
 
 const STATUS_LABELS: Record<AudioTranscriptRow["status"], string> = {
 	uploading: "Waiting for file",
@@ -60,6 +63,7 @@ class UploadError extends Error {
 		message: string,
 		readonly status = 0,
 		readonly code = "",
+		readonly retryAfter: string | null = null,
 	) {
 		super(message);
 	}
@@ -113,7 +117,14 @@ function putFile(
 			signal.removeEventListener("abort", abort);
 			if (xhr.status >= 200 && xhr.status < 300) resolve();
 			else {
-				reject(new UploadError("Storage did not accept the file", xhr.status));
+				reject(
+					new UploadError(
+						"Storage did not accept the file",
+						xhr.status,
+						"",
+						xhr.getResponseHeader("Retry-After"),
+					),
+				);
 			}
 		};
 		xhr.onerror = () => {
@@ -237,7 +248,7 @@ export function AudioClient({
 			transcriptId = created.transcript.id;
 			stopIfCancelled();
 
-			for (let attempt = 1; ; attempt++) {
+			for (let attempt = 1, limited = 0; ; ) {
 				try {
 					await putFile(
 						created.upload.url,
@@ -247,15 +258,17 @@ export function AudioClient({
 					);
 					break;
 				} catch (error) {
-					const status = error instanceof UploadError ? error.status : 0;
-					if (
-						signal.aborted ||
-						attempt >= PUT_ATTEMPTS ||
-						isDefinitiveRejection(status)
-					) {
+					if (signal.aborted || !(error instanceof UploadError)) throw error;
+					if (error.status === 429 && limited < RATE_LIMIT_ATTEMPTS) {
+						limited++;
+						await pause(retryAfterMs(error.retryAfter), signal);
+						continue;
+					}
+					if (attempt >= PUT_ATTEMPTS || isDefinitiveRejection(error.status)) {
 						throw error;
 					}
 					await pause(1000 * attempt, signal);
+					attempt++;
 				}
 			}
 
@@ -347,7 +360,7 @@ export function AudioClient({
 		await refresh();
 	};
 
-	const description = `Turn audio or video into text. ${pricePerHour} per audio hour, billed by the second from your credits.`;
+	const description = `Audio or video to text. ${pricePerHour} per audio hour, billed by the second.`;
 
 	if (!available) {
 		return (
@@ -571,16 +584,18 @@ export function AudioClient({
 											"text-right text-[13px] tabular-nums",
 										)}
 									>
-										{formatDuration(row.durationSeconds) ?? "pending"}
+										{formatDuration(row.durationSeconds) ??
+											(row.status === "error" ? NONE : "pending")}
 									</td>
-									<td
-										className={clsx(
-											TD,
-											row.status === "error" && "text-[#F2A199]",
-											row.status === "complete" && "text-[#E8ECF4]",
-										)}
-									>
-										{STATUS_LABELS[row.status]}
+									<td className={TD}>
+										<span
+											className={clsx(
+												row.status === "error" && "text-[#F2A199]",
+												row.status === "complete" && "text-[#E8ECF4]",
+											)}
+										>
+											{STATUS_LABELS[row.status]}
+										</span>
 									</td>
 									<td
 										className={clsx(
