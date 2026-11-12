@@ -598,6 +598,24 @@ pub async fn usage(client: &AgentClient, app_id: &str) -> Result<Value, AgentApi
     }))
 }
 
+pub const NO_SPEECH_NOTE: &str =
+    "No speech was found, so the transcript is empty. It was billed for its audio length.";
+
+pub fn transcript_has_no_speech(value: &Value) -> bool {
+    transcript_status(value) == Some("complete")
+        && value
+            .get("transcript")
+            .and_then(|transcript| transcript.get("wordCount"))
+            .and_then(Value::as_u64)
+            == Some(0)
+        && value
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+}
+
 pub fn video_create_body(
     file_name: &str,
     content_length: u64,
@@ -673,9 +691,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        TranscriptOptions, transcript_failure, transcript_file_body, transcript_path,
-        transcript_status, transcript_url_body, validate_wait_seconds, video_create_body,
-        without_upload_target,
+        TranscriptOptions, transcript_failure, transcript_file_body, transcript_has_no_speech,
+        transcript_path, transcript_status, transcript_url_body, validate_wait_seconds,
+        video_create_body, without_upload_target,
     };
 
     #[test]
@@ -736,6 +754,29 @@ mod tests {
         assert_eq!(error.code, "TRANSCRIPT_FAILED");
         assert!(error.message.contains("insufficient_credits"));
         assert_eq!(error.request_id.as_deref(), Some("r1"));
+    }
+
+    #[test]
+    fn only_a_complete_transcript_without_words_counts_as_no_speech() {
+        let no_speech = |status: &str, words: serde_json::Value| {
+            transcript_has_no_speech(&json!({
+                "transcript": { "status": status, "wordCount": words },
+                "text": "",
+            }))
+        };
+        assert!(no_speech("complete", json!(0)));
+        assert!(!no_speech("complete", json!(12)));
+        assert!(!no_speech("complete", json!(null)));
+        assert!(!no_speech("error", json!(0)));
+        assert!(!no_speech("processing", json!(null)));
+        assert!(!transcript_has_no_speech(&json!({ "text": "" })));
+        assert!(!transcript_has_no_speech(&json!({
+            "transcript": { "status": "complete", "wordCount": 0 },
+            "text": "hello there",
+        })));
+        assert!(transcript_has_no_speech(&json!({
+            "transcript": { "status": "complete", "wordCount": 0 },
+        })));
     }
 
     #[test]

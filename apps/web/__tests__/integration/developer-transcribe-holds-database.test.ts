@@ -30,6 +30,8 @@ const fixture = vi.hoisted(() => ({
 	sleeps: 0,
 	sleepSeconds: 0,
 	sourceReads: 0,
+	noSpeech: false,
+	speechCalls: 0,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -112,7 +114,9 @@ vi.mock("@/lib/developer-transcript-audio", async (importOriginal) => ({
 vi.mock("@/lib/developer-transcript-speech", () => ({
 	parseTranscriptLanguage: () => "auto",
 	transcribeSpeech: async () => {
+		fixture.speechCalls += 1;
 		await new Promise((resolve) => setTimeout(resolve, 20));
+		if (fixture.noSpeech) return { state: "no_speech" as const };
 		return {
 			state: "ok" as const,
 			text: "hello world",
@@ -285,6 +289,50 @@ describe.skipIf(!databaseUrl)("transcript holds on a real database", () => {
 		fixture.sleeps = 0;
 		fixture.sleepSeconds = 0;
 		fixture.sourceReads = 0;
+		fixture.noSpeech = false;
+		fixture.speechCalls = 0;
+	});
+
+	it("bills audio with no speech once each when transcripts and repeat deliveries race", async () => {
+		fixture.noSpeech = true;
+		const balance = 3 * FULL_HOLD;
+		const appId = await makeApp(balance);
+		const ids = await Promise.all(
+			Array.from({ length: 8 }, () => queueUpload(appId, BIG_FILE, 600)),
+		);
+		const cost = transcriptionMicroCredits(600);
+
+		const { peak } = await watchingHolds(appId, () =>
+			Promise.all([...ids, ...ids, ...ids].map(run)),
+		);
+		await Promise.all(ids.map(run));
+
+		const rows = await database()
+			.select({
+				status: developerTranscripts.status,
+				text: developerTranscripts.text,
+				wordCount: developerTranscripts.wordCount,
+				billed: developerTranscripts.billedMicroCredits,
+				reserved: developerTranscripts.reservedMicroCredits,
+				errorCode: developerTranscripts.errorCode,
+			})
+			.from(developerTranscripts)
+			.where(inArray(developerTranscripts.id, ids));
+		expect(rows).toEqual(
+			Array.from({ length: 8 }, () => ({
+				status: "complete",
+				text: "",
+				wordCount: 0,
+				billed: cost,
+				reserved: 0,
+				errorCode: null,
+			})),
+		);
+		expect(fixture.speechCalls).toBeGreaterThanOrEqual(8);
+		expect(peak()).toBeLessThanOrEqual(balance);
+		expect(await ledgerCount(appId)).toBe(8);
+		expect(await balanceOf(appId)).toBe(balance - 8 * cost);
+		expect(await heldBy(appId)).toBe(0);
 	});
 
 	it("never holds more than the balance when transcripts start together, and completes them all", async () => {

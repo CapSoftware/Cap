@@ -78,7 +78,9 @@ for storage, so name the app, the file, and the price and get confirmation first
 
 An uploaded video is `processing` until its playback files are ready. Do not report it as playable before its
 status is `ready`; then read `shareUrl`, `embedUrl`, `hlsUrl` and `mp4Url` from the video. A `queued` or
-`processing` transcript is not done: wait for `complete`. A failed or timed out wait still reports the video
+`processing` transcript is not done: wait for `complete`. A `complete` transcript with empty text and a
+`wordCount` of 0 means the audio had no speech; it is still billed for its length, while a transcript that
+fails is not charged. A failed or timed out wait still reports the video
 or transcript id. `INSUFFICIENT_CREDITS` means the app needs a top-up through `cap developers credits purchase`.
 `cap developers usage <app>` shows the balance and whether uploads are allowed. Before a delete or a key
 rotation, run the command with `--dry-run` (MCP `dry_run=true`) and show the user the result.

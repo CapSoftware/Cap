@@ -2672,7 +2672,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_transcript_create",
-        description = "Turn a local audio or video file (file_path) or a public URL (url) into text after explicit user confirmation. Only files that contain an audio track are accepted. Charges the app's credits per audio hour. Set wait=true to block until the text is ready and return it",
+        description = "Turn a local audio or video file (file_path) or a public URL (url) into text after explicit user confirmation. Only files that contain an audio track are accepted. Charges the app's credits per audio hour. Audio with no speech is billed for its length and completes with empty text and a wordCount of 0; a transcript that fails is not charged. Set wait=true to block until the text is ready and return it",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2736,7 +2736,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_transcript_get",
-        description = "Get a developer transcript with its status, duration, cost and text. Set include_segments=true for timed segments",
+        description = "Get a developer transcript with its status, duration, cost and text. A complete transcript with empty text and a wordCount of 0 had no speech and was billed for its length. Set include_segments=true for timed segments",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

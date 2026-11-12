@@ -65,12 +65,13 @@ describe("date helpers", () => {
 describe("formatting", () => {
 	it("formats balances in dollars", () => {
 		expect(formatCredits(0)).toBe("$0.00");
-		expect(formatCredits(1_234_567_800)).toBe("$12,345.68");
+		expect(formatCredits(1_234_567_000)).toBe("$12,345.67");
+		expect(formatCredits(1_234_567_800)).toBe("$12,345.67800");
 	});
 
 	it("keeps small charges visible", () => {
 		expect(formatCharge(266)).toBe("$0.00266");
-		expect(formatCharge(60)).toBe("$0.0006");
+		expect(formatCharge(60)).toBe("$0.00060");
 		expect(formatCharge(-250_000)).toBe("$2.50");
 		expect(formatCharge(0)).toBe("$0.00");
 	});

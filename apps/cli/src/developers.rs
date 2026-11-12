@@ -532,6 +532,9 @@ fn print_transcript_text(value: &Value, format: OutputFormat) -> Result<(), Agen
     match format {
         OutputFormat::Json => print(value, format),
         OutputFormat::Text => {
+            if developer_media::transcript_has_no_speech(value) {
+                eprintln!("{}", developer_media::NO_SPEECH_NOTE);
+            }
             println!(
                 "{}",
                 value

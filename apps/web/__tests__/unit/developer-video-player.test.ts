@@ -149,26 +149,53 @@ describe("developer video player data", () => {
 		});
 	});
 
-	it("shows why processing failed", async () => {
-		mocks.store.video = developerVideo({
-			status: "errored",
-			errorReason: "This file has no video track.",
-		});
+	it.each([
+		"This file has no video track.",
+		"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+		"The uploaded file is empty. Upload it again.",
+		"Video is longer than the 4 hour limit",
+	])("shows a viewer the reason about the file: %s", async (errorReason) => {
+		mocks.store.video = developerVideo({ status: "errored", errorReason });
 
 		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
 			kind: "failed",
-			reason: "This file has no video track.",
+			reason: errorReason,
 		});
 	});
 
-	it("still says a video failed when no reason was recorded", async () => {
-		mocks.store.video = developerVideo({ status: "errored" });
+	it.each([
+		[
+			"the app's credit shortfall",
+			"Not enough credit to store this video at its measured length and size. Add at least $0.05 of credit and upload it again.",
+		],
+		[
+			"a shorter credit refusal",
+			"Not enough credit for the video's full length",
+		],
+		[
+			"a file sentence that mentions credit",
+			"This video could not be stored because the app is out of credit.",
+		],
+		[
+			"a raw encoder string",
+			"ffmpeg exited 1: /tmp/cap-media-server/abc/input.mp4: Invalid data found",
+		],
+		[
+			"an internal processing reason",
+			"Processing failed because of a problem on our side. Upload the video again.",
+		],
+		["a missing reason", null],
+	])(
+		"shows a viewer one neutral sentence instead of %s",
+		async (_, errorReason) => {
+			mocks.store.video = developerVideo({ status: "errored", errorReason });
 
-		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
-			kind: "failed",
-			reason: "This video could not be processed.",
-		});
-	});
+			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+				kind: "failed",
+				reason: "Its owner can see what went wrong.",
+			});
+		},
+	);
 
 	it("offers nothing to play while the app is paused", async () => {
 		mocks.standing.mockResolvedValue({
