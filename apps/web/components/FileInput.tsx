@@ -254,6 +254,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 						</div>
 						<Tooltip content="Remove icon">
 							<Button
+								type="button"
 								variant="outline"
 								size="xs"
 								className="!p-0 size-7 group"
