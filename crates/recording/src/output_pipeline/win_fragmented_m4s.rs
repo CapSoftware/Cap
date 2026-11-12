@@ -4,7 +4,7 @@ use super::core::{
 };
 use super::frame_pacing::{FramePacer, Paced};
 use super::mjpeg::MjpegDecoder;
-use super::win::{duration_to_timespan, reference_video_frame};
+use super::win::{MEDIA_FOUNDATION_ENCODER, duration_to_timespan, reference_video_frame};
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
     capture_pipeline::EncoderPreferences,
@@ -13,6 +13,7 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
+use cap_enc_ffmpeg::hardware_crash::{HardwareEncoderSession, hardware_encoder_disabled};
 use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, QueueFrameError, SegmentCompletedEvent, SegmentedPacketMuxer,
     SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
@@ -788,6 +789,14 @@ impl WindowsFragmentedM4SMuxer {
             .name("win-m4s-mf-encoder".to_string())
             .spawn(move || {
                 cap_mediafoundation_utils::thread_init();
+
+                if hardware_encoder_disabled(MEDIA_FOUNDATION_ENCODER) {
+                    let _ = ready_tx.send(Err(
+                        "Media Foundation H264 disabled after it crashed Cap".to_string(),
+                    ));
+                    return Ok(());
+                }
+                let _hardware_session = HardwareEncoderSession::begin(MEDIA_FOUNDATION_ENCODER);
 
                 let disk_base_path = base_path.clone();
                 let setup =

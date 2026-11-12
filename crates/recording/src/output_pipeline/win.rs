@@ -28,7 +28,7 @@ const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
 
 /// The direct Media Foundation encoder loads the same vendor transforms as
 /// FFmpeg's `h264_mf`, so it shares that name for crash recovery.
-const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
+pub(crate) const MEDIA_FOUNDATION_ENCODER: &str = "h264_mf";
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")

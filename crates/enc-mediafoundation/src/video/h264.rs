@@ -828,10 +828,18 @@ impl H264Encoder {
                 }
             }
 
-            let _ = self
+            let mut shutdown_error = None;
+            if let Err(error) = self
                 .transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
-            let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
+            {
+                warn!(%error, "Media Foundation encoder end-of-stream failed");
+                shutdown_error = Some(error);
+            }
+            if let Err(error) = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0) {
+                warn!(%error, "Media Foundation encoder drain failed");
+                shutdown_error.get_or_insert(error);
+            }
 
             let drain_deadline = Instant::now() + ENCODER_DRAIN_TIMEOUT;
             let mut drain_complete = false;
@@ -845,6 +853,7 @@ impl H264Encoder {
                     }
                     Err(error) => {
                         warn!(%error, "Media Foundation encoder drain event failed");
+                        shutdown_error.get_or_insert(error);
                         break;
                     }
                 };
@@ -852,6 +861,7 @@ impl H264Encoder {
                     Ok(event_type) => event_type,
                     Err(error) => {
                         warn!(%error, "Media Foundation encoder drain event type failed");
+                        shutdown_error.get_or_insert(error);
                         break;
                     }
                 };
@@ -872,13 +882,17 @@ impl H264Encoder {
                             Ok(()) => {
                                 if let Some(sample) = output_buffers[0].pSample.take() {
                                     health_monitor.record_output();
-                                    on_sample(sample)?;
+                                    if let Err(error) = on_sample(sample) {
+                                        shutdown_error.get_or_insert(error);
+                                        break;
+                                    }
                                     drained += 1;
                                 }
                             }
                             Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {}
                             Err(error) => {
                                 warn!(%error, "Media Foundation encoder drain output failed");
+                                shutdown_error.get_or_insert(error);
                                 break;
                             }
                         }
@@ -898,12 +912,23 @@ impl H264Encoder {
                     drained,
                     "Media Foundation encoder did not confirm drain before the deadline; finishing stop without the remaining output"
                 );
+                shutdown_error.get_or_insert_with(|| {
+                    windows::core::Error::new(
+                        windows::Win32::Foundation::E_FAIL,
+                        "Media Foundation encoder did not confirm drain before the deadline",
+                    )
+                });
             }
 
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+            let end_streaming_result = self
+                .transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+            let flush_result = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+            if let Some(error) = shutdown_error {
+                return Err(error.into());
+            }
+            end_streaming_result?;
+            flush_result?;
         }
 
         Ok(health_monitor.check_health())
