@@ -135,7 +135,8 @@ app.post(
 			...body,
 			maxBytes: c.get("developerUploadMaxBytes"),
 		});
-		return c.json(result.body, result.status);
+		if (result.status === 200) return c.json(result.body);
+		return c.json(result.body, result.status, result.headers);
 	},
 );
 
