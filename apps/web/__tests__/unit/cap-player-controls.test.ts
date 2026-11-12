@@ -40,6 +40,34 @@ describe("cap player quality levels", () => {
 		expect(levels[0]).toMatchObject({ label: "1080p", index: 1 });
 	});
 
+	it("uses the rendition's own name when the stream carries one", () => {
+		const levels = listLevels([
+			{ width: 860, height: 360, bitrate: 680_000, uri: "360p.m3u8" },
+			{ width: 1720, height: 720, bitrate: 2_440_000, uri: "720p.m3u8" },
+			{
+				width: 2580,
+				height: 1080,
+				bitrate: 4_390_000,
+				uri: "https://example.com/v/1080p.m3u8?token=abc",
+			},
+			{ width: 3840, height: 1608, bitrate: 13_770_000, name: "2160p" },
+		]);
+		expect(levels.map((level) => level.label)).toEqual([
+			"4K",
+			"1080p",
+			"720p",
+			"360p",
+		]);
+	});
+
+	it("ignores names that are not a resolution", () => {
+		const levels = listLevels([
+			{ width: 1280, height: 720, bitrate: 2_000_000, uri: "video_720.m3u8" },
+			{ width: 1920, height: 1080, bitrate: 4_000_000, name: "High" },
+		]);
+		expect(levels.map((level) => level.label)).toEqual(["1080p", "720p"]);
+	});
+
 	it("drops renditions with no size and handles an empty stream", () => {
 		expect(listLevels([{ width: 0, height: 0, bitrate: 128_000 }])).toEqual([]);
 		expect(listLevels([])).toEqual([]);

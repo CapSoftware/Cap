@@ -275,6 +275,7 @@ export const CapPlayer = ({
 	const volumeFillRef = useRef<HTMLDivElement>(null);
 	const attachmentRef = useRef<CapPlayerAttachment | null>(null);
 	const menuDismissedAt = useRef(-1);
+	const levelsRef = useRef<readonly CapPlayerLevel[]>([]);
 	const live = useRef({ onFirstPlay, onEnded, speeds });
 	live.current = { onFirstPlay, onEnded, speeds };
 
@@ -289,6 +290,11 @@ export const CapPlayer = ({
 	const [picked, setPicked] = useState(AUTO_LEVEL);
 	const [menu, setMenu] = useState<MenuName | null>(null);
 	const [pip, setPip] = useState({ supported: false, active: false });
+
+	levelsRef.current = levels;
+	useLayoutEffect(() => {
+		if (levels.length > 0) videoRef.current?.dispatchEvent(new Event("resize"));
+	}, [levels]);
 
 	const { hls, mp4 } = source;
 	const shows = (control: CapPlayerControl) => !hideControls.includes(control);
@@ -521,7 +527,13 @@ export const CapPlayer = ({
 			);
 		};
 		const onResize = () =>
-			setResolution(resolutionLabel(video.videoWidth, video.videoHeight));
+			setResolution(
+				levelsRef.current.find(
+					(level) =>
+						level.width === video.videoWidth &&
+						level.height === video.videoHeight,
+				)?.label ?? resolutionLabel(video.videoWidth, video.videoHeight),
+			);
 		const onRate = () => setSpeed(video.playbackRate);
 		const onWaiting = () => setWaiting(true);
 		const onReady = () => setWaiting(false);

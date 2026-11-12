@@ -31,16 +31,43 @@ export const resolutionLabel = (width: number, height: number) => {
 	return long > 0 ? "360p" : "";
 };
 
+const NAMED_RENDITION = /(?:^|\/)(\d{3,4})p(?:\.m3u8)?(?:$|[?#])/;
+
+export const renditionLabel = (level: {
+	width: number;
+	height: number;
+	name?: string;
+	uri?: string;
+}) => {
+	const named =
+		NAMED_RENDITION.exec(level.name ?? "") ??
+		NAMED_RENDITION.exec(level.uri ?? "");
+	if (named) return named[1] === "2160" ? "4K" : `${named[1]}p`;
+	return resolutionLabel(level.width, level.height);
+};
+
 export const listLevels = (
-	levels: readonly { width: number; height: number; bitrate: number }[],
+	levels: readonly {
+		width: number;
+		height: number;
+		bitrate: number;
+		name?: string;
+		uri?: string;
+	}[],
 ): CapPlayerLevel[] => {
 	const best = new Map<string, CapPlayerLevel>();
 	levels.forEach((level, index) => {
-		const label = resolutionLabel(level.width, level.height);
+		const label = renditionLabel(level);
 		if (!label) return;
 		const kept = best.get(label);
 		if (!kept || level.bitrate > kept.bitrate) {
-			best.set(label, { index, label, ...level });
+			best.set(label, {
+				index,
+				label,
+				width: level.width,
+				height: level.height,
+				bitrate: level.bitrate,
+			});
 		}
 	});
 	return [...best.values()].sort(
