@@ -8,6 +8,7 @@ import {
 const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	standing: vi.fn(),
+	redrive: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -23,6 +24,9 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/developer-video-storage", () => ({}));
 vi.mock("@/lib/infra-standing", () => ({
 	getInfraAppStanding: mocks.standing,
+}));
+vi.mock("@/lib/developer-video-start", () => ({
+	redriveDeveloperVideoProcessing: mocks.redrive,
 }));
 
 const { loadDeveloperVideoPlayer } = await import(
@@ -49,7 +53,16 @@ beforeEach(() => {
 	mocks.store.video = ready();
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
+	mocks.redrive.mockResolvedValue(false);
 });
+
+const MINUTE = 60_000;
+const uploadedLongAgo = () =>
+	developerVideo({
+		status: "uploading",
+		processing: null,
+		updatedAt: new Date(Date.now() - 10 * MINUTE),
+	});
 
 describe("developer video player data", () => {
 	it("plays the adaptive stream with the MP4 behind it and the poster", async () => {
@@ -180,6 +193,136 @@ describe("developer video player data", () => {
 		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
 			kind: "playing",
 		});
+	});
+
+	it("starts processing that never started, then shows it as processing", async () => {
+		mocks.store.video = uploadedLongAgo();
+		mocks.redrive.mockImplementation(async () => {
+			mocks.store.video = developerVideo({ status: "processing" });
+			return true;
+		});
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "processing",
+			uploading: false,
+		});
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
+	});
+
+	it("keeps waiting when processing cannot be started yet", async () => {
+		mocks.store.video = uploadedLongAgo();
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "processing",
+			uploading: true,
+		});
+		expect(mocks.redrive).toHaveBeenCalledTimes(1);
+	});
+
+	it("restarts processing that stalled", async () => {
+		mocks.store.video = developerVideo({
+			status: "processing",
+			processing: processingState({ startedAt: Date.now() - 7 * 60 * MINUTE }),
+		});
+
+		await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
+	});
+
+	it("retries the adaptive stream of a ready video and still plays the MP4", async () => {
+		mocks.store.video = ready({
+			processing: processingState({
+				hls: {
+					state: "unavailable",
+					reason: "The encoder was busy.",
+					retryAt: Date.now() - MINUTE,
+				},
+				mp4: { state: "complete", output: "mp4-out" },
+			}),
+		});
+		mocks.redrive.mockResolvedValue(true);
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "playing",
+			source: { hls: undefined, mp4: `${BASE}/video.mp4` },
+		});
+		expect(mocks.redrive).toHaveBeenCalledExactlyOnceWith("video-1");
+	});
+
+	it.each([
+		[
+			"an upload still in progress",
+			() =>
+				developerVideo({
+					status: "uploading",
+					processing: null,
+					duration: null,
+				}),
+		],
+		[
+			"a video that just finished uploading",
+			() =>
+				developerVideo({
+					status: "uploading",
+					processing: null,
+					updatedAt: new Date(),
+				}),
+		],
+		[
+			"a video being processed",
+			() =>
+				developerVideo({
+					status: "processing",
+					processing: processingState({ startedAt: Date.now() - MINUTE }),
+				}),
+		],
+		[
+			"a ready video",
+			() =>
+				ready({
+					updatedAt: new Date(),
+					processing: processingState({
+						startedAt: Date.now(),
+						hls: { state: "complete", output: "hls-out" },
+						mp4: { state: "complete", output: "mp4-out" },
+					}),
+				}),
+		],
+		[
+			"a failed video",
+			() =>
+				developerVideo({ status: "errored", errorReason: "No video track." }),
+		],
+	])("starts nothing for %s", async (_, video) => {
+		mocks.store.video = video();
+
+		await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(mocks.redrive).not.toHaveBeenCalled();
+	});
+
+	it("starts nothing for a paused app", async () => {
+		mocks.store.video = uploadedLongAgo();
+		mocks.standing.mockResolvedValue({
+			state: "paused",
+			pausesAt: new Date("2026-11-01T00:00:00Z"),
+		});
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "paused",
+		});
+		expect(mocks.redrive).not.toHaveBeenCalled();
+	});
+
+	it("finds nothing when the video is deleted while processing restarts", async () => {
+		mocks.store.video = uploadedLongAgo();
+		mocks.redrive.mockImplementation(async () => {
+			mocks.store.video = null;
+			return true;
+		});
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toBeNull();
 	});
 
 	it("finds nothing for a deleted video", async () => {
