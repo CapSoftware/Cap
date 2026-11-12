@@ -131,6 +131,7 @@ import {
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import { developerIdFromKey } from "@/lib/developer-ids";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
 	createTranscriptFromUrl,
@@ -4141,7 +4142,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!app) return { state: "not_found" };
-								const id = deterministicAgentId(
+								const id = developerIdFromKey(
 									"developer_domain",
 									path.appId,
 									domain,
@@ -4152,11 +4153,21 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.onDuplicateKeyUpdate({
 										set: { domain: sql`${Db.developerAppDomains.domain}` },
 									});
+								const [stored] = await tx
+									.select({ id: Db.developerAppDomains.id })
+									.from(Db.developerAppDomains)
+									.where(
+										and(
+											eq(Db.developerAppDomains.appId, path.appId),
+											eq(Db.developerAppDomains.domain, domain),
+										),
+									)
+									.limit(1);
 								return {
 									state: "success",
 									response: mutationResponse(
 										"developer_domain",
-										id,
+										stored?.id ?? id,
 										"created",
 										requestId,
 									),
