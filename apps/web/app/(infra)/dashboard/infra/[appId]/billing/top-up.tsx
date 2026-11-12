@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { CREDIT_CODE_MAX_LENGTH } from "@/lib/infra-credit-code";
 import { infraAppPath } from "@/lib/infra-routes";
 import { Button, FOCUS, Input, MONO } from "../../_components/ui";
 
@@ -18,10 +19,13 @@ export function TopUp({ appId }: { appId: string }) {
 	const amountId = useId();
 	const [selected, setSelected] = useState<number | null>(2500);
 	const [custom, setCustom] = useState("");
+	const codeId = useId();
+	const [codeOpen, setCodeOpen] = useState(false);
+	const [code, setCode] = useState("");
 
 	useEffect(() => {
 		if (searchParams.get("purchase") === "success") {
-			toast.success("Payment received. Credits are added once it clears.");
+			toast.success("Purchase complete. Credits are added once it clears.");
 			router.replace(infraAppPath(appId, "billing"));
 			router.refresh();
 		}
@@ -32,7 +36,11 @@ export function TopUp({ appId }: { appId: string }) {
 			const res = await fetch("/api/developer/credits/checkout", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ appId, amountCents }),
+				body: JSON.stringify({
+					appId,
+					amountCents,
+					...(code.trim() ? { code: code.trim() } : {}),
+				}),
 			});
 			const data: { url?: string; error?: string } = await res
 				.json()
@@ -124,19 +132,40 @@ export function TopUp({ appId }: { appId: string }) {
 					Enter an amount from $5 to $1,000.
 				</p>
 			)}
-			<Button
-				type="submit"
-				className="self-start"
-				disabled={!valid}
-				loading={checkout.isPending}
-			>
-				{valid && amountCents !== null
-					? `Add $${(amountCents / 100).toLocaleString("en-US", {
-							minimumFractionDigits: amountCents % 100 === 0 ? 0 : 2,
-							maximumFractionDigits: 2,
-						})}`
-					: "Add credits"}
-			</Button>
+			{codeOpen && (
+				<div className="w-[240px] max-w-full">
+					<label htmlFor={codeId} className="sr-only">
+						Code
+					</label>
+					<Input
+						id={codeId}
+						value={code}
+						maxLength={CREDIT_CODE_MAX_LENGTH}
+						autoFocus
+						autoComplete="off"
+						autoCapitalize="characters"
+						spellCheck={false}
+						onChange={(e) => setCode(e.target.value)}
+						placeholder="Code"
+						className={clsx(MONO, "h-[38px]")}
+					/>
+				</div>
+			)}
+			<div className="flex flex-wrap items-center gap-2">
+				<Button type="submit" disabled={!valid} loading={checkout.isPending}>
+					{valid && amountCents !== null
+						? `Add $${(amountCents / 100).toLocaleString("en-US", {
+								minimumFractionDigits: amountCents % 100 === 0 ? 0 : 2,
+								maximumFractionDigits: 2,
+							})}`
+						: "Add credits"}
+				</Button>
+				{!codeOpen && (
+					<Button variant="quiet" onClick={() => setCodeOpen(true)}>
+						Have a code?
+					</Button>
+				)}
+			</div>
 		</form>
 	);
 }
