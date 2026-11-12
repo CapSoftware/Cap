@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { Cause, Effect } from "effect";
+import { Effect } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
@@ -9,8 +9,8 @@ import { removeDeveloperSavedCard } from "@/actions/developers/remove-saved-card
 import { updateDeveloperAutoTopUp } from "@/actions/developers/update-auto-topup";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { useEffectMutation } from "@/lib/EffectRuntime";
-import { refusalMessage, settled } from "@/lib/infra-action-result";
 import { infraAppPath } from "@/lib/infra-routes";
+import { actionMessage, runAction } from "../../_components/run-action";
 import { Button, FOCUS, Input, MONO } from "../../_components/ui";
 
 const DEFAULT_THRESHOLD_DOLLARS = 5;
@@ -26,9 +26,6 @@ const dollars = (value: string) => Number.parseFloat(value);
 
 const asError = (error: unknown) =>
 	error instanceof Error ? error : new Error(String(error));
-
-const messageOf = (cause: Cause.Cause<Error>, fallback: string) =>
-	refusalMessage(Cause.squash(cause), fallback);
 
 export function AutoTopUp({
 	appId,
@@ -97,7 +94,7 @@ export function AutoTopUp({
 				catch: asError,
 			}),
 		onError: (cause) =>
-			toast.error(messageOf(cause, "Could not open the card form")),
+			toast.error(actionMessage(cause, "Could not open the card form")),
 	});
 
 	const removeCard = useEffectMutation({
@@ -116,26 +113,22 @@ export function AutoTopUp({
 
 	const save = useEffectMutation({
 		mutationFn: () =>
-			Effect.tryPromise({
-				try: () =>
-					settled(
-						updateDeveloperAutoTopUp({
-							appId,
-							enabled,
-							thresholdMicroCredits: Math.round(
-								dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
-							),
-							amountCents: Math.round(dollars(amount) * 100),
-						}),
+			runAction(() =>
+				updateDeveloperAutoTopUp({
+					appId,
+					enabled,
+					thresholdMicroCredits: Math.round(
+						dollars(threshold) * MICRO_CREDITS_PER_DOLLAR,
 					),
-				catch: asError,
-			}),
+					amountCents: Math.round(dollars(amount) * 100),
+				}),
+			),
 		onSuccess: () => {
 			toast.success(enabled ? "Auto top-up is on" : "Auto top-up is off");
 			router.refresh();
 		},
 		onError: (cause) =>
-			toast.error(messageOf(cause, "Could not save auto top-up")),
+			toast.error(actionMessage(cause, "Could not save auto top-up")),
 	});
 
 	if (!hasCard) {

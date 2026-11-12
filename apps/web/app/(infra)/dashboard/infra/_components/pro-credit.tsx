@@ -1,13 +1,13 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { claimDeveloperProCredit } from "@/actions/developers/claim-pro-credit";
-import { refusalMessage, settled } from "@/lib/infra-action-result";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import type { InfraProCredit } from "../infra-data";
+import { actionMessage, runAction } from "./run-action";
 import { Button, TEXT_LINK } from "./ui";
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
@@ -31,15 +31,15 @@ export function ProCredit({
 	const router = useRouter();
 	const [claimedHere, setClaimedHere] = useState(false);
 
-	const claim = useMutation({
-		mutationFn: () => settled(claimDeveloperProCredit(appId)),
+	const claim = useEffectMutation({
+		mutationFn: () => runAction(() => claimDeveloperProCredit(appId)),
 		onSuccess: () => {
 			setClaimedHere(true);
 			toast.success("$5 credit added to this app");
 			if (refresh) router.refresh();
 		},
-		onError: (error) =>
-			toast.error(refusalMessage(error, "Could not claim the credit")),
+		onError: (cause) =>
+			toast.error(actionMessage(cause, "Could not claim the credit")),
 	});
 
 	if (credit.status === "not_pro") {

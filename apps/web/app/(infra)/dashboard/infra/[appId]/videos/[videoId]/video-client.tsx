@@ -1,6 +1,5 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
@@ -10,7 +9,7 @@ import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { renameDeveloperVideo } from "@/actions/developers/rename-video";
 import { CapPlayer } from "@/components/cap-player/CapPlayer";
-import { refusalMessage, settled } from "@/lib/infra-action-result";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
 import { formatBytes, formatDuration } from "@/lib/infra-usage";
 import {
@@ -20,6 +19,7 @@ import {
 import { KeyRow } from "../../../_components/copy";
 import { ConfirmDialog } from "../../../_components/dialog";
 import { useLiveRefresh } from "../../../_components/live-refresh";
+import { actionMessage, runAction } from "../../../_components/run-action";
 import {
 	Block,
 	Button,
@@ -134,19 +134,20 @@ export function VideoClient({
 			(infraVideoIsChanging(video, Date.now()) || video.stillEncoding),
 	);
 
-	const rename = useMutation({
-		mutationFn: () => settled(renameDeveloperVideo(appId, video.id, name)),
+	const rename = useEffectMutation({
+		mutationFn: () =>
+			runAction(() => renameDeveloperVideo(appId, video.id, name)),
 		onSuccess: () => {
 			setRenaming(false);
 			toast.success("Video renamed");
 			router.refresh();
 		},
-		onError: (error) =>
-			toast.error(refusalMessage(error, "Could not rename the video")),
+		onError: (cause) =>
+			toast.error(actionMessage(cause, "Could not rename the video")),
 	});
 
-	const remove = useMutation({
-		mutationFn: () => deleteDeveloperVideo(appId, video.id),
+	const remove = useEffectMutation({
+		mutationFn: () => runAction(() => deleteDeveloperVideo(appId, video.id)),
 		onSuccess: () => {
 			toast.success("Video deleted");
 			router.push(videosPath);

@@ -6,7 +6,7 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperApp } from "@/actions/developers/delete-app";
 import { updateDeveloperApp } from "@/actions/developers/update-app";
-import { refusalMessage, settled } from "@/lib/infra-action-result";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import { INFRA_BASE_PATH } from "@/lib/infra-routes";
 import { formatCredits } from "@/lib/infra-usage";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../_components/create-app";
 import { ConfirmDialog } from "../../_components/dialog";
 import { forgetInfraApp } from "../../_components/remember-infra-app";
+import { actionMessage, runAction } from "../../_components/run-action";
 import { Button, Input, PageHeader, Split } from "../../_components/ui";
 
 export function AppSettingsClient({
@@ -42,14 +43,15 @@ export function AppSettingsClient({
 	const dirty =
 		name.trim() !== initialName || environment !== initialEnvironment;
 
-	const update = useMutation({
-		mutationFn: () => settled(updateDeveloperApp({ appId, name, environment })),
+	const update = useEffectMutation({
+		mutationFn: () =>
+			runAction(() => updateDeveloperApp({ appId, name, environment })),
 		onSuccess: () => {
 			toast.success("App saved");
 			router.refresh();
 		},
-		onError: (error) =>
-			toast.error(refusalMessage(error, "Could not save the app")),
+		onError: (cause) =>
+			toast.error(actionMessage(cause, "Could not save the app")),
 	});
 
 	const remove = useMutation({

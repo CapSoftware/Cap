@@ -1,13 +1,13 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { addDeveloperDomain } from "@/actions/developers/add-domain";
-import { refusalMessage, settled } from "@/lib/infra-action-result";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import { DomainRow } from "../../_components/domain-row";
+import { actionMessage, runAction } from "../../_components/run-action";
 import { Button, Input, Split } from "../../_components/ui";
 
 export function DomainsSection({
@@ -25,15 +25,16 @@ export function DomainsSection({
 	const [newDomain, setNewDomain] = useState("");
 	const [problem, setProblem] = useState<string | null>(null);
 
-	const add = useMutation({
-		mutationFn: (origin: string) => settled(addDeveloperDomain(appId, origin)),
+	const add = useEffectMutation({
+		mutationFn: (origin: string) =>
+			runAction(() => addDeveloperDomain(appId, origin)),
 		onSuccess: (result) => {
 			setNewDomain("");
 			toast.success(`${result.domain} added`);
 			router.refresh();
 		},
-		onError: (error) =>
-			setProblem(refusalMessage(error, "Could not add the domain. Try again.")),
+		onError: (cause) =>
+			setProblem(actionMessage(cause, "Could not add the domain. Try again.")),
 	});
 
 	return (
