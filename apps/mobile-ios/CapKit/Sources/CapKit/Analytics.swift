@@ -251,7 +251,7 @@ extension Analytics {
         private var sending = false
         /// A round of sends covers the events queued before it began, so later ones still wait to be batched.
         private var roundEnd: UInt64 = 0
-        /// The session changed mid-round; the signed-in events wait for the next one.
+        /// The session ended or changed mid-round, which stops the round.
         private var skipsUser = false
         /// Whether the current round sent anything. A round that sent nothing must not start another by itself.
         private var delivered = false
@@ -285,9 +285,10 @@ extension Analytics {
                 enqueue(event)
                 trim()
                 guard !sending else { return }
-                if failures == 0, pending.count >= configuration.flushThreshold {
+                let ready = readyCount()
+                if failures == 0, ready >= configuration.flushThreshold {
                     beginRound()
-                } else if timer == nil {
+                } else if ready > 0, timer == nil {
                     schedule(after: configuration.flushInterval)
                 }
             case let .timer(generation):
@@ -329,34 +330,40 @@ extension Analytics {
             sendNext()
         }
 
-        /// Events from before sign-in go without a session; the rest only with the session they were recorded in.
+        /// What the signed-in user may send: their own events, and those from before anyone was signed in.
+        private func isReady(_ event: StoredEvent, for user: String) -> Bool {
+            event.userId == nil || event.userId == user
+        }
+
+        private func readyCount() -> Int {
+            guard let user = currentUserId() else { return 0 }
+            return pending.count { isReady($0.event, for: user) }
+        }
+
+        /// The server only takes events from a signed-in session, so nothing goes out while signed out. Events from
+        /// before sign-in wait on the device for whoever signs in next.
         private mutating func sendNext() {
-            let user = skipsUser ? nil : currentUserId()
-            let senders: [String?] = user == nil ? [nil] : [nil, user]
+            guard !skipsUser, let user = currentUserId() else { return endRound() }
             let end = roundEnd
-            for sender in senders {
-                let batch = pending.filter { $0.id < end && $0.event.userId == sender }.prefix(configuration.batchLimit)
-                guard !batch.isEmpty else { continue }
-                let ids = batch.map(\.id)
-                let body = AnalyticsBatch(
-                    sentAt: Analytics.milliseconds(now()),
-                    app: app,
-                    events: batch.map { AnalyticsBatch.Event(name: $0.event.name, timestamp: $0.event.time, properties: $0.event.properties.isEmpty ? nil : $0.event.properties) }
-                )
-                sending = true
-                let api = api
-                let commands = commands
-                Task.detached(priority: .utility) {
-                    do {
-                        try await api.trackEvents(body, userId: sender)
-                        commands.yield(.sent(ids, nil))
-                    } catch {
-                        commands.yield(.sent(ids, CapAPIError.from(error)))
-                    }
+            let batch = pending.filter { $0.id < end && isReady($0.event, for: user) }.prefix(configuration.batchLimit)
+            guard !batch.isEmpty else { return endRound() }
+            let ids = batch.map(\.id)
+            let body = AnalyticsBatch(
+                sentAt: Analytics.milliseconds(now()),
+                app: app,
+                events: batch.map { AnalyticsBatch.Event(name: $0.event.name, timestamp: $0.event.time, properties: $0.event.properties.isEmpty ? nil : $0.event.properties) }
+            )
+            sending = true
+            let api = api
+            let commands = commands
+            Task.detached(priority: .utility) {
+                do {
+                    try await api.trackEvents(body, userId: user)
+                    commands.yield(.sent(ids, nil))
+                } catch {
+                    commands.yield(.sent(ids, CapAPIError.from(error)))
                 }
-                return
             }
-            endRound()
         }
 
         private mutating func finished(_ ids: [UInt64], _ error: CapAPIError?) {
@@ -371,10 +378,11 @@ extension Analytics {
                 unsupported = true
                 pending.removeAll()
                 endRound()
-            case .missingSession:
+            case .missingSession, .unauthorized:
+                // The session ended or changed. What is queued stays for the next one that may send it.
                 skipsUser = true
                 sendNext()
-            case .badRequest, .payloadTooLarge, .conflict, .forbidden, .unauthorized, .unexpectedStatus:
+            case .badRequest, .payloadTooLarge, .conflict, .forbidden, .unexpectedStatus:
                 // Refused for what it contains, so sending it again cannot work.
                 remove(ids)
                 sendNext()
@@ -390,9 +398,8 @@ extension Analytics {
             for waiter in waiters { waiter.resume() }
             waiters.removeAll()
             guard timer == nil, !unsupported else { return }
-            // Only events this session may send count; another user's wait for sign-in without a timer running.
-            let user = currentUserId()
-            let ready = pending.count { $0.event.userId == nil || $0.event.userId == user }
+            // Only events this session may send count; the rest wait for a sign-in without a timer running.
+            let ready = readyCount()
             if delivered, failures == 0, ready >= configuration.flushThreshold {
                 // Enough arrived while the last request was out.
                 beginRound()

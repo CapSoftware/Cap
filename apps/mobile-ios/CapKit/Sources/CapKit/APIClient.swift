@@ -585,9 +585,9 @@ extension CapAPI {
         try await expectSuccess(mobile(.post, "recordings", id.rawValue, "complete", body: Self.body(completion)))
     }
 
-    /// With a user, the batch goes out under that user's session or not at all; without one, it goes out unsigned.
-    public func trackEvents(_ batch: AnalyticsBatch, userId: String?) async throws(CapAPIError) {
-        var request = mobile(.post, "events", body: try Self.body(batch), authenticated: userId != nil)
+    /// The batch goes out under that user's session or not at all.
+    public func trackEvents(_ batch: AnalyticsBatch, userId: String) async throws(CapAPIError) {
+        var request = mobile(.post, "events", body: try Self.body(batch))
         request.requiredUserId = userId
         try await expectSuccess(request)
     }

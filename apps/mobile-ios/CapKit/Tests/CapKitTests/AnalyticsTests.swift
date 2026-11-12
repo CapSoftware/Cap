@@ -232,18 +232,22 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         #expect(!rig.hasStoredQueue)
     }
 
-    @Test func sendsSignedOutEventsWithoutASessionAndTheRestWithIt() async throws {
+    @Test func holdsSignedOutEventsUntilSomeoneSignsIn() async throws {
         let rig = Rig(credentials: nil)
+        rig.analytics.track("app_opened", ["signed_in": false])
         rig.analytics.track("auth_started", ["method": "email"])
+        await rig.analytics.flush()
+        #expect(rig.requests.isEmpty)
+        #expect(rig.hasStoredQueue)
+        #expect(rig.timers.delays.isEmpty)
+
         rig.credentials.value = testCredentials
         rig.analytics.track("user_signed_in", ["method": "email"])
         await rig.analytics.flush()
-
-        #expect(rig.requests.count == 2)
-        #expect(rig.requests[0].value(forHTTPHeaderField: "Authorization") == nil)
-        #expect(try rig.names(0) == ["auth_started"])
-        #expect(rig.requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer \(testCredentials.apiKey)")
-        #expect(try rig.names(1) == ["user_signed_in"])
+        #expect(rig.requests.count == 1)
+        #expect(rig.requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer \(testCredentials.apiKey)")
+        #expect(try rig.names(0) == ["app_opened", "auth_started", "user_signed_in"])
+        #expect(!rig.hasStoredQueue)
     }
 
     @Test func neverSendsOneUsersEventsUnderAnothersSession() async throws {
@@ -279,13 +283,27 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         rig.status.value = 200
         rig.analytics.track("auth_started")
         await rig.analytics.flush()
-        #expect(rig.requests.count == 2)
-        #expect(try rig.names(1) == ["auth_started"])
+        #expect(rig.requests.count == 1)
 
-        rig.credentials.value = testCredentials
+        rig.credentials.value = CredentialSnapshot(apiKey: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", userId: "user_456")
         await rig.analytics.flush()
         #expect(rig.requests.count == 2)
+        #expect(try rig.names(1) == ["auth_started"])
         #expect(!rig.hasStoredQueue)
+    }
+
+    @Test func keepsWhatIsQueuedWhenTheServerRejectsTheSession() async throws {
+        let rig = Rig()
+        rig.status.value = 401
+        rig.analytics.track("cap_opened")
+        await rig.analytics.flush()
+        #expect(rig.requests.count == 1)
+        #expect(rig.hasStoredQueue)
+
+        rig.status.value = 200
+        await rig.analytics.flush()
+        #expect(rig.requests.count == 2)
+        #expect(try rig.names(1) == ["cap_opened"])
     }
 
     @Test func keepsEventsThroughAFailureAndRetriesByItself() async throws {
@@ -586,9 +604,13 @@ private func eventually(_ condition: @Sendable () -> Bool) async -> Bool {
         }
         #expect(transport.requests.isEmpty)
         try await api.trackEvents(batch, userId: testCredentials.userId)
-        try await api.trackEvents(batch, userId: nil)
-        #expect(transport.requests.count == 2)
-        #expect(transport.requests[0].value(forHTTPHeaderField: "Authorization") != nil)
-        #expect(transport.requests[1].value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(transport.requests.count == 1)
+        #expect(transport.requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer \(testCredentials.apiKey)")
+
+        let (signedOut, unsent) = makeAPI(credentials: nil) { _ in (200, Data(#"{"success":true}"#.utf8)) }
+        await #expect(throws: CapAPIError.missingSession) {
+            try await signedOut.trackEvents(batch, userId: testCredentials.userId)
+        }
+        #expect(unsent.requests.isEmpty)
     }
 }
