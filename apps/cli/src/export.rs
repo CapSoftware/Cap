@@ -996,6 +996,7 @@ impl ExportPreview {
         .await
         .map_err(|e| format!("Preview render error: {e}"))?;
 
+        crate::mark_json_written();
         let mut stdout = stdout();
         serde_json::to_writer(&mut stdout, &result).map_err(|e| e.to_string())?;
         writeln!(&mut stdout).map_err(|e| e.to_string())?;
@@ -1007,6 +1008,7 @@ fn emit_export_message(
     stdout: &Arc<Mutex<std::io::Stdout>>,
     message: &ExportProgressMessage<'_>,
 ) -> Result<(), String> {
+    crate::mark_json_written();
     let mut stdout = stdout
         .lock()
         .map_err(|_| "Failed to lock stdout".to_string())?;

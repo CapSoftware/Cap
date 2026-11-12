@@ -2,7 +2,7 @@ use clap::{ArgGroup, Args, Subcommand};
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
-use crate::{OutputFormat, agent_client, confirmation};
+use crate::{OutputFormat, agent_client, caps::AgentApiError, confirmation};
 
 #[derive(Args)]
 pub struct NotificationsArgs {
@@ -75,7 +75,7 @@ struct NotificationReadArgs {
 }
 
 impl NotificationsArgs {
-    pub async fn run(self, global_json: bool) -> Result<(), String> {
+    pub async fn run(self, global_json: bool) -> Result<(), AgentApiError> {
         match self.command {
             NotificationCommands::List(args) => {
                 let query = agent_client::query(&[
