@@ -75,10 +75,6 @@ const Top = () => {
 		"/dashboard/analytics": "Analytics",
 		[`/dashboard/folder/${params.id}`]: "Caps",
 		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
-		"/dashboard/developers": "Developers",
-		"/dashboard/developers/apps": "Developer Apps",
-		"/dashboard/developers/usage": "Developer Usage",
-		"/dashboard/developers/credits": "Developer Credits",
 	};
 
 	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
