@@ -27,7 +27,6 @@ interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	parentFolderId: Folder.FolderId;
-	/** The space or organization the parent folder is in, from the route. */
 	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
