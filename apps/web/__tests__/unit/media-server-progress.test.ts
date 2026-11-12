@@ -197,6 +197,7 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 		bucket: null,
 	};
 	const mutations: Mutation[] = [];
+	const beforeWrite = vi.fn<(mutation: Mutation) => void>();
 	const rows = (table: unknown) => {
 		if (table === mocks.tables.videos) return [{ ...video }];
 		if (table === mocks.tables.jobs)
@@ -208,14 +209,18 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 		update: (table: unknown) => ({
 			set: (values: Record<string, unknown>) => ({
 				where: async () => {
-					pending.push({ operation: "update", table, values });
+					const mutation: Mutation = { operation: "update", table, values };
+					beforeWrite(mutation);
+					pending.push(mutation);
 					return [{ affectedRows: 1 }];
 				},
 			}),
 		}),
 		delete: (table: unknown) => ({
 			where: async () => {
-				pending.push({ operation: "delete", table });
+				const mutation: Mutation = { operation: "delete", table };
+				beforeWrite(mutation);
+				pending.push(mutation);
 				return [{ affectedRows: 1 }];
 			},
 		}),
@@ -260,6 +265,7 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	);
 	return {
 		mutations,
+		beforeWrite,
 		video,
 		transaction,
 		setRawFileKey: (key: string) => {
@@ -872,14 +878,190 @@ describe("Loom importer completions", () => {
 	beforeEach(() => {
 		mocks.transcribe.mockReset().mockResolvedValue({ success: true });
 		mocks.queue.mockReset();
+		mocks.signal.mockReset().mockResolvedValue(undefined);
 		vi.spyOn(console, "log").mockImplementation(() => undefined);
 	});
 
 	function loomVideo() {
 		const database = databaseFixture(null);
 		database.video.source = { type: "webMP4" };
+		database.video.metadata = {
+			loomImportRun: {
+				runId: "run-1",
+				dispatch: "accepted",
+				mediaDispatch: {
+					attemptId: "run-1:0",
+					videoId,
+					state: "accepted",
+					jobId: "importer-1",
+				},
+			},
+		};
 		return database;
 	}
+
+	it.each(["processing", "complete", "error", "cancelled"])(
+		"ignores a previous Loom attempt's %s callback after a retry starts",
+		async (phase) => {
+			const database = databaseFixture(null);
+			database.video.source = { type: "webMP4" };
+			database.video.metadata = {
+				loomImportRun: {
+					runId: "current-run",
+					dispatch: "accepted",
+					mediaDispatch: {
+						attemptId: "current-run:1",
+						videoId,
+						state: "accepted",
+						jobId: "current-job",
+					},
+				},
+			};
+			const response = await request(
+				{
+					jobId: "previous-job",
+					videoId,
+					phase,
+					progress: 50,
+					metadata,
+					error: "Old failure",
+					errorCode: "input-policy-violation",
+				},
+				"media-secret",
+				`?retryable=true&signal=loom-import:${videoId}:current-run:0`,
+			);
+			expect(response.status).toBe(200);
+			expect(database.mutations).toEqual([]);
+			expect(mocks.signal).not.toHaveBeenCalled();
+			expect(mocks.strike).not.toHaveBeenCalled();
+			expect(mocks.transcribe).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["processing", "complete", "error", "cancelled"])(
+		"ignores a Loom %s callback superseded after its initial check",
+		async (phase) => {
+			const database = loomVideo();
+			mocks.getState.mockImplementationOnce(async () => {
+				database.video.metadata = {
+					loomImportRun: {
+						runId: "run-1",
+						dispatch: "accepted",
+						mediaDispatch: {
+							attemptId: "run-1:1",
+							videoId,
+							state: "accepted",
+							jobId: "importer-2",
+						},
+					},
+				};
+				return null;
+			});
+			const response = await request(
+				complete({ phase, errorCode: "input-policy-violation" }),
+				"media-secret",
+				`?retryable=true&signal=loom-import:${videoId}:run-1:0`,
+			);
+			expect(response.status).toBe(200);
+			expect(database.mutations).toEqual([]);
+			expect(mocks.signal).not.toHaveBeenCalled();
+			expect(mocks.strike).not.toHaveBeenCalled();
+			expect(mocks.transcribe).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ runId: "run-1", attemptId: "run-1:0", jobId: "other-job" },
+		{ runId: "run-2", attemptId: "run-1:0", jobId: "importer-1" },
+		{ videoId: "other-video" },
+		{ state: "rejected" },
+	])("ignores a mismatched Loom dispatch %j", async (change) => {
+		const database = loomVideo();
+		database.video.metadata = {
+			loomImportRun: {
+				runId: change.runId ?? "run-1",
+				dispatch: "accepted",
+				mediaDispatch: {
+					attemptId: "run-1:0",
+					videoId,
+					state: "accepted",
+					jobId: "importer-1",
+					...change,
+				},
+			},
+		};
+		const response = await request(
+			complete(),
+			"media-secret",
+			`?signal=loom-import:${videoId}:run-1:0`,
+		);
+		expect(response.status).toBe(200);
+		expect(database.mutations).toEqual([]);
+		expect(mocks.signal).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		null,
+		{},
+		{ loomImportRun: { runId: "run-1", dispatch: "pending" } },
+	])(
+		"ignores a Loom callback without a saved dispatch %j",
+		async (savedMetadata) => {
+			const database = loomVideo();
+			database.video.metadata = savedMetadata;
+			const response = await request(
+				complete(),
+				"media-secret",
+				`?signal=loom-import:${videoId}:run-1:0`,
+			);
+			expect(response.status).toBe(200);
+			expect(database.mutations).toEqual([]);
+			expect(mocks.signal).not.toHaveBeenCalled();
+		},
+	);
+
+	it("ignores a signal token belonging to another video", async () => {
+		const database = loomVideo();
+		const response = await request(
+			complete(),
+			"media-secret",
+			"?signal=loom-import:other-video:run-1:0",
+		);
+		expect(response.status).toBe(200);
+		expect(database.mutations).toEqual([]);
+		expect(mocks.signal).not.toHaveBeenCalled();
+	});
+
+	it.each(["processing", "complete"])(
+		"accepts current %s before the worker acceptance is saved",
+		async (phase) => {
+			const database = loomVideo();
+			database.video.metadata = {
+				loomImportRun: {
+					runId: "run-1",
+					dispatch: "accepted",
+					mediaDispatch: {
+						attemptId: "run-1:0",
+						videoId,
+						state: "uncertain",
+					},
+				},
+			};
+			const response = await request(
+				complete({ phase }),
+				"media-secret",
+				`?signal=loom-import:${videoId}:run-1:0`,
+			);
+			expect(response.status).toBe(200);
+			expect(database.mutations).toContainEqual(
+				expect.objectContaining({
+					table: mocks.tables.uploads,
+					operation: phase === "complete" ? "delete" : "update",
+				}),
+			);
+		},
+	);
 
 	it("leaves transcription for the first view of importer completions", async () => {
 		const database = loomVideo();
@@ -999,6 +1181,42 @@ describe("Loom importer completions", () => {
 		);
 		expect(response.status).toBe(200);
 		expect(mocks.signal).toHaveBeenCalledWith(token, videoId, "complete");
+	});
+
+	it("rolls back Loom completion writes if the upload deletion fails", async () => {
+		const database = loomVideo();
+		database.beforeWrite.mockImplementation((mutation) => {
+			if (mutation.operation === "delete")
+				throw new Error("upload deletion failed");
+		});
+		const response = await request(
+			complete(),
+			"media-secret",
+			`?signal=loom-import:${videoId}:run-1:0`,
+		);
+		expect(response.status).toBe(500);
+		expect(database.mutations).toEqual([]);
+		expect(mocks.signal).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
+	it("records current Loom policy strikes after the error is committed", async () => {
+		const database = loomVideo();
+		let committedAtStrike = false;
+		mocks.strike.mockImplementationOnce(async () => {
+			committedAtStrike = database.mutations.some(
+				({ table, values }) =>
+					table === mocks.tables.uploads && values?.phase === "error",
+			);
+		});
+		const response = await request(
+			complete({ phase: "error", errorCode: "input-policy-violation" }),
+			"media-secret",
+			`?retryable=true&signal=loom-import:${videoId}:run-1:0`,
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.strike).toHaveBeenCalledExactlyOnceWith({ videoId });
+		expect(committedAtStrike).toBe(true);
 	});
 
 	it("wakes the waiting import when the worker fails", async () => {
