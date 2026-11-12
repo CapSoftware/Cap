@@ -28,6 +28,7 @@ export type TranscriptErrorCode =
 	| "source_too_large"
 	| "source_missing"
 	| "no_audio_track"
+	| "unsupported_format"
 	| "no_speech"
 	| "duration_too_long"
 	| "upload_expired"

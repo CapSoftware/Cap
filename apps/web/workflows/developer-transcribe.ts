@@ -46,6 +46,10 @@ import {
 	convertAudioToMp3ViaMediaServer,
 	isMediaServerConfigured,
 } from "@/lib/media-client";
+import {
+	isSelfContainedMedia,
+	MEDIA_CONTAINER_SNIFF_BYTES,
+} from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
 import {
 	fetchPublicMedia,
@@ -72,6 +76,7 @@ const FAILURE_MESSAGES = {
 	source_unreachable: "The file at the URL could not be downloaded",
 	source_blocked: "The URL does not point to a public address",
 	no_audio_track: "The file has no audio track",
+	unsupported_format: "The file is not a supported audio or video format",
 	no_speech: "No speech was found in the audio",
 	duration_too_long: "The audio is longer than the 4 hour limit",
 	transcription_failed: "The transcript could not be created",
@@ -278,6 +283,33 @@ async function prepareTranscriptSource(
 	}
 }
 
+const SNIFF_TIMEOUT_MS = 30_000;
+
+async function sourceIsSelfContainedMedia(sourceUrl: string) {
+	const response = await fetch(sourceUrl, {
+		headers: { Range: `bytes=0-${MEDIA_CONTAINER_SNIFF_BYTES - 1}` },
+		signal: AbortSignal.timeout(SNIFF_TIMEOUT_MS),
+	});
+	if (!response.ok || !response.body) {
+		throw new Error(`Could not read the stored source (${response.status})`);
+	}
+	const reader = response.body.getReader();
+	const head = new Uint8Array(MEDIA_CONTAINER_SNIFF_BYTES);
+	let filled = 0;
+	try {
+		while (filled < head.length) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			const take = Math.min(value.length, head.length - filled);
+			head.set(value.subarray(0, take), filled);
+			filled += take;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	return isSelfContainedMedia(head.subarray(0, filled));
+}
+
 const LOCAL_NO_AUDIO_PATTERN =
 	/does not contain any stream|matches no streams/i;
 
@@ -318,7 +350,11 @@ async function extractTranscriptAudio(
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
-	const audio = await extractAudioBytes(await developerObjectUrl(keys.source));
+	const sourceUrl = await developerObjectUrl(keys.source);
+	if (!(await sourceIsSelfContainedMedia(sourceUrl))) {
+		return failure("unsupported_format", FAILURE_MESSAGES.unsupported_format);
+	}
+	const audio = await extractAudioBytes(sourceUrl);
 
 	if (audio === null || audio.length === 0) {
 		return failure("no_audio_track", FAILURE_MESSAGES.no_audio_track);
