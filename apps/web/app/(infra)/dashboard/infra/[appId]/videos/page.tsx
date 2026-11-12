@@ -1,24 +1,29 @@
-import type { Metadata } from "next";
+import {
+	infraVideoListLimit,
+	infraVideoListPage,
+} from "@/lib/infra-video-view";
 import { ApiGuide, FirstCredit } from "../../_components/get-started";
 import { PageHeader } from "../../_components/ui";
 import { UploadDrop } from "../../_components/upload-drop";
 import {
 	getDeveloperAppVideos,
 	getInfraProCredit,
+	infraPageMetadata,
 	requireInfraApp,
 } from "../../infra-data";
 import { VideosClient } from "./videos-client";
 
-export const metadata: Metadata = {
-	title: "Videos | Cap Infra",
-};
+export const generateMetadata = infraPageMetadata("Videos");
 
 export default async function InfraVideosPage({
 	params,
 	searchParams,
 }: {
 	params: Promise<{ appId: string }>;
-	searchParams: Promise<{ userId?: string | string[] }>;
+	searchParams: Promise<{
+		userId?: string | string[];
+		show?: string | string[];
+	}>;
 }) {
 	const [{ appId }, query] = await Promise.all([params, searchParams]);
 	const { app } = await requireInfraApp(appId);
@@ -27,7 +32,11 @@ export default async function InfraVideosPage({
 			? query.userId.trim()
 			: undefined;
 
-	const videos = await getDeveloperAppVideos(app.id, { userId });
+	const limit = infraVideoListLimit(query.show);
+	const { rows: videos, ...page } = infraVideoListPage(
+		await getDeveloperAppVideos(app.id, { userId, limit: limit + 1 }),
+		limit,
+	);
 
 	if (videos.length === 0 && !userId) {
 		return (
@@ -47,5 +56,13 @@ export default async function InfraVideosPage({
 		);
 	}
 
-	return <VideosClient appId={app.id} videos={videos} userId={userId ?? ""} />;
+	return (
+		<VideosClient
+			appId={app.id}
+			videos={videos}
+			userId={userId ?? ""}
+			hasMore={page.hasMore}
+			nextLimit={page.nextLimit}
+		/>
+	);
 }

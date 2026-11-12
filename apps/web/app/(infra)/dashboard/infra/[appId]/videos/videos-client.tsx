@@ -5,12 +5,16 @@ import clsx from "clsx";
 import { Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useId, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { infraAppPath } from "@/lib/infra-routes";
 import { formatDuration } from "@/lib/infra-usage";
-import type { InfraVideoListItem } from "@/lib/infra-video-view";
+import {
+	INFRA_VIDEO_PAGE_MAX,
+	type InfraVideoListItem,
+	infraVideoDisplayState,
+} from "@/lib/infra-video-view";
 import { CopyButton } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
 import {
@@ -25,12 +29,11 @@ import {
 	TR,
 } from "../../_components/ui";
 import { UploadDrop } from "../../_components/upload-drop";
+import { useLocalUpload } from "../../_components/uploads";
 import { useWatchVideos } from "../../_components/video-live";
 import { VideoStatus } from "../../_components/video-status";
 
 type Video = InfraVideoListItem;
-
-const PAGE_LIMIT = 50;
 
 const dateFormat = new Intl.DateTimeFormat("en-US", {
 	month: "short",
@@ -45,18 +48,25 @@ export function VideosClient({
 	appId,
 	videos,
 	userId,
+	nextLimit,
+	hasMore,
 }: {
 	appId: string;
 	videos: Video[];
 	userId: string;
+	nextLimit: number | null;
+	hasMore: boolean;
 }) {
 	const router = useRouter();
 	const filterId = useId();
-	const uploadingId = useWatchVideos(videos);
+	useWatchVideos(videos);
+	const localUpload = useLocalUpload();
 	const [userIdFilter, setUserIdFilter] = useState(userId);
 	const [pendingDelete, setPendingDelete] = useState<Video | null>(null);
+	const [loadingMore, startLoadingMore] = useTransition();
 	const hasUserIds = videos.some((video) => video.externalUserId);
-	const showFilter = userId !== "" || hasUserIds || videos.length >= PAGE_LIMIT;
+	const displayState = (video: Video) =>
+		infraVideoDisplayState(video.state, localUpload(video.id));
 
 	const deleteMutation = useMutation({
 		mutationFn: (video: Video) => deleteDeveloperVideo(appId, video.id),
@@ -68,58 +78,68 @@ export function VideosClient({
 		onError: () => toast.error("Could not delete the video"),
 	});
 
-	const applyFilter = (value: string) => {
-		const trimmed = value.trim();
+	const listPath = (filter: string, show?: number) => {
+		const query = new URLSearchParams();
+		if (filter) query.set("userId", filter);
+		if (show) query.set("show", String(show));
 		const base = infraAppPath(appId, "videos");
-		router.push(
-			trimmed ? `${base}?userId=${encodeURIComponent(trimmed)}` : base,
+		return query.size > 0 ? `${base}?${query}` : base;
+	};
+
+	const applyFilter = (value: string) => router.push(listPath(value.trim()));
+
+	const showMore = () => {
+		if (nextLimit === null) return;
+		startLoadingMore(() =>
+			router.replace(listPath(userId, nextLimit), { scroll: false }),
 		);
 	};
+
+	const pendingDeleteUnfinished =
+		pendingDelete !== null && displayState(pendingDelete) === "unfinished";
 
 	return (
 		<>
 			<PageHeader
 				title="Videos"
 				description={
-					videos.length >= PAGE_LIMIT
-						? `The ${PAGE_LIMIT} most recent, newest first. Open one to watch it and copy its links.`
+					hasMore
+						? `The ${videos.length.toLocaleString("en-US")} most recent, newest first. Open one to watch it and copy its links.`
 						: "Every video in this app, newest first. Open one to watch it and copy its links."
 				}
 				action={
-					showFilter && (
-						<form
-							className="flex w-full items-center gap-2 sm:w-auto"
-							onSubmit={(e) => {
-								e.preventDefault();
-								applyFilter(userIdFilter);
-							}}
-						>
-							<label htmlFor={filterId} className="sr-only">
-								Filter by external user id
-							</label>
-							<Input
-								id={filterId}
-								value={userIdFilter}
-								onChange={(e) => setUserIdFilter(e.target.value)}
-								placeholder="Filter by user id"
-								className="sm:w-56"
-							/>
-							<Button type="submit" variant="ghost">
-								Filter
+					<form
+						className="flex w-full items-center gap-2 sm:w-auto"
+						onSubmit={(e) => {
+							e.preventDefault();
+							applyFilter(userIdFilter);
+						}}
+					>
+						<label htmlFor={filterId} className="sr-only">
+							Filter by external user id
+						</label>
+						<Input
+							id={filterId}
+							value={userIdFilter}
+							onChange={(e) => setUserIdFilter(e.target.value)}
+							placeholder="Filter by user id"
+							className="sm:w-56"
+						/>
+						<Button type="submit" variant="ghost">
+							Filter
+						</Button>
+						{userId && (
+							<Button
+								variant="quiet"
+								onClick={() => {
+									setUserIdFilter("");
+									applyFilter("");
+								}}
+							>
+								Clear
 							</Button>
-							{userId && (
-								<Button
-									variant="quiet"
-									onClick={() => {
-										setUserIdFilter("");
-										applyFilter("");
-									}}
-								>
-									Clear
-								</Button>
-							)}
-						</form>
-					)
+						)}
+					</form>
 				}
 			/>
 
@@ -127,11 +147,15 @@ export function VideosClient({
 
 			{videos.length === 0 ? (
 				<div className="border-t border-[rgba(222,230,246,0.08)]">
-					<Empty>No videos for user id {userId}.</Empty>
+					<Empty>
+						<span className="[overflow-wrap:anywhere]">
+							No videos for user id {userId}.
+						</span>
+					</Empty>
 				</div>
 			) : (
-				<div className="relative overflow-x-auto border-t border-[rgba(222,230,246,0.08)]">
-					<table className="w-full border-collapse">
+				<div className="relative -mx-1 overflow-x-auto px-1">
+					<table className="w-full border-collapse border-t border-[rgba(222,230,246,0.08)]">
 						<thead>
 							<tr className={TR}>
 								<th className={TH}>Name</th>
@@ -150,8 +174,8 @@ export function VideosClient({
 						</thead>
 						<tbody>
 							{videos.map((video) => {
-								const uploadingHere = video.id === uploadingId;
-								const stalled = video.state === "uploading" && !uploadingHere;
+								const state = displayState(video);
+								const unfinished = state === "unfinished";
 								return (
 									<tr
 										key={video.id}
@@ -165,13 +189,13 @@ export function VideosClient({
 												href={`${infraAppPath(appId, "videos")}/${encodeURIComponent(video.id)}`}
 												className={clsx(
 													"block truncate rounded-[4px] pt-3 text-[#E8ECF4] underline-offset-[4px] hover:underline",
-													stalled ? "pb-0.5" : "pb-3",
+													unfinished ? "pb-0.5" : "pb-3",
 													FOCUS,
 												)}
 											>
 												{video.name}
 											</Link>
-											{stalled && (
+											{unfinished && (
 												<p className="m-0 whitespace-normal text-pretty pb-3 text-[12.5px] leading-[1.4] text-[rgba(232,236,244,0.46)]">
 													The file did not arrive. Remove this and upload it
 													again.
@@ -179,10 +203,7 @@ export function VideosClient({
 											)}
 										</td>
 										<td className={TD}>
-											<VideoStatus
-												state={video.state}
-												uploadingHere={uploadingHere}
-											/>
+											<VideoStatus state={state} />
 										</td>
 										<td
 											className={clsx(
@@ -230,9 +251,9 @@ export function VideosClient({
 												<button
 													type="button"
 													onClick={() => setPendingDelete(video)}
-													disabled={uploadingHere}
-													aria-label={`Delete ${video.name}`}
-													title="Delete"
+													disabled={state === "uploading"}
+													aria-label={`${unfinished ? "Remove" : "Delete"} ${video.name}`}
+													title={unfinished ? "Remove" : "Delete"}
 													className={clsx(
 														"inline-flex size-7 items-center justify-center rounded-[6px] text-[rgba(232,236,244,0.4)] transition-colors duration-200 hover:bg-[rgba(242,161,153,0.1)] hover:text-[#F2A199] disabled:pointer-events-none disabled:opacity-40",
 														FOCUS,
@@ -250,19 +271,38 @@ export function VideosClient({
 				</div>
 			)}
 
+			{hasMore && (
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+					{nextLimit !== null ? (
+						<Button
+							variant="ghost"
+							size="sm"
+							loading={loadingMore}
+							onClick={showMore}
+						>
+							Show more
+						</Button>
+					) : (
+						<p className="m-0 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
+							These are the {INFRA_VIDEO_PAGE_MAX.toLocaleString("en-US")} most
+							recent. Filter by user id to reach older videos, or list them
+							through the API.
+						</p>
+					)}
+				</div>
+			)}
+
 			<ConfirmDialog
 				open={pendingDelete !== null}
-				title="Delete video"
+				title={pendingDeleteUnfinished ? "Remove upload" : "Delete video"}
 				description={
 					pendingDelete
-						? pendingDelete.state === "uploading"
+						? pendingDeleteUnfinished
 							? `Remove "${pendingDelete.name}"? Its file has not arrived. An upload still running somewhere else will fail.`
 							: `Delete "${pendingDelete.name}"? Its links stop playing within about a minute, its files are removed and it stops counting toward storage.`
 						: undefined
 				}
-				confirmLabel={
-					pendingDelete?.state === "uploading" ? "Remove" : "Delete"
-				}
+				confirmLabel={pendingDeleteUnfinished ? "Remove" : "Delete"}
 				loading={deleteMutation.isPending}
 				onConfirm={() => {
 					if (pendingDelete) deleteMutation.mutate(pendingDelete);

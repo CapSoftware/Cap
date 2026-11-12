@@ -42,3 +42,18 @@ export function completeRetryPlan(
 		waitMs: busy ? BUSY_RETRY_MS : 1500 * attempt,
 	};
 }
+
+export const EMPTY_FILE_MESSAGE = "That file is empty.";
+
+const NOT_VIDEO_SIGNATURES: readonly (readonly number[])[] = [
+	[0x89, 0x50, 0x4e, 0x47],
+	[0xff, 0xd8, 0xff],
+	[0x47, 0x49, 0x46, 0x38],
+	[0x25, 0x50, 0x44, 0x46],
+];
+
+export function startsLikeAnImageOrDocument(bytes: Uint8Array) {
+	return NOT_VIDEO_SIGNATURES.some((signature) =>
+		signature.every((byte, index) => bytes[index] === byte),
+	);
+}
