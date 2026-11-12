@@ -46,16 +46,28 @@ export function developerVideoPlaybackUrls(
 	};
 }
 
+export function developerVideoPageUrls(
+	playbackId: string,
+	webUrl: string = serverEnv().WEB_URL,
+): { shareUrl: string; embedUrl: string } {
+	const shareUrl = `${webUrl.replace(/\/+$/, "")}/dev/${playbackId}`;
+	return { shareUrl, embedUrl: `${shareUrl}/embed` };
+}
+
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,
 		filesDeletedAt: _filesDeletedAt,
+		s3Key: _s3Key,
 		...fields
 	} = video;
 	return {
 		...fields,
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
+		...(video.playbackId
+			? developerVideoPageUrls(video.playbackId)
+			: { shareUrl: null, embedUrl: null }),
 	};
 }
 

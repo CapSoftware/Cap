@@ -6,7 +6,7 @@ import {
 	initiateInfraUpload,
 	presignInfraUploadParts,
 } from "@/lib/infra-video-upload";
-import { zValidator } from "@/utils/zod-validator";
+import { developerZValidator } from "@/utils/zod-validator";
 import { withDeveloperPublicAuth } from "../../../../utils";
 
 export const app = new Hono<{
@@ -18,7 +18,7 @@ export const app = new Hono<{
 
 app.post(
 	"/initiate",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			videoId: z.string(),
@@ -36,7 +36,7 @@ app.post(
 
 app.post(
 	"/presign-part",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			videoId: z.string(),
@@ -59,7 +59,7 @@ app.post(
 
 app.post(
 	"/complete",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			videoId: z.string(),
@@ -88,7 +88,7 @@ app.post(
 
 app.post(
 	"/abort",
-	zValidator(
+	developerZValidator(
 		"json",
 		z.object({
 			videoId: z.string(),

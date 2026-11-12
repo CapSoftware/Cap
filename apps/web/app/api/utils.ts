@@ -18,6 +18,7 @@ import { HTTPException } from "hono/http-exception";
 import {
 	apiErrorBody,
 	apiInternalErrorBody,
+	apiMethodNotAllowedBody,
 	apiNotFoundBody,
 } from "@/lib/api-errors";
 import { hashKey } from "@/lib/developer-key-hash";
@@ -29,9 +30,11 @@ const RATE_LIMIT_MAX_ENTRIES = 10_000;
 const requestCounts = new Map<string, { count: number; resetAt: number }>();
 let rateLimitRequestCounter = 0;
 
+// The counter lives in this process, so each server instance keeps its own
+// window. The headers and Retry-After describe the instance that answered.
 export const developerRateLimiter = createMiddleware(async (c, next) => {
 	const key =
-		c.req.header("authorization") ??
+		c.req.header("authorization")?.trim().split(/\s+/)[1] ??
 		c.req.header("x-forwarded-for") ??
 		"unknown";
 	const now = Date.now();
@@ -58,26 +61,35 @@ export const developerRateLimiter = createMiddleware(async (c, next) => {
 		}
 	}
 
-	const entry = requestCounts.get(key);
+	let entry = requestCounts.get(key);
 
 	if (!entry || now > entry.resetAt) {
-		requestCounts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+		entry = { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS };
+		requestCounts.set(key, entry);
 	} else {
 		entry.count++;
-		if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
-			c.header(
-				"Retry-After",
-				String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))),
-			);
-			return c.json(
-				apiErrorBody(
-					"rate_limited",
-					"Rate limit exceeded",
-					`Wait for the Retry-After seconds, then retry. Each key allows ${RATE_LIMIT_MAX_REQUESTS} requests per minute.`,
-				),
-				429,
-			);
-		}
+	}
+
+	const resetSeconds = String(
+		Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+	);
+	c.header("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
+	c.header(
+		"X-RateLimit-Remaining",
+		String(Math.max(0, RATE_LIMIT_MAX_REQUESTS - entry.count)),
+	);
+	c.header("X-RateLimit-Reset", resetSeconds);
+
+	if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+		c.header("Retry-After", resetSeconds);
+		return c.json(
+			apiErrorBody(
+				"rate_limited",
+				"Rate limit exceeded",
+				`Wait for the Retry-After seconds, then retry. Each key allows ${RATE_LIMIT_MAX_REQUESTS} requests per minute.`,
+			),
+			429,
+		);
 	}
 
 	await next();
@@ -165,6 +177,12 @@ export const developerSdkCors = cors({
 	credentials: false,
 	allowMethods: ["GET", "POST", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization"],
+	exposeHeaders: [
+		"Retry-After",
+		"X-RateLimit-Limit",
+		"X-RateLimit-Remaining",
+		"X-RateLimit-Reset",
+	],
 });
 
 function isOwnOrigin(origin: string) {
@@ -327,11 +345,52 @@ export const withDeveloperSecretAuth = createMiddleware<{
 	await next();
 });
 
-export const developerApiNotFound = (c: Context) =>
-	c.json(apiNotFoundBody(new URL(c.req.url).pathname), 404);
+type DeveloperApiRoute = { method: string; path: string };
+
+const routeMatches = (pattern: string, pathname: string) => {
+	const expected = pattern.split("/");
+	const actual = pathname.split("/");
+	return (
+		expected.length === actual.length &&
+		expected.every((segment, index) =>
+			segment.startsWith(":")
+				? actual[index] !== ""
+				: segment === actual[index],
+		)
+	);
+};
+
+export const developerApiNotFound = (
+	c: Context,
+	routes: readonly DeveloperApiRoute[] = [],
+) => {
+	const pathname = new URL(c.req.url).pathname;
+	const allowed = [
+		...new Set(
+			routes
+				.filter(
+					(route) =>
+						route.method !== "ALL" && routeMatches(route.path, pathname),
+				)
+				.map((route) => route.method),
+		),
+	];
+	if (allowed.length === 0) return c.json(apiNotFoundBody(pathname), 404);
+	c.header("Allow", allowed.join(", "));
+	return c.json(apiMethodNotAllowedBody(c.req.method, pathname, allowed), 405);
+};
 
 export const developerApiError = (error: Error, c: Context) => {
-	if (error instanceof HTTPException) return error.getResponse();
+	if (error instanceof HTTPException) {
+		return c.json(
+			apiErrorBody(
+				"invalid_request",
+				error.message || "The request could not be processed",
+				"Check the request against the OpenAPI description at /openapi.json.",
+			),
+			error.status,
+		);
+	}
 	console.error("Developer API error:", error);
 	return c.json(apiInternalErrorBody(), 500);
 };

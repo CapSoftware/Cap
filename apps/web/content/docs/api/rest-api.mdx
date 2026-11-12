@@ -145,7 +145,6 @@ curl https://cap.so/api/developer/v1/videos?limit=10 \
       "width": 1920,
       "height": 1080,
       "fps": 30,
-      "s3Key": "developer/app_789/abc123def456/result.mp4",
       "transcriptionStatus": "COMPLETE",
       "metadata": null,
       "deletedAt": null,
@@ -190,7 +189,6 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "s3Key": "developer/app_789/abc123def456/result.mp4",
     "transcriptionStatus": "COMPLETE",
     "metadata": null,
     "status": "ready",
@@ -208,7 +206,9 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "updatedAt": "2025-06-15T10:32:00.000Z",
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
-    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
   }
 }
 ```
@@ -577,11 +577,12 @@ curl -X POST https://cap.so/api/developer/sdk/v1/videos/create \
 {
   "videoId": "abc123def456",
   "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
-  "s3Key": "developer/app_789/abc123def456/result.mp4",
-  "shareUrl": "https://cap.so/dev/abc123def456",
-  "embedUrl": "https://cap.so/embed/abc123def456?sdk=1"
+  "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+  "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
 }
 ```
+
+`shareUrl` and `embedUrl` are a hosted player for the video. See [Share and Embed](#share-and-embed).
 
 Creating a video is free. It returns `402` if the app is out of credit or its balance does not cover 7 days of storage for what it already stores. The `402` body says how much is needed:
 
@@ -722,6 +723,25 @@ POST /api/developer/sdk/v1/upload/multipart/abort
 
 ---
 
+## Share and Embed
+
+Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create, get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
+
+- `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
+- `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
+
+```html
+<iframe
+  src="https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
+  title="Product Demo"
+  style="width: 100%; aspect-ratio: 16 / 9; border: 0"
+  allow="fullscreen; picture-in-picture"
+  allowfullscreen
+></iframe>
+```
+
+Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it shows `errorReason`. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+
 ## SDKs
 
 Cap provides official SDK packages to simplify integration:
@@ -743,7 +763,6 @@ The full video object returned by list and get endpoints:
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
-| `s3Key` | string \| null | Storage key for the video file |
 | `transcriptionStatus` | string \| null | One of: `PROCESSING`, `COMPLETE`, `ERROR`, `SKIPPED`, `NO_AUDIO` |
 | `metadata` | object \| null | Custom metadata provided during creation |
 | `status` | string | One of: `uploading`, `processing`, `ready`, `errored` |
@@ -755,6 +774,8 @@ The full video object returned by list and get endpoints:
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
+| `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
+| `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |
