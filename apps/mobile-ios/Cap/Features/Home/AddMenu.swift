@@ -89,7 +89,8 @@ struct AddMenu: View {
     }
 
     private func enqueueFile(_ url: URL) {
-        Usage.track("upload_started", ["source": "files", "kind": "video"])
+        let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
+        Usage.track("upload_started", ["source": "files", "kind": isImage ? "image" : "video"])
         session.uploads.enqueue(displayName: url.deletingPathExtension().lastPathComponent, folderId: uploadFolderId) {
             try await UploadCenter.prepareVideo(copying: url, suggestedName: nil, securityScoped: true)
         }
