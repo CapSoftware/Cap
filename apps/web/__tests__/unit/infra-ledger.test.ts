@@ -333,6 +333,63 @@ describe("rows written in the same second", () => {
 		}
 	});
 
+	it("keeps rows that moved nothing where the balance they show was reached", () => {
+		const credit = row({
+			type: "topup",
+			amountMicroCredits: 2_500,
+			balanceAfterMicroCredits: 2_500,
+			createdAt: at,
+		});
+		const pending = row({
+			type: "topup_pending",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 2_500,
+			createdAt: at,
+		});
+		const declined = row({
+			type: "topup_failed",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 2_500,
+			createdAt: at,
+		});
+		const debit = row({
+			amountMicroCredits: -33,
+			balanceAfterMicroCredits: 2_467,
+			createdAt: at,
+		});
+		const before = row({
+			type: "topup_failed",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			createdAt: at,
+		});
+		const group = [credit, pending, declined, debit, before];
+
+		const orders = (rows: LedgerRow[]): LedgerRow[][] =>
+			rows.length < 2
+				? [rows]
+				: rows.flatMap((first, index) =>
+						orders(rows.filter((_, other) => other !== index)).map((rest) => [
+							first,
+							...rest,
+						]),
+					);
+
+		for (const shuffled of orders(group)) {
+			const ordered = orderLedgerRows(shuffled);
+			expect(ordered.map((entry) => entry.id).sort()).toEqual(
+				group.map((entry) => entry.id).sort(),
+			);
+			expect(ordered[0]?.id).toBe(debit.id);
+			expect(ordered.at(-1)?.id).toBe(before.id);
+			for (const [newer, older] of neighbours(ordered)) {
+				expect(newer.balanceAfterMicroCredits - newer.amountMicroCredits).toBe(
+					older.balanceAfterMicroCredits,
+				);
+			}
+		}
+	});
+
 	it("keeps every row exactly once when the chain cannot be told apart", () => {
 		const rows = [
 			row({

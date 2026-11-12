@@ -152,8 +152,18 @@ const balanceBefore = (row: LedgerRow) =>
 
 function chainNewestFirst<Row extends LedgerRow>(group: Row[]) {
 	if (group.length < 2) return group;
-	const remaining = [...group];
+	const unmoved = group.filter((row) => row.amountMicroCredits === 0);
+	const remaining = group.filter((row) => row.amountMicroCredits !== 0);
 	const oldestFirst: Row[] = [];
+	const placeUnmovedAt = (balance: number) => {
+		for (let index = 0; index < unmoved.length; ) {
+			if (unmoved[index]?.balanceAfterMicroCredits === balance) {
+				oldestFirst.push(...unmoved.splice(index, 1));
+			} else {
+				index++;
+			}
+		}
+	};
 	let next = remaining.findIndex(
 		(candidate) =>
 			!remaining.some(
@@ -165,12 +175,14 @@ function chainNewestFirst<Row extends LedgerRow>(group: Row[]) {
 	while (remaining.length > 0) {
 		const [row] = remaining.splice(next < 0 ? remaining.length - 1 : next, 1);
 		if (!row) break;
+		if (oldestFirst.length === 0) placeUnmovedAt(balanceBefore(row));
 		oldestFirst.push(row);
+		placeUnmovedAt(row.balanceAfterMicroCredits);
 		next = remaining.findIndex(
 			(candidate) => balanceBefore(candidate) === row.balanceAfterMicroCredits,
 		);
 	}
-	return oldestFirst.reverse();
+	return [...unmoved, ...oldestFirst].reverse();
 }
 
 export function orderLedgerRows<Row extends LedgerRow>(rows: readonly Row[]) {
