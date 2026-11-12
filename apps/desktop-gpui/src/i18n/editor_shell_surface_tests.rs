@@ -8,6 +8,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
         "editor.markers.",
         "editor.modal.",
         "editor.preparing.",
+        "editor.side_panel.",
         "editor.tabs.",
         "editor.timeline.",
         "editor.transcript.",
@@ -36,6 +37,7 @@ const FORMATTED: &[&str] = &[
     "editor.markers.stack",
     "editor.clips.append_error",
     "editor.clips.clip",
+    "editor.clips.count",
     "editor.clips.error.cannot_decode",
     "editor.clips.error.in_use",
     "editor.clips.error.missing_video",
@@ -117,8 +119,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::canvas::text_item(), "Text"),
         (tr::editor::clips::append_error_title(), "Recording Error"),
-        (tr::editor::clips::back(), "Back to editor"),
-        (tr::editor::clips::cap_filter(), "Cap Recording"),
         (
             tr::editor::clips::empty_description(),
             "Record or import a clip and it will show up here.",
@@ -167,7 +167,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::clips::import_mp4(), "MP4 Video…"),
         (tr::editor::clips::importing(), "Importing…"),
         (tr::editor::clips::mp4_filter(), "MP4 Video"),
+        (tr::editor::clips::record(), "Record"),
         (tr::editor::clips::record_new(), "Record a new clip"),
+        (tr::editor::side_panel::style(), "Style"),
         (tr::editor::clips::title(), "Clips"),
         (
             tr::editor::export::advanced::bits_per_pixel(),
@@ -306,6 +308,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::export::preview_unavailable(),
             "Preview unavailable",
         ),
+        (tr::editor::export::quality::gif_high(), "High"),
+        (tr::editor::export::quality::gif_low(), "Low"),
+        (tr::editor::export::quality::gif_medium(), "Medium"),
         (tr::editor::export::quality::larger(), "Larger file"),
         (tr::editor::export::quality::maximum(), "Maximum"),
         (tr::editor::export::quality::potato(), "Potato"),
@@ -567,6 +572,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Smallest download",
         ),
         (tr::editor::tabs::captions::model_label(), "Model"),
+        (
+            tr::editor::tabs::captions::model_updated(),
+            "Recommended model updated",
+        ),
+        (
+            tr::editor::tabs::captions::model_updated_description(),
+            "We recommend the new version. It is more accurate and catches short recordings the old one missed.",
+        ),
         (tr::editor::tabs::captions::position(), "Position"),
         (tr::editor::tabs::captions::preset::classic(), "Classic"),
         (
@@ -1116,6 +1129,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::transcript::no_audio(),
             "This recording has no audio to transcribe.",
         ),
+        (
+            tr::editor::transcript::no_speech(),
+            "No speech found in this recording",
+        ),
         (tr::editor::transcript::pauses::apply(), "Shorten"),
         (tr::editor::transcript::pauses::keep(), "Shorten to"),
         (
@@ -1149,11 +1166,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::transcript::title(), "Transcript"),
         (tr::editor::transcript::transcribe(), "Transcribe"),
         (tr::editor::transcript::transcribing(), "Transcribing…"),
-        (tr::editor::window::header::transcript(), "Transcript"),
-        (
-            tr::editor::window::header::transcript_tooltip(),
-            "Edit by transcript",
-        ),
         (
             tr::editor::window::image::changed(),
             "This image changed while choosing a replacement. Select it and try again.",
@@ -1345,6 +1357,80 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "System Monospace",
         ),
         (tr::ui::selection::select_all(), "Select all"),
+        (
+            tr::editor::tabs::audio::voice_eq::apply_all(),
+            "Apply to all clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_high(), "High"),
+        (
+            tr::editor::tabs::audio::voice_eq::band_high_mid(),
+            "High-mid",
+        ),
+        (tr::editor::tabs::audio::voice_eq::band_low(), "Low"),
+        (tr::editor::tabs::audio::voice_eq::band_low_cut(), "Low cut"),
+        (tr::editor::tabs::audio::voice_eq::band_low_mid(), "Low-mid"),
+        (tr::editor::tabs::audio::voice_eq::declick(), "De-click"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_description(),
+            "Repairs mouth clicks and crackle and leaves the rest of your voice untouched.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::declick_light(), "Light"),
+        (tr::editor::tabs::audio::voice_eq::declick_off(), "Off"),
+        (
+            tr::editor::tabs::audio::voice_eq::declick_strong(),
+            "Strong",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::description(),
+            "Shape your microphone's tone. What you hear here is what exports.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::frequency(), "Frequency"),
+        (tr::editor::tabs::audio::voice_eq::gain(), "Gain"),
+        (
+            tr::editor::tabs::audio::voice_eq::graph_hint(),
+            "Drag a point to shape the sound. Scroll over a point to widen or narrow it, and double-click to reset it.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::low_cut_description(),
+            "Removes rumble and handling noise below the cutoff.",
+        ),
+        (tr::editor::tabs::audio::voice_eq::off(), "Off"),
+        (tr::editor::tabs::audio::voice_eq::preset_bright(), "Bright"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_broadcast(),
+            "Broadcast",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_clear(), "Clear"),
+        (tr::editor::tabs::audio::voice_eq::preset_custom(), "Custom"),
+        (
+            tr::editor::tabs::audio::voice_eq::preset_natural(),
+            "Natural",
+        ),
+        (tr::editor::tabs::audio::voice_eq::preset_warm(), "Warm"),
+        (tr::editor::tabs::audio::voice_eq::q(), "Q"),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all(),
+            "Editing all clips",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_all_hint(),
+            "Select a clip in the timeline to tune it on its own.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_mixed(),
+            "Clips have different settings. A change here applies to all of them.",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected(),
+            "Editing the selected clip",
+        ),
+        (
+            tr::editor::tabs::audio::voice_eq::scope_selected_many(),
+            "Editing the selected clips",
+        ),
+        (tr::editor::tabs::audio::voice_eq::title(), "Voice EQ"),
+        (tr::editor::timeline::segment::voice_eq(), "Voice EQ"),
+        (tr::editor::window::clip_menu::voice_eq(), "Voice EQ"),
         (tr::editor::canvas::shape(), "Shape"),
         (tr::editor::timeline::track::shape(), "Shape"),
         (
@@ -1372,6 +1458,8 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+    assert_eq!(tr::editor::clips::count(1), "1 clip");
+    assert_eq!(tr::editor::clips::count(3), "3 clips");
     assert_eq!(tr::editor::markers::button(1), "1 marker");
     assert_eq!(tr::editor::markers::button(12), "12 markers");
     assert_eq!(tr::editor::markers::default_name(3), "Marker 3");

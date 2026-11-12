@@ -2,13 +2,14 @@
 
 import { verifyPassword as verifyPlainPassword } from "@cap/database/crypto";
 import { revalidatePath } from "next/cache";
+import { isPasswordAttemptLimited } from "@/lib/password-attempt-limit";
 import {
 	passwordAttemptResourceKey,
 	TOO_MANY_PASSWORD_ATTEMPTS,
 } from "@/lib/password-attempts";
 import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
 import { getPublicCollectionPasswordHash } from "@/lib/public-collections";
-import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function verifyCollectionPassword(
 	collectionId: string,
@@ -25,10 +26,14 @@ export async function verifyCollectionPassword(
 		}
 
 		if (
-			(await isRateLimited(RATE_LIMIT_IDS.COLLECTION_PASSWORD)) ||
-			(await isRateLimited(RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION, {
-				key: `collection:${resourceKey}`,
-			}))
+			await isPasswordAttemptLimited(
+				{
+					perClient: RATE_LIMIT_IDS.COLLECTION_PASSWORD,
+					perViewer: RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_VIEWER,
+					perResource: RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION,
+				},
+				`collection:${resourceKey}`,
+			)
 		) {
 			return { success: false, error: TOO_MANY_PASSWORD_ATTEMPTS };
 		}

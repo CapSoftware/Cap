@@ -1,13 +1,14 @@
 "use client";
 import type { Folder, Space } from "@cap/web-domain";
-import { faGlobe, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons/faGlobe";
+import { faTrash } from "@fortawesome/free-solid-svg-icons/faTrash";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { resolveMoveLocation } from "@/lib/move-items";
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
@@ -119,12 +120,27 @@ const FolderCard = ({
 			toast.success("Folder updated successfully");
 			router.refresh();
 		},
-		onError: () => {
+		onError: (_error, variables) => {
 			setPublicEnabled(isPublic);
+			const failedName = variables.name;
+			// Only undo the rename that failed, not one typed since.
+			if (failedName !== undefined)
+				setUpdateName((current) => (current === failedName ? name : current));
 			toast.error("Failed to update folder");
 		},
 		onSettled: () => setIsRenaming(false),
 	});
+
+	const commitRename = () => {
+		setIsRenaming(false);
+		const nextName = updateName.trim();
+		if (!nextName) {
+			setUpdateName(name);
+			return;
+		}
+		setUpdateName(nextName);
+		if (nextName !== name) updateFolder.mutate({ id, name: nextName });
+	};
 
 	useEffect(() => {
 		if (isRenaming && nameRef.current) {
@@ -393,23 +409,9 @@ const FolderCard = ({
 								e.stopPropagation();
 							}}
 							onChange={(e) => setUpdateName(e.target.value)}
-							onBlur={() => {
-								setIsRenaming(false);
-								if (updateName.trim() !== name)
-									updateFolder.mutate({
-										id,
-										name: updateName.trim(),
-									});
-							}}
+							onBlur={commitRename}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") {
-									setIsRenaming(false);
-									if (updateName.trim() !== name)
-										updateFolder.mutate({
-											id,
-											name: updateName.trim(),
-										});
-								}
+								if (e.key === "Enter") commitRename();
 							}}
 							className={clsx(
 								"relative z-10 flex-1 w-full min-w-0 resize-none bg-transparent border-none focus:outline-none focus:ring-0 focus:border-none text-gray-12 truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal",

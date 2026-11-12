@@ -38,10 +38,13 @@ mod editor_modal;
 mod editor_panels;
 mod editor_preparing;
 mod editor_shapes;
+mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
+mod editor_voice_eq;
 mod editor_timeline;
 mod editor_window;
+mod encoder_recovery;
 mod feeds;
 mod focus_border;
 mod hotkeys;
@@ -83,7 +86,6 @@ mod presets;
 mod style_presets;
 mod project_save;
 mod recording;
-mod repair;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -346,7 +348,8 @@ fn main() {
 
     single_instance::acquire();
     let previous_session = crash_capture::begin_session(&diagnostics::logs_dir());
-    blur_recovery::configure(previous_session);
+    encoder_recovery::configure(previous_session.as_ref());
+    blur_recovery::configure(previous_session.as_ref());
 
     #[cfg(target_os = "macos")]
     platform::install_appkit_exception_guards();
@@ -379,7 +382,6 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_tokio::init_from_handle(cx, runtime_handle);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
-        repair::init(cx);
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
@@ -493,14 +495,14 @@ fn main() {
             Ok(requests) => {
                 cx.spawn(async move |cx| {
                     while requests.recv_async().await.is_ok() {
-                        cx.update(menus::quit);
+                        cx.update(|cx| menus::quit(menus::QuitSource::NativeTermination, cx));
                     }
                 })
                 .detach();
             }
             Err(error) => {
                 tracing::error!(%error, "Could not install safe native Quit handling");
-                menus::quit(cx);
+                menus::quit(menus::QuitSource::NativeQuitHandlerUnavailable, cx);
                 return;
             }
         }
