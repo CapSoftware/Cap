@@ -50,6 +50,7 @@ const LIST_FIELDS = [
 
 const DETAIL_FIELDS = [
 	...LIST_FIELDS,
+	"captions",
 	"embedCode",
 	"failure",
 	"height",
@@ -188,6 +189,7 @@ describe("console video payload", () => {
 		expect(detail.posterUrl).toContain("/playback-id-0123456789ab/");
 		expect(detail.stillEncoding).toBe(false);
 		expect(detail.failure).toBeNull();
+		expect(detail.captions).toEqual([]);
 
 		const sent = JSON.stringify(detail);
 		expect(sent).not.toContain("developer/app-1/video-1/video");
@@ -242,7 +244,7 @@ describe("console video payload", () => {
 
 			expect(detail.shareUrl).toBe(PAGE);
 			expect(detail.embedCode).toBe(
-				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`,
+				`<iframe src="${PAGE}/embed" title="${video.name}" style="width: 100%; aspect-ratio: 1080 / 1920; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`,
 			);
 		});
 

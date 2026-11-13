@@ -33,6 +33,7 @@ import {
 	developerVideoPageUrls,
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
+import { developerVideoCaptionTracks } from "@/lib/developer-video-captions";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { developerVideoIsTakenDown } from "@/lib/developer-video-takedown";
@@ -212,7 +213,7 @@ export const getDeveloperAppVideo = cache(
 		) {
 			row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
 		}
-		return toInfraVideoDetail(
+		const detail = toInfraVideoDetail(
 			{
 				...row,
 				legacy: row.playbackId === null && row.processing === null,
@@ -221,6 +222,13 @@ export const getDeveloperAppVideo = cache(
 			developerVideoPlaybackUrls(row),
 			row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
 		);
+		if (detail.state !== "ready" || (!detail.hlsUrl && !detail.mp4Url)) {
+			return detail;
+		}
+		return {
+			...detail,
+			captions: await developerVideoCaptionTracks({ ...row, appId }),
+		};
 	},
 );
 

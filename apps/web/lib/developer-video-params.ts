@@ -3,6 +3,7 @@ export interface DeveloperVideoPlayback {
 	muted: boolean;
 	loop: boolean;
 	controls: boolean;
+	captions: boolean;
 	startAt: number;
 }
 
@@ -35,6 +36,7 @@ export function developerVideoPlayback(
 		muted: embed && flag(query.muted, false),
 		loop: embed && flag(query.loop, false),
 		controls: !embed || flag(query.controls, true),
+		captions: embed && flag(query.captions, false),
 		startAt: seconds(query.t),
 	};
 }

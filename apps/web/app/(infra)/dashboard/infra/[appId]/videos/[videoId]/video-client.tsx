@@ -86,6 +86,7 @@ function Player({ video }: { video: InfraVideoDetail }) {
 				source={source}
 				title={video.name}
 				poster={video.posterUrl ?? undefined}
+				captions={video.captions}
 				aspectRatio={
 					video.width && video.height
 						? `${video.width} / ${video.height}`
@@ -353,6 +354,14 @@ export function VideoClient({
 							{video.width}×{video.height}
 						</Fact>
 					) : null}
+					{video.captions.length > 0 && (
+						<Fact
+							label="Captions"
+							note="Shown in the hosted player and the embed. Add captions=1 to the embed link to turn them on from the start."
+						>
+							{video.captions.map((caption) => caption.label).join(", ")}
+						</Fact>
+					)}
 					<Fact label="Uploaded">
 						{createdFormat.format(new Date(video.createdAt))}
 					</Fact>
