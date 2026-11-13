@@ -108,7 +108,8 @@ vi.mock("@/lib/public-media-fetch", async (importOriginal) => {
 	};
 });
 
-vi.mock("@/lib/media-container", () => ({
+vi.mock("@/lib/media-container", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/media-container")>()),
 	urlIsSelfContainedMedia: async () => true,
 }));
 
@@ -199,6 +200,7 @@ import {
 import { developerTranscribeWorkflow } from "@/workflows/developer-transcribe";
 
 const SOURCE_KEY = "developer/_uploads/app-1/t-tr-1";
+const MEDIA_HEAD = new TextEncoder().encode("ID3");
 const SIGNED_URL = "https://media.example.com/clip.mp3?sig=secret&expires=1";
 
 type Origin = {
@@ -216,6 +218,7 @@ const serve = async (options: {
 	everyMs: number;
 	contentLength: boolean;
 	stopAfterChunks?: number;
+	head?: Uint8Array;
 }) => {
 	const state: Origin = {
 		server: createServer((_request, response) => {
@@ -238,12 +241,14 @@ const serve = async (options: {
 				sent += next;
 				chunk += 1;
 				state.served = sent;
+				const body = Buffer.alloc(next, 7);
+				if (chunk === 1) Buffer.from(options.head ?? MEDIA_HEAD).copy(body);
 				if (sent >= options.bytes) {
 					state.finishedAt = Date.now();
-					response.end(Buffer.alloc(next, 7));
+					response.end(body);
 					return;
 				}
-				response.write(Buffer.alloc(next, 7));
+				response.write(body);
 				setTimeout(tick, options.everyMs);
 			};
 			response.on("close", () => {
@@ -414,5 +419,104 @@ describe("downloading a URL source from a slow server", () => {
 			reservedMicroCredits: 0,
 		});
 		expect(balance()).toBe(100_000);
+	});
+
+	describe("a URL that is not an audio or video file", () => {
+		const notMedia = (head: Uint8Array) =>
+			serve({
+				bytes: 50 * 1024 * 1024,
+				chunks: 50 * 16,
+				everyMs: 1,
+				contentLength: true,
+				head,
+			});
+
+		it.each([
+			["an HTML page", new TextEncoder().encode("<!doctype html><html>")],
+			["a playlist", new TextEncoder().encode("#EXTM3U\n#EXT-X-VERSION:3\n")],
+			["random bytes", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])],
+		])(
+			"is refused from its first bytes when it is %s, with nothing stored",
+			async (_label, head) => {
+				const server = await notMedia(head);
+
+				const result = await run();
+
+				expect(result).toEqual({
+					success: false,
+					message: "The file is not a supported audio or video format",
+				});
+				expect(transcript()).toMatchObject({
+					status: "error",
+					errorCode: "unsupported_format",
+					errorMessage: "The file is not a supported audio or video format",
+					billedMicroCredits: 0,
+					reservedMicroCredits: 0,
+				});
+				expect(ledger()).toHaveLength(0);
+				expect(context.streamedPuts).toBe(0);
+				expect(context.filePuts).toEqual([]);
+				expect(context.objects.has(SOURCE_KEY)).toBe(false);
+				expect(context.extract).not.toHaveBeenCalled();
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				expect(server.closedEarly).toBe(true);
+				expect(server.served).toBeLessThan(2 * 1024 * 1024);
+			},
+		);
+
+		const storedAtExtract = () => {
+			const seen: { bytes: Uint8Array | null } = { bytes: null };
+			const answer = context.extract.getMockImplementation();
+			context.extract.mockImplementationOnce(async (...args: unknown[]) => {
+				seen.bytes = context.objects.get(SOURCE_KEY) ?? null;
+				return answer?.(...args);
+			});
+			return seen;
+		};
+
+		it("still stores every byte of a media file, its first bytes included", async () => {
+			const server = await serve({
+				bytes: 40_000,
+				chunks: 7,
+				everyMs: 5,
+				contentLength: false,
+			});
+			const seen = storedAtExtract();
+
+			await run();
+
+			const stored = seen.bytes;
+			expect(stored?.length).toBe(40_000);
+			expect(
+				Buffer.from(stored ?? [])
+					.subarray(0, 3)
+					.toString(),
+			).toBe("ID3");
+			expect(stored?.[3]).toBe(7);
+			expect(stored?.[39_999]).toBe(7);
+			expect(server.closedEarly).toBe(false);
+			expect(transcript()?.status).toBe("complete");
+		});
+
+		it("still stores a media file shorter than the bytes it looks at", async () => {
+			await serve({ bytes: 1_000, chunks: 1, everyMs: 1, contentLength: true });
+			const seen = storedAtExtract();
+
+			await run();
+
+			expect(seen.bytes?.length).toBe(1_000);
+			expect(transcript()?.status).toBe("complete");
+		});
+
+		it("still says an empty file could not be downloaded", async () => {
+			await serve({ bytes: 0, chunks: 1, everyMs: 1, contentLength: false });
+
+			await run();
+
+			expect(transcript()).toMatchObject({
+				status: "error",
+				errorCode: "source_unreachable",
+			});
+		});
 	});
 });
