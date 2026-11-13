@@ -101,6 +101,28 @@ describe("embed frame-ancestors", () => {
 		);
 	});
 
+	it.each([
+		"/dev/%70layback-id-0123456789ab/embed",
+		"/Dev/playback-id-0123456789ab/Embed",
+		"/DEV/playback-id-0123456789ab/EMBED?autoplay=1",
+	])("restricts the same embed at %s", async (path) => {
+		state.domains = ["https://myshop.com"];
+		const response = await send(`https://cap.so${path}`);
+		expect(state.lookups).toBe(1);
+		expect(response.headers.get("content-security-policy")).toBe(
+			"frame-ancestors 'self' https://myshop.com",
+		);
+	});
+
+	it("leaves a differently cased embed untouched when the list is empty", async () => {
+		const main = await send(
+			`https://cap.so/Dev/${PLAYBACK_ID}/Embed?dub_id=click_123`,
+		);
+		expect(state.lookups).toBe(1);
+		expect(main.headers.get("content-security-policy")).toBeNull();
+		expect(main.headers.get("set-cookie")).toContain("dub_id=click_123");
+	});
+
 	it("sends one policy header for the RSC request too", async () => {
 		state.domains = ["https://myshop.com"];
 		const response = await send(EMBED, { rsc: "1" });

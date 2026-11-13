@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normalizeEmbedOrigin } from "@/lib/infra-domain";
 import {
-	DEVELOPER_EMBED_PATH,
 	embedFrameAncestors,
 	embedFrameSource,
+	embedPlaybackId,
 	withFrameAncestors,
 } from "@/lib/infra-embed-ancestors";
 
@@ -90,22 +90,31 @@ describe("withFrameAncestors", () => {
 	});
 });
 
-describe("DEVELOPER_EMBED_PATH", () => {
+describe("embedPlaybackId", () => {
 	it.each([
 		["/dev/playback-id-0123456789ab/embed", "playback-id-0123456789ab"],
-		["/dev/playback-id-0123456789ab/embed/", "playback-id-0123456789ab"],
-	])("matches %s", (path, id) => {
-		expect(DEVELOPER_EMBED_PATH.exec(path)?.[1]).toBe(id);
+		["/dev/%70layback-id-0123456789ab/embed", "playback-id-0123456789ab"],
+		["/Dev/playback-id-0123456789ab/Embed", "playback-id-0123456789ab"],
+		["/DEV/playback-id-0123456789ab/EMBED", "playback-id-0123456789ab"],
+		["/dev/playback%2Did%2D0123456789ab/embed", "playback-id-0123456789ab"],
+	])("finds the playback id in %s", (path, id) => {
+		expect(embedPlaybackId(path)).toBe(id);
 	});
 
 	it.each([
 		"/dev/playback-id-0123456789ab",
-		"/dev/short/embed",
+		"/dev/playback-id-0123456789ab/embed/",
 		"/dev/playback-id-0123456789ab/embed/x",
+		"//dev/playback-id-0123456789ab/embed",
+		"/dev/short/embed",
+		"/dev/playback%2Fid-0123456789ab/embed",
+		"/dev/%E0%A4%A/embed",
 		"/s/playback-id-0123456789ab/embed",
 		"/embed/playback-id-0123456789ab",
-	])("does not match %s", (path) => {
-		expect(DEVELOPER_EMBED_PATH.test(path)).toBe(false);
+		"/%64ev/playback-id-0123456789ab/embed",
+		"/dev/playback-id-0123456789ab/%65mbed",
+	])("ignores %s", (path) => {
+		expect(embedPlaybackId(path)).toBeNull();
 	});
 });
 

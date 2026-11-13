@@ -1,4 +1,23 @@
-export const DEVELOPER_EMBED_PATH = /^\/dev\/([A-Za-z0-9_-]{16,64})\/embed\/?$/;
+const PLAYBACK_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+// Matches every address that serves the embed, not just the canonical one:
+// the router treats the "dev" and "embed" segments case-insensitively and
+// decodes the playback id, so /Dev/%72D8.../Embed renders the same player.
+export function embedPlaybackId(pathname: string): string | null {
+	const segments = pathname.split("/");
+	if (segments.length !== 4 || segments[0] !== "") return null;
+	const [, dev, encodedId, embed] = segments;
+	if (dev?.toLowerCase() !== "dev" || embed?.toLowerCase() !== "embed") {
+		return null;
+	}
+	let playbackId: string;
+	try {
+		playbackId = decodeURIComponent(encodedId ?? "");
+	} catch {
+		return null;
+	}
+	return PLAYBACK_ID.test(playbackId) ? playbackId : null;
+}
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
