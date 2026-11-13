@@ -87,7 +87,10 @@ vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: vi.fn(),
 }));
 
-import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
+import {
+	developerVideoIdForIdempotencyKey,
+	legacyDeveloperVideoIdForIdempotencyKey,
+} from "@/lib/developer-ids";
 import { createInfraVideo } from "@/lib/infra-video-upload";
 
 const admitted = {
@@ -133,6 +136,40 @@ describe("create upload with an Idempotency-Key", () => {
 		);
 		expect(state.inserts).toBe(1);
 		expect(state.videos.size).toBe(1);
+	});
+
+	it("gives a new keyed video an id in the alphabet of every other video id", async () => {
+		const created = await createInfraVideo(request);
+
+		expect(created.status === 200 && created.body.videoId).toMatch(
+			/^[0-9a-hjkmnp-tv-z]{15}$/,
+		);
+	});
+
+	it("keeps returning a video created under the key before ids changed", async () => {
+		const legacy = legacyDeveloperVideoIdForIdempotencyKey("app-1", KEY);
+		state.videos.set(legacy, {
+			id: legacy,
+			appId: "app-1",
+			s3Key: `developer/app-1/${legacy}/video`,
+			name: request.name,
+			externalUserId: request.userId,
+			metadata: request.metadata,
+			maxResolutionTier: request.maxResolutionTier,
+			playbackId: "playback-legacy-0001",
+			duration: null,
+			deletedAt: null,
+			status: "uploading",
+		});
+
+		const repeated = await createInfraVideo(request);
+
+		expect(repeated.status === 200 && repeated.body.videoId).toBe(legacy);
+		expect(state.inserts).toBe(0);
+		expect(state.videos.size).toBe(1);
+		expect(
+			await createInfraVideo({ ...request, name: "Another name" }),
+		).toMatchObject({ status: 409 });
 	});
 
 	it("never stores Cap's takedown marker from a client's metadata, and replays the request", async () => {

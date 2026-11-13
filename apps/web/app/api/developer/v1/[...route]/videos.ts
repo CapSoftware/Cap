@@ -6,11 +6,7 @@ import { Hono } from "hono";
 import { start } from "workflow/api";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
-import {
-	developerVideoIdForIdempotencyKey,
-	invalidIdempotencyKey,
-	readIdempotencyKey,
-} from "@/lib/developer-ids";
+import { invalidIdempotencyKey, readIdempotencyKey } from "@/lib/developer-ids";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	exactUserIdMatch,
@@ -24,6 +20,7 @@ import {
 } from "@/lib/developer-video-api";
 import { developerVideosCaptionLinks } from "@/lib/developer-video-captions";
 import { markDeveloperVideoDeleted } from "@/lib/developer-video-delete";
+import { keyedDeveloperVideoId } from "@/lib/developer-video-ids";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
@@ -139,7 +136,7 @@ app.post(
 				keyId: c.get("developerKeyId"),
 				idempotencyKey: idempotency.key,
 				videoId: idempotency.key
-					? developerVideoIdForIdempotencyKey(appId, idempotency.key)
+					? await keyedDeveloperVideoId(appId, idempotency.key)
 					: newImportVideoId(),
 			},
 			{

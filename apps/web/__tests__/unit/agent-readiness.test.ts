@@ -442,6 +442,30 @@ describe("proxy content negotiation", () => {
 		},
 	);
 
+	it.each([
+		["/infra", "text/markdown"],
+		["/infra/", "text/markdown, text/html;q=0.5"],
+		["/infra.md", "text/html,*/*;q=0.8"],
+	])(
+		"rewrites %s with Accept %s to the Infra Markdown",
+		async (path, accept) => {
+			const response = await send(path, accept);
+			expect(response.headers.get("x-middleware-rewrite")).toBe(
+				"https://cap.so/infra-markdown",
+			);
+		},
+	);
+
+	it.each([
+		["/infra", "text/html,*/*;q=0.8"],
+		["/infra", "text/html, text/markdown;q=0.5"],
+		["/infra/pricing", "text/markdown"],
+		["/infrastructure", "text/markdown"],
+	])("leaves %s with Accept %s alone", async (path, accept) => {
+		const response = await send(path, accept);
+		expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+	});
+
 	it("serves the homepage as Markdown", async () => {
 		const fetch = vi
 			.spyOn(globalThis, "fetch")

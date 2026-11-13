@@ -361,6 +361,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 const restErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
+	"405": response("MethodNotAllowed"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -370,6 +371,7 @@ const sdkErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
 	"404": response("NotFound"),
+	"405": response("MethodNotAllowed"),
 	"415": response("UnsupportedMediaType"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
@@ -515,7 +517,7 @@ const developerVideoSchema = {
 		captions: {
 			type: "array",
 			description:
-				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its url can briefly answer 404. Returned by Get Video and List Videos, not in webhook payloads.",
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its url answers as soon as it appears. Returned by Get Video and List Videos, not in webhook payloads.",
 			items: {
 				type: "object",
 				required: ["language", "url"],
@@ -537,10 +539,15 @@ const developerVideoSchema = {
 			description: "Your user ID, as passed to createUpload.",
 		},
 		name: { type: "string", description: "Video name." },
+		durationSeconds: {
+			type: ["number", "null"],
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed. The same name transcripts use.",
+		},
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
+				"Deprecated: use durationSeconds, which always holds the same value. duration keeps working.",
 		},
 		width: {
 			type: ["integer", "null"],
@@ -1482,6 +1489,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"ID of a ready video of this app. Cap transcribes its stored MP4 directly. Leave it out when you send url.",
 					},
 					...transcriptOptionProperties,
+					userId: {
+						...transcriptOptionProperties.userId,
+						description:
+							"Your own identifier for the end user, used to filter lists. With videoId, leaving it out uses the video's userId, and a repeat with the same Idempotency-Key may leave it out too.",
+					},
 				},
 			},
 			CreateTranscriptUploadRequest: {
@@ -1505,7 +1517,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: {
 					id: { type: "string" },
 					externalUserId: developerVideoSchema.properties.externalUserId,
-					duration: { type: ["number", "null"] },
+					durationSeconds: developerVideoSchema.properties.durationSeconds,
+					duration: developerVideoSchema.properties.duration,
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
 					transcriptionStatus:
@@ -1781,6 +1794,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							monthlyMicroCredits: {
 								type: "integer",
 								description: "The same over a 30 day month.",
+							},
+							storedMonthlyMicroCredits: {
+								type: "integer",
+								description:
+									"What a 30 day month of storage costs for every video in minutesByTier, those in their first month included, at the current rates. Answers how much the stored videos cost a month, where monthlyMicroCredits leaves out the first months already charged.",
 							},
 						},
 					},
@@ -2352,6 +2370,20 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"Retry-After": {
 						description: `Seconds to wait before retrying, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}.`,
 						schema: { type: "integer" },
+					},
+				},
+			},
+			MethodNotAllowed: {
+				...json(
+					ref("Error"),
+					"The path exists but does not take the method that was sent, for example PATCH on a video (code method_not_allowed). The Allow header lists the methods it takes.",
+				),
+				headers: {
+					...rateLimitHeaders,
+					Allow: {
+						description:
+							"The methods this path takes, separated by a comma and a space.",
+						schema: { type: "string" },
 					},
 				},
 			},
