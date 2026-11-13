@@ -46,6 +46,22 @@ describe("credit link", () => {
 		expect(await link.resolve()).toBe(`${CONSOLE}/app_3/billing`);
 	});
 
+	it("stops waiting for a shared lookup when a joining call is cancelled", async () => {
+		const link = new CreditLink(CONSOLE, null, () => new Promise(() => {}));
+		const first = link.resolve();
+		let firstSettled = false;
+		void first.then(() => {
+			firstSettled = true;
+		});
+		const controller = new AbortController();
+		const second = link.resolve(controller.signal);
+		const startedAt = Date.now();
+		controller.abort();
+		expect(await second).toBe(CONSOLE);
+		expect(Date.now() - startedAt).toBeLessThan(100);
+		expect(firstSettled).toBe(false);
+	});
+
 	it("keeps the console root when the server does not name the app", async () => {
 		const link = new CreditLink(CONSOLE, null, async () => ({
 			data: { balanceMicroCredits: 0 },

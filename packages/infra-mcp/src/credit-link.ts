@@ -5,6 +5,24 @@ const LOOKUP_MS = 5_000;
 export const appBillingUrl = (consoleUrl: string, appId: string) =>
 	`${consoleUrl}/${encodeURIComponent(appId)}/billing`;
 
+// A caller that joins a lookup already in flight stops waiting as soon as its own
+// call is cancelled, instead of waiting out another caller's lookup.
+const untilSettledOrAborted = (
+	pending: Promise<void>,
+	signal?: AbortSignal,
+): Promise<void> => {
+	if (!signal) return pending;
+	if (signal.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		const stop = () => resolve();
+		signal.addEventListener("abort", stop, { once: true });
+		void pending.finally(() => {
+			signal.removeEventListener("abort", stop);
+			resolve();
+		});
+	});
+};
+
 type LookUpAppId = (input: {
 	signal?: AbortSignal;
 	deadlineAt: number;
@@ -47,7 +65,7 @@ export class CreditLink {
 				.finally(() => {
 					this.pending = null;
 				});
-			await this.pending;
+			await untilSettledOrAborted(this.pending, signal);
 		}
 		return this.url;
 	}
