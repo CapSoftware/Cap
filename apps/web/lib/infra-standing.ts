@@ -3,14 +3,17 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
-import { heldTranscriptsQuery } from "@/lib/infra-balance";
+import {
+	AVAILABLE_AFTER_FIELD,
+	heldTranscriptsQuery,
+} from "@/lib/infra-balance";
 import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
@@ -360,28 +363,83 @@ export async function latestStorageCharges(
 	return charges;
 }
 
+const availableAfterCredit = sql<number>`COALESCE(CAST(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${AVAILABLE_AFTER_FIELD}`}) AS SIGNED), ${developerCreditTransactions.balanceAfterMicroCredits})`;
+
+type ChainRow = {
+	id: string;
+	amountMicroCredits: number;
+	balanceAfterMicroCredits: number;
+	restores: number | string | null;
+};
+
+function followsInChain(rows: ChainRow[], fromId: string, toIds: Set<string>) {
+	const start = rows.find((row) => row.id === fromId);
+	if (!start) return false;
+	const reached = new Set([start.id]);
+	const frontier = [start];
+	while (frontier.length > 0) {
+		const current = frontier.shift() as ChainRow;
+		for (const row of rows) {
+			if (reached.has(row.id)) continue;
+			if (
+				Number(row.balanceAfterMicroCredits) -
+					Number(row.amountMicroCredits) !==
+				Number(current.balanceAfterMicroCredits)
+			) {
+				continue;
+			}
+			if (toIds.has(row.id)) return true;
+			reached.add(row.id);
+			frontier.push(row);
+		}
+	}
+	return false;
+}
+
 export async function restoredSinceCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 	charge: StorageCharge,
 ) {
 	if (charge.resolvedAt) return true;
-	const [credit] = await executor
+	const restoringCredit = and(
+		eq(developerCreditTransactions.accountId, accountId),
+		gt(developerCreditTransactions.amountMicroCredits, 0),
+		sql`${availableAfterCredit} >= ${charge.owedMicroCredits}`,
+	);
+	const [later] = await executor
 		.select({ id: developerCreditTransactions.id })
 		.from(developerCreditTransactions)
 		.where(
 			and(
-				eq(developerCreditTransactions.accountId, accountId),
-				gte(developerCreditTransactions.createdAt, charge.createdAt),
-				gt(developerCreditTransactions.amountMicroCredits, 0),
-				gte(
-					developerCreditTransactions.balanceAfterMicroCredits,
-					charge.owedMicroCredits,
-				),
+				restoringCredit,
+				gt(developerCreditTransactions.createdAt, charge.createdAt),
 			),
 		)
 		.limit(1);
-	return !!credit;
+	if (later) return true;
+	if (!charge.id) return false;
+	const sameSecond = await executor
+		.select({
+			id: developerCreditTransactions.id,
+			amountMicroCredits: developerCreditTransactions.amountMicroCredits,
+			balanceAfterMicroCredits:
+				developerCreditTransactions.balanceAfterMicroCredits,
+			restores: sql<
+				number | string | null
+			>`CASE WHEN ${restoringCredit} THEN 1 ELSE 0 END`,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.createdAt, charge.createdAt),
+			),
+		);
+	const restoring = new Set(
+		sameSecond.filter((row) => Number(row.restores) === 1).map((row) => row.id),
+	);
+	return restoring.size > 0 && followsInChain(sameSecond, charge.id, restoring);
 }
 
 const disputeRows = (accountId: string | typeof developerCreditAccounts.id) =>
