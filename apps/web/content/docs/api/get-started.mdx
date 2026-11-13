@@ -889,3 +889,11 @@ The tools:
 - `account_usage` and `account_transactions`: the balance, prices and every charge.
 
 Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
+
+To upload a file from your disk in one call, run the MCP server locally instead. It needs Node 20 or newer and the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add cap-infra --env CAP_SECRET_KEY="$CAP_SECRET_KEY" -- npx -y @cap.so/infra-mcp
+```
+
+Its tools and setup for other clients are in the [package README](https://www.npmjs.com/package/@cap.so/infra-mcp).

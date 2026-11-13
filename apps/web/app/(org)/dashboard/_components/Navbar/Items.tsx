@@ -42,6 +42,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { canUseInfra } from "@/lib/infra-access";
+import { INFRA_BASE_PATH } from "@/lib/infra-routes";
 import {
 	loomImportDestinationFromPathname,
 	loomImportPageHref,
@@ -555,7 +556,7 @@ const NavItem = ({
 				onMouseLeave={() => {
 					iconRef.current?.stopAnimation();
 				}}
-				prefetch={true}
+				prefetch={href !== INFRA_BASE_PATH}
 				passHref
 				className={classNames(
 					"relative border border-transparent transition z-3",

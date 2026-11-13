@@ -40,6 +40,14 @@ groups="$gid"
 for device in /dev/nvidia* /dev/dri/*; do
 	[ -c "$device" ] || continue
 	device_gid="$(stat -c %g "$device")"
+	# A device anyone may read and write needs no group, and the root group
+	# is never handed out for one. NVIDIA nodes usually own their devices
+	# as root:root with mode 666.
+	if [ "$device_gid" = 0 ]; then
+		case "$(stat -c %a "$device")" in
+		*[67]) continue ;;
+		esac
+	fi
 	case ",$groups," in
 	*",$device_gid,"*) ;;
 	*) groups="$groups,$device_gid" ;;
