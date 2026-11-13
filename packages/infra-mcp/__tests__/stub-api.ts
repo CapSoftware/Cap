@@ -31,8 +31,9 @@ type StubTranscript = {
 	id: string;
 	status: "uploading" | "queued" | "processing" | "complete" | "error";
 	name: string;
-	sourceType: "url" | "upload";
+	sourceType: "url" | "upload" | "video";
 	sourceUrl: string | null;
+	videoId: string | null;
 	userId: string | null;
 	metadata: unknown;
 	language: string | null;
@@ -197,7 +198,8 @@ export async function startStubApi() {
 			source:
 				transcript.sourceType === "url"
 					? { type: "url", url: transcript.sourceUrl }
-					: { type: "upload", url: null },
+					: { type: transcript.sourceType, url: null },
+			videoId: transcript.videoId,
 			durationSeconds: complete ? 754.2 : null,
 			language: complete ? "en" : null,
 			wordCount: complete ? 7 : null,
@@ -463,6 +465,7 @@ export async function startStubApi() {
 			if (
 				unknownField(response, body, [
 					"url",
+					"videoId",
 					"name",
 					"language",
 					"userId",
@@ -471,6 +474,32 @@ export async function startStubApi() {
 			)
 				return;
 			if (state.credit) return send(response, 402, creditRefusal("transcript"));
+			if (typeof body.videoId === "string") {
+				const video = videos.get(body.videoId);
+				if (!video || video.deleted)
+					return send(response, 404, {
+						error: { code: "video_not_found", message: "Video not found" },
+					});
+				if (video.status !== "ready")
+					return send(response, 409, {
+						error: { code: "video_not_ready", message: "Video is not ready" },
+					});
+				const transcript = newTranscript(
+					{
+						...body,
+						name: typeof body.name === "string" ? body.name : video.name,
+						userId:
+							typeof body.userId === "string"
+								? body.userId
+								: video.externalUserId,
+					},
+					"video",
+					request,
+				);
+				transcript.videoId = video.id;
+				transcript.status = "queued";
+				return send(response, 200, { data: transcriptJson(transcript) });
+			}
 			const transcript = newTranscript(body, "url", request);
 			transcript.sourceUrl = String(body.url);
 			transcript.status = "queued";
@@ -690,7 +719,7 @@ export async function startStubApi() {
 
 	const newTranscript = (
 		body: Json,
-		sourceType: "url" | "upload",
+		sourceType: "url" | "upload" | "video",
 		request: StubRequest,
 	) => {
 		const transcript: StubTranscript = {
@@ -704,6 +733,7 @@ export async function startStubApi() {
 						: "Untitled",
 			sourceType,
 			sourceUrl: null,
+			videoId: null,
 			userId: typeof body.userId === "string" ? body.userId : null,
 			metadata: body.metadata,
 			language: typeof body.language === "string" ? body.language : null,
