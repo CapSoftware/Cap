@@ -164,12 +164,15 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("refuses a purchase over $10,000", async () => {
+	it("refuses an amount outside $5 to $10,000 with the console's sentence", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const res = await POST(
-			makeRequest({ appId: "app-456", amountCents: 1_000_001 }),
-		);
-		expect(res.status).toBe(400);
+		for (const amountCents of [499, 1_000_001]) {
+			const res = await POST(makeRequest({ appId: "app-456", amountCents }));
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({
+				error: "Enter an amount from $5 to $10,000.",
+			});
+		}
 		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 
@@ -797,7 +800,7 @@ describe("credit checkout for a named app and a US business", () => {
 			unknown
 		>;
 
-	it("names the app on the Stripe page, the invoice and the payment, and offers card and Link only", async () => {
+	it("names the app on the Stripe page, the invoice and the payment, and offers card only", async () => {
 		mockDb.limit
 			.mockResolvedValueOnce([{ ...mockApp, name: "  Course   site  " }])
 			.mockResolvedValueOnce([fundedAccount]);
@@ -808,7 +811,7 @@ describe("credit checkout for a named app and a US business", () => {
 
 		expect(res.status).toBe(200);
 		expect(lastParams()).toMatchObject({
-			payment_method_types: ["card", "link"],
+			payment_method_types: ["card"],
 			custom_text: {
 				submit: {
 					message:
