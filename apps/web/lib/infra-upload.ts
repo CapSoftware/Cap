@@ -48,9 +48,6 @@ export function isDefinitiveRejection(status: number, code?: string | null) {
 	return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
-// A completion held by another request is waited out for as long as the
-// server can hold it, at the pace its Retry-After asks for. Other failures get
-// a few quick retries.
 export function completeRetryPlan({
 	attempt,
 	code,

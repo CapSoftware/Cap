@@ -23,6 +23,8 @@ const fixture = vi.hoisted(() => ({
 	storage: [] as string[],
 	storageDelayMs: 0,
 	kicks: [] as Promise<unknown>[],
+	kickGate: Promise.resolve() as Promise<void>,
+	releaseKick: () => {},
 	objectBytes: 64 * 1024 * 1024,
 }));
 
@@ -108,6 +110,21 @@ vi.mock("next/server", () => ({
 		fixture.kicks.push(promise);
 	},
 }));
+// The kick starts while completion is still running, so it waits here until
+// the completion's statements have been counted.
+vi.mock("@/lib/developer-video-processing", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/lib/developer-video-processing")>();
+	return {
+		...actual,
+		prepareDeveloperVideoProcessing: async (
+			...args: Parameters<typeof actual.prepareDeveloperVideoProcessing>
+		) => {
+			await fixture.kickGate;
+			return actual.prepareDeveloperVideoProcessing(...args);
+		},
+	};
+});
 vi.mock("workflow/api", () => ({ start: vi.fn(async () => ({})) }));
 vi.mock("@/workflows/process-developer-video", () => ({
 	processDeveloperVideoWorkflow: "workflow",
@@ -231,6 +248,9 @@ describe.runIf(Boolean(databaseUrl))(
 					playbackId: `rt${id()}`,
 				});
 
+			fixture.kickGate = new Promise((resolve) => {
+				fixture.releaseKick = resolve;
+			});
 			fixture.statements.length = 0;
 			fixture.storage.length = 0;
 			const completed = await completeInfraUpload({
@@ -252,6 +272,7 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.statements.length = 0;
 			fixture.storage.length = 0;
 			expect(fixture.kicks).toHaveLength(1);
+			fixture.releaseKick();
 			await Promise.all(fixture.kicks.splice(0));
 			const kick = {
 				...summary(fixture.statements),
