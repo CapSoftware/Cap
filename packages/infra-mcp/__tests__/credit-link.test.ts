@@ -105,4 +105,48 @@ describe("hosted credit link", () => {
 		);
 		expect(requests.some((path) => path.endsWith("/usage"))).toBe(false);
 	});
+
+	it("keeps the lookup inside the call's time limit", async () => {
+		const tools = createHostedTools({
+			apiUrl: "https://cap.test",
+			secretKey: "csk_hostedtest123",
+			fetch: async (input, init) => {
+				const url = new URL(
+					String(input instanceof Request ? input.url : input),
+				);
+				if (url.pathname.endsWith("/usage")) {
+					return new Promise<Response>((_, reject) => {
+						init?.signal?.addEventListener("abort", () =>
+							reject(new DOMException("aborted", "AbortError")),
+						);
+					});
+				}
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				return new Response(
+					JSON.stringify({
+						error: "Not enough credit",
+						code: "insufficient_credits",
+						message: "Not enough credit",
+					}),
+					{ status: 402, headers: { "Content-Type": "application/json" } },
+				);
+			},
+			log: () => {},
+			budgetMs: 300,
+		});
+		const create = tools.find((tool) => tool.name === "transcripts_create");
+		const startedAt = Date.now();
+		const result = await create?.run(
+			{ url: "https://files.example.com/a.mp3" },
+			{
+				signal: new AbortController().signal,
+				progressToken: undefined,
+				sendProgress: async () => {},
+				sendLog: async () => {},
+			},
+		);
+		expect(Date.now() - startedAt).toBeLessThan(1_500);
+		const body = JSON.parse(result?.content[0]?.text ?? "{}");
+		expect(body.addCreditAt).toBe("https://cap.test/dashboard/infra");
+	});
 });

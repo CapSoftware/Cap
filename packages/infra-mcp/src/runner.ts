@@ -124,7 +124,7 @@ export function createToolRunner(options: {
 				: toToolError(thrown);
 			const body = errorBody(
 				error,
-				isCreditError(error) ? await credit.resolve(hooks.signal) : null,
+				isCreditError(error) ? await credit.resolve(signal) : null,
 			);
 			if (error.code === "internal_error" && thrown instanceof Error) {
 				log(`${tool.name} failed unexpectedly: ${thrown.message}`);
