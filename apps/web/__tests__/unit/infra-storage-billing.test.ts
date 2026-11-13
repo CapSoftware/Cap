@@ -29,6 +29,8 @@ import {
 	getInfraAppStanding,
 	getInfraBilling,
 	getInfraUploadAdmission,
+	latestStorageCharge,
+	latestStorageCharges,
 } from "@/lib/infra-standing";
 import { getAppStorageUsage } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
@@ -337,6 +339,67 @@ describe("daily storage charge", () => {
 			}),
 		]);
 		expect(ledger.snapshots[0]?.totalDurationMinutes).toBeGreaterThan(0);
+	});
+
+	it("reads the latest billed day, not the last write, when two days are written in the same second", async () => {
+		const yesterday = new Date(ledger.now.getTime() - DAY_MS)
+			.toISOString()
+			.slice(0, 10);
+		const shortSince = new Date(ledger.now);
+		ledger.account.balanceMicroCredits = 0;
+		ledger.rows.push(
+			{
+				id: "row-a",
+				accountId: "account-1",
+				type: "storage_daily",
+				amountMicroCredits: -50,
+				balanceAfterMicroCredits: 0,
+				referenceId: dateKey(),
+				referenceType: "storage_day",
+				metadata: {
+					snapshotDate: dateKey(),
+					owedMicroCredits: 144,
+					chargedMicroCredits: 50,
+					shortSince: shortSince.toISOString(),
+				},
+				createdAt: new Date(ledger.now),
+			},
+			{
+				id: "row-b",
+				accountId: "account-1",
+				type: "storage_daily",
+				amountMicroCredits: -144,
+				balanceAfterMicroCredits: 50,
+				referenceId: yesterday,
+				referenceType: "storage_day",
+				metadata: {
+					snapshotDate: yesterday,
+					owedMicroCredits: 144,
+					chargedMicroCredits: 144,
+					shortSince: null,
+				},
+				createdAt: new Date(ledger.now),
+			},
+		);
+
+		expect(await latestStorageCharge(fakeDb as never, "account-1")).toEqual({
+			createdAt: new Date(ledger.now),
+			owedMicroCredits: 144,
+			shortSince,
+		});
+		expect(
+			(await latestStorageCharges(fakeDb as never, ["account-1"])).get(
+				"account-1",
+			),
+		).toEqual({
+			createdAt: new Date(ledger.now),
+			owedMicroCredits: 144,
+			shortSince,
+		});
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		advanceDays(1);
+		expect(await charge()).toEqual({ state: "unpaid", shortSince });
 	});
 
 	it("does not bill an app that stores nothing", async () => {

@@ -102,6 +102,25 @@ const newestFirst = (rows: LedgerRow[]) =>
 			ledger.rows.indexOf(b) - ledger.rows.indexOf(a),
 	);
 
+const byId = (a: LedgerRow, b: LedgerRow) =>
+	a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+
+const latestWritten = (rows: LedgerRow[]) =>
+	[...rows].sort(
+		(a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byId(a, b),
+	);
+
+const latestStorageDayRows = () => {
+	const days = storageRows().filter(
+		(row) => row.referenceType === "storage_day" && row.referenceId,
+	);
+	const latestDay = days
+		.map((row) => String(row.referenceId))
+		.sort()
+		.at(-1);
+	return days.filter((row) => row.referenceId === latestDay).sort(byId);
+};
+
 function runSelect(query: Query): Record<string, unknown>[] {
 	const keys = Object.keys(query.fields).sort().join(",");
 	const rendered = query.where
@@ -135,7 +154,14 @@ function runSelect(query: Query): Record<string, unknown>[] {
 
 	if (query.table === developerCreditTransactions) {
 		if (keys === "createdAt,metadata") {
-			return newestFirst(storageRows()).slice(0, 1);
+			return rendered.sql.includes(
+				"`developer_credit_transactions`.`referenceId` <= ?",
+			)
+				? latestStorageDayRows().slice(0, 1)
+				: latestWritten(storageRows()).slice(0, 1);
+		}
+		if (keys === "accountId,createdAt,id,metadata") {
+			return latestStorageDayRows();
 		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));

@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte, inArray, max } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
-import { formatCredits, formatNeed } from "@/lib/infra-usage";
+import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
@@ -111,6 +111,18 @@ export function resolveStanding({
 	};
 }
 
+const storageDayCeiling = () =>
+	utcDateKey(new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+const storageDayRows = () =>
+	and(
+		eq(developerCreditTransactions.type, "storage_daily"),
+		eq(developerCreditTransactions.referenceType, STORAGE_DAY_REFERENCE_TYPE),
+	);
+
+const latestStorageDay = (accountId: string, ceiling: string) =>
+	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
+
 export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
@@ -124,10 +136,14 @@ export async function latestStorageCharge(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "storage_daily"),
+				storageDayRows(),
+				lte(developerCreditTransactions.referenceId, storageDayCeiling()),
 			),
 		)
-		.orderBy(desc(developerCreditTransactions.createdAt))
+		.orderBy(
+			desc(developerCreditTransactions.referenceId),
+			desc(developerCreditTransactions.id),
+		)
 		.limit(1);
 	return row ? parseStorageCharge(row) : null;
 }
@@ -138,38 +154,29 @@ export async function latestStorageCharges(
 ) {
 	const charges = new Map<string, StorageCharge>();
 	if (accountIds.length === 0) return charges;
-	const latest = executor
-		.select({
-			accountId: developerCreditTransactions.accountId,
-			createdAt: max(developerCreditTransactions.createdAt).as(
-				"latestCreatedAt",
-			),
-		})
-		.from(developerCreditTransactions)
-		.where(
-			and(
-				inArray(developerCreditTransactions.accountId, [...accountIds]),
-				eq(developerCreditTransactions.type, "storage_daily"),
-			),
-		)
-		.groupBy(developerCreditTransactions.accountId)
-		.as("latest");
+	const ceiling = storageDayCeiling();
 	const rows = await executor
 		.select({
+			id: developerCreditTransactions.id,
 			accountId: developerCreditTransactions.accountId,
 			createdAt: developerCreditTransactions.createdAt,
 			metadata: developerCreditTransactions.metadata,
 		})
 		.from(developerCreditTransactions)
-		.innerJoin(
-			latest,
+		.where(
 			and(
-				eq(developerCreditTransactions.accountId, latest.accountId),
-				eq(developerCreditTransactions.createdAt, latest.createdAt),
+				storageDayRows(),
+				sql`(${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId}) in (select latest.accountId, latest.referenceId from (${sql.join(
+					accountIds.map((accountId) => latestStorageDay(accountId, ceiling)),
+					sql` union all `,
+				)}) latest)`,
 			),
-		)
-		.where(eq(developerCreditTransactions.type, "storage_daily"));
-	for (const row of rows) charges.set(row.accountId, parseStorageCharge(row));
+		);
+	for (const row of [...rows].sort((a, b) => (a.id < b.id ? 1 : -1))) {
+		if (!charges.has(row.accountId)) {
+			charges.set(row.accountId, parseStorageCharge(row));
+		}
+	}
 	return charges;
 }
 
