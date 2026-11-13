@@ -33,7 +33,7 @@ API keys are managed in Cap Infra, not the general Settings page.
 3. Two keys are generated for each app:
    - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API, including to create uploads.
    - **Public key** (`cpk_...`) -- Cannot create or upload videos. Browsers upload with an upload token instead.
-4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair.
+4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair and the upload tokens the previous secret key created.
 
 ### Using Your Keys
 
@@ -238,8 +238,9 @@ The token is the only credential the [SDK API](/docs/api/rest-api#sdk-api-endpoi
 - It uploads this video and no other.
 - It works until `expiresAt`. Raise `timeoutSeconds` for large files on slow connections. If it expires before the upload completes, [renew it](/docs/api/rest-api#renew-upload-token) and continue the same upload.
 - It stops working when the upload completes or the video is deleted.
+- It stops working when the secret key that created it is revoked. [Renew it](/docs/api/rest-api#renew-upload-token) with the new secret key to continue the same upload.
 
-`maxBytes` caps the file a token can upload. [Initiate Upload](/docs/api/rest-api#initiate-upload) refuses a declared `contentLength` over the cap before any byte is sent, and [Complete Upload](/docs/api/rest-api#complete-upload) measures the bytes in storage and refuses an upload over the cap, whatever sizes the request claims. Both answer `400` with the code `file_too_large`. Without `maxBytes` the only limit is the 36 GB one.
+`maxBytes` caps the file a token can upload. [Initiate Upload](/docs/api/rest-api#initiate-upload) refuses a declared `contentLength` over the cap before any byte is sent, and [Complete Upload](/docs/api/rest-api#complete-upload) measures the bytes in storage and refuses an upload over the cap, whatever sizes the request claims. Both answer `400` with the code `file_too_large`. Without `maxBytes` the only limit is the 36 GB one. The cap also limits the part numbers a token can sign, see [Get Presigned Part URL](/docs/api/rest-api#get-presigned-part-url).
 
 A video whose upload is never completed stays in the `uploading` status and counts in `uploadingVideos` until you delete it with [Delete Video](/docs/api/rest-api#delete-video).
 
@@ -320,6 +321,8 @@ An upload left open is discarded a day after it was opened. After that, Complete
 
 Renewing does not cancel earlier tokens. Each works until its own `expiresAt`.
 
+**When the secret key is regenerated mid-upload.** Tokens created with the previous secret key answer `401` with the code `invalid_upload_token`, and the hint says the key was rotated. Renew the token with the new secret key and finish the upload the same way.
+
 | Status | `code` | Meaning |
 |--------|--------|---------|
 | `404` | `video_not_found` | The video was deleted, or does not belong to this app |
@@ -387,6 +390,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
       "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
       "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+      "outputs": { "hls": "ready", "mp4": "ready" },
       "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
       "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
     },
@@ -413,6 +417,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "hlsUrl": null,
       "mp4Url": null,
       "posterUrl": null,
+      "outputs": { "hls": "processing", "mp4": "processing" },
       "shareUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M",
       "embedUrl": "https://cap.so/dev/Hn5tW2c8Jx4Pq7Ld9Vs1Ry3M/embed"
     }
@@ -484,6 +489,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" },
     "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
     "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed"
   }
@@ -542,7 +548,8 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     ],
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
-    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" }
   }
 }
 ```
@@ -556,6 +563,8 @@ Poll this endpoint every few seconds after completing an upload, and stop when `
 A video is `ready` as soon as its first output can be played, so playback can start while the rest is still encoding. The playback URLs are `null` until then. `hlsUrl` is an adaptive HLS master playlist, `mp4Url` is a progressive MP4 and `posterUrl` is a poster image. They need no API key and can be loaded from any origin. [Play a Video](/docs/api/rest-api#play-a-video) shows how to use them, and [Delete Video](/docs/api/rest-api#delete-video) says when they stop working.
 
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
+
+`outputs` says whether a `null` URL is still coming. Each of `outputs.hls` and `outputs.mp4` is `ready` when its URL is set, `processing` while it is being encoded or will be retried, and `failed` when it will not be produced. A video can be `ready` with one output `failed`, so stop waiting for that URL and play the other. `none` only appears on videos uploaded before encoding existed.
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
 
@@ -615,6 +624,7 @@ A transcript request can be refused. The response carries a `code` and a `messag
 |--------|------|---------|
 | `400` | `invalid_url` | The URL is missing, longer than 2,048 characters, not http or https, on a port other than the default, or carries a username or password |
 | `400` | `url_not_public` | The URL points to a private or local address |
+| `400` | `invalid_video_id` | `videoId` is empty or longer than 64 characters |
 | `400` | `invalid_name` | The name is longer than 255 characters |
 | `400` | `invalid_language` | The language is not `auto` or one of the supported codes. The hint lists them |
 | `400` | `invalid_user_id` | The user ID is longer than 255 characters |
@@ -629,6 +639,8 @@ A transcript request can be refused. The response carries a `code` and a `messag
 | `402` | `insufficient_credits` | The available balance is under $0.01. The message says how much to add |
 | `403` | `infra_not_available` | Cap Infra is not enabled for this account |
 | `404` | `transcript_not_found` | No transcript with this ID belongs to the app |
+| `404` | `video_not_found` | No video with this ID belongs to the app, or it was deleted |
+| `409` | `video_not_ready` | The video is not ready yet, or it failed to process and has no file to transcribe. The message says which |
 | `409` | `idempotency_conflict` | The `Idempotency-Key` was already used with a different request, or for a transcript that was deleted. The message names the field that differs |
 | `409` | `upload_not_found` | The file has not been uploaded yet. If the upload URL expired, repeat the create request with the same `Idempotency-Key` to get a new one |
 | `429` | `too_many_transcripts` | The app already has 20 transcripts queued or processing. Wait for one to finish, then send the request again |
@@ -642,13 +654,14 @@ POST /api/developer/v1/transcripts
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string | Yes | Public `http` or `https` URL of an audio or video file |
-| `name` | string | No | Display name (defaults to the file name) |
+| `url` | string | One of `url` or `videoId` | Public `http` or `https` URL of an audio or video file |
+| `videoId` | string | One of `url` or `videoId` | ID of a ready video of this app. See [Transcribe a video you already uploaded](/docs/api/rest-api#transcribe-a-video-you-already-uploaded) |
+| `name` | string | No | Display name (defaults to the file name, or to the video's name) |
 | `language` | string | No | The language of the audio if you know it, or `auto` (default). See [Languages](/docs/api/rest-api#languages) |
 | `userId` | string | No | Your own user identifier, used to filter lists |
 | `metadata` | object | No | Your own JSON object, under 8KB |
 
-Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
+Send exactly one of `url` or `videoId`. Both, or neither, returns `400` with the code `invalid_request`. Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
 
 The URL must use the default port, must not contain credentials and must resolve to a public address. Redirects are followed up to five times and each hop is checked the same way. Files can be up to 2 GB, or 400 MB when the server does not send a `Content-Length`. Audio can be up to 4 hours long.
 
@@ -671,6 +684,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
     "status": "queued",
     "name": "standup",
     "source": { "type": "url", "url": "https://example.com/standup.mp3" },
+    "videoId": null,
     "durationSeconds": null,
     "language": null,
     "wordCount": null,
@@ -688,7 +702,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 
 Send an `Idempotency-Key` header so a retried request returns the same transcript instead of creating and billing a second one. The key is 8 to 128 characters from letters, digits, dot, dash and underscore. Any other character, such as a colon, slash or space, is refused with `400 invalid_idempotency_key`.
 
-A repeat must send the same body. The same key with a different `url`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
+A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
 
 #### Languages
 
@@ -700,25 +714,47 @@ Supported codes: `en` English, `es` Spanish, `fr` French, `de` German, `pt` Port
 
 #### Transcribe a video you already uploaded
 
-A video is not transcribed when it is uploaded, and it does not have to be uploaded again to get text. Once its `status` is `ready`, send its `mp4Url` as the `url`:
+A video is not transcribed when it is uploaded, and it does not have to be uploaded again to get text. Once its `status` is `ready`, send its ID as `videoId` instead of a `url`:
 
 ```bash
-MP4_URL=$(curl -s https://cap.so/api/developer/v1/videos/abc123def456 \
-  -H "Authorization: Bearer csk_your_secret_key_here" | jq -r .data.mp4Url)
-
 curl -X POST https://cap.so/api/developer/v1/transcripts \
   -H "Authorization: Bearer csk_your_secret_key_here" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: transcript-abc123def456" \
-  -d "{\"url\": \"$MP4_URL\", \"userId\": \"user_42\", \"metadata\": {\"videoId\": \"abc123def456\"}}"
+  -d '{"videoId": "abc123def456", "userId": "user_42"}'
 ```
 
-- `mp4Url` is a stable link that needs no key. Cap follows its redirect to the file when the transcript runs, so the link does not expire between your request and the download.
-- It costs the same as any other transcript, $0.10 per audio hour. Reading the stored video is not charged.
-- `mp4Url` is `null` until the video is `ready`, and the MP4 must be within the 2 GB limit for URL transcripts. A larger MP4 ends with the error `source_too_large`.
-- The transcript is its own object. It is not linked to the video, the video's `transcriptionStatus` does not change, and deleting the video leaves the transcript. Keep the video ID in `metadata`, as above, and delete the transcript yourself when you delete the video.
-- Delete the video first and a transcript that has not started downloading ends with `source_unreachable`.
-- On a self-hosted Cap, the storage the link redirects to must be on a public address and the default port, like any other URL. Otherwise the transcript ends with `source_blocked`.
+```json
+{
+  "data": {
+    "id": "8kq2m4x7n1p3v5w",
+    "status": "queued",
+    "name": "Product walkthrough",
+    "source": { "type": "video", "url": null },
+    "videoId": "abc123def456",
+    "durationSeconds": null,
+    "language": null,
+    "wordCount": null,
+    "costMicroCredits": 0,
+    "costDollars": 0,
+    "error": null,
+    "userId": "user_42",
+    "metadata": null,
+    "createdAt": "2026-11-11T10:30:00.000Z",
+    "updatedAt": "2026-11-11T10:30:00.000Z",
+    "completedAt": null
+  }
+}
+```
+
+- The video must belong to the app that owns the key, not be deleted and be `ready`. An unknown or deleted video returns `404 video_not_found`. A video that is still `uploading` or `processing` returns `409 video_not_ready`: wait for `ready` and send the request again. A video that failed to process has no file to transcribe and returns the same code.
+- Cap reads the video's stored MP4 directly. Nothing is downloaded, so the 2 GB limit and the 15 minute download limit for URL transcripts do not apply. Audio can still be up to 4 hours long.
+- It costs the transcript price only, $0.10 per audio hour. Reading the stored video is not charged, and the video's storage charge does not change.
+- `name`, `language`, `userId`, `metadata` and the `Idempotency-Key` header work as they do for a URL. The name defaults to the video's name.
+- The transcript carries the video's ID as `videoId`, and `source.type` is `video`. `videoId` is `null` on every other transcript.
+- When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.
+- The transcript is its own object. The video's `transcriptionStatus` does not change, and deleting the video leaves the transcript and its text. A transcript whose video is deleted before it runs ends with `source_missing` and is not charged.
+- Sending the video's `mp4Url` as `url` still works as a URL transcript. It is not linked to the video: its `videoId` is `null`.
 
 #### Transcribe a file
 
@@ -774,6 +810,7 @@ Returns the transcript. Once the status is `complete` the response includes `tex
     "status": "complete",
     "name": "standup",
     "source": { "type": "upload", "url": null },
+    "videoId": null,
     "durationSeconds": 754.2,
     "language": "en",
     "wordCount": 1893,
@@ -869,10 +906,10 @@ Deletes the transcript, its text and its stored files. A transcript deleted befo
 - Audio with no speech is billed for its length and returns an empty transcript, because the audio was extracted and run through speech recognition.
 - Never charged: a transcript that ends in `error` for any reason (a file that is not audio or video, a file with no audio track, a source that cannot be fetched or is too large, audio over 4 hours, not enough credit, a timeout, or a failure on our side), and a transcript deleted before its audio is sent to speech recognition.
 - A transcript deleted while its audio is being transcribed is charged for the length of its audio, like one that completes. The credit held for it stays held until then.
-- Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. The available balance is your balance minus those holds.
+- Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. The hold is placed before the file is downloaded or processed and nothing is charged for it. It is sized from the file: a file under 180 KB holds $0.01, a file of 7.2 MB or more holds the full $0.40, and a URL that does not report its size holds $0.40. A stored video is held for its known length instead, so a 10 minute video holds under $0.02. The available balance is your balance minus those holds.
 - If the available balance cannot cover the hold, the transcript ends with `insufficient_credits` before the file is downloaded or processed, and the error message says how much was needed. When other running transcripts hold the credit, it waits for them for up to 15 minutes first, so a batch started together runs through as holds are released.
 - Credit held for a running transcript is left alone by the daily storage charge and is not counted when uploads are admitted. If the balance still cannot pay for a transcript in full when it finishes, the transcript ends with `insufficient_credits`, its text is discarded and nothing is charged. Top up and submit it again.
-- Cap deletes the source file once the transcript finishes. The text and timings are kept until you delete the transcript.
+- Cap deletes the source file once the transcript finishes. A stored video's own file is never touched. The text and timings are kept until you delete the transcript.
 
 ### Get Usage
 
@@ -1062,7 +1099,7 @@ The SDK API uploads a video's file from a browser or app. Every endpoint takes t
 After creating an upload, send its file in parts with the upload token:
 
 1. Initiate the upload to get an `uploadId`.
-2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts. The whole file can be up to 36 GB.
+2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes). Number the parts from 1 with no gaps. The whole file can be up to 36 GB, which is at most 6,867 parts.
 3. Get presigned URLs for the parts, up to 50 per request. `PUT` each part's bytes to its URL and keep the `ETag` response header.
 4. Complete the upload with the list of parts.
 
@@ -1142,6 +1179,8 @@ curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
 ```
 
 A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`.
+
+A token signs part numbers up to the last one its size limit allows: `maxBytes` divided by 5,242,880 and rounded up, or 6,867 for a token with no `maxBytes`. A higher part number returns `400` with the code `part_number_too_large`, and no part in that request is signed.
 
 Each URL is valid for one hour, so sign parts shortly before you upload them and sign again for any part whose URL has expired. Upload a part by sending a `PUT` request to its URL with the bytes as the body and no extra headers:
 
@@ -1448,7 +1487,7 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file |
+| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed |
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
@@ -1463,6 +1502,7 @@ The full video object returned by list and get endpoints:
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
+| `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
