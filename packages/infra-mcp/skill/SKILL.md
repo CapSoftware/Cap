@@ -17,10 +17,12 @@ Cap Infra stores and streams video and turns speech into text. It bills from pre
 
 1. `videos_upload` with the absolute `path` of the file. Set `name` if the file name is not a good title, and `userId` if the video belongs to one of the user's own users.
 2. Keep the `videoId` it returns. The `shareUrl` and `embedUrl` exist right away, but the video only plays once it is ready.
-3. `videos_wait` with that `videoId`. A video becomes `ready` when its first playback link exists and the other one follows shortly after, so by default the wait returns once both `hlsUrl` and `mp4Url` exist, together with `posterUrl`, `shareUrl` and `embedUrl`. Pass `output` (`mp4`, `hls` or `any`) when you need only one of them sooner.
+3. `videos_wait` with that `videoId`. A video becomes `ready` when its first playback link exists and the other one usually follows within seconds, so by default the wait returns once both `hlsUrl` and `mp4Url` exist, together with `posterUrl`, `shareUrl` and `embedUrl`. It allows the second link 30 seconds after `ready`. Pass `output` (`mp4`, `hls` or `any`) when you need only one of them.
 4. Give the user the link that fits: `shareUrl` for a page to send someone, `embedUrl` for an iframe, `hlsUrl` for their own player, `mp4Url` for a download.
 
-If `videos_wait` returns `timedOut`, call it again with the same `videoId`. Encoding a long video takes minutes. When `status` is already `ready`, the links that are present work and `missing` names the one still encoding. If your client ends tool calls after a fixed time, pass a `timeoutSeconds` below that limit.
+If `videos_wait` returns `timedOut`, the video is still encoding, so call it again with the same `videoId`. Encoding a long video takes minutes. If your client ends tool calls after a fixed time, pass a `timeoutSeconds` below that limit.
+
+If the result has `missing`, it is final and `timedOut` is not set. The video is `ready` and plays with the links it has, and the missing link may not be coming, so do not wait for it again. Use `hlsUrl`, `shareUrl` or `embedUrl` to play it. An MP4 is needed only for a download and for `transcripts_create` with `videoId`. If you need one of those, read the video later with `videos_get`, or transcribe the original file with `path`.
 
 If `status` is `errored`, tell the user the `errorReason`. The file was not a video Cap could read. Delete the video with `videos_delete` unless they want to keep the record.
 
@@ -37,7 +39,7 @@ When a call was cancelled you get no result. `videos_list` shows the video, and 
 
 - `url`: a public http or https link to an audio or video file.
 - `path`: the absolute path of a local file, up to 2 GB.
-- `videoId`: a stored video whose status is `ready`. It does not need to be uploaded again.
+- `videoId`: a stored video whose status is `ready` and that has an `mp4Url`. It does not need to be uploaded again. If the tool answers `video_has_no_mp4`, that video will not get one: use `path` with the original file, or `url`.
 
 Then `transcripts_wait` with the id, and `transcripts_text` for the text. Use `transcripts_get` with `words` or `segments` only when the user needs timings, because the result is large.
 

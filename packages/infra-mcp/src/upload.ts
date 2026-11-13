@@ -23,6 +23,7 @@ export const PART_URL_BATCH = 50;
 const PART_URL_REUSE_MS = 30 * 60 * 1000;
 const PART_ATTEMPTS = 3;
 const COMPLETE_ATTEMPTS = 6;
+const COMPLETION_RETRY_CAP_MS = 15_000;
 const PROGRESS_CHUNK_BYTES = 64 * 1024;
 
 export type UploadTuning = {
@@ -319,9 +320,10 @@ async function sendParts(
 	return completed.sort((a, b) => a.partNumber - b.partNumber);
 }
 
-const completionUnknown = (error: unknown) =>
+const completionUnclear = (error: unknown) =>
 	isUnanswered(error) ||
-	(error instanceof ApiError && error.code === "completion_in_progress");
+	(error instanceof ApiError &&
+		(error.status >= 500 || error.code === "completion_in_progress"));
 
 async function complete(
 	session: UploadSession,
@@ -329,7 +331,8 @@ async function complete(
 	parts: CompletedPart[],
 	durationInSecs: number,
 	tuning: UploadTuning,
-	signal?: AbortSignal,
+	signal: AbortSignal | undefined,
+	onUnclear: () => void,
 ) {
 	const body = { videoId: session.videoId, uploadId, parts, durationInSecs };
 	for (let attempt = 1; ; attempt++) {
@@ -337,13 +340,16 @@ async function complete(
 			confirmed(await session.call("completeUpload", body, { signal }));
 			return;
 		} catch (error) {
-			if (!completionUnknown(error) || attempt >= COMPLETE_ATTEMPTS) {
-				throw error;
-			}
+			if (!completionUnclear(error)) throw error;
+			onUnclear();
+			if (attempt >= COMPLETE_ATTEMPTS) throw error;
 			await sleep(
 				error instanceof ApiError && error.retryAfterSeconds
 					? error.retryAfterSeconds * 1000
-					: tuning.completionRetryMs,
+					: Math.min(
+							COMPLETION_RETRY_CAP_MS,
+							tuning.completionRetryMs * 2 ** (attempt - 1),
+						),
 				signal,
 			);
 		}
@@ -400,6 +406,7 @@ export async function uploadVideo(
 
 	let uploadId: string | null = null;
 	let completing = false;
+	let unclear = false;
 	try {
 		uploadId = required(
 			asRecord(
@@ -424,6 +431,9 @@ export async function uploadVideo(
 			input.durationSeconds ?? 1,
 			tuning,
 			hooks.signal,
+			() => {
+				unclear = true;
+			},
 		);
 		const pages = existing ?? created;
 		return {
@@ -436,7 +446,7 @@ export async function uploadVideo(
 		};
 	} catch (error) {
 		const unknown =
-			completing && (isCancelled(error) || completionUnknown(error));
+			completing && (unclear || isCancelled(error) || completionUnclear(error));
 		if (uploadId !== null && !unknown) {
 			await session
 				.call(

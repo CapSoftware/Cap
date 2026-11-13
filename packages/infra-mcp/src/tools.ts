@@ -88,6 +88,13 @@ const OUTPUT_LINKS: Record<VideoOutput, readonly ("hlsUrl" | "mp4Url")[]> = {
 
 const megabytes = (bytes: number) => (bytes / MEGABYTE).toFixed(1);
 
+const MISSING_LINK_ADVICE: Record<"hlsUrl" | "mp4Url", string> = {
+	mp4Url:
+		"The MP4 link has not arrived since the video became ready and may not be coming. The video plays with hlsUrl, shareUrl and embedUrl. An MP4 is needed only for download and for transcripts_create with videoId. If you need one of those, read the video later with videos_get, or transcribe the original file with transcripts_create and path.",
+	hlsUrl:
+		"The HLS link has not arrived since the video became ready and may not be coming. The video plays with mp4Url, shareUrl and embedUrl. If you need adaptive streaming, read the video later with videos_get.",
+};
+
 const videoCanPlay = (video: Record<string, unknown>) =>
 	video.ready === true || video.status === "ready";
 
@@ -266,21 +273,28 @@ export function createTools(deps: ToolDeps): Tool[] {
 		});
 		const video = outcome.last ?? {};
 		if (typeof video.mp4Url !== "string") {
-			const hint =
-				video.status === "errored"
-					? "The video failed to encode, so it has no MP4. Transcribe the original file with path instead."
-					: video.status === "uploading"
-						? "The video has no file yet. Upload it with videos_upload, or transcribe the original file with path instead."
-						: videoCanPlay(video) && video.playbackId === null
-							? "This video was stored without an MP4. Transcribe the original file with path instead."
-							: "Call videos_wait with output mp4 until it returns the mp4Url, then create the transcript again.";
+			const context = { videoId: id, videoStatus: video.status ?? "unknown" };
+			if (videoCanPlay(video)) {
+				throw withContext(
+					new LocalError(
+						"video_has_no_mp4",
+						"This video has no MP4",
+						"Transcribe the original file with path, or a public link to it with url.",
+					),
+					context,
+				);
+			}
 			throw withContext(
 				new LocalError(
 					"video_not_ready",
 					"This video has no MP4 to transcribe yet",
-					hint,
+					video.status === "errored"
+						? "The video failed to encode, so it has no MP4. Transcribe the original file with path instead."
+						: video.status === "uploading"
+							? "The video has no file yet. Upload it with videos_upload, or transcribe the original file with path instead."
+							: "Call videos_wait until the video is ready, then create the transcript again.",
 				),
-				{ videoId: id, videoStatus: video.status ?? "unknown" },
+				context,
 			);
 		}
 		return {
@@ -379,7 +393,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_wait",
 			title: "Wait for a video",
 			description:
-				"Wait until a video has the playback links you need, or has failed, then return its status, length, playback id and HLS, MP4, poster, share and embed links. A video is ready when its first link exists and the other follows, so by default this waits for both HLS and MP4; set output to wait for one. If the time runs out, the result has timedOut set with the last known status and what is missing, so call it again. Free to call.",
+				"Wait until a video has the playback links you need, or has failed, then return its status, length, playback id and HLS, MP4, poster, share and embed links. A video is ready when its first link exists, so by default this allows the other link up to 30 seconds more; set output to wait for one. A result with missing is final: the video plays with the links it has and the missing one may not be coming. If the time runs out before the video is ready, the result has timedOut set with the last known status, so call it again. Free to call.",
 			kind: "read",
 			input: {
 				videoId,
@@ -398,6 +412,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const firstLook = () => pages ?? {};
 				const missing = (video: Record<string, unknown>) =>
 					needed.filter((link) => typeof video[link] !== "string");
+				let playableAt: number | null = null;
 				const outcome = await waitFor({
 					poll: async (deadlineAt) => {
 						const reply = await client.call(
@@ -414,9 +429,13 @@ export function createTools(deps: ToolDeps): Tool[] {
 						pages ??= video;
 						return video;
 					},
-					settled: (video) =>
-						videoIsFinal(video) ||
-						(videoCanPlay(video) && missing(video).length === 0),
+					settled: (video) => {
+						if (videoIsFinal(video)) return true;
+						if (!videoCanPlay(video)) return false;
+						if (missing(video).length === 0) return true;
+						playableAt ??= Date.now();
+						return Date.now() - playableAt >= deps.wait.outputGraceMs;
+					},
 					tuning: deps.wait,
 					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
 					signal: call.signal,
@@ -429,15 +448,21 @@ export function createTools(deps: ToolDeps): Tool[] {
 				});
 				const last = outcome.last ?? {};
 				const absent =
-					outcome.settled || !videoCanPlay(last) ? [] : missing(last);
+					videoCanPlay(last) && !videoIsFinal(last) ? missing(last) : [];
+				const [firstAbsent] = absent;
 				return {
 					videoId: args.videoId,
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
 					...videoLinks({ ...firstLook(), ...last }),
-					...(absent.length > 0 ? { missing: absent } : {}),
-					...waitOutcome(outcome, "videos_wait"),
+					...(firstAbsent === undefined
+						? waitOutcome(outcome, "videos_wait")
+						: {
+								missing: absent,
+								waitedSeconds: outcome.waitedSeconds,
+								next: MISSING_LINK_ADVICE[firstAbsent],
+							}),
 					...(last.status === "uploading"
 						? {
 								next: "This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",

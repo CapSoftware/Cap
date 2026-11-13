@@ -5,12 +5,16 @@ export type WaitTuning = {
 	pollIntervalMs: number;
 	maxPollIntervalMs: number;
 	mp4WaitMs: number;
+	outputGraceMs: number;
 };
+
+export const OUTPUT_GRACE_MS = 30_000;
 
 export const DEFAULT_WAIT_TUNING: WaitTuning = {
 	pollIntervalMs: 3_000,
 	maxPollIntervalMs: 10_000,
-	mp4WaitMs: 30_000,
+	mp4WaitMs: OUTPUT_GRACE_MS,
+	outputGraceMs: OUTPUT_GRACE_MS,
 };
 
 const POLL_GROWTH = 1.2;

@@ -102,6 +102,8 @@ export async function startStubApi() {
 		intercept: null as ((request: StubRequest) => ScriptedReply | null) | null,
 		hlsAfterReads: 0,
 		mp4AfterReads: 0,
+		mp4Failed: false,
+		failAfterAssembly: 0,
 		refuseTranscriptFile: false,
 		videoOutcome: "ready" as "ready" | "errored",
 		transcriptOutcome: "complete" as "complete" | "insufficient_credits",
@@ -133,7 +135,7 @@ export async function startStubApi() {
 					? `${base}/master.m3u8`
 					: null,
 			mp4Url:
-				ready && video.readyReads >= state.mp4AfterReads
+				ready && !state.mp4Failed && video.readyReads >= state.mp4AfterReads
 					? `${base}/video.mp4`
 					: null,
 			posterUrl: ready ? `${base}/poster.jpg` : null,
@@ -828,6 +830,31 @@ export async function startStubApi() {
 			}
 			if (video.duration !== null)
 				return send(response, 200, { success: true });
+			const record = () => {
+				if (state.failAfterAssembly > 0) {
+					state.failAfterAssembly--;
+					return send(
+						response,
+						500,
+						apiError(
+							"internal_error",
+							"Failed to complete upload",
+							"Retry with backoff. If the error persists, contact hello@cap.so.",
+						),
+					);
+				}
+				if (state.credit) {
+					video.file = null;
+					return send(response, 402, {
+						...creditRefusal("upload"),
+						fileRemoved: true,
+					});
+				}
+				video.duration = Number(body.durationInSecs);
+				video.status = "processing";
+				return send(response, 200, { success: true });
+			};
+			if (video.file !== null) return record();
 			const listed = Array.isArray(body.parts) ? (body.parts as Json[]) : [];
 			const matches =
 				listed.length > 0 &&
@@ -858,9 +885,7 @@ export async function startStubApi() {
 							video.parts.get(partNumber)?.bytes ?? Buffer.alloc(0),
 					),
 			);
-			video.duration = Number(body.durationInSecs);
-			video.status = "processing";
-			return send(response, 200, { success: true });
+			return record();
 		}
 		if (action === "abort") {
 			video.uploadId = null;

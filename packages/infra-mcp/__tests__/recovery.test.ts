@@ -172,6 +172,16 @@ describe("the recovery text in the drafts", () => {
 		},
 	);
 
+	it.each(["skill/SKILL.md", "README.md"])(
+		"%s says a result with missing links is final",
+		(name) => {
+			const text = read(name);
+			expect(text).toMatch(/`missing`/);
+			expect(text).toMatch(/30 seconds/);
+			expect(text).toMatch(/may not be coming/);
+		},
+	);
+
 	it("the skill stops for credit only when credit is needed", () => {
 		const text = read("skill/SKILL.md");
 		expect(text).not.toMatch(/or any tool answers with `addCreditAt`/);
@@ -239,35 +249,102 @@ describe("outputs that arrive after the video is ready", () => {
 
 		const any = await session.call("videos_wait", { videoId, output: "any" });
 		expect(any.body.timedOut).toBeUndefined();
-		const hls = await session.call("videos_wait", {
-			videoId,
-			output: "hls",
-			timeoutSeconds: 2,
-		});
-		expect(hls.body).toMatchObject({
-			status: "ready",
-			timedOut: true,
-			missing: ["hlsUrl"],
-		});
+		expect(any.body.missing).toBeUndefined();
 	});
 
-	it("stops at the deadline with what exists and names what is missing", async () => {
+	it("settles soon after ready when the HLS link never arrives", async () => {
 		const videoId = await uploadOne();
-		stub.state.mp4AfterReads = 1_000_000;
+		stub.state.hlsAfterReads = 1_000_000;
+		const startedAt = Date.now();
+		const waited = await session.call("videos_wait", {
+			videoId,
+			output: "hls",
+		});
+		expect(Date.now() - startedAt).toBeLessThan(1500);
+		expect(waited.isError).toBe(false);
+		expect(waited.body).toMatchObject({
+			status: "ready",
+			hlsUrl: null,
+			missing: ["hlsUrl"],
+		});
+		expect(waited.body.timedOut).toBeUndefined();
+		expect(waited.body.next).toMatch(/may not be coming/);
+		expect(waited.body.next).toMatch(
+			/plays with mp4Url, shareUrl and embedUrl/,
+		);
+		expect(waited.body.next).not.toMatch(/videos_wait/);
+	});
+
+	it("settles soon after ready when the MP4 never arrives, and does not say to wait again", async () => {
+		const videoId = await uploadOne();
+		stub.state.mp4Failed = true;
+		const startedAt = Date.now();
+		const waited = await session.call("videos_wait", { videoId });
+		const elapsed = Date.now() - startedAt;
+		expect(elapsed).toBeGreaterThanOrEqual(400);
+		expect(elapsed).toBeLessThan(1500);
+		expect(waited.isError).toBe(false);
+		expect(waited.body).toMatchObject({
+			status: "ready",
+			mp4Url: null,
+			missing: ["mp4Url"],
+		});
+		expect(waited.body.hlsUrl).toMatch(/master\.m3u8$/);
+		expect(waited.body.shareUrl).toMatch(/\/dev\//);
+		expect(waited.body.timedOut).toBeUndefined();
+		expect(waited.body.next).toMatch(/may not be coming/);
+		expect(waited.body.next).toMatch(
+			/plays with hlsUrl, shareUrl and embedUrl/,
+		);
+		expect(waited.body.next).toMatch(
+			/only for download and for transcripts_create with videoId/,
+		);
+		expect(waited.body.next).not.toMatch(/videos_wait/);
+		expect(waited.body.next).not.toMatch(/again/);
+
+		const second = await session.call("videos_wait", {
+			videoId,
+			output: "mp4",
+		});
+		expect(second.body).toMatchObject({ missing: ["mp4Url"] });
+		expect(second.body.timedOut).toBeUndefined();
+		expect(second.body.next).not.toMatch(/videos_wait/);
+	});
+
+	it("clips that grace to the caller's deadline", async () => {
+		await reconnect({
+			...FAST,
+			wait: { ...FAST.wait, outputGraceMs: 60_000 },
+		});
+		const videoId = await uploadOne();
+		stub.state.mp4Failed = true;
 		const startedAt = Date.now();
 		const waited = await session.call("videos_wait", {
 			videoId,
 			timeoutSeconds: 2,
 		});
 		expect(Date.now() - startedAt).toBeLessThan(2400);
-		expect(waited.isError).toBe(false);
 		expect(waited.body).toMatchObject({
 			status: "ready",
-			mp4Url: null,
-			timedOut: true,
 			missing: ["mp4Url"],
 		});
-		expect(waited.body.hlsUrl).toMatch(/master\.m3u8$/);
+		expect(waited.body.timedOut).toBeUndefined();
+		expect(waited.body.next).toMatch(/may not be coming/);
+		expect(waited.body.next).not.toMatch(/videos_wait/);
+	});
+
+	it("still reports a timeout while the video is not ready at all", async () => {
+		const videoId = await uploadOne();
+		stub.state.readyAfterPolls = 1_000_000;
+		const waited = await session.call("videos_wait", {
+			videoId,
+			timeoutSeconds: 2,
+		});
+		expect(waited.body).toMatchObject({
+			status: "processing",
+			timedOut: true,
+		});
+		expect(waited.body.missing).toBeUndefined();
 		expect(waited.body.next).toMatch(/Call videos_wait again/);
 	});
 
@@ -297,22 +374,36 @@ describe("outputs that arrive after the video is ready", () => {
 		).toBeGreaterThanOrEqual(3);
 	});
 
-	it("gives up on the MP4 link within its own short deadline", async () => {
+	it("says plainly that a ready video has no MP4, with the two ways forward", async () => {
 		const videoId = await uploadOne();
-		stub.state.mp4AfterReads = 1_000_000;
+		stub.state.mp4Failed = true;
 		await session.call("videos_wait", { videoId, output: "hls" });
 		const startedAt = Date.now();
 		const refused = await session.call("transcripts_create", { videoId });
 		expect(Date.now() - startedAt).toBeLessThan(1600);
+		expect(refused.isError).toBe(true);
 		expect(refused.body).toMatchObject({
-			error: { code: "video_not_ready" },
+			error: { code: "video_has_no_mp4", message: "This video has no MP4" },
 			videoId,
 			videoStatus: "ready",
 		});
-		expect((refused.body.error as { hint: string }).hint).toMatch(
-			/videos_wait with output mp4/,
-		);
+		const hint = (refused.body.error as { hint: string }).hint;
+		expect(hint).toMatch(/original file with path/);
+		expect(hint).toMatch(/public link to it with url/);
+		expect(hint).not.toMatch(/videos_wait/);
 		expect(stub.calls("POST", "/transcripts")).toHaveLength(0);
+	});
+
+	it("still points at videos_wait while the video is encoding", async () => {
+		const videoId = await uploadOne();
+		const refused = await session.call("transcripts_create", { videoId });
+		expect(refused.body).toMatchObject({
+			error: { code: "video_not_ready" },
+			videoStatus: "processing",
+		});
+		expect((refused.body.error as { hint: string }).hint).toMatch(
+			/videos_wait/,
+		);
 	});
 
 	it("does not wait on a video that failed or has no file", async () => {
@@ -326,6 +417,63 @@ describe("outputs that arrive after the video is ready", () => {
 			error: { code: "video_not_ready" },
 			videoStatus: "errored",
 		});
+	});
+});
+
+describe("a completion that fails on the server after the file was assembled", () => {
+	it("is sent again, and succeeds without an abort or a second upload", async () => {
+		const file = await files.write("assembled.mp4", 5000);
+		stub.state.failAfterAssembly = 1;
+		const uploaded = await session.call("videos_upload", { path: file.path });
+		expect(uploaded.isError).toBe(false);
+		const video = stub.videos.get(String(uploaded.body.videoId));
+		expect(video?.status).toBe("processing");
+		expect(video?.file?.equals(file.content)).toBe(true);
+		expect(stub.calls("POST", "/complete")).toHaveLength(2);
+		expect(stub.calls("POST", "/abort")).toHaveLength(0);
+		expect(stub.calls("PUT", "")).toHaveLength(5);
+	});
+
+	it("keeps the check-first advice and never aborts while the answer stays a server error", async () => {
+		const file = await files.write("assembled.mp4", 5000);
+		stub.state.failAfterAssembly = 1_000_000;
+		const failed = await session.call("videos_upload", { path: file.path });
+		const videoId = String([...stub.videos.keys()][0]);
+		expect(failed.isError).toBe(true);
+		expect(failed.body).toMatchObject({
+			error: { code: "internal_error", status: 500 },
+			videoId,
+			videoStatus: "unknown",
+		});
+		expect(failed.body.next).toMatch(/videos_get/);
+		expect(failed.body.next).not.toMatch(/no file/);
+		expect(stub.calls("POST", "/complete")).toHaveLength(6);
+		expect(stub.calls("POST", "/abort")).toHaveLength(0);
+		expect(stub.videos.get(videoId)?.file?.equals(file.content)).toBe(true);
+		const spacing = gaps(stub.calls("POST", "/complete"));
+		expect(spacing[4]).toBeGreaterThan((spacing[0] ?? 0) * 4);
+	});
+
+	it("does not abort after a server error even when the next answer is a refusal", async () => {
+		const file = await files.write("assembled.mp4", 5000);
+		stub.state.failAfterAssembly = 1;
+		stub.state.hang = (request) => {
+			if (
+				request.path.endsWith("/complete") &&
+				stub.calls("POST", "/complete").length === 2
+			) {
+				stub.state.credit = "insufficient_credits";
+			}
+			return false;
+		};
+		const failed = await session.call("videos_upload", { path: file.path });
+		expect(failed.body).toMatchObject({
+			error: { code: "insufficient_credits", status: 402, fileRemoved: true },
+			videoStatus: "unknown",
+			addCreditAt: `${stub.url}/dashboard/infra`,
+		});
+		expect(failed.body.next).toMatch(/videos_get/);
+		expect(stub.calls("POST", "/abort")).toHaveLength(0);
 	});
 });
 
