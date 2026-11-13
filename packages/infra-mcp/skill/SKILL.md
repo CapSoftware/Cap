@@ -11,20 +11,25 @@ Cap Infra stores and streams video and turns speech into text. It bills from pre
 
 1. Check the tools are there. If no `videos_upload` tool exists, the server is not connected: tell the user to add it with their app's secret key as `CAP_SECRET_KEY`. Never ask them to paste the key into the chat.
 2. Call `account_usage` once before the first upload or transcript. It tells you the balance, whether uploads are accepted (`upload.allowed`) and the rates.
-3. If `upload.allowed` is false, or any tool answers with `addCreditAt`, stop and give the user that link. Only a signed-in person can add credit. Do not retry until they say it is done.
+3. Carry on when `upload.allowed` is true. Stop only when `upload.allowed` is false, or when a tool fails with a credit error (its result has `credit` and `error.code` is `out_of_credit` or `insufficient_credits`). Then give the user the `addCreditAt` link from that result. Only a signed-in person can add credit. Do not retry until they say it is done.
 
 ## Upload a video and get its links
 
 1. `videos_upload` with the absolute `path` of the file. Set `name` if the file name is not a good title, and `userId` if the video belongs to one of the user's own users.
 2. Keep the `videoId` it returns. The `shareUrl` and `embedUrl` exist right away, but the video only plays once it is ready.
-3. `videos_wait` with that `videoId`. When `status` is `ready`, the result has `hlsUrl`, `mp4Url`, `posterUrl`, `shareUrl` and `embedUrl`.
+3. `videos_wait` with that `videoId`. A video becomes `ready` when its first playback link exists and the other one follows shortly after, so by default the wait returns once both `hlsUrl` and `mp4Url` exist, together with `posterUrl`, `shareUrl` and `embedUrl`. Pass `output` (`mp4`, `hls` or `any`) when you need only one of them sooner.
 4. Give the user the link that fits: `shareUrl` for a page to send someone, `embedUrl` for an iframe, `hlsUrl` for their own player, `mp4Url` for a download.
 
-If `videos_wait` returns `timedOut`, call it again with the same `videoId`. Encoding a long video takes minutes. If your client ends tool calls after a fixed time, pass a `timeoutSeconds` below that limit.
+If `videos_wait` returns `timedOut`, call it again with the same `videoId`. Encoding a long video takes minutes. When `status` is already `ready`, the links that are present work and `missing` names the one still encoding. If your client ends tool calls after a fixed time, pass a `timeoutSeconds` below that limit.
 
 If `status` is `errored`, tell the user the `errorReason`. The file was not a video Cap could read. Delete the video with `videos_delete` unless they want to keep the record.
 
-If the upload fails or is cancelled, the result names a `videoId` that has no file. Run `videos_upload` again with the same `path` and that `videoId`, or remove it with `videos_delete`. Do not leave it behind. `videos_list` shows any that were left with the status `uploading`.
+If the upload fails or is cancelled, the result has the `videoId`, a `videoStatus` and a `next` hint. Do what `next` says:
+
+- `videoStatus` is `uploading`: the video exists with no file. Run `videos_upload` again with the same `path` and that `videoId`, or remove it with `videos_delete`.
+- `videoStatus` is `unknown`: the upload may have completed. Call `videos_get` first. If its status is `processing` or `ready`, the file arrived, so carry on with `videos_wait` and do not upload again or delete it. Only when its status is still `uploading` may you retry or delete.
+
+When a call was cancelled you get no result. `videos_list` shows the video, and the same rule applies: check its status before you retry or delete. Do not leave a video with no file behind.
 
 ## Transcripts
 
@@ -35,6 +40,8 @@ If the upload fails or is cancelled, the result names a `videoId` that has no fi
 - `videoId`: a stored video whose status is `ready`. It does not need to be uploaded again.
 
 Then `transcripts_wait` with the id, and `transcripts_text` for the text. Use `transcripts_get` with `words` or `segments` only when the user needs timings, because the result is large.
+
+If `transcripts_create` fails after the transcript was created, the result has the `transcriptId`, a `transcriptStatus` and a `next` hint. When `transcriptStatus` is `unknown`, the file was stored and the transcript may be running and may be billed, so check it with `transcripts_get` or `transcripts_wait` before anything else. Delete and create again only when `next` says the transcript did not start.
 
 A transcript with the status `error` has an `error.code` that says why, for example `no_audio_track`, `source_unreachable` or `duration_too_long` (over 4 hours). A complete transcript with a `wordCount` of 0 means the audio had no speech.
 

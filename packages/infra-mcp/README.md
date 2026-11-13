@@ -51,7 +51,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 | Tool | What it does | Cost |
 |------|--------------|------|
 | `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed daily until deleted. |
-| `videos_wait` | Waits until a video is ready or has failed, then returns status, length, playback id and the HLS, MP4, poster, share and embed links. | Free |
+| `videos_wait` | Waits until a video has its playback links or has failed, then returns status, length, playback id and the HLS, MP4, poster, share and embed links. Waits for both HLS and MP4 unless `output` asks for one. | Free |
 | `videos_get` | Returns one video. | Free |
 | `videos_list` | Lists videos, newest first, optionally for one `userId`, with `limit` and `offset`. | Free |
 | `videos_delete` | Deletes a video and its files for good. | Stops its storage charge |
@@ -64,7 +64,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 | `account_usage` | Returns balance, standing, whether uploads are accepted, stored minutes, daily storage cost and rates. | Free |
 | `account_transactions` | Lists the ledger, newest first. | Free |
 
-There is no tool that adds credit. Buying credit needs a signed-in browser, so when the API answers that the app is out of credit, the result says so and carries the console link in `addCreditAt`.
+There is no tool that adds credit. Buying credit needs a signed-in browser, so when the API answers that the app is out of credit, the result says so and carries the console link in `addCreditAt`. `account_usage` carries that link only when the app cannot take an upload or is in `grace` or `paused`.
 
 ## How it behaves
 
@@ -73,7 +73,10 @@ There is no tool that adds credit. Buying credit needs a signed-in browser, so w
 - The API allows 60 requests a minute for each secret key. Waits ask no more often than every 3 seconds and slow down from there, and every request waits for `Retry-After` when it is told to.
 - A wait runs for up to 15 minutes. Pass `timeoutSeconds` to make it shorter. When the time runs out, the result has `timedOut` set with the id and the last known status, so the same call picks up where it stopped.
 - Some clients end a tool call after a minute. Either raise that limit, as in the Codex example above, or pass a `timeoutSeconds` below it and call again.
-- An upload that fails or is cancelled leaves the video in place with no file. The result carries its `videoId`, and so does a log message and a line on stderr when the client cancelled. Retry with `videos_upload` and that `videoId`, or remove it with `videos_delete`.
+- A video is `ready` when its first playback link exists, and the other link follows. `videos_wait` returns once both exist, or the one named in `output`. If the deadline passes first, the result has the links that exist and `missing` names the rest.
+- An upload that fails or is cancelled keeps its video. The result carries the `videoId`, a `videoStatus` and a `next` hint, and so does a log message and a line on stderr when the client cancelled. With `videoStatus` `uploading` the video has no file: retry with `videos_upload` and that `videoId`, or remove it with `videos_delete`. With `videoStatus` `unknown` the upload may have completed, so read it with `videos_get` before retrying or deleting.
+- A transcript from a file that fails after the file was stored reports `transcriptStatus` `unknown`, because it may be running and may be billed. Check it with `transcripts_get` or `transcripts_wait` before deleting or creating it again.
+- An upload reports progress in bytes when the client sends a progress token.
 - The secret key, upload tokens and signed storage links never appear in a result or a log line.
 
 ## Develop
