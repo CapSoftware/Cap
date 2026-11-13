@@ -295,11 +295,26 @@ async function runningTranscripts(
 
 async function withTranscriptSlot<T>(
 	appId: string,
+	transcriptId: string,
+	holdsSlot: (row: { status: DeveloperTranscriptStatus } | null) => boolean,
 	enqueue: (executor: InfraDbExecutor) => Promise<T>,
 ): Promise<{ admitted: true; value: T } | { admitted: false }> {
 	return db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
-		if ((await runningTranscripts(tx, appId)) >= TRANSCRIPT_MAX_CONCURRENT) {
+		const [row] = await tx
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.id, transcriptId),
+					eq(developerTranscripts.appId, appId),
+				),
+			)
+			.limit(1);
+		if (
+			!holdsSlot(row ?? null) &&
+			(await runningTranscripts(tx, appId)) >= TRANSCRIPT_MAX_CONCURRENT
+		) {
 			return { admitted: false as const };
 		}
 		return { admitted: true as const, value: await enqueue(tx) };
@@ -339,7 +354,12 @@ async function dispatchTranscript(
 			);
 	let claim: unknown;
 	if (slotForAppId) {
-		const slot = await withTranscriptSlot(slotForAppId, claimWith);
+		const slot = await withTranscriptSlot(
+			slotForAppId,
+			transcriptId,
+			(row) => row !== null && row.status !== from,
+			claimWith,
+		);
 		if (!slot.admitted) return "at_capacity" as const;
 		claim = slot.value;
 	} else {
@@ -399,19 +419,12 @@ async function appOwnerCanUseInfra(appId: string) {
 	return canUseInfra(owner?.email);
 }
 
-async function startGate(
-	appId: string,
-	starting = true,
-): Promise<TranscriptFailure | null> {
+async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	if (!(await appOwnerCanUseInfra(appId))) return NOT_AVAILABLE;
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
 	const refusal = await transcriptStartRefusal(appId);
-	if (refusal) {
-		return fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT);
-	}
-	return starting &&
-		(await runningTranscripts(db(), appId)) >= TRANSCRIPT_MAX_CONCURRENT
-		? TOO_MANY_TRANSCRIPTS
+	return refusal
+		? fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT)
 		: null;
 }
 
@@ -480,23 +493,27 @@ export async function createTranscriptFromUrl(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	const slot = await withTranscriptSlot(appId, (executor) =>
-		executor
-			.insert(developerTranscripts)
-			.values({
-				id,
-				appId,
-				externalUserId: options.externalUserId,
-				name: options.name ?? transcriptNameFromUrl(url),
-				status: "queued",
-				queuedAt: new Date(),
-				sourceType: "url",
-				sourceUrl: url,
-				s3Key: transcriptObjectKeys(appId, id).source,
-				requestedLanguage: options.requestedLanguage,
-				metadata: options.metadata,
-			})
-			.onDuplicateKeyUpdate({ set: { id } }),
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId,
+					name: options.name ?? transcriptNameFromUrl(url),
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "url",
+					sourceUrl: url,
+					s3Key: transcriptObjectKeys(appId, id).source,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
 	);
 	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
 
@@ -634,7 +651,7 @@ export async function createTranscriptUpload(
 		if (existing) return replay(existing);
 	}
 
-	const gate = await startGate(appId, false);
+	const gate = await startGate(appId);
 	if (gate) return gate;
 
 	await db()
