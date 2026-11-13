@@ -787,6 +787,8 @@ The same secret key turns an audio or video file into text. It is a separate cal
 2. `PUT` the file to `upload.url`.
 3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` every 5 seconds until `status` is `complete` or `error`. A complete transcript has its `text`.
 
+To wait on several transcripts, check them as a batch with one list call per status instead of one call each: `GET /api/developer/v1/transcripts?status=processing&limit=100`, plus `status=queued` while any are queued. A transcript that has left both lists has finished, so get it once for its `text`. An app has at most 20 transcripts in flight, and checking each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
+
 A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
 
 [Transcripts](/docs/api/rest-api#transcripts) is the reference, with a request for each step, word and segment timings and every error code.

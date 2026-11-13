@@ -624,6 +624,8 @@ Send an audio or video file and get text back. Transcription costs $0.10 per aud
 
 A transcript moves through these statuses: `uploading` (waiting for its file), `queued`, `processing`, then `complete` or `error`. Poll [Get Transcript](/docs/api/rest-api#get-transcript) every 5 seconds until the status is `complete` or `error`. Each key allows 60 requests per minute.
 
+To wait on several transcripts, poll them as a batch with one [List Transcripts](/docs/api/rest-api#list-transcripts) call per status instead of one Get Transcript each: `GET /api/developer/v1/transcripts?status=processing&limit=100`, plus `status=queued` while any are queued. A transcript that has left both lists has finished, so read it once with Get Transcript for its text. An app has at most 20 transcripts in flight, and getting each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
+
 An app can have 20 transcripts `queued` or `processing` at once. Starting another answers `429` with the code `too_many_transcripts` and a `Retry-After` header of 15 seconds. Wait for one to finish, then send the request again. Transcripts in `uploading` do not count until they are started.
 
 A transcript request can be refused. The response carries a `code` and a `message`, and these are all the codes the transcript routes return besides the ones every route shares (see [Error Handling](/docs/api/rest-api#error-handling)):
@@ -860,7 +862,7 @@ With `?include=words,segments` a complete transcript also carries:
 }
 ```
 
-`start` and `end` are seconds from the start of the audio, in steps of 0.08 seconds. A word's start is usually within 0.1 seconds of where it is spoken. Its end can run up to 0.4 seconds late and is often the start of the next word, so the timings suit captions and seeking rather than tight cuts at word ends. Timings do not drift on long files.
+`start` and `end` are seconds from the start of the audio. A word's start is usually within 0.1 seconds of where it is spoken. Its end can run up to 0.4 seconds late and is often the start of the next word, so the timings suit captions and seeking rather than tight cuts at word ends. Timings do not drift on long files.
 
 Audio with no speech is not a failure. The transcript completes with `text` set to `""` and `wordCount` set to `0`, and it is billed for its length like any other transcript. A complete transcript with a `wordCount` of `0` is how you tell that no speech was found.
 
