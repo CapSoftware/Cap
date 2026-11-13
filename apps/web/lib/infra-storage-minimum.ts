@@ -5,6 +5,7 @@ import {
 	developerCreditTransactions,
 	developerVideos,
 } from "@cap/database/schema";
+import type { DeveloperVideoProcessingState } from "@cap/database/types";
 import {
 	and,
 	asc,
@@ -21,6 +22,7 @@ import {
 	STORAGE_BILLING_DAYS_PER_MONTH,
 	videoStorageTier,
 } from "@/lib/developer-pricing";
+import { DEVELOPER_VIDEO_MAX_DURATION_SECONDS } from "@/lib/developer-video-charge";
 import { availableBalance } from "@/lib/infra-balance";
 import {
 	INFRA_RESOLUTION_TIERS,
@@ -54,15 +56,25 @@ export type FirstMonthCharge =
 	| { state: "exempt"; paidUntil: Date }
 	| {
 			state: "skipped";
-			reason: "missing" | "already_settled" | "not_ready";
+			reason:
+				| "missing"
+				| "already_settled"
+				| "not_ready"
+				| "not_deleted"
+				| "not_dispatched";
 	  };
 
 export type FirstMonthOptions = {
 	executor?: InfraDbExecutor;
 	deletedBeforeReady?: boolean;
 	exemptIfDeleted?: boolean;
+	atDelete?: boolean;
 	now?: Date;
 };
+
+const encodeDispatched = (processing: DeveloperVideoProcessingState) =>
+	processing.attempts.mp4 + processing.attempts.hls > 0 ||
+	[processing.mp4, processing.hls].some((part) => part.state !== "pending");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -131,7 +143,17 @@ async function settleFirstMonth(
 		.for("update");
 	if (!video) return skipped("missing");
 	if (video.storagePaidUntil !== null) return skipped("already_settled");
-	if (video.status !== "ready") return skipped("not_ready");
+	if (options.atDelete) {
+		if (video.deletedAt === null) return skipped("not_deleted");
+		const encoding =
+			video.status === "processing" &&
+			video.processing !== null &&
+			video.duration !== null &&
+			encodeDispatched(video.processing);
+		if (video.status !== "ready" && !encoding) return skipped("not_dispatched");
+	} else if (video.status !== "ready") {
+		return skipped("not_ready");
+	}
 
 	const paidUntil = firstMonthStoragePaidUntil(
 		now,
@@ -176,11 +198,21 @@ async function settleFirstMonth(
 		return skipped("already_settled");
 	}
 
-	const durationSeconds = positive(video.duration);
-	const tier = videoStorageTier(
-		{ width: positive(video.width), height: positive(video.height) },
-		isTier(video.maxResolutionTier) ? video.maxResolutionTier : null,
+	const durationSeconds = Math.min(
+		positive(video.duration),
+		DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
 	);
+	const maxTier = isTier(video.maxResolutionTier)
+		? video.maxResolutionTier
+		: null;
+	const measured = positive(video.width) > 0 && positive(video.height) > 0;
+	const tier =
+		!measured && maxTier
+			? maxTier
+			: videoStorageTier(
+					{ width: positive(video.width), height: positive(video.height) },
+					maxTier,
+				);
 	const lastCharge = await latestStorageCharge(tx, account.id);
 	const available =
 		(await availableBalance(appId, tx)) ?? account.balanceMicroCredits;
@@ -223,6 +255,9 @@ async function settleFirstMonth(
 			durationSeconds,
 			tier,
 			paidUntil: paidUntil.toISOString(),
+			...(options.atDelete && video.status !== "ready"
+				? { deletedWhileEncoding: true }
+				: {}),
 		},
 	});
 	await markSettled();
@@ -250,6 +285,42 @@ export async function chargeDeveloperVideoFirstMonth(
 	return executor.transaction((tx) =>
 		settleFirstMonth(tx, videoId, found.appId, options),
 	);
+}
+
+export async function settleFirstMonthAtDelete(
+	videoId: string,
+): Promise<FirstMonthCharge | null> {
+	try {
+		return await chargeDeveloperVideoFirstMonth(videoId, { atDelete: true });
+	} catch (error) {
+		console.error("[infra-storage] First month charge failed at delete", {
+			videoId,
+			error,
+		});
+		return null;
+	}
+}
+
+export async function settleFirstMonthsForDeletedApp(appId: string) {
+	try {
+		const videos = await db()
+			.select({ id: developerVideos.id })
+			.from(developerVideos)
+			.where(
+				and(
+					eq(developerVideos.appId, appId),
+					isNotNull(developerVideos.deletedAt),
+					inArray(developerVideos.status, ["processing", "ready"]),
+					isNull(developerVideos.storagePaidUntil),
+				),
+			);
+		for (const video of videos) await settleFirstMonthAtDelete(video.id);
+	} catch (error) {
+		console.error("[infra-storage] First month charges failed at app delete", {
+			appId,
+			error,
+		});
+	}
 }
 
 export async function settleFirstMonthAtReady(

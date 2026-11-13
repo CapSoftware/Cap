@@ -59,7 +59,9 @@ const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const {
 	chargeDeveloperVideoFirstMonth,
 	chargeMissedFirstMonths,
+	settleFirstMonthAtDelete,
 	settleFirstMonthAtReady,
+	settleFirstMonthsForDeletedApp,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
 const { getInfraFirstMonthChargesSince, getInfraStorageChargesSince } =
@@ -649,6 +651,165 @@ describe.runIf(Boolean(databaseUrl))(
 				new Date(Date.now() + 10 * DAY_MS),
 			);
 			expect(later.standing).toEqual({ state: "active", pausesAt: null });
+		});
+
+		describe("a video deleted while it encodes", () => {
+			const encoding = (): DeveloperVideoProcessingState => ({
+				...processing(),
+				probe: null,
+				mp4: {
+					state: "running",
+					token: "t-mp4",
+					jobId: "job-1",
+					startedAt: Date.now(),
+				},
+				attempts: { hls: 0, mp4: 1 },
+			});
+			const deleteNow = (videoId: string) =>
+				database()
+					.update(developerVideos)
+					.set({ deletedAt: new Date() })
+					.where(eq(developerVideos.id, videoId));
+
+			it("is charged its first month once, from its declared length at the tier it was created with, and never again", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					status: "processing",
+					duration: 3600,
+					width: null,
+					height: null,
+					maxResolutionTier: "2160p",
+					processing: encoding(),
+				});
+				await deleteNow(videoId);
+
+				const charged = await settleFirstMonthAtDelete(videoId);
+				expect(charged).toMatchObject({
+					state: "charged",
+					tier: "2160p",
+					owedMicroCredits: 16_800,
+					chargedMicroCredits: 16_800,
+				});
+				expect(await settleFirstMonthAtDelete(videoId)).toEqual({
+					state: "skipped",
+					reason: "already_settled",
+				});
+
+				await database()
+					.update(developerVideos)
+					.set({ status: "ready" })
+					.where(eq(developerVideos.id, videoId));
+				await settleFirstMonthAtReady({ id: videoId, deletedAt: new Date() });
+				await chargeMissedFirstMonths(new Date());
+
+				const rows = await firstMonthRows(accountId);
+				expect(rows).toHaveLength(1);
+				expect(rows[0]).toMatchObject({
+					amountMicroCredits: -16_800,
+					referenceId: videoId,
+					referenceType: "developer_video",
+				});
+				expect(rows[0]?.metadata).toMatchObject({ deletedWhileEncoding: true });
+				expect(await balanceOf(accountId)).toBe(1_000_000 - 16_800);
+				expect((await videoRow(videoId))?.storagePaidUntil).not.toBeNull();
+			});
+
+			it("caps the declared length at the 4 hour limit", async () => {
+				const { appId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					status: "processing",
+					duration: 6 * 60 * 60,
+					processing: encoding(),
+				});
+				await deleteNow(videoId);
+
+				expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+					state: "charged",
+					owedMicroCredits: 240 * 85,
+				});
+			});
+
+			it("pays nothing when deleted before any encode was handed to the farm", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const notClaimed = await makeVideo(appId, {
+					status: "uploading",
+					processing: null,
+					playbackId: null,
+				});
+				const claimedNotSent = await makeVideo(appId, {
+					status: "processing",
+					processing: {
+						...processing(),
+						mp4: { state: "pending" },
+						attempts: { hls: 0, mp4: 0 },
+					},
+				});
+				for (const videoId of [notClaimed, claimedNotSent]) {
+					await deleteNow(videoId);
+					expect(await settleFirstMonthAtDelete(videoId)).toEqual({
+						state: "skipped",
+						reason: "not_dispatched",
+					});
+					expect((await videoRow(videoId))?.storagePaidUntil).toBeNull();
+				}
+				expect(await firstMonthRows(accountId)).toHaveLength(0);
+				expect(await balanceOf(accountId)).toBe(1_000_000);
+			});
+
+			it("pays nothing for an encode that failed on its own, deleted or not", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const failed = await makeVideo(appId, {
+					status: "errored",
+					processing: {
+						...processing(),
+						mp4: { state: "failed", reason: "boom" },
+						hls: { state: "failed", reason: "boom" },
+						attempts: { hls: 2, mp4: 2 },
+					},
+				});
+				await deleteNow(failed);
+
+				expect(await settleFirstMonthAtDelete(failed)).toEqual({
+					state: "skipped",
+					reason: "not_dispatched",
+				});
+				expect(await firstMonthRows(accountId)).toHaveLength(0);
+			});
+
+			it("is charged when the whole app is deleted mid-encode", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					status: "processing",
+					duration: 600,
+					processing: encoding(),
+				});
+				await deleteNow(videoId);
+
+				await settleFirstMonthsForDeletedApp(appId);
+				await settleFirstMonthsForDeletedApp(appId);
+
+				expect(await firstMonthRows(accountId)).toHaveLength(1);
+				expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+			});
+
+			it("records a month the balance cannot pay as owed and leaves the delete in place", async () => {
+				const { appId, accountId } = await makeApp(100);
+				const videoId = await makeVideo(appId, {
+					status: "processing",
+					duration: 600,
+					processing: encoding(),
+				});
+				await deleteNow(videoId);
+
+				expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+					state: "charged",
+					owedMicroCredits: 850,
+					chargedMicroCredits: 100,
+				});
+				expect(await balanceOf(accountId)).toBe(0);
+				expect((await videoRow(videoId))?.deletedAt).not.toBeNull();
+				expect((await getInfraBilling(appId)).standing.state).toBe("grace");
+			});
 		});
 
 		it("never throws from the ready path when the charge fails", async () => {
