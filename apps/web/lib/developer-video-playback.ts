@@ -416,7 +416,6 @@ export function listSubtitles(
 	return listed.join("\n");
 }
 
-// The captions file is one segment that covers the whole video.
 export function subtitlesPlaylist(
 	language: string,
 	durationSeconds: number,
