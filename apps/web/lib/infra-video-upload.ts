@@ -477,7 +477,7 @@ export async function createInfraVideo({
 	const admission = await getInfraUploadAdmission(appId);
 	if (!admission.allowed) {
 		await scheduleAutoTopUp({ appId });
-		return { status: 402, body: uploadAdmissionError(admission) };
+		return { status: 402, body: uploadAdmissionError(admission, appId) };
 	}
 
 	const request = videoRequest({ name, userId, metadata, maxResolutionTier });
@@ -813,7 +813,7 @@ export async function completeInfraUpload({
 			if (recorded) return ok({ success: true });
 			if (!admission.allowed) {
 				await scheduleAutoTopUp({ appId });
-				return { status: 402, body: uploadAdmissionError(admission) };
+				return { status: 402, body: uploadAdmissionError(admission, appId) };
 			}
 		}
 
@@ -879,7 +879,7 @@ export async function completeInfraUpload({
 			await releaseDeveloperVideoUpload(videoId, claim);
 			claim = null;
 			await scheduleAutoTopUp({ appId });
-			const refusal = uploadAdmissionError(admission);
+			const refusal = uploadAdmissionError(admission, appId);
 			return {
 				status: 402,
 				body: {

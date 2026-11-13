@@ -98,6 +98,7 @@ export async function startStubApi() {
 		completionRetryAfterSeconds: null as number | null,
 		videoListPagination: true,
 		hang: null as ((request: StubRequest) => boolean) | null,
+		docs: new Map<string, string>(),
 		dropAnswer: null as ((request: StubRequest) => boolean) | null,
 		intercept: null as ((request: StubRequest) => ScriptedReply | null) | null,
 		hlsAfterReads: 0,
@@ -107,6 +108,7 @@ export async function startStubApi() {
 		refuseTranscriptFile: false,
 		videoOutcome: "ready" as "ready" | "errored",
 		transcriptOutcome: "complete" as "complete" | "insufficient_credits",
+		usageAppId: "app_stub" as string | null,
 	};
 	let origin = "";
 
@@ -605,6 +607,7 @@ export async function startStubApi() {
 		if (resource === "usage" && key === undefined && method === "GET") {
 			return send(response, 200, {
 				data: {
+					...(state.usageAppId === null ? {} : { appId: state.usageAppId }),
 					balanceMicroCredits: 500000,
 					balanceDollars: "5.00",
 					totalVideos: videos.size,
@@ -1051,6 +1054,14 @@ export async function startStubApi() {
 					);
 				}
 				return rest(request, response, url.pathname.slice(REST.length));
+			}
+			const docPage = /^\/docs\/api\/([a-z-]+)\.md$/.exec(url.pathname)?.[1];
+			const doc = docPage === undefined ? undefined : state.docs.get(docPage);
+			if (doc !== undefined) {
+				response
+					.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" })
+					.end(doc);
+				return;
 			}
 			send(
 				response,

@@ -464,6 +464,7 @@ describe("examples in the REST API reference", () => {
 					firstMonthMicroCredits: body.requiredMicroCredits,
 				},
 			}),
+			"app_789",
 		);
 
 		expect(body).toEqual(refusal);

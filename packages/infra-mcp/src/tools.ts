@@ -1,7 +1,15 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
+import { creditLinkFor } from "./credit-link";
+import { createDocsTool, fetchDocs } from "./docs";
+import {
+	ApiError,
+	isCreditCode,
+	isUnanswered,
+	LocalError,
+	withContext,
+} from "./errors";
 import { inspectFile, storageTimeoutMs } from "./files";
 import { createHostedUploadTools } from "./hosted-upload";
 import { asRecord, confirmed, dataOf, listOf, storagePut } from "./http";
@@ -154,8 +162,19 @@ export function createTools(deps: ToolDeps): Tool[] {
 		deps.wait.pollIntervalMs / 1000,
 		singleCheckBelowSeconds(deps.wait),
 	);
-	const transcript = (fields: Record<string, unknown>, text = false) =>
-		transcriptView(fields, config.consoleUrl, { text });
+	const credit = deps.credit ?? creditLinkFor(config.consoleUrl, client);
+	const transcript = async (
+		fields: Record<string, unknown>,
+		text = false,
+		signal?: AbortSignal,
+	) =>
+		transcriptView(
+			fields,
+			isCreditCode(asRecord(fields.error).code)
+				? await credit.resolve(signal)
+				: credit.url,
+			{ text },
+		);
 
 	const waitOutcome = (
 		outcome: { settled: boolean; waitedSeconds: number; lastError: unknown },
@@ -199,7 +218,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			);
 		}
 		call.announce("transcript_created", { transcriptId: id });
-		if (target === null) return transcript(created);
+		if (target === null) return transcript(created, false, call.signal);
 
 		let stored = false;
 		try {
@@ -228,10 +247,12 @@ export function createTools(deps: ToolDeps): Tool[] {
 			stored = true;
 			for (let attempt = 1; ; attempt++) {
 				try {
-					return transcript(
+					return await transcript(
 						dataOf(
 							await client.call("startTranscript", { id, signal: call.signal }),
 						),
+						false,
+						call.signal,
 					);
 				} catch (error) {
 					if (!isUnanswered(error) || attempt >= START_ATTEMPTS) throw error;
@@ -693,7 +714,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 							signal: call.signal,
 						}),
 					);
-					return { ...transcript(created), next };
+					return { ...(await transcript(created, false, call.signal)), next };
 				}
 
 				const fromVideo =
@@ -719,7 +740,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 						signal: call.signal,
 					}),
 				);
-				return { ...transcript(created), next };
+				return { ...(await transcript(created, false, call.signal)), next };
 			},
 		}),
 		tool({
@@ -754,7 +775,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					}),
 				);
 				return {
-					...transcript(found, true),
+					...(await transcript(found, true, call.signal)),
 					...(args.words ? { words: found.words ?? null } : {}),
 					...(args.segments ? { segments: found.segments ?? null } : {}),
 					...captionsNext(found),
@@ -797,7 +818,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				return {
 					...(last === null
 						? { id: args.transcriptId, status: "unknown" }
-						: transcript(last)),
+						: await transcript(last, false, call.signal)),
 					...waitOutcome(outcome, "transcripts_wait"),
 					...(outcome.settled && last !== null ? captionsNext(last) : {}),
 					...(last?.status === "uploading"
@@ -869,7 +890,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 					},
 					signal: call.signal,
 				});
-				const transcripts = listOf(reply).map((row) => transcript(row));
+				const transcripts = await Promise.all(
+					listOf(reply).map((row) => transcript(row, false, call.signal)),
+				);
 				return { transcripts, ...page(reply, size, skip, transcripts.length) };
 			},
 		}),
@@ -901,6 +924,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const usage = dataOf(
 					await client.call("getUsage", { signal: call.signal }),
 				);
+				credit.learn(usage);
 				const standing = asRecord(usage.standing).state;
 				const needsCredit =
 					asRecord(usage.upload).allowed === false ||
@@ -914,7 +938,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 									Math.round(usage.totalDurationMinutes * 100) / 100,
 							}
 						: {}),
-					...(needsCredit ? { addCreditAt: config.consoleUrl } : {}),
+					...(needsCredit ? { addCreditAt: credit.url } : {}),
 				};
 			},
 		}),
@@ -939,6 +963,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
 	];
 
 	// The npm package lists its tools in a README that changes only with a

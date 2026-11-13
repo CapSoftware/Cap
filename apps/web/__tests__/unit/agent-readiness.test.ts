@@ -313,6 +313,8 @@ describe("developer OpenAPI spec", () => {
 				"error",
 				"code",
 				"message",
+				"hint",
+				"docs",
 				"standing",
 				"pausesAt",
 				"balanceMicroCredits",
@@ -326,15 +328,21 @@ describe("developer OpenAPI spec", () => {
 
 	it("matches the 402 schema to the body the upload routes send", async () => {
 		const { uploadAdmissionError } = await import("@/lib/infra-standing");
-		const body = uploadAdmissionError({
-			allowed: false,
-			reason: "insufficient_credits",
-			standing: { state: "grace", pausesAt: new Date("2026-11-19T00:00:00Z") },
-			balanceMicroCredits: 10,
-			requiredMicroCredits: 30,
-			shortfallMicroCredits: 20,
-			message: "Add credit.",
-		});
+		const body = uploadAdmissionError(
+			{
+				allowed: false,
+				reason: "insufficient_credits",
+				standing: {
+					state: "grace",
+					pausesAt: new Date("2026-11-19T00:00:00Z"),
+				},
+				balanceMicroCredits: 10,
+				requiredMicroCredits: 30,
+				shortfallMicroCredits: 20,
+				message: "Add credit.",
+			},
+			"app_1",
+		);
 		const schema = spec.components.schemas.UploadPaymentRequired;
 
 		expect(Object.keys(body).sort()).toEqual([...schema.required].sort());
