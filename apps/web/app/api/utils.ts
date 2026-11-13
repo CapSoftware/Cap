@@ -10,7 +10,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Context, Next } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
@@ -32,6 +32,7 @@ import {
 	isDeveloperPublicKey,
 	missingUploadTokenRefusal,
 	publicKeyRefusal,
+	UPLOAD_TOKEN_MAX_SECONDS,
 	UPLOAD_TOKEN_PREFIX,
 	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
@@ -253,6 +254,8 @@ export const refuseDeveloperPublicKey = createMiddleware(async (c, next) => {
 	await next();
 });
 
+const UNKEYED_UPLOAD_TOKEN = "";
+
 export const withDeveloperUploadToken = createMiddleware<{
 	Variables: {
 		developerAppId: string;
@@ -268,7 +271,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 
 	const check = verifyDeveloperUploadToken(credential);
 	if (!check.ok) return c.json(uploadTokenRefusal(check.reason), 401);
-	const { appId, videoId, corsOrigin, maxBytes } = check.token;
+	const { appId, videoId, corsOrigin, maxBytes, keyId } = check.token;
 
 	if (corsOrigin !== null && c.req.header("origin") !== corsOrigin) {
 		return c.json(
@@ -285,6 +288,8 @@ export const withDeveloperUploadToken = createMiddleware<{
 		.select({
 			duration: developerVideos.duration,
 			deletedAt: developerVideos.deletedAt,
+			keyId: developerApiKeys.id,
+			keyRevokedAt: developerApiKeys.revokedAt,
 		})
 		.from(developerVideos)
 		.innerJoin(
@@ -292,6 +297,14 @@ export const withDeveloperUploadToken = createMiddleware<{
 			and(
 				eq(developerVideos.appId, developerApps.id),
 				isNull(developerApps.deletedAt),
+			),
+		)
+		.leftJoin(
+			developerApiKeys,
+			and(
+				eq(developerApiKeys.id, keyId ?? UNKEYED_UPLOAD_TOKEN),
+				eq(developerApiKeys.appId, developerVideos.appId),
+				eq(developerApiKeys.keyType, "secret"),
 			),
 		)
 		.where(
@@ -310,6 +323,26 @@ export const withDeveloperUploadToken = createMiddleware<{
 		);
 	}
 
+	if (keyId === undefined) {
+		const [revoked] = await db()
+			.select({ id: developerApiKeys.id })
+			.from(developerApiKeys)
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					eq(developerApiKeys.keyType, "secret"),
+					gt(
+						developerApiKeys.revokedAt,
+						new Date(check.token.expiresAt - UPLOAD_TOKEN_MAX_SECONDS * 1000),
+					),
+				),
+			)
+			.limit(1);
+		if (revoked) return c.json(uploadTokenRefusal("rotated"), 401);
+	} else if (video.keyId === null || video.keyRevokedAt) {
+		return c.json(uploadTokenRefusal("rotated"), 401);
+	}
+
 	c.set("developerAppId", appId);
 	c.set("developerVideoId", videoId);
 	c.set("developerUploadCompleted", video.duration !== null);
@@ -320,6 +353,7 @@ export const withDeveloperUploadToken = createMiddleware<{
 export const withDeveloperSecretAuth = createMiddleware<{
 	Variables: {
 		developerAppId: string;
+		developerKeyId: string;
 		developerKeyType: "secret";
 	};
 }>(async (c, next) => {
@@ -337,7 +371,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 
 	const keyHash = await hashKey(authHeader);
 	const [row] = await db()
-		.select({ appId: developerApps.id })
+		.select({ appId: developerApps.id, keyId: developerApiKeys.id })
 		.from(developerApiKeys)
 		.innerJoin(
 			developerApps,
@@ -369,6 +403,7 @@ export const withDeveloperSecretAuth = createMiddleware<{
 	debouncedLastUsedUpdate(keyHash);
 
 	c.set("developerAppId", row.appId);
+	c.set("developerKeyId", row.keyId);
 	c.set("developerKeyType", "secret" as const);
 	await next();
 });

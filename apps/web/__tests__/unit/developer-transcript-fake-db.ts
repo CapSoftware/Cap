@@ -228,23 +228,30 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		return new Date(clock);
 	};
 
-	const select = (fields?: Record<string, unknown>) => ({
+	const select = (fields?: Record<string, unknown>, distinct = false) => ({
 		from: (table: Table) => {
 			const state = {
 				condition: undefined as SQL | undefined,
 				ordered: false,
+				orderColumn: "createdAt",
+				ascending: false,
 				limit: undefined as number | undefined,
 				offset: 0,
 			};
 			const run = async () => {
 				let rows = rowsOf(table).filter(compile(state.condition));
 				if (state.ordered) {
+					const time = (row: Row) => {
+						const value = row[state.orderColumn];
+						return value instanceof Date ? value.getTime() : 0;
+					};
+					const direction = state.ascending ? -1 : 1;
 					rows = [...rows].sort((a, b) => {
-						const byDate =
-							(b.createdAt as Date).getTime() - (a.createdAt as Date).getTime();
-						return byDate !== 0
-							? byDate
-							: String(b.id).localeCompare(String(a.id));
+						const byDate = time(b) - time(a);
+						return (
+							direction *
+							(byDate !== 0 ? byDate : String(b.id).localeCompare(String(a.id)))
+						);
 					});
 				}
 				const scalars: Row = {};
@@ -261,10 +268,19 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							Object.entries(fields).filter(([alias]) => !(alias in scalars)),
 						)
 					: fields;
-				const projected = project(rows, selected).map((row) => ({
+				const all = project(rows, selected).map((row) => ({
 					...row,
 					...scalars,
 				}));
+				const seen = new Set<string>();
+				const projected = distinct
+					? all.filter((row) => {
+							const key = JSON.stringify(row);
+							if (seen.has(key)) return false;
+							seen.add(key);
+							return true;
+						})
+					: all;
 				return projected.slice(
 					state.offset,
 					state.limit === undefined ? undefined : state.offset + state.limit,
@@ -275,8 +291,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 					state.condition = condition;
 					return chain;
 				},
-				orderBy() {
+				orderBy(first?: SQL) {
 					state.ordered = true;
+					const named = first
+						? dialect.sqlToQuery(first).sql.match(/`(\w+)`(?: (desc|asc))?$/i)
+						: null;
+					state.orderColumn = named?.[1] ?? "createdAt";
+					state.ascending = named?.[2]?.toLowerCase() === "asc";
 					return chain;
 				},
 				limit(count: number) {
@@ -359,7 +380,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		},
 	});
 
-	const client = { select, insert, update, delete: remove };
+	const client = {
+		select: (fields?: Record<string, unknown>) => select(fields),
+		selectDistinct: (fields: Record<string, unknown>) => select(fields, true),
+		insert,
+		update,
+		delete: remove,
+	};
 
 	const transaction = <T>(callback: (tx: typeof client) => Promise<T>) => {
 		const run = async () => {
