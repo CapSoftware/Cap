@@ -36,6 +36,7 @@ const row = (
 	sourceType: "upload",
 	sourceUrl: null,
 	videoId: null,
+	requestedAt: null,
 	s3Key: "developer/app-1/transcripts/tr-1/source",
 	resultKey: "developer/app-1/transcripts/tr-1/result.json",
 	sourceBytes: 1_000,

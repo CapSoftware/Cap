@@ -809,6 +809,7 @@ const summaryColumns = {
 	sourceType: developerTranscripts.sourceType,
 	sourceUrl: developerTranscripts.sourceUrl,
 	videoId: developerTranscripts.videoId,
+	requestedAt: developerTranscripts.requestedAt,
 	s3Key: developerTranscripts.s3Key,
 	resultKey: developerTranscripts.resultKey,
 	sourceBytes: developerTranscripts.sourceBytes,
