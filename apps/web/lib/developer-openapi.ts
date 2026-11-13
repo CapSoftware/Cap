@@ -338,6 +338,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 const restErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
+	"405": response("MethodNotAllowed"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -347,6 +348,7 @@ const sdkErrors = {
 	"401": response("Unauthorized"),
 	"403": response("Forbidden"),
 	"404": response("NotFound"),
+	"405": response("MethodNotAllowed"),
 	"415": response("UnsupportedMediaType"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
@@ -2261,6 +2263,20 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"Retry-After": {
 						description: `Seconds to wait before retrying, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}.`,
 						schema: { type: "integer" },
+					},
+				},
+			},
+			MethodNotAllowed: {
+				...json(
+					ref("Error"),
+					"The path exists but does not take the method that was sent, for example PATCH on a video (code method_not_allowed). The Allow header lists the methods it takes.",
+				),
+				headers: {
+					...rateLimitHeaders,
+					Allow: {
+						description:
+							"The methods this path takes, separated by a comma and a space.",
+						schema: { type: "string" },
 					},
 				},
 			},
