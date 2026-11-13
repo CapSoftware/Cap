@@ -42,6 +42,7 @@ export function developerVideo(
 		storedBytes: null,
 		errorReason: null,
 		processing: processingState(),
+		storagePaidUntil: null,
 		deletedAt: null,
 		filesDeletedAt: null,
 		createdAt: new Date("2026-11-01T00:00:00Z"),

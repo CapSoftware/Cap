@@ -4,6 +4,16 @@ vi.mock("@/lib/infra-access", () => ({
 	canUseInfra: () => true,
 }));
 
+const firstMonth = vi.hoisted(() => ({
+	atDelete: vi.fn(),
+	forDeletedApp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtDelete: firstMonth.atDelete,
+	settleFirstMonthsForDeletedApp: firstMonth.forDeletedApp,
+}));
+
 vi.mock("@cap/database", () => {
 	const mockDb = {
 		select: vi.fn(() => mockDb),
@@ -303,6 +313,19 @@ describe("deleteDeveloperApp", () => {
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
 		const result = await deleteDeveloperApp("app-456");
 		expect(result).toEqual({ success: true });
+	});
+
+	it("settles the first month of the videos this delete stamped, after the delete", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		await deleteDeveloperApp("app-456");
+		const stamps = mockDb.set.mock.calls
+			.map(([values]) => (values as { deletedAt?: Date }).deletedAt)
+			.filter(Boolean);
+		expect(stamps).toHaveLength(2);
+		expect(stamps[0]?.getMilliseconds()).toBe(0);
+		expect(firstMonth.forDeletedApp).toHaveBeenCalledWith("app-456", stamps[0]);
+		expect(stamps[1]).toBe(stamps[0]);
 	});
 
 	it("cancels the app's encode jobs once the delete has committed", async () => {
@@ -807,20 +830,38 @@ describe("deleteDeveloperVideo", () => {
 		);
 	});
 
-	it("soft deletes video", async () => {
+	it("soft deletes video and settles its first month after the delete", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 		await deleteDeveloperVideo("app-456", "video-001");
 
 		expect(mockDb.update).toHaveBeenCalled();
 		expect(mockDb.set).toHaveBeenCalledWith(
 			expect.objectContaining({ deletedAt: expect.any(Date) }),
 		);
+		expect(firstMonth.atDelete).toHaveBeenCalledWith("video-001");
+	});
+
+	it("does not settle anything when the video was already deleted or is another app's", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 0 }] as never);
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(firstMonth.atDelete).not.toHaveBeenCalled();
 	});
 
 	it("returns success true", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 		const result = await deleteDeveloperVideo("app-456", "video-001");
 		expect(result).toEqual({ success: true });
 	});
@@ -828,6 +869,9 @@ describe("deleteDeveloperVideo", () => {
 	it("cancels the video's encode jobs after the delete is written", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 
 		await deleteDeveloperVideo("app-456", "video-001");
 
