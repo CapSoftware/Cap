@@ -462,7 +462,7 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(await dailyMinutes(appId, day("2026-11-21"))).toBe(10);
 		});
 
-		it("lets the cron charge a ready video the transition missed, deleted or not, exactly once", async () => {
+		it("lets the cron charge a live ready video the transition missed exactly once, and exempt a deleted one", async () => {
 			await makeVideo((await makeApp(1_000_000)).appId, {
 				storagePaidUntil: new Date("2026-12-12T00:00:00Z"),
 			});
@@ -500,10 +500,12 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await videoRow(unbillable))?.storagePaidUntil).not.toBeNull();
 
 			const rows = await firstMonthRows(accountId);
-			expect(rows.map((row) => row.referenceId).sort()).toEqual(
-				[missed, missedThenDeleted].sort(),
-			);
-			expect(await balanceOf(accountId)).toBe(1_000_000 - 2 * 850);
+			expect(rows.map((row) => row.referenceId)).toEqual([missed]);
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 850);
+			expect((await videoRow(missed))?.storagePaidUntil).not.toBeNull();
+			expect(
+				(await videoRow(missedThenDeleted))?.storagePaidUntil,
+			).not.toBeNull();
 		});
 
 		it("takes what the balance holds when it cannot pay the month, leaves the video ready and the account out of credit until topped up", async () => {

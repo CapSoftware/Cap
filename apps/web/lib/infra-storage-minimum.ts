@@ -59,6 +59,7 @@ export type FirstMonthCharge =
 export type FirstMonthOptions = {
 	executor?: InfraDbExecutor;
 	deletedBeforeReady?: boolean;
+	exemptIfDeleted?: boolean;
 	now?: Date;
 };
 
@@ -122,6 +123,7 @@ async function settleFirstMonth(
 			maxResolutionTier: developerVideos.maxResolutionTier,
 			processing: developerVideos.processing,
 			storagePaidUntil: developerVideos.storagePaidUntil,
+			deletedAt: developerVideos.deletedAt,
 		})
 		.from(developerVideos)
 		.where(eq(developerVideos.id, videoId))
@@ -143,7 +145,12 @@ async function settleFirstMonth(
 			})
 			.where(eq(developerVideos.id, videoId));
 
-	if (options.deletedBeforeReady || video.processing === null || !account) {
+	if (
+		options.deletedBeforeReady ||
+		(options.exemptIfDeleted && video.deletedAt !== null) ||
+		video.processing === null ||
+		!account
+	) {
 		await markSettled();
 		return { state: "exempt", paidUntil };
 	}
@@ -305,7 +312,10 @@ export async function chargeMissedFirstMonths(
 	if (!began) return outcome;
 	for (const video of await unsettledFirstMonthsQuery(began, limit)) {
 		try {
-			const result = await chargeDeveloperVideoFirstMonth(video.id, { now });
+			const result = await chargeDeveloperVideoFirstMonth(video.id, {
+				now,
+				exemptIfDeleted: true,
+			});
 			if (result.state === "charged") {
 				outcome.charged++;
 				if (result.shortSince) outcome.short++;
