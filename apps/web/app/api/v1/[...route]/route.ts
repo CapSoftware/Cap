@@ -168,7 +168,7 @@ import {
 	CREDIT_CHECKOUT_METADATA_TYPE,
 	creditCheckoutSessionParams,
 } from "@/lib/infra-credit-checkout";
-import { normalizeAllowedOrigin } from "@/lib/infra-domain";
+import { normalizeEmbedOrigin } from "@/lib/infra-domain";
 import {
 	settleFirstMonthAtDelete,
 	settleFirstMonthsForDeletedApp,
@@ -4204,7 +4204,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireAgentWrites(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
-						const allowed = normalizeAllowedOrigin(payload.domain);
+						const allowed = normalizeEmbedOrigin(payload.domain);
 						if (!allowed.ok) {
 							return yield* badRequest(requestId, allowed.message);
 						}
