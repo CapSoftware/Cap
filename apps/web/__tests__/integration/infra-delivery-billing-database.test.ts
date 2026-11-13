@@ -364,6 +364,42 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 		});
 
+		it("charges the final total once when a recompute lowers a day or drops an app before it is final", async () => {
+			const now = NOW;
+			const day = dayKey(2, now);
+			const lowered = await makeApp(1_000_000);
+			const dropped = await makeApp(1_000_000);
+			await writeDay(
+				lowered.appId,
+				day,
+				[
+					{ tier: "1080p", seconds: 9_000 },
+					{ tier: "720p", seconds: 1_234 },
+					{ tier: "audio", seconds: 0, bytes: 1_000 },
+				],
+				false,
+			);
+			await writeDay(dropped.appId, day, FIXTURE_TIERS, false);
+			expect(await settle(now)).toMatchObject({ billed: 0, waiting: 2 });
+
+			await writeDay(lowered.appId, day, [{ tier: "1080p", seconds: 3_000 }]);
+			await pool.query(
+				"delete from developer_delivery_daily where appId = ? and day = ?",
+				[dropped.appId, day],
+			);
+			expect(await settle(now)).toMatchObject({ billed: 1, waiting: 0 });
+			expect(await settle(now)).toMatchObject({ billed: 0 });
+
+			const [row] = await deliveryRows(lowered.accountId);
+			expect(row?.amountMicroCredits).toBe(-4_750);
+			expect(row?.metadata).toMatchObject({
+				deliveredSeconds: 3_000,
+				minutesByTier: { "1080p": 50 },
+			});
+			expect(await deliveryRows(dropped.accountId)).toEqual([]);
+			expect(await balanceOf(dropped.accountId)).toBe(1_000_000);
+		});
+
 		it("returns the exact rows a real run writes from a dry run, twice the same, and writes nothing", async () => {
 			const now = NOW;
 			const rich = await makeApp(1_000_000);
