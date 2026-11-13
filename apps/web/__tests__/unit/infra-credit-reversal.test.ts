@@ -135,6 +135,7 @@ const autoTopUp = { type: "developer_auto_top_up", accountId: "account-1" };
 const checkoutPaymentTag = creditCheckoutSessionParams({
 	customerId: "cus_1",
 	accountId: "account-1",
+	appName: "Demo",
 	amountCents: 2500,
 	receiptEmail: "owner@example.com",
 }).payment_intent_data.metadata;
