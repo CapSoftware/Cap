@@ -29,6 +29,7 @@ const CREDIT_CHECKOUT_METADATA_TYPE = "developer_credits";
 
 export type CreditReversalResult =
 	| { state: "ignored"; reason: "no_payment" | "not_a_credit_payment" }
+	| { state: "grant_pending" }
 	| { state: "duplicate" }
 	| { state: "nothing_left" }
 	| {
@@ -99,12 +100,17 @@ async function creditAccountOfPayment(
 		: null;
 }
 
+type PaidGrantLookup =
+	| { state: "not_a_credit_payment" }
+	| { state: "grant_pending"; accountId: string }
+	| { state: "found"; grant: PaidGrant };
+
 async function findPaidGrant(
 	paymentIntentId: string,
 	hints?: PaymentHints,
-): Promise<PaidGrant | null> {
+): Promise<PaidGrantLookup> {
 	const accountId = await creditAccountOfPayment(paymentIntentId, hints);
-	if (!accountId) return null;
+	if (!accountId) return { state: "not_a_credit_payment" };
 
 	const [grant] = await db()
 		.select({
@@ -123,8 +129,37 @@ async function findPaidGrant(
 			),
 		)
 		.limit(1);
-	return grant && grant.amountMicroCredits > 0 ? grant : null;
+	if (grant) {
+		return grant.amountMicroCredits > 0
+			? { state: "found", grant }
+			: { state: "not_a_credit_payment" };
+	}
+
+	const [account] = await db()
+		.select({ id: developerCreditAccounts.id })
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.id, accountId))
+		.limit(1);
+	return account
+		? { state: "grant_pending", accountId }
+		: { state: "not_a_credit_payment" };
 }
+
+function grantPending(
+	event: "refund" | "dispute",
+	accountId: string,
+	paymentIntentId: string,
+): CreditReversalResult {
+	console.warn(
+		`[infra-billing] A ${event} arrived before its credit grant was recorded, leaving it for redelivery`,
+		{ accountId, paymentIntentId },
+	);
+	return { state: "grant_pending" };
+}
+
+export const awaitsCreditGrant = (
+	results: CreditReversalResult | CreditReversalResult[],
+) => [results].flat().some((result) => result.state === "grant_pending");
 
 export function refundedShareMicroCredits({
 	grantMicroCredits,
@@ -307,11 +342,17 @@ export async function reverseRefundedCharge(
 ): Promise<CreditReversalResult[]> {
 	const paymentIntentId = idOf(charge.payment_intent);
 	if (!paymentIntentId) return [{ state: "ignored", reason: "no_payment" }];
-	const grant = await findPaidGrant(paymentIntentId, {
+	const lookup = await findPaidGrant(paymentIntentId, {
 		invoice: charge.invoice,
 		metadata: charge.metadata,
 	});
-	if (!grant) return [{ state: "ignored", reason: "not_a_credit_payment" }];
+	if (lookup.state === "grant_pending") {
+		return [grantPending("refund", lookup.accountId, paymentIntentId)];
+	}
+	if (lookup.state !== "found") {
+		return [{ state: "ignored", reason: "not_a_credit_payment" }];
+	}
+	const { grant } = lookup;
 
 	const results: CreditReversalResult[] = [];
 	for (const refund of await refundsOf(charge)) {
@@ -344,8 +385,14 @@ export async function reverseDisputedPayment(
 ): Promise<CreditReversalResult> {
 	const paymentIntentId = idOf(dispute.payment_intent);
 	if (!paymentIntentId) return { state: "ignored", reason: "no_payment" };
-	const grant = await findPaidGrant(paymentIntentId);
-	if (!grant) return { state: "ignored", reason: "not_a_credit_payment" };
+	const lookup = await findPaidGrant(paymentIntentId);
+	if (lookup.state === "grant_pending") {
+		return grantPending("dispute", lookup.accountId, paymentIntentId);
+	}
+	if (lookup.state !== "found") {
+		return { state: "ignored", reason: "not_a_credit_payment" };
+	}
+	const { grant } = lookup;
 
 	const result = await applyReversal({
 		grant,

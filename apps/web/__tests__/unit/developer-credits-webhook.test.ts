@@ -69,6 +69,12 @@ const mockReverseDispute = vi.fn();
 vi.mock("@/lib/infra-credit-reversal", () => ({
 	reverseRefundedCharge: (...args: unknown[]) => mockReverseRefund(...args),
 	reverseDisputedPayment: (...args: unknown[]) => mockReverseDispute(...args),
+	awaitsCreditGrant: (results: unknown) =>
+		[results]
+			.flat()
+			.some(
+				(result) => (result as { state?: string })?.state === "grant_pending",
+			),
 }));
 
 vi.mock("@cap/web-domain", () => ({
@@ -546,6 +552,52 @@ describe("Stripe webhook — developer credits", () => {
 			const res = await POST(makeWebhookRequest());
 
 			expect(res.status).toBe(400);
+		},
+	);
+
+	it.each([
+		["charge.refunded", mockReverseRefund, [{ state: "grant_pending" }]],
+		["charge.dispute.created", mockReverseDispute, { state: "grant_pending" }],
+	])(
+		"does not acknowledge %s that arrives before its grant",
+		async (type, reverse, pending) => {
+			reverse.mockResolvedValueOnce(pending);
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type,
+				data: { object: { id: "obj_1", payment_intent: "pi_test_abc" } },
+			});
+
+			const res = await POST(makeWebhookRequest());
+
+			expect(res.status).toBe(503);
+			expect(mockAddCredits).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		[
+			"charge.refunded",
+			mockReverseRefund,
+			[{ state: "ignored", reason: "not_a_credit_payment" }],
+		],
+		[
+			"charge.dispute.created",
+			mockReverseDispute,
+			{ state: "ignored", reason: "not_a_credit_payment" },
+		],
+		["charge.refunded", mockReverseRefund, [{ state: "duplicate" }]],
+	])(
+		"acknowledges %s for an unrelated or already handled charge",
+		async (type, reverse, outcome) => {
+			reverse.mockResolvedValueOnce(outcome);
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type,
+				data: { object: { id: "obj_1", payment_intent: "pi_subscription" } },
+			});
+
+			const res = await POST(makeWebhookRequest());
+
+			expect(res.status).toBe(200);
 		},
 	);
 

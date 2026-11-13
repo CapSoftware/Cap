@@ -112,6 +112,13 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
 		if (
+			keys === "id" &&
+			/`id` = \?$/.test(rendered.sql) &&
+			rendered.params[0] !== account.id
+		) {
+			return [];
+		}
+		if (
 			rendered.sql.includes("autoTopUpThresholdMicroCredits") &&
 			keys === "id" &&
 			!(

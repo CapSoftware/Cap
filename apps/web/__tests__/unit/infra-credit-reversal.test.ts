@@ -29,12 +29,14 @@ import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
+	awaitsCreditGrant,
 	refundedShareMicroCredits,
 	reverseDisputedPayment,
 	reverseRefundedCharge,
 } from "@/lib/infra-credit-reversal";
 import { describeLedgerRow, serializeLedgerRow } from "@/lib/infra-ledger";
 import { DISPUTED_UPLOAD_MESSAGE, getInfraBilling } from "@/lib/infra-standing";
+import { infraVideoFailure } from "@/lib/infra-video-view";
 import {
 	advanceDays,
 	fakeDb,
@@ -464,7 +466,7 @@ describe("a charge that did not buy credit", () => {
 		expect(ledger.account.balanceMicroCredits).toBe(GRANT);
 	});
 
-	it("ignores a payment whose checkout names an account that holds no such grant", async () => {
+	it("ignores a payment whose checkout names an account that does not exist", async () => {
 		await topUp("pi_other_account");
 
 		expect(
@@ -492,9 +494,18 @@ describe("a charge that did not buy credit", () => {
 			referenceType: "stripe_checkout_session",
 		});
 
-		await reverseRefundedCharge(charge("pi_1", [refund("re_1", 2500)]));
-		await reverseDisputedPayment(dispute("dp_1", "pi_2"));
-		await reverseDisputedPayment(dispute("dp_2", "pi_unknown"));
+		expect(
+			await reverseRefundedCharge(charge("pi_1", [refund("re_1", 2500)])),
+		).toEqual([{ state: "grant_pending" }]);
+		expect(await reverseDisputedPayment(dispute("dp_1", "pi_2"))).toEqual({
+			state: "grant_pending",
+		});
+		expect(await reverseDisputedPayment(dispute("dp_2", "pi_unknown"))).toEqual(
+			{
+				state: "ignored",
+				reason: "not_a_credit_payment",
+			},
+		);
 
 		expect(reversals()).toHaveLength(0);
 		expect(ledger.account.balanceMicroCredits).toBe(GRANT);
@@ -513,9 +524,111 @@ describe("a charge that did not buy credit", () => {
 			createdAt: new Date(ledger.now),
 		});
 
-		await reverseDisputedPayment(dispute("dp_1", "pi_pending"));
+		expect(await reverseDisputedPayment(dispute("dp_1", "pi_pending"))).toEqual(
+			{ state: "grant_pending" },
+		);
 
 		expect(reversals()).toHaveLength(0);
+		expect(ledger.rows).toHaveLength(1);
+	});
+});
+
+describe("an event that arrives before its grant", () => {
+	it("leaves a refund unacknowledged and writes nothing, then reverses it once", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const event = charge("pi_1", [refund("re_1", 1000)]);
+
+		const early = await reverseRefundedCharge(event);
+
+		expect(early).toEqual([{ state: "grant_pending" }]);
+		expect(awaitsCreditGrant(early)).toBe(true);
+		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.account.balanceMicroCredits).toBe(0);
+		expect(mocks.listRefunds).not.toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+
+		await topUp();
+		const redelivered = await reverseRefundedCharge(event);
+
+		expect(awaitsCreditGrant(redelivered)).toBe(false);
+		expect(redelivered).toMatchObject([
+			{ state: "reversed", deductedMicroCredits: 1_000_000 },
+		]);
+		expect(await reverseRefundedCharge(event)).toEqual([
+			{ state: "duplicate" },
+		]);
+		expect(reversals()).toHaveLength(1);
+		expect(ledger.account.balanceMicroCredits).toBe(1_500_000);
+		addsUp();
+	});
+
+	it("leaves a dispute unacknowledged and unpaused, then reverses and pauses once", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		ledger.account.autoTopUpEnabled = true;
+
+		const early = await reverseDisputedPayment(dispute("dp_1", "pi_1"));
+
+		expect(early).toEqual({ state: "grant_pending" });
+		expect(awaitsCreditGrant(early)).toBe(true);
+		expect(ledger.rows).toHaveLength(0);
+		expect(ledger.account.autoTopUpEnabled).toBe(true);
+		expect((await billing()).standing.state).toBe("active");
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+
+		await topUp();
+		const redelivered = await reverseDisputedPayment(dispute("dp_1", "pi_1"));
+
+		expect(redelivered).toMatchObject({
+			state: "reversed",
+			deductedMicroCredits: GRANT,
+		});
+		expect(await reverseDisputedPayment(dispute("dp_1", "pi_1"))).toEqual({
+			state: "duplicate",
+		});
+		expect(reversals()).toHaveLength(1);
+		expect(ledger.account).toMatchObject({
+			balanceMicroCredits: 0,
+			autoTopUpEnabled: false,
+		});
+		expect((await billing()).standing).toMatchObject({
+			state: "paused",
+			disputed: true,
+		});
+	});
+
+	it("waits for an auto top-up whose grant is not written yet", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		expect(
+			await reverseRefundedCharge(
+				charge("pi_auto", [refund("re_1", 2500)], { metadata: autoTopUp }),
+			),
+		).toEqual([{ state: "grant_pending" }]);
+		expect(ledger.rows).toHaveLength(0);
+		warn.mockRestore();
+	});
+
+	it("still acknowledges a charge that never bought credit", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const subscription = await reverseRefundedCharge(
+			charge("pi_subscription", null, {
+				invoice: "in_1",
+			} as Partial<Stripe.Charge>),
+		);
+		const unknown = await reverseDisputedPayment(dispute("dp_1", "pi_unknown"));
+		const otherCheckout = await reverseRefundedCharge(
+			charge("pi_pro_checkout", [refund("re_1", 2500)]),
+		);
+
+		expect(awaitsCreditGrant(subscription)).toBe(false);
+		expect(awaitsCreditGrant(unknown)).toBe(false);
+		expect(awaitsCreditGrant(otherCheckout)).toBe(false);
+		expect(warn).not.toHaveBeenCalled();
+		expect(ledger.rows).toHaveLength(0);
+		warn.mockRestore();
 	});
 });
 
@@ -615,6 +728,9 @@ describe("a disputed top-up", () => {
 			reason: "out_of_credit",
 			message: DISPUTED_UPLOAD_MESSAGE,
 		});
+		expect(infraVideoFailure(DISPUTED_UPLOAD_MESSAGE)).toBe(
+			DISPUTED_UPLOAD_MESSAGE,
+		);
 		expect(await transcriptStartRefusal("app-1", ledger.now)).toMatchObject({
 			code: "out_of_credit",
 		});
