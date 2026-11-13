@@ -277,12 +277,14 @@ const attach = (
 	options: { autoPlay?: boolean; startAt?: number } = {},
 ) => {
 	const onFatal = vi.fn();
+	const onLevels = vi.fn();
 	const attached = attachSource(video as unknown as HTMLVideoElement, source, {
 		autoPlay: options.autoPlay ?? false,
 		startAt: options.startAt,
 		onFatal,
+		onLevels,
 	});
-	return { ...attached, onFatal };
+	return { ...attached, onFatal, onLevels };
 };
 
 const hlsFor = async () => {
@@ -797,11 +799,19 @@ describe("attachSource with hls.js", () => {
 		macSafari(true);
 		const video = new FakeVideo(true);
 
-		const { onFatal, warm } = attach(video, { hls: HLS, mp4: MP4 });
+		const { onFatal, onLevels, warm } = attach(video, {
+			hls: HLS,
+			mp4: MP4,
+		});
 		const hls = await hlsFor();
 		hls.emit("manifestParsed", LADDER_DATA);
+
+		expect(onLevels).toHaveBeenCalledTimes(1);
+
 		hls.emit("error", { fatal: true, type: "networkError" });
 
+		expect(onLevels).toHaveBeenCalledTimes(2);
+		expect(onLevels).toHaveBeenLastCalledWith([]);
 		expect(hls.destroyed).toBe(true);
 		expect(video.src).toBe(HLS);
 		expect(video.preload).toBe("metadata");

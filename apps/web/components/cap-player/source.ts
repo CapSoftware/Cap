@@ -250,6 +250,8 @@ export const attachSource = (
 			return;
 		}
 		nativeAttached = true;
+		setLevel = () => undefined;
+		onLevels?.([]);
 		detach = () => release(video);
 		video.addEventListener("error", onNativeError);
 		video.preload = "none";
