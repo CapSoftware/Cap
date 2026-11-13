@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	probe: vi.fn(),
 	startJob: vi.fn(),
 	readJob: vi.fn(),
+	cancelJob: vi.fn(),
 	charge: vi.fn(),
 	deleteObjects: vi.fn(),
 	sniff: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock("@/lib/media-client", () => ({
 	tryProbeVideoViaMediaServer: mocks.probe,
 	startMediaServerVideoJob: mocks.startJob,
 	readMediaServerVideoJob: mocks.readJob,
+	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
 vi.mock("@/lib/media-container", () => ({
 	sniffMediaUrl: mocks.sniff,
@@ -131,6 +133,7 @@ beforeEach(() => {
 	mocks.charge.mockResolvedValue("charged");
 	mocks.deleteObjects.mockResolvedValue(0);
 	mocks.sniff.mockResolvedValue("media");
+	mocks.cancelJob.mockResolvedValue("cancelled");
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -1872,5 +1875,135 @@ describe("superseded output sweep", () => {
 
 		await sweepSupersededDeveloperVideoOutputs("video-1", "encode-1");
 		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+	});
+});
+
+describe("a deleted developer video", () => {
+	const deletedVideo = (
+		overrides: Parameters<typeof processingState>[0] = {},
+	) =>
+		developerVideo({
+			deletedAt: new Date("2026-11-02T00:00:00Z"),
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: { ...runningPart("t-mp4"), jobId: "job-2" },
+				...overrides,
+			}),
+		});
+
+	it.each([
+		{
+			name: "the cancel the delete asked for",
+			payload: { phase: "cancelled", message: "Processing cancelled by user" },
+		},
+		{
+			name: "a shutdown that would otherwise send the part again",
+			payload: { phase: "cancelled", message: "Server shutting down" },
+		},
+		{
+			name: "a failure that would otherwise spend an attempt",
+			payload: { phase: "error", error: "Encoding failed" },
+		},
+		{
+			name: "a completion that would otherwise charge for a measured length",
+			payload: {
+				phase: "complete",
+				metadata: { duration: 30 },
+			},
+			probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+		},
+	])("ignores $name", async ({ payload, probe }) => {
+		mocks.store.video = deletedVideo(probe ? { probe } : {});
+		const before = structuredClone(video());
+
+		const result = await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-2", ...payload },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.store.updates).toHaveLength(0);
+		expect(video()).toEqual(before);
+		expect(mocks.charge).not.toHaveBeenCalled();
+		expect(mocks.startJob).not.toHaveBeenCalled();
+		expect(mocks.head).not.toHaveBeenCalled();
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(await readDeveloperVideoParts("video-1", "encode-1")).toBeNull();
+	});
+
+	it("cancels a job that reports progress after the delete", async () => {
+		mocks.store.video = deletedVideo({
+			hls: { state: "running", token: "t-hls", jobId: null, startedAt: 2_000 },
+		});
+
+		const result = await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-7", phase: "downloading" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-7");
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("does not cancel on progress from another attempt or without a job id", async () => {
+		mocks.store.video = deletedVideo();
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-old", phase: "processing" },
+			"hls",
+			"stale",
+		);
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "processing" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("cancels a job whose start returned after the video was deleted", async () => {
+		mocks.startJob.mockImplementation(async () => {
+			mocks.store.video = { ...video(), deletedAt: new Date() };
+			return { status: "started", jobId: "job-9" };
+		});
+
+		expect(await dispatchDeveloperVideoPart("video-1", "encode-1", "hls")).toBe(
+			"dispatched",
+		);
+
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-9");
+		expect(video().processing?.hls).toMatchObject({ jobId: null });
+	});
+
+	it("does not cancel a started job that was recorded", async () => {
+		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-9" });
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+
+		expect(video().processing?.hls).toMatchObject({ jobId: "job-9" });
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+	});
+
+	it("does not cancel a started job that lost to another attempt on a live video", async () => {
+		mocks.startJob.mockImplementation(async () => {
+			const current = video();
+			mocks.store.video = {
+				...current,
+				processing: current.processing && {
+					...current.processing,
+					hls: runningPart("newer"),
+				},
+			};
+			return { status: "started", jobId: "job-9" };
+		});
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
 	});
 });

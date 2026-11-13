@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
 	claim: vi.fn(),
 	release: vi.fn(),
 	startProcessing: vi.fn(),
+	cancelEncodes: vi.fn(),
+}));
+
+vi.mock("@/lib/developer-video-cancel", () => ({
+	cancelDeveloperVideoEncodes: mocks.cancelEncodes,
 }));
 
 vi.mock("@/lib/developer-video-start", () => ({
@@ -781,6 +786,10 @@ describe("removing files that were assembled but never recorded", () => {
 			Effect.fail(new Error("no such upload")),
 		);
 		mocks.complete.mockReset();
+		mocks.cancelEncodes.mockReset();
+		mocks.cancelEncodes.mockImplementation(async () => {
+			mocks.events.push("cancel");
+		});
 	});
 
 	it("retires the video under the account lock, then deletes the file", async () => {
@@ -788,7 +797,11 @@ describe("removing files that were assembled but never recorded", () => {
 		mocks.headObject.mockImplementation(old);
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
-		expect(mocks.events).toEqual(["lock", "retire", "delete"]);
+		expect(mocks.events).toEqual(["lock", "retire", "cancel", "delete"]);
+		expect(mocks.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-1",
+			videoId: "video-1",
+		});
 		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
 		expect(mocks.deleteObject).toHaveBeenCalledWith(
 			"developer/app-1/old/video",
@@ -806,6 +819,7 @@ describe("removing files that were assembled but never recorded", () => {
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
 		expect(mocks.deletedAt).toBe(null);
 		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.cancelEncodes).not.toHaveBeenCalled();
 	});
 
 	it("refuses a completion that reaches the lock after the sweep retired the video", async () => {
