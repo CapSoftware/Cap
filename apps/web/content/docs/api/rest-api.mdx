@@ -75,7 +75,7 @@ If you are self-hosting Cap, replace `cap.so` with your custom domain.
 
 ## Error Handling
 
-Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text.
+Every error is a JSON object with an `error` string, a stable `code`, a `hint` that says what to change, and a link to these docs. `message` holds the same text as `error`. Switch on `code`, not on the text. Every response on cap.so carries an `X-Request-Id` header: quote it when you contact support about a call.
 
 ```json
 {
@@ -186,6 +186,8 @@ POST /api/developer/v1/uploads
 | `maxBytes` | integer | No | Largest file the token may upload, in bytes, from `1` to `36000000000`. Leave it out for no cap beyond the 36 GB limit |
 
 The body is optional. A request with no body creates an upload with the defaults.
+
+Send an `Idempotency-Key` header so a retried request returns the same video with a new upload token instead of creating a second one. The key follows the same rules as for [transcripts](/docs/api/rest-api#transcribe-a-url). A repeat must send the same `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict` and the message names the field that differs. `corsOrigin`, `timeoutSeconds` and `maxBytes` only shape the new token, so they may change. A key for a video that was deleted is refused with `409 idempotency_conflict`, and a repeat after the upload completed answers `409 upload_already_completed`.
 
 A field this list does not have returns `400` with the code `invalid_request`, and the error names the field. Field names are case-sensitive, so `user_id` in place of `userId` is refused instead of creating a video with no user:
 
@@ -903,6 +905,8 @@ DELETE /api/developer/v1/transcripts/:id
 ```
 
 Deletes the transcript, its text and its stored files. A transcript deleted before its audio is sent to speech recognition is not charged. One deleted after that is still charged for the length of its audio when it finishes, because the audio was already transcribed. It stays deleted: it is not listed and its text is not kept.
+
+Deleting a transcript this app already deleted returns success again, so the call is safe to repeat. An ID that never belonged to this app returns `404`.
 
 #### Transcript billing
 
