@@ -974,13 +974,14 @@ name = "Tell Slack when you share something"
 
 [main]
 
+
+delete_recording_confirm = "Are you sure you want to delete this recording?"
+delete_screenshot_confirm = "Are you sure you want to delete this screenshot?"
+
 [main.network]
 upload_check_failed = "Upload check failed - contact support"
 checking_upload = "Checking upload..."
 upload_speed = "{speed} Mbps up"
-
-delete_recording_confirm = "Are you sure you want to delete this recording?"
-delete_screenshot_confirm = "Are you sure you want to delete this screenshot?"
 
 [main.clean_capture]
 title = "Keep your capture clean"

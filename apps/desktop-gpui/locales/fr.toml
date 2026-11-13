@@ -972,13 +972,14 @@ name = "Prévenir Slack quand vous partagez"
 
 [main]
 
+
+delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"
+delete_screenshot_confirm = "Voulez-vous vraiment supprimer cette capture d'écran ?"
+
 [main.network]
 upload_check_failed = "Échec du test de téléversement - contactez le support"
 checking_upload = "Vérification du téléversement..."
 upload_speed = "{speed} Mbps en téléversement"
-
-delete_recording_confirm = "Voulez-vous vraiment supprimer cet enregistrement ?"
-delete_screenshot_confirm = "Voulez-vous vraiment supprimer cette capture d'écran ?"
 
 [main.clean_capture]
 title = "Gardez votre capture propre"
