@@ -93,6 +93,28 @@ describe("developer video player data", () => {
 		},
 	);
 
+	it("shows a video taken down while its stalled processing was retried as unavailable", async () => {
+		mocks.store.video = uploadedLongAgo();
+		mocks.redrive.mockImplementation(async () => {
+			if (!mocks.store.video) throw new Error("missing video");
+			mocks.store.video = {
+				...mocks.store.video,
+				metadata: {
+					__capTakedown: { at: "2026-11-13T12:00:00.000Z", metadata: null },
+				},
+			};
+			return true;
+		});
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
+			kind: "taken_down",
+			name: "",
+			width: 16,
+			height: 9,
+		});
+		expect(mocks.redrive).toHaveBeenCalledTimes(1);
+	});
+
 	it("plays the adaptive stream with the MP4 behind it and the poster", async () => {
 		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
 			kind: "playing",

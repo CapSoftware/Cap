@@ -50,6 +50,14 @@ async function redriveStalled(video: PlayableVideo, playbackId: string) {
 	return started ? findPlayableVideo(playbackId) : video;
 }
 
+// Nothing about the video reaches a page that cannot play it.
+const TAKEN_DOWN: DeveloperVideoPlayer = {
+	name: "",
+	width: DEFAULT_WIDTH,
+	height: DEFAULT_HEIGHT,
+	kind: "taken_down",
+};
+
 export async function loadDeveloperVideoPlayer(
 	playbackId: string,
 ): Promise<DeveloperVideoPlayer | null> {
@@ -57,21 +65,15 @@ export async function loadDeveloperVideoPlayer(
 
 	const found = await findPlayableVideo(playbackId);
 	if (!found) return null;
-	// Nothing about the video reaches a page that cannot play it.
-	if (developerVideoIsTakenDown(found)) {
-		return {
-			name: "",
-			width: DEFAULT_WIDTH,
-			height: DEFAULT_HEIGHT,
-			kind: "taken_down",
-		};
-	}
+	if (developerVideoIsTakenDown(found)) return TAKEN_DOWN;
 
 	const standing = await getInfraAppStanding(found.appId);
 	if (standing.state === "paused") return { ...frameOf(found), kind: "paused" };
 
 	const video = await redriveStalled(found, playbackId);
 	if (!video) return null;
+	// The retry reads the row again, so a takedown made meanwhile counts too.
+	if (developerVideoIsTakenDown(video)) return TAKEN_DOWN;
 	const frame = frameOf(video);
 
 	if (video.status === "errored") return { ...frame, kind: "failed" };
