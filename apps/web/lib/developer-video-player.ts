@@ -1,5 +1,9 @@
 import { developerVideoPlaybackUrls } from "./developer-video-api";
 import {
+	type DeveloperVideoCaptionTrack,
+	developerVideoCaptionTracks,
+} from "./developer-video-captions";
+import {
 	findPlayableVideo,
 	PLAYBACK_ID_PATTERN,
 } from "./developer-video-playback";
@@ -23,6 +27,7 @@ export type DeveloperVideoPlayer = DeveloperVideoFrame &
 				kind: "playing";
 				source: { hls?: string; mp4?: string };
 				poster: string | null;
+				captions: DeveloperVideoCaptionTrack[] | null;
 		  }
 		| { kind: "processing"; uploading: boolean }
 		| { kind: "failed" }
@@ -80,11 +85,13 @@ export async function loadDeveloperVideoPlayer(
 
 	const { hlsUrl, mp4Url, posterUrl } = developerVideoPlaybackUrls(video);
 	if (hlsUrl || mp4Url) {
+		const captions = await developerVideoCaptionTracks(video);
 		return {
 			...frame,
 			kind: "playing",
 			source: { hls: hlsUrl ?? undefined, mp4: mp4Url ?? undefined },
 			poster: posterUrl,
+			captions: captions.length > 0 ? captions : null,
 		};
 	}
 

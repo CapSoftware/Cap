@@ -48,7 +48,10 @@ export const NESTED_RESOURCE_DEMUXERS = [
 
 const NESTED_RESOURCE_DEMUXER_SET = new Set<string>(NESTED_RESOURCE_DEMUXERS);
 
-const FALLBACK_DEMUXERS = [
+// The containers this server reads. FFmpeg ships hundreds more, and a new
+// release can add one that opens other resources, so the list is fixed and a
+// build can only narrow it.
+export const ALLOWED_DEMUXERS = [
 	"mov,mp4,m4a,3gp,3g2,mj2",
 	"matroska,webm",
 	"mpegts",
@@ -71,7 +74,7 @@ const FALLBACK_DEMUXERS = [
 	"png_pipe",
 	"jpeg_pipe",
 	"webp_pipe",
-];
+] as const;
 
 export function parseSafeDemuxers(listing: string): string[] {
 	const names: string[] = [];
@@ -88,11 +91,24 @@ export function parseSafeDemuxers(listing: string): string[] {
 	return names;
 }
 
+// The allowed demuxers the build has. A listing that cannot be read leaves
+// the fixed list as it is: FFmpeg ignores a name it does not know.
+export function allowedDemuxersIn(listing: string): string[] {
+	const reported = new Set(
+		parseSafeDemuxers(listing).flatMap((name) => name.split(",")),
+	);
+	if (reported.size === 0) return [...ALLOWED_DEMUXERS];
+	const present = ALLOWED_DEMUXERS.filter((name) =>
+		name.split(",").some((alias) => reported.has(alias)),
+	);
+	return present.length > 0 ? present : [...ALLOWED_DEMUXERS];
+}
+
 let safeDemuxerWhitelist: string | undefined;
 
 export function getSafeDemuxerWhitelist(): string {
 	if (safeDemuxerWhitelist !== undefined) return safeDemuxerWhitelist;
-	let names: string[] = [];
+	let listing = "";
 	try {
 		const result = spawnSync(["ffmpeg", "-hide_banner", "-demuxers"], {
 			stdout: "pipe",
@@ -100,14 +116,114 @@ export function getSafeDemuxerWhitelist(): string {
 			stdin: "ignore",
 			env: { PATH: process.env.PATH ?? "" },
 		});
-		if (result.exitCode === 0)
-			names = parseSafeDemuxers(result.stdout.toString());
+		if (result.exitCode === 0) listing = result.stdout.toString();
 	} catch {}
-	safeDemuxerWhitelist = (
-		names.length >= FALLBACK_DEMUXERS.length ? names : FALLBACK_DEMUXERS
-	).join(",");
+	safeDemuxerWhitelist = allowedDemuxersIn(listing).join(",");
 	return safeDemuxerWhitelist;
 }
+
+// Video codecs this server accepts in an upload, as ffprobe names them.
+export const ALLOWED_VIDEO_CODECS: readonly string[] = [
+	"h264",
+	"hevc",
+	"vp8",
+	"vp9",
+	"av1",
+	"prores",
+	"mpeg4",
+	"mjpeg",
+];
+
+export function isAllowedVideoCodec(codec: string): boolean {
+	return ALLOWED_VIDEO_CODECS.includes(codec.toLowerCase());
+}
+
+const PCM_DECODERS = [
+	"pcm_alaw",
+	"pcm_bluray",
+	"pcm_dvd",
+	"pcm_f16le",
+	"pcm_f24le",
+	"pcm_f32be",
+	"pcm_f32le",
+	"pcm_f64be",
+	"pcm_f64le",
+	"pcm_mulaw",
+	"pcm_s16be",
+	"pcm_s16be_planar",
+	"pcm_s16le",
+	"pcm_s16le_planar",
+	"pcm_s24be",
+	"pcm_s24le",
+	"pcm_s24le_planar",
+	"pcm_s32be",
+	"pcm_s32le",
+	"pcm_s32le_planar",
+	"pcm_s64be",
+	"pcm_s64le",
+	"pcm_s8",
+	"pcm_s8_planar",
+	"pcm_u16be",
+	"pcm_u16le",
+	"pcm_u24be",
+	"pcm_u24le",
+	"pcm_u32be",
+	"pcm_u32le",
+	"pcm_u8",
+];
+
+// Every decoder FFmpeg may open for an input, by decoder name, which is what
+// FFmpeg matches. The accepted video codecs with the library and GPU
+// decoders that read them, the audio a recording or an import carries (DTS
+// included, so a file with it keeps its audio), and the subtitles and cover
+// art some uploads carry: FFmpeg copies a text subtitle into an MP4 by
+// default, and ffprobe stops on any stream whose decoder it may not open.
+export const ALLOWED_DECODERS: readonly string[] = [
+	...ALLOWED_VIDEO_CODECS,
+	"libdav1d",
+	"libaom-av1",
+	"libvpx",
+	"libvpx-vp9",
+	"h264_cuvid",
+	"hevc_cuvid",
+	"vp8_cuvid",
+	"vp9_cuvid",
+	"av1_cuvid",
+	"mjpeg_cuvid",
+	"mpeg4_cuvid",
+	"aac",
+	"aac_fixed",
+	"aac_latm",
+	"mp3",
+	"mp3float",
+	"opus",
+	"libopus",
+	"vorbis",
+	"libvorbis",
+	"flac",
+	"alac",
+	"ac3",
+	"ac3_fixed",
+	"eac3",
+	"dca",
+	...PCM_DECODERS,
+	"mov_text",
+	"subrip",
+	"srt",
+	"ass",
+	"ssa",
+	"webvtt",
+	"text",
+	"png",
+	"bmp",
+	"gif",
+	"webp",
+];
+
+export const DECODER_WHITELIST = ALLOWED_DECODERS.join(",");
+
+export const UNSUPPORTED_FORMAT_MESSAGE =
+	"This video format is not supported. Upload H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.";
 
 const MAX_TRUSTED_PLAYLISTS = 1000;
 const trustedPlaylists = new Set<string>();
@@ -205,6 +321,11 @@ const NESTED_DEMUXER_REJECTED = new RegExp(
 	`\\[(?:${NESTED_RESOURCE_DEMUXERS.join("|")}) @ [^\\]]*\\] Format not on whitelist`,
 );
 const PROTOCOL_REJECTED = /Protocol '[^']+' not on whitelist/;
+const DECODER_REJECTED = /Codec \([^)]*\) not on whitelist/;
+
+export function isDecoderRejectedMessage(message: string | undefined) {
+	return Boolean(message) && DECODER_REJECTED.test(message as string);
+}
 
 export function isInputPolicyViolationMessage(message: string | undefined) {
 	if (!message) return false;

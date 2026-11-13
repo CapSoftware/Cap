@@ -50,7 +50,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 
 | Tool | What it does | Cost |
 |------|--------------|------|
-| `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed daily until deleted. |
+| `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed one month when it becomes ready, then daily until deleted. |
 | `videos_wait` | Waits until a video has its playback links or has failed, then returns status, length, playback id and the HLS, MP4, poster, share and embed links. Waits for both HLS and MP4 unless `output` asks for one. | Free |
 | `videos_get` | Returns one video. | Free |
 | `videos_list` | Lists videos, newest first, optionally for one `userId`, with `limit` and `offset`. | Free |
@@ -70,7 +70,7 @@ There is no tool that adds credit. Buying credit needs a signed-in browser, so w
 
 - Results are one compact JSON object. Lists carry only the fields an agent needs, plus `nextOffset` when there is another page.
 - A failed call has `isError` set and an `error` object with the API's `code`, `message` and `hint`.
-- The API allows 60 requests a minute for each secret key. Waits ask no more often than every 3 seconds and slow down from there, and every request waits for `Retry-After` when it is told to.
+- The API limits how many requests each secret key can send a minute. Waits ask no more often than every 3 seconds and slow down from there, and every request waits for `Retry-After` when it is told to.
 - A wait runs for up to 15 minutes. Pass `timeoutSeconds` to make it shorter. When the time runs out, the result has `timedOut` set with the id and the last known status, so the same call picks up where it stopped.
 - Some clients end a tool call after a minute. Either raise that limit, as in the Codex example above, or pass a `timeoutSeconds` below it and call again.
 - A video is `ready` when its first playback link exists, and the other link usually follows within seconds. `videos_wait` returns once both exist, or the one named in `output`. It allows the other link 30 seconds after `ready`, never past the deadline, and then returns the links that exist with `missing` naming the rest. That result is final and not a timeout: the video plays, and the missing link may not be coming. `transcripts_create` with a `videoId` that has no MP4 after 30 seconds answers `video_has_no_mp4` and says to use `path` or `url`.

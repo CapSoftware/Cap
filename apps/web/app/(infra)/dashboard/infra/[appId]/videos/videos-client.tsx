@@ -9,7 +9,7 @@ import { useId, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { infraAppPath } from "@/lib/infra-routes";
-import { formatDuration } from "@/lib/infra-usage";
+import { formatDurationOrDash } from "@/lib/infra-usage";
 import {
 	INFRA_VIDEO_PAGE_MAX,
 	type InfraVideoListItem,
@@ -220,7 +220,7 @@ export function VideosClient({
 												"hidden text-right text-[13px] tabular-nums sm:table-cell",
 											)}
 										>
-											{formatDuration(video.duration) ?? NONE}
+											{formatDurationOrDash(video.duration)}
 										</td>
 										<td className={clsx(TD, "hidden md:table-cell")}>
 											{dateFormat.format(new Date(video.createdAt))}

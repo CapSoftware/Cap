@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
 	probe: vi.fn(),
 	startJob: vi.fn(),
 	readJob: vi.fn(),
+	cancelJob: vi.fn(),
 	charge: vi.fn(),
+	firstMonth: vi.fn(),
 	deleteObjects: vi.fn(),
 	sniff: vi.fn(),
 }));
@@ -40,6 +42,9 @@ vi.mock("@/lib/developer-video-storage", () => ({
 	developerVideoUploadUrl: async (key: string, contentType: string) =>
 		`https://storage/put/${key}?type=${contentType}`,
 }));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtReady: mocks.firstMonth,
+}));
 vi.mock("@/lib/developer-video-charge", () => ({
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS: 4 * 60 * 60,
 	chargeDeveloperVideoUpload: mocks.charge,
@@ -49,6 +54,7 @@ vi.mock("@/lib/media-client", () => ({
 	tryProbeVideoViaMediaServer: mocks.probe,
 	startMediaServerVideoJob: mocks.startJob,
 	readMediaServerVideoJob: mocks.readJob,
+	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
 vi.mock("@/lib/media-container", () => ({
 	sniffMediaUrl: mocks.sniff,
@@ -131,6 +137,7 @@ beforeEach(() => {
 	mocks.charge.mockResolvedValue("charged");
 	mocks.deleteObjects.mockResolvedValue(0);
 	mocks.sniff.mockResolvedValue("media");
+	mocks.cancelJob.mockResolvedValue("cancelled");
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -196,6 +203,64 @@ describe("developer video webhook", () => {
 		expect(video().processing?.poster).toEqual({ output: "t-mp4" });
 		expect(mocks.head).toHaveBeenCalledWith(`${ENCODE}/t-mp4/video.mp4`);
 		expect(video().storedBytes).toBe(1_000 + 2_000 + 50);
+	});
+
+	it("charges the first month once, after the video turns ready, and not when its second part lands", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: runningPart("t-mp4"),
+			}),
+		});
+		mocks.firstMonth.mockImplementation(async () => {
+			expect(video().status).toBe("ready");
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete" },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(mocks.firstMonth).toHaveBeenCalledTimes(1);
+		expect(mocks.firstMonth.mock.calls[0]?.[0]).toMatchObject({
+			id: "video-1",
+			status: "ready",
+			deletedAt: null,
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete", ladder },
+			"hls",
+			"t-hls",
+		);
+
+		expect(video().processing?.hls.state).toBe("complete");
+		expect(mocks.firstMonth).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not charge the first month for a part that leaves the video encoding or failed", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: runningPart("t-mp4"),
+				attempts: { hls: 2, mp4: 2 },
+			}),
+		});
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "error", error: "boom" },
+			"mp4",
+			"t-mp4",
+		);
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "error", error: "boom" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(video().status).toBe("errored");
+		expect(mocks.firstMonth).not.toHaveBeenCalled();
 	});
 
 	it("marks the video ready with its renditions once both parts are stored", async () => {
@@ -1198,6 +1263,47 @@ describe("developer video dispatch", () => {
 		);
 	});
 
+	it("marks every job request it can send as Cap Infra work", async () => {
+		const sizes = [
+			{ width: 640, height: 360 },
+			{ width: 1920, height: 1080 },
+			{ width: 2560, height: 1440 },
+			{ width: 3840, height: 2160 },
+			{ width: 1080, height: 1920 },
+		];
+		const contentTypes = ["video/quicktime", "video/mp4", undefined];
+		const sent = new Set<string>();
+		for (const tier of ["1080p", "1440p", "2160p"] as const) {
+			for (const size of sizes) {
+				for (const contentType of contentTypes) {
+					for (const part of ["hls", "mp4"] as const) {
+						mocks.startJob.mockReset();
+						mocks.startJob.mockResolvedValue({
+							status: "started",
+							jobId: "job-infra",
+						});
+						mocks.head.mockResolvedValue({ bytes: 1_000, contentType });
+						mocks.store.video = developerVideo({
+							maxResolutionTier: tier,
+							processing: processingState({
+								probe: { duration: 12, ...size, fps: 30 },
+							}),
+						});
+						await dispatchDeveloperVideoPart("video-1", "encode-1", part);
+						expect(mocks.startJob).toHaveBeenCalledTimes(1);
+						const [path, body] = mocks.startJob.mock.calls[0] ?? [];
+						sent.add(path);
+						expect({ path, infra: body?.infra }).toEqual({
+							path,
+							infra: true,
+						});
+					}
+				}
+			}
+		}
+		expect([...sent].sort()).toEqual(["/video/ladder", "/video/process"]);
+	});
+
 	it("caps the MP4 job at the video's tier", async () => {
 		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-9" });
 		mocks.store.video = developerVideo({
@@ -1243,6 +1349,16 @@ describe("developer video dispatch", () => {
 		);
 		expect(video().processing?.mp4).toEqual({ state: "pending" });
 		expect(video().processing?.attempts.mp4).toBe(0);
+	});
+
+	it("records when the media server last answered busy", async () => {
+		mocks.startJob.mockResolvedValue({ status: "busy" });
+		const before = Date.now();
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "mp4");
+
+		expect(video().processing?.busyAt).toBeGreaterThanOrEqual(before);
+		expect(video().processing?.busyAt).toBeLessThanOrEqual(Date.now());
 	});
 
 	it("keeps the part for a later try when the media server cannot be reached", async () => {
@@ -1411,7 +1527,7 @@ describe("developer video dispatch", () => {
 
 		await expect(refusal).rejects.toBeInstanceOf(DeveloperVideoRejected);
 		await expect(refusal).rejects.toThrow(
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		);
 		expect(video().processing?.probing).toBeUndefined();
 	});
@@ -1425,11 +1541,11 @@ describe("developer video dispatch", () => {
 		["Media input is empty", "The uploaded file is empty. Upload it again."],
 		[
 			"Media input could not be read",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Input has an unsupported or unrecognizable format.",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 		[
 			"Video frame is larger than 8K, the largest size this server accepts",
@@ -1513,7 +1629,7 @@ describe("developer video dispatch", () => {
 		[
 			"a file that is not media",
 			"unknown",
-			"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
+			"This file could not be read as a video. Upload MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.",
 		],
 	])(
 		"refuses %s without asking the media server",
@@ -1872,5 +1988,194 @@ describe("superseded output sweep", () => {
 
 		await sweepSupersededDeveloperVideoOutputs("video-1", "encode-1");
 		expect(mocks.deleteObjects).not.toHaveBeenCalled();
+	});
+});
+
+describe("a deleted developer video", () => {
+	const deletedVideo = (
+		overrides: Parameters<typeof processingState>[0] = {},
+	) =>
+		developerVideo({
+			deletedAt: new Date("2026-11-02T00:00:00Z"),
+			processing: processingState({
+				hls: runningPart("t-hls"),
+				mp4: { ...runningPart("t-mp4"), jobId: "job-2" },
+				...overrides,
+			}),
+		});
+
+	it.each([
+		{
+			name: "the cancel the delete asked for",
+			payload: { phase: "cancelled", message: "Processing cancelled by user" },
+		},
+		{
+			name: "a shutdown that would otherwise send the part again",
+			payload: { phase: "cancelled", message: "Server shutting down" },
+		},
+		{
+			name: "a failure that would otherwise spend an attempt",
+			payload: { phase: "error", error: "Encoding failed" },
+		},
+		{
+			name: "a completion that would otherwise charge for a measured length",
+			payload: {
+				phase: "complete",
+				metadata: { duration: 30 },
+			},
+			probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+		},
+	])("ignores $name", async ({ payload, probe }) => {
+		mocks.store.video = deletedVideo(probe ? { probe } : {});
+		const before = structuredClone(video());
+
+		const result = await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-2", ...payload },
+			"mp4",
+			"t-mp4",
+		);
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.store.updates).toHaveLength(0);
+		expect(video()).toEqual(before);
+		expect(mocks.charge).not.toHaveBeenCalled();
+		expect(mocks.startJob).not.toHaveBeenCalled();
+		expect(mocks.head).not.toHaveBeenCalled();
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(await readDeveloperVideoParts("video-1", "encode-1")).toBeNull();
+	});
+
+	it("cancels a job that reports progress after the delete", async () => {
+		mocks.store.video = deletedVideo({
+			hls: { state: "running", token: "t-hls", jobId: null, startedAt: 2_000 },
+		});
+
+		const result = await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-7", phase: "downloading" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-7");
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	// The callback reads the video while it is live, and `change` commits just
+	// before the callback's own write takes its row lock.
+	const progressBeforeConfirm = async (change: () => void) => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: {
+					state: "running",
+					token: "t-hls",
+					jobId: null,
+					startedAt: 2_000,
+				},
+			}),
+		});
+		const { db } = await import("@cap/database");
+		const database = db();
+		const transaction = database.transaction.bind(database);
+		const spy = vi.spyOn(database, "transaction").mockImplementationOnce(((
+			run: Parameters<typeof transaction>[0],
+		) => {
+			change();
+			return transaction(run);
+		}) as typeof transaction);
+		try {
+			return await applyDeveloperVideoProgress(
+				{ videoId: "video-1", jobId: "job-7", phase: "downloading" },
+				"hls",
+				"t-hls",
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	};
+
+	it("cancels a job whose first progress lost its job id write to the delete", async () => {
+		const result = await progressBeforeConfirm(() => {
+			mocks.store.video = { ...video(), deletedAt: new Date() };
+		});
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-7");
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("does not cancel a job whose first progress lost its write on a live video", async () => {
+		await progressBeforeConfirm(() => {
+			const current = video();
+			mocks.store.video = {
+				...current,
+				processing: current.processing && {
+					...current.processing,
+					hls: runningPart("newer"),
+				},
+			};
+		});
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("does not cancel on progress from another attempt or without a job id", async () => {
+		mocks.store.video = deletedVideo();
+
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", jobId: "job-old", phase: "processing" },
+			"hls",
+			"stale",
+		);
+		await applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "processing" },
+			"hls",
+			"t-hls",
+		);
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("cancels a job whose start returned after the video was deleted", async () => {
+		mocks.startJob.mockImplementation(async () => {
+			mocks.store.video = { ...video(), deletedAt: new Date() };
+			return { status: "started", jobId: "job-9" };
+		});
+
+		expect(await dispatchDeveloperVideoPart("video-1", "encode-1", "hls")).toBe(
+			"dispatched",
+		);
+
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-9");
+		expect(video().processing?.hls).toMatchObject({ jobId: null });
+	});
+
+	it("does not cancel a started job that was recorded", async () => {
+		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-9" });
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+
+		expect(video().processing?.hls).toMatchObject({ jobId: "job-9" });
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+	});
+
+	it("does not cancel a started job that lost to another attempt on a live video", async () => {
+		mocks.startJob.mockImplementation(async () => {
+			const current = video();
+			mocks.store.video = {
+				...current,
+				processing: current.processing && {
+					...current.processing,
+					hls: runningPart("newer"),
+				},
+			};
+			return { status: "started", jobId: "job-9" };
+		});
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "hls");
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
 	});
 });

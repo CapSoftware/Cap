@@ -596,7 +596,7 @@ struct DeveloperAutoTopUpInput {
 struct DeveloperCreditsCheckoutInput {
     /// App id from developer_apps_list
     app_id: String,
-    /// Amount in cents, from 500 ($5) to 100000 ($1,000)
+    /// Amount in cents, from 500 ($5) to 1000000 ($10,000)
     amount_cents: u32,
     /// true only after the user confirmed the amount
     confirmed: bool,
@@ -3177,7 +3177,7 @@ impl CapMcpServer {
 
     #[tool(
         name = "developer_credits_checkout",
-        description = "Create a developer-credit purchase URL after explicit user confirmation; the user completes payment in a browser and nothing is charged before that. The amount is in cents, from 500 ($5) to 100000 ($1,000)",
+        description = "Create a developer-credit purchase URL after explicit user confirmation; the user completes payment in a browser and nothing is charged before that. The amount is in cents, from 500 ($5) to 1000000 ($10,000)",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

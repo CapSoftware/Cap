@@ -140,7 +140,7 @@ export function stubStorageUploads(options: { finish?: boolean } = {}) {
 	return requests;
 }
 
-export function stubVideoProbe() {
+export function stubVideoProbe({ duration = 12 }: { duration?: number } = {}) {
 	vi.stubGlobal("URL", {
 		...URL,
 		createObjectURL: () => "blob:probe",
@@ -153,7 +153,7 @@ export function stubVideoProbe() {
 	) => {
 		if (tag !== "video") return create(tag, options);
 		const probe = {
-			duration: 12,
+			duration,
 			videoWidth: 1280,
 			videoHeight: 720,
 			preload: "",

@@ -11,7 +11,7 @@ import {
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { and, eq, gt, isNull } from "drizzle-orm";
-import type { Context, Next } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
@@ -24,6 +24,7 @@ import {
 import { hashKey } from "@/lib/developer-key-hash";
 import {
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
 } from "@/lib/developer-rate-limits";
@@ -37,12 +38,23 @@ import {
 	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
 } from "@/lib/developer-upload-token";
-import { RATE_LIMIT_IDS, sharedRateLimitDecision } from "@/lib/rate-limit";
+import {
+	isRateLimited,
+	RATE_LIMIT_IDS,
+	rateLimitClientAddress,
+	sharedRateLimitDecision,
+} from "@/lib/rate-limit";
 
 const RATE_LIMIT_WINDOW_MS = DEVELOPER_RATE_LIMIT_WINDOW_SECONDS * 1000;
 const RATE_LIMIT_MAX_ENTRIES = 10_000;
 
 type DeveloperRateLimit = { ruleId: string; limit: number; subject: string };
+type DeveloperWindow = {
+	limited: boolean;
+	shared: boolean;
+	count: number;
+	resetAt: number;
+};
 
 const requestCounts = new Map<
 	string,
@@ -58,46 +70,44 @@ async function credentialDigest(credential: string) {
 	return Buffer.from(digest).toString("hex");
 }
 
-// The firewall rule counts a credential across every server instance and its
+function sweepRequestCounts(now: number) {
+	rateLimitRequestCounter++;
+	if (rateLimitRequestCounter % 100 !== 0) return;
+	for (const [k, v] of requestCounts) {
+		if (now > v.resetAt) requestCounts.delete(k);
+	}
+	if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) return;
+	for (const [k, v] of requestCounts) {
+		if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+		if (v.count < v.limit) requestCounts.delete(k);
+	}
+	if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) return;
+	const byExpiry = [...requestCounts.entries()].sort(
+		(a, b) => a[1].resetAt - b[1].resetAt,
+	);
+	for (const [k] of byExpiry) {
+		if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
+		requestCounts.delete(k);
+	}
+}
+
+// The firewall rule counts a bucket across every server instance and its
 // answer is final. The window kept here fills the headers, and decides only
 // when the firewall cannot answer. A 429 from the rule waits a whole window,
-// because this instance cannot see when the shared one began.
-async function limitDeveloperRequest(
+// because this instance cannot see when the shared one began. Only a
+// credential that has already been accepted is counted, so a caller without
+// one cannot fill this map or spend a firewall call.
+async function countDeveloperRequest(
 	c: Context,
-	next: Next,
-	{ ruleId, limit, subject }: DeveloperRateLimit,
-) {
-	const credential =
-		c.req.header("authorization")?.trim().split(/\s+/)[1] ??
-		c.req.header("x-forwarded-for") ??
-		"unknown";
-	const key = `${ruleId}|${credential}`;
+	{ ruleId, limit }: DeveloperRateLimit,
+	bucket: string,
+	sharedKey: string,
+): Promise<DeveloperWindow> {
+	const key = `${ruleId}|${bucket}`;
 	const now = Date.now();
-
-	rateLimitRequestCounter++;
-	if (rateLimitRequestCounter % 100 === 0) {
-		for (const [k, v] of requestCounts) {
-			if (now > v.resetAt) requestCounts.delete(k);
-		}
-		if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
-			for (const [k, v] of requestCounts) {
-				if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
-				if (v.count < v.limit) requestCounts.delete(k);
-			}
-			if (requestCounts.size > RATE_LIMIT_MAX_ENTRIES) {
-				const byExpiry = [...requestCounts.entries()].sort(
-					(a, b) => a[1].resetAt - b[1].resetAt,
-				);
-				for (const [k] of byExpiry) {
-					if (requestCounts.size <= RATE_LIMIT_MAX_ENTRIES) break;
-					requestCounts.delete(k);
-				}
-			}
-		}
-	}
+	sweepRequestCounts(now);
 
 	let entry = requestCounts.get(key);
-
 	if (!entry || now > entry.resetAt) {
 		entry = { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS, limit };
 		requestCounts.set(key, entry);
@@ -107,51 +117,326 @@ async function limitDeveloperRequest(
 	const { count, resetAt } = entry;
 
 	const shared = await sharedRateLimitDecision(ruleId, {
-		key: await credentialDigest(credential),
+		key: sharedKey,
 		headers: c.req.raw.headers,
 	});
-	const limited = shared ?? count > limit;
+	return {
+		limited: shared ?? count > limit,
+		shared: shared !== undefined,
+		count,
+		resetAt,
+	};
+}
 
-	const resetSeconds = String(
-		shared
+function resetSeconds(window: DeveloperWindow): string {
+	return String(
+		window.shared && window.limited
 			? DEVELOPER_RATE_LIMIT_WINDOW_SECONDS
-			: Math.max(1, Math.ceil((resetAt - now) / 1000)),
+			: Math.max(1, Math.ceil((window.resetAt - Date.now()) / 1000)),
 	);
+}
+
+function setRateLimitHeaders(
+	c: Context,
+	{ limit }: DeveloperRateLimit,
+	window: DeveloperWindow,
+) {
 	c.header("X-RateLimit-Limit", String(limit));
 	c.header(
 		"X-RateLimit-Remaining",
-		String(limited ? 0 : Math.max(0, limit - count)),
+		String(window.limited ? 0 : Math.max(0, limit - window.count)),
 	);
-	c.header("X-RateLimit-Reset", resetSeconds);
-
-	if (limited) {
-		c.header("Retry-After", resetSeconds);
-		return c.json(
-			apiErrorBody(
-				"rate_limited",
-				"Rate limit exceeded",
-				`Wait for the Retry-After seconds, then retry. Each ${subject} allows ${limit} requests per minute.`,
-			),
-			429,
-		);
-	}
-
-	await next();
+	c.header("X-RateLimit-Reset", resetSeconds(window));
 }
 
-const developerRateLimit = (rule: DeveloperRateLimit) =>
-	createMiddleware((c, next) => limitDeveloperRequest(c, next, rule));
+function rateLimited(
+	c: Context,
+	{ limit, subject }: DeveloperRateLimit,
+	window: DeveloperWindow,
+) {
+	c.header("Retry-After", resetSeconds(window));
+	return c.json(
+		apiErrorBody(
+			"rate_limited",
+			"Rate limit exceeded",
+			`Wait for the Retry-After seconds, then retry. Each ${subject} allows ${limit} requests per minute.`,
+		),
+		429,
+	);
+}
 
-export const developerRateLimiter = developerRateLimit({
+const KEY_RATE_LIMIT: DeveloperRateLimit = {
 	ruleId: RATE_LIMIT_IDS.DEVELOPER_API_KEY,
 	limit: DEVELOPER_KEY_REQUESTS_PER_MINUTE,
 	subject: "key",
-});
-
-export const developerUploadRateLimiter = developerRateLimit({
+};
+const OWNER_RATE_LIMIT: DeveloperRateLimit = {
+	ruleId: RATE_LIMIT_IDS.DEVELOPER_API_OWNER,
+	limit: DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
+	subject: "account, across all of its keys,",
+};
+const UPLOAD_TOKEN_RATE_LIMIT: DeveloperRateLimit = {
 	ruleId: RATE_LIMIT_IDS.DEVELOPER_UPLOAD_TOKEN,
 	limit: DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
 	subject: "upload token",
+};
+
+// A credential that was refused is remembered with the address that sent it,
+// so sending it again is refused at once: no lookup, and it does not count
+// again. A different credential from the same address is still looked up, so a
+// customer whose stale worker keeps sending a rotated key, from the same server
+// as their live traffic, keeps working. Only an address sending many different
+// refused credentials (an attacker trying keys) is stopped outright, which
+// bounds the lookups it can cause. A key this instance accepted within the
+// last minute is let through even then.
+const blockedAddresses = new Map<string, number>();
+const refusedCredentials = new Map<string, number>();
+const pendingLookups = new Map<string, Promise<DeveloperSecretKey | null>>();
+const acceptedAt = new Map<string, number>();
+
+function refusedKey(address: string, digest: string) {
+	return `${address}|${digest}`;
+}
+
+function refusedRecently(address: string, digest: string): boolean {
+	const key = refusedKey(address, digest);
+	const until = refusedCredentials.get(key);
+	if (until === undefined) return false;
+	if (until > Date.now()) return true;
+	refusedCredentials.delete(key);
+	return false;
+}
+
+function rememberRefused(address: string, digest: string) {
+	const now = Date.now();
+	if (refusedCredentials.size >= RATE_LIMIT_MAX_ENTRIES) {
+		for (const [key, until] of refusedCredentials) {
+			if (until <= now) refusedCredentials.delete(key);
+		}
+		if (refusedCredentials.size >= RATE_LIMIT_MAX_ENTRIES) {
+			refusedCredentials.clear();
+		}
+	}
+	refusedCredentials.set(
+		refusedKey(address, digest),
+		now + RATE_LIMIT_WINDOW_MS,
+	);
+}
+
+function recentlyAccepted(credential: string): boolean {
+	const at = acceptedAt.get(credential);
+	return at !== undefined && Date.now() - at < RATE_LIMIT_WINDOW_MS;
+}
+
+function rememberAccepted(credential: string) {
+	const now = Date.now();
+	if (
+		!acceptedAt.has(credential) &&
+		acceptedAt.size >= RATE_LIMIT_MAX_ENTRIES
+	) {
+		for (const [key, at] of acceptedAt) {
+			if (now - at >= RATE_LIMIT_WINDOW_MS) acceptedAt.delete(key);
+		}
+		if (acceptedAt.size >= RATE_LIMIT_MAX_ENTRIES) acceptedAt.clear();
+	}
+	acceptedAt.set(credential, now);
+}
+
+function authFailuresBlocked(c: Context): boolean {
+	const address = rateLimitClientAddress(c.req.raw.headers);
+	if (!address) return false;
+	const until = blockedAddresses.get(address);
+	if (until === undefined) return false;
+	if (until > Date.now()) return true;
+	blockedAddresses.delete(address);
+	return false;
+}
+
+async function tooManyAuthFailures(c: Context): Promise<boolean> {
+	const limited = await isRateLimited(RATE_LIMIT_IDS.DEVELOPER_AUTH_FAILURE, {
+		headers: c.req.raw.headers,
+	});
+	const address = limited
+		? rateLimitClientAddress(c.req.raw.headers)
+		: undefined;
+	if (address) {
+		const now = Date.now();
+		if (blockedAddresses.size >= RATE_LIMIT_MAX_ENTRIES) {
+			for (const [blocked, until] of blockedAddresses) {
+				if (until <= now) blockedAddresses.delete(blocked);
+			}
+			if (blockedAddresses.size >= RATE_LIMIT_MAX_ENTRIES) {
+				blockedAddresses.clear();
+			}
+		}
+		blockedAddresses.set(address, now + RATE_LIMIT_WINDOW_MS);
+	}
+	return limited;
+}
+
+function authFailuresLimited(c: Context) {
+	c.header("Retry-After", String(DEVELOPER_RATE_LIMIT_WINDOW_SECONDS));
+	return c.json(
+		apiErrorBody(
+			"rate_limited",
+			"Too many requests with a key or token that was not accepted",
+			"Wait for the Retry-After seconds, then retry with a valid key or upload token.",
+		),
+		429,
+	);
+}
+
+const bearerCredential = (c: Context) =>
+	c.req.header("authorization")?.trim().split(/\s+/)[1];
+
+// Every key issued is csk_ and 30 characters from a 32 letter alphabet. Any
+// credential outside this shape is refused without being hashed or looked up.
+const SECRET_KEY_SHAPE = /^csk_[A-Za-z0-9_-]{1,124}$/;
+
+type DeveloperSecretKey = { appId: string; keyId: string; ownerId: string };
+
+async function findDeveloperSecretKey(
+	credential: string,
+): Promise<DeveloperSecretKey | null> {
+	const keyHash = await hashKey(credential);
+	const [row] = await db()
+		.select({
+			appId: developerApps.id,
+			keyId: developerApiKeys.id,
+			ownerId: developerApps.ownerId,
+		})
+		.from(developerApiKeys)
+		.innerJoin(
+			developerApps,
+			and(
+				eq(developerApiKeys.appId, developerApps.id),
+				isNull(developerApps.deletedAt),
+			),
+		)
+		.where(
+			and(
+				eq(developerApiKeys.keyHash, keyHash),
+				eq(developerApiKeys.keyType, "secret"),
+				isNull(developerApiKeys.revokedAt),
+			),
+		)
+		.limit(1);
+	if (!row) return null;
+	debouncedLastUsedUpdate(keyHash);
+	return row;
+}
+
+const unknownSecretKey = () =>
+	apiErrorBody(
+		"invalid_secret_key",
+		"Invalid or revoked secret key",
+		"Copy the current secret key for your app from https://cap.so/dashboard/infra. Generating a new key replaces the previous one.",
+	);
+
+type DeveloperSecretVariables = {
+	developerAppId: string;
+	developerKeyId: string;
+	developerOwnerId: string;
+	developerKeyType: "secret";
+};
+
+// Every path that accepts a secret key sets the same variables, so a route
+// gets the key's id whichever middleware looked it up.
+function setDeveloperSecretKey(
+	c: Context<{ Variables: DeveloperSecretVariables }>,
+	key: DeveloperSecretKey,
+) {
+	c.set("developerAppId", key.appId);
+	c.set("developerKeyId", key.keyId);
+	c.set("developerOwnerId", key.ownerId);
+	c.set("developerKeyType", "secret");
+}
+
+// A request without a well formed key costs nothing here and is answered by
+// the route. A well formed key is looked up once: an unknown one counts
+// against the address that sent it, a known one against its own budget and
+// its owner's.
+export const developerRateLimiter = createMiddleware<{
+	Variables: DeveloperSecretVariables;
+}>(async (c, next) => {
+	const credential = bearerCredential(c);
+	if (!credential || !SECRET_KEY_SHAPE.test(credential)) return next();
+	if (authFailuresBlocked(c) && !recentlyAccepted(credential)) {
+		return authFailuresLimited(c);
+	}
+	const address = rateLimitClientAddress(c.req.raw.headers);
+	const digest = await credentialDigest(credential);
+	if (address && refusedRecently(address, digest)) {
+		return c.json(unknownSecretKey(), 401);
+	}
+
+	// Requests with the same credential from the same address share one lookup,
+	// and only that lookup counts a refusal, so a burst of retries with a
+	// rotated key counts once however many arrive before it finishes.
+	const pairKey = address ? refusedKey(address, digest) : null;
+	let pending = pairKey ? pendingLookups.get(pairKey) : undefined;
+	const leads = pending === undefined;
+	if (!pending) {
+		pending = findDeveloperSecretKey(credential);
+		if (pairKey) {
+			pendingLookups.set(pairKey, pending);
+			void pending.then(
+				() => pendingLookups.delete(pairKey),
+				() => pendingLookups.delete(pairKey),
+			);
+		}
+	}
+	const key = await pending;
+	if (!key) {
+		if (!leads) return c.json(unknownSecretKey(), 401);
+		if (address) rememberRefused(address, digest);
+		if (await tooManyAuthFailures(c)) return authFailuresLimited(c);
+		return c.json(unknownSecretKey(), 401);
+	}
+	setDeveloperSecretKey(c, key);
+	rememberAccepted(credential);
+
+	const [byKey, byOwner] = await Promise.all([
+		countDeveloperRequest(c, KEY_RATE_LIMIT, credential, digest),
+		countDeveloperRequest(c, OWNER_RATE_LIMIT, key.ownerId, key.ownerId),
+	]);
+	setRateLimitHeaders(c, KEY_RATE_LIMIT, byKey);
+	if (byKey.limited) return rateLimited(c, KEY_RATE_LIMIT, byKey);
+	if (byOwner.limited) {
+		c.header("X-RateLimit-Remaining", "0");
+		c.header("X-RateLimit-Reset", resetSeconds(byOwner));
+		return rateLimited(c, OWNER_RATE_LIMIT, byOwner);
+	}
+	await next();
+});
+
+// A token is checked by its signature alone, so this costs no lookup. One
+// that was never issued counts against the address that sent it, and the
+// route still gives the refusal its usual wording.
+export const developerUploadRateLimiter = createMiddleware(async (c, next) => {
+	const credential = bearerCredential(c);
+	if (!credential?.startsWith(UPLOAD_TOKEN_PREFIX)) return next();
+
+	const check = verifyDeveloperUploadToken(credential);
+	if (!check.ok) {
+		if (
+			check.reason === "invalid" &&
+			(authFailuresBlocked(c) || (await tooManyAuthFailures(c)))
+		) {
+			return authFailuresLimited(c);
+		}
+		return next();
+	}
+
+	const window = await countDeveloperRequest(
+		c,
+		UPLOAD_TOKEN_RATE_LIMIT,
+		credential,
+		await credentialDigest(credential),
+	);
+	setRateLimitHeaders(c, UPLOAD_TOKEN_RATE_LIMIT, window);
+	if (window.limited) return rateLimited(c, UPLOAD_TOKEN_RATE_LIMIT, window);
+	await next();
 });
 
 const LAST_USED_DEBOUNCE_MS = 5 * 60 * 1000;
@@ -243,6 +528,7 @@ export const developerSdkCors = cors({
 	credentials: false,
 	allowMethods: ["GET", "POST", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization"],
+	maxAge: 7200,
 	exposeHeaders: [
 		"Retry-After",
 		"X-RateLimit-Limit",
@@ -251,9 +537,6 @@ export const developerSdkCors = cors({
 		"X-Request-Id",
 	],
 });
-
-const bearerCredential = (c: Context) =>
-	c.req.header("authorization")?.trim().split(/\s+/)[1];
 
 export const refuseDeveloperPublicKey = createMiddleware(async (c, next) => {
 	if (isDeveloperPublicKey(bearerCredential(c))) {
@@ -359,14 +642,36 @@ export const withDeveloperUploadToken = createMiddleware<{
 });
 
 export const withDeveloperSecretAuth = createMiddleware<{
-	Variables: {
-		developerAppId: string;
-		developerKeyId: string;
-		developerKeyType: "secret";
-	};
+	Variables: DeveloperSecretVariables;
 }>(async (c, next) => {
-	const authHeader = c.req.header("authorization")?.split(" ")[1];
-	if (!authHeader?.startsWith("csk_")) {
+	// Only a secret key the rate limiter already accepted skips the lookup. An
+	// app id set by any other middleware, such as an upload token's, does not.
+	if (c.get("developerAppId") && c.get("developerKeyType") === "secret") {
+		return next();
+	}
+
+	if (!c.req.header("authorization")?.trim()) {
+		return c.json(
+			apiErrorBody(
+				"invalid_secret_key",
+				"Missing secret key",
+				"No Authorization header was sent. Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
+			),
+			401,
+		);
+	}
+	const credential = bearerCredential(c);
+	if (isDeveloperPublicKey(credential)) {
+		return c.json(
+			apiErrorBody(
+				"public_key_not_allowed",
+				"Public keys cannot call the REST API",
+				"A public key (cpk_) was sent. The REST API takes the app's secret key: send Authorization: Bearer csk_... from your server, with the secret key from https://cap.so/dashboard/infra.",
+			),
+			403,
+		);
+	}
+	if (!credential || !SECRET_KEY_SHAPE.test(credential)) {
 		return c.json(
 			apiErrorBody(
 				"invalid_secret_key",
@@ -377,42 +682,10 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		);
 	}
 
-	const keyHash = await hashKey(authHeader);
-	const [row] = await db()
-		.select({ appId: developerApps.id, keyId: developerApiKeys.id })
-		.from(developerApiKeys)
-		.innerJoin(
-			developerApps,
-			and(
-				eq(developerApiKeys.appId, developerApps.id),
-				isNull(developerApps.deletedAt),
-			),
-		)
-		.where(
-			and(
-				eq(developerApiKeys.keyHash, keyHash),
-				eq(developerApiKeys.keyType, "secret"),
-				isNull(developerApiKeys.revokedAt),
-			),
-		)
-		.limit(1);
+	const key = await findDeveloperSecretKey(credential);
+	if (!key) return c.json(unknownSecretKey(), 401);
 
-	if (!row) {
-		return c.json(
-			apiErrorBody(
-				"invalid_secret_key",
-				"Invalid or revoked secret key",
-				"Copy the current secret key for your app from https://cap.so/dashboard/infra. Regenerating keys revokes the previous pair.",
-			),
-			401,
-		);
-	}
-
-	debouncedLastUsedUpdate(keyHash);
-
-	c.set("developerAppId", row.appId);
-	c.set("developerKeyId", row.keyId);
-	c.set("developerKeyType", "secret" as const);
+	setDeveloperSecretKey(c, key);
 	await next();
 });
 

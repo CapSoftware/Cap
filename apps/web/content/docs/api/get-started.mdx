@@ -150,6 +150,8 @@ createServer((request, response) => {
 
 The browser sends the file in parts with the upload token: initiate, get signed URLs for the parts, `PUT` each part's bytes to its URL, then complete. [Multipart Upload](/docs/api/rest-api#multipart-upload) is the reference for the calls.
 
+Cap Infra accepts MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video.
+
 Save this as `index.html` beside `server.mjs`. It uses no library.
 
 ```html
@@ -164,6 +166,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 <script>
   const UPLOAD_API = "https://cap.so/api/developer/sdk/v1/upload/multipart";
   const PART_SIZE = 8 * 1024 * 1024;
+  const PARTS_AT_ONCE = 6;
   const SIGN_AT_ONCE = 10;
 
   async function uploadStep(upload, step, body) {
@@ -212,9 +215,11 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
     });
   }
 
-  function putPart(url, blob, onSent) {
+  function putPart(url, blob, onSent, inFlight) {
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      inFlight.add(request);
+      request.onloadend = () => inFlight.delete(request);
       request.open("PUT", url);
       request.upload.onprogress = (event) => onSent(event.loaded);
       request.onload = () =>
@@ -222,6 +227,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
           ? resolve(request.getResponseHeader("ETag"))
           : reject(new Error(`part upload failed with ${request.status}`));
       request.onerror = () => reject(new Error("part upload failed"));
+      request.onabort = () => reject(new Error("part upload stopped"));
       request.send(blob);
     });
   }
@@ -247,26 +253,61 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
         urls.set(part.partNumber, part.presignedUrl);
       }
     };
-    const parts = [];
-    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+    let signing = null;
+    const urlFor = async (partNumber) => {
+      while (signing) await signing;
+      if (!urls.has(partNumber)) {
+        const last = Math.min(partNumber + SIGN_AT_ONCE - 1, partCount);
+        signing = sign(partNumber, last).finally(() => (signing = null));
+        await signing;
+      }
+      return urls.get(partNumber);
+    };
+    const sentBytes = new Array(partCount).fill(0);
+    const inFlight = new Set();
+    let failure = null;
+    const sendPart = async (partNumber) => {
       const start = (partNumber - 1) * PART_SIZE;
       const blob = file.slice(start, start + PART_SIZE);
-      if (!urls.has(partNumber)) {
-        await sign(
-          partNumber,
-          Math.min(partNumber + SIGN_AT_ONCE - 1, partCount),
+      const put = async (url) => {
+        if (failure) throw failure;
+        return putPart(
+          url,
+          blob,
+          (sent) => {
+            if (failure) return;
+            sentBytes[partNumber - 1] = sent;
+            onProgress(sentBytes.reduce((a, b) => a + b, 0) / file.size);
+          },
+          inFlight,
         );
-      }
-      const sendPart = () =>
-        putPart(urls.get(partNumber), blob, (sent) =>
-          onProgress((start + sent) / file.size),
-        );
-      const etag = await sendPart().catch(async () => {
+      };
+      const etag = await put(await urlFor(partNumber)).catch(async (error) => {
+        if (failure) throw error;
         await sign(partNumber, partNumber);
-        return sendPart();
+        return put(urls.get(partNumber));
       });
-      parts.push({ partNumber, etag, size: blob.size });
-    }
+      return { partNumber, etag, size: blob.size };
+    };
+    const parts = [];
+    let nextPart = 1;
+    const sendParts = async () => {
+      try {
+        while (!failure && nextPart <= partCount) {
+          parts.push(await sendPart(nextPart++));
+        }
+      } catch (error) {
+        if (!failure) {
+          failure = error;
+          for (const request of inFlight) request.abort();
+        }
+      }
+    };
+    await Promise.allSettled(
+      Array.from({ length: Math.min(PARTS_AT_ONCE, partCount) }, sendParts),
+    );
+    if (failure) throw failure;
+    parts.sort((a, b) => a.partNumber - b.partNumber);
     await uploadStep(upload, "complete", { uploadId, parts, ...info });
   }
 
@@ -303,12 +344,13 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 `waitForVideo` and `playVideo` are added in the next two steps.
 
 - **Parts.** Every part except the last must be at least 5 MB. Number the parts from 1 with no gaps: a token signs part numbers up to the last one its size limit allows, which is 6,867 for the 36 GB limit. A file smaller than one part is sent as a single part.
-- **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made.
+- **Parts at once.** The page sends six parts at a time, and starts the next part as soon as one finishes. On a distant or lossy connection this is much faster than one part at a time; on a fast, clean one it makes little difference. Complete takes the parts in part-number order.
+- **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made. Only one signing request runs at a time; the other parts wait for it.
 - **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
 - **File size.** Initiate takes the file's size as `contentLength`, so a file over the token's `maxBytes` is refused with the code `file_too_large` before any of it is sent.
-- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
-- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload.
+- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The page adds up the bytes sent for every part, and the bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
+- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload: the parts still sending are stopped, no new parts start, the bar stops moving, and the first error is shown once every part has stopped.
 - **An expired token.** A call that answers `upload_token_expired` gets a new token from your server and is sent again. Nothing already uploaded is lost.
 - **Resuming.** Calling initiate again returns the same `uploadId` when the upload was opened in the last 6 hours, with the same token or a renewed one. Keep each finished part's `partNumber`, `etag` and `size`, upload only the parts that are missing, then list every part in complete.
 
@@ -351,7 +393,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 300 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 
@@ -395,28 +437,7 @@ Add this to `index.html`, below the other scripts:
     if (width && height) player.style.aspectRatio = `${width} / ${height}`;
 
     if (hlsUrl && window.Hls && Hls.isSupported()) {
-      const megabits = navigator.connection?.downlink;
-      const estimate = megabits > 0 ? megabits * 800000 : 1500000;
-      hls = new Hls({
-        autoStartLoad: false,
-        abrEwmaDefaultEstimate: estimate,
-        abrEwmaDefaultEstimateMax: estimate,
-        startFragPrefetch: true,
-        capLevelToPlayerSize: true,
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event, { levels }) => {
-        const wanted = player.clientWidth * window.devicePixelRatio;
-        let level = 0;
-        while (
-          levels[level + 1] &&
-          levels[level + 1].bitrate <= estimate &&
-          levels[level].width < wanted
-        ) {
-          level++;
-        }
-        hls.startLevel = level;
-        hls.startLoad();
-      });
+      hls = new Hls({ capLevelToPlayerSize: true });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal || data.response?.code === 403) playMp4();
       });
@@ -442,13 +463,12 @@ Safari plays HLS by itself. Every other browser needs [hls.js](https://github.co
 
 | Setting | Why |
 |---------|-----|
-| `autoStartLoad: false`, then `startLevel` and `startLoad()` | Start on a rendition the viewer's connection can carry. Without it hls.js starts on the first rendition the playlist lists, which is too large for a slow connection |
-| `abrEwmaDefaultEstimate` and `abrEwmaDefaultEstimateMax` | Give hls.js the browser's own estimate of the connection. Safari and Firefox do not give one, so the page assumes a slow connection there: the video starts on the smallest rendition and steps up once hls.js has measured a download |
-| `startFragPrefetch` | Fetch the first segment while the video element is still being set up |
 | `capLevelToPlayerSize` | Never load a rendition larger than the player on the page |
 | The `403` check | Media links inside the playlist expire after 12 hours. A `403` means one has expired, so switch to the MP4 at once instead of letting hls.js retry |
 | `playMp4` on a fatal error | Keep playing from the same position if HLS fails for any other reason |
 | `stopHls` at the start of `playVideo` | Stop the previous video's player before starting the next one on the same page |
+
+There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
 
 [Play a Video](/docs/api/rest-api#play-a-video) covers a Content Security Policy, bitrates and what happens when playback stops.
 
@@ -464,7 +484,8 @@ Every upload also returns `shareUrl` and `embedUrl`. They are Cap's hosted playe
   src="EMBED_URL"
   title="Product demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
+  allowfullscreen
   loading="lazy"
 ></iframe>
 ```
@@ -807,7 +828,9 @@ The same secret key turns an audio or video file into text. It is a separate cal
 
 1. Create the transcript with `POST /api/developer/v1/transcripts/uploads`, sending the file's exact size in bytes as `contentLength`. The response holds the transcript's `id` and a signed `upload.url`.
 2. `PUT` the file to `upload.url`.
-3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` until `status` is `complete` or `error`, leaving at least 3 seconds between checks. A complete transcript has its `text`.
+3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` every 5 seconds until `status` is `complete` or `error`. A complete transcript has its `text`.
+
+To wait on several transcripts, check them as a batch with one list call per status instead of one call each: `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`. Ask for `queued` first: a transcript only moves from `queued` to `processing` to a final status, so one missing from both lists has finished. Get it for its `text`, and keep checking it if its `status` is not yet `complete` or `error`. An app has at most 20 transcripts in flight, and checking each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
 
 A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
 
@@ -815,8 +838,51 @@ A file that is already at a public URL needs no upload. Send it as `url` to `POS
 
 ## 9. What it costs
 
-Uploading and encoding are free. Stored video and transcription are paid for from the app's prepaid credit. [Billing](/docs/api/billing) has the prices and the rules.
+Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free. A 10 minute 1080p video costs $0.00850 when it becomes ready, then $0.00028 a day after its first month. Stored video and transcription are paid for from the app's prepaid credit. [Billing](/docs/api/billing) has the prices and the rules.
 
 - The app's Billing page in the console shows the balance and every charge.
 - [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
 - [List Transactions](/docs/api/rest-api#list-transactions) returns every credit and charge.
+
+## 10. Use with agents (MCP)
+
+Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Codex can upload, check and transcribe video with the app's secret key.
+
+- URL: `https://cap.so/api/developer/mcp`
+- Header: `Authorization: Bearer` followed by the secret key
+
+Claude Code, with the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
+```
+
+Cursor, in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cap-infra": {
+      "url": "https://cap.so/api/developer/mcp",
+      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+    }
+  }
+}
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cap-infra]
+url = "https://cap.so/api/developer/mcp"
+bearer_token_env_var = "CAP_SECRET_KEY"
+```
+
+The tools:
+
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
+- `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
+- `account_usage` and `account_transactions`: the balance, prices and every charge.
+
+Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
