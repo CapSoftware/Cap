@@ -74,6 +74,14 @@ describe("3D Secure on large credit purchases", () => {
 		}
 	});
 
+	it("builds the same session params every time for the same amount, so a retry under one Stripe key matches", () => {
+		for (const amountCents of [5_000, 100_000, 100_001, 1_000_000]) {
+			const first = paramsFor(amountCents);
+			const retry = paramsFor(amountCents);
+			expect(JSON.stringify(retry)).toBe(JSON.stringify(first));
+		}
+	});
+
 	it("changes nothing else about the session", () => {
 		const {
 			payment_method_types: _largeTypes,
