@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
@@ -7,6 +8,8 @@ import {
 	type CapPlayerControl,
 } from "@/components/cap-player/CapPlayer";
 import { Lockup } from "@/components/infra/Lockup";
+import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { developerVideoOEmbedHref } from "@/lib/developer-video-oembed";
 import {
 	cappedPlaylistUrl,
 	type DeveloperVideoPlayback,
@@ -32,8 +35,12 @@ export type DeveloperVideoPageVariant = "share" | "embed";
 
 const loadPlayer = cache(loadDeveloperVideoPlayer);
 
+// A link to the share page unfurls as the video: og:video points at the MP4,
+// and an oEmbed endpoint gives sites that read it the embed's iframe. Only
+// the share page carries them, so the embed's own document stays as light.
 export async function developerVideoMetadata(
 	playbackId: string,
+	variant: DeveloperVideoPageVariant = "share",
 ): Promise<Metadata> {
 	const player = await loadPlayer(playbackId);
 	const title =
@@ -42,7 +49,7 @@ export async function developerVideoMetadata(
 			: (player?.name ?? "Video not found");
 	const images =
 		player?.kind === "playing" && player.poster ? [player.poster] : [];
-	return {
+	const metadata: Metadata = {
 		title,
 		description: null,
 		robots: { index: false, follow: false },
@@ -51,6 +58,39 @@ export async function developerVideoMetadata(
 			card: images.length > 0 ? "summary_large_image" : "summary",
 			title,
 			images,
+		},
+	};
+	if (variant !== "share" || !player || player.kind === "taken_down") {
+		return metadata;
+	}
+	const webUrl = serverEnv().WEB_URL;
+	const { shareUrl } = developerVideoPageUrls(playbackId, webUrl);
+	const mp4 = player.kind === "playing" ? player.source.mp4 : undefined;
+	return {
+		...metadata,
+		openGraph: {
+			title,
+			type: "video.other",
+			url: shareUrl,
+			images,
+			...(mp4
+				? {
+						videos: [
+							{
+								url: mp4,
+								secureUrl: mp4.startsWith("https:") ? mp4 : undefined,
+								type: "video/mp4",
+								width: player.width,
+								height: player.height,
+							},
+						],
+					}
+				: null),
+		},
+		alternates: {
+			types: {
+				"application/json+oembed": developerVideoOEmbedHref(shareUrl, webUrl),
+			},
 		},
 	};
 }
