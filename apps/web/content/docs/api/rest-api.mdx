@@ -4,11 +4,13 @@ summary: "Programmatic access to Cap via the REST API"
 tags: "API, Integration"
 ---
 
-The Cap Developer API lets your product host video with Cap. You upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player.
+The Cap Developer API does two things for your product. It hosts video: you upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4, or with the hosted player. It turns speech into text: you send an audio or video file to [Transcripts](/docs/api/rest-api#transcripts) and get the text back, with timings.
+
+New to the API? [Get Started](/docs/api/get-started) goes from a new app to a video playing on your page, with examples for the browser, Node and Python. This page is the reference.
 
 There are two APIs:
 
-- **REST API** (`/api/developer/v1`) -- Server-side: create uploads and manage videos and usage, authenticated with secret keys (`csk_`).
+- **REST API** (`/api/developer/v1`) -- Server-side: create uploads, manage videos, transcribe audio and read usage, authenticated with secret keys (`csk_`).
 - **SDK API** (`/api/developer/sdk/v1`) -- Browser-side: upload a video's file, authenticated with an upload token (`cut_`) that your server creates for that one video.
 
 These keys do not authenticate the Cap CLI. For CLI keys (`cap_cli_`), used with `CAP_API_KEY` in headless environments, see [Set Up Your Agent](/docs/agents/setup#headless-environments-ci-containers-and-remote-sandboxes).
@@ -1210,10 +1212,10 @@ Complete can itself return `409` with a `code`:
 
 | `code` | Meaning | What to do |
 |--------|---------|------------|
-| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait a few seconds and send the same complete request again. Do not abort the upload or delete the video. |
+| `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait for the seconds in the `Retry-After` header, then send the same complete request again, and repeat for as long as it answers this way. If the earlier request was cut off, that can last up to 15 minutes. Do not abort the upload or delete the video. |
 | `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new upload and send the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header: wait for the completion to finish. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
 
 #### Abort Upload
 
