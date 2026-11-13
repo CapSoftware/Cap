@@ -169,7 +169,7 @@ const transcriptSchema = {
 		videoId: {
 			type: ["string", "null"],
 			description:
-				"The video this transcript was created from with videoId. null for every other transcript. Captions for the hosted player are generated from the newest completed transcript of a video in each language.",
+				"The video this transcript was created from with videoId. null for every other transcript. When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.",
 		},
 		durationSeconds: {
 			type: ["number", "null"],

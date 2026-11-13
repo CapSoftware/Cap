@@ -740,7 +740,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 - It costs the transcript price only, $0.10 per audio hour. Reading the stored video is not charged, and the video's storage charge does not change.
 - `name`, `language`, `userId`, `metadata` and the `Idempotency-Key` header work as they do for a URL. The name defaults to the video's name.
 - The transcript carries the video's ID as `videoId`, and `source.type` is `video`. `videoId` is `null` on every other transcript.
-- Captions for the hosted player are generated from the newest completed transcript of a video in each language.
+- When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.
 - The transcript is its own object. The video's `transcriptionStatus` does not change, and deleting the video leaves the transcript and its text. A transcript whose video is deleted before it runs ends with `source_missing` and is not charged.
 - Sending the video's `mp4Url` as `url` still works as a URL transcript. It is not linked to the video: its `videoId` is `null`.
 
