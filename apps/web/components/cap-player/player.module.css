@@ -400,7 +400,11 @@
 }
 
 .time {
+	flex: 0 1 auto;
+	min-width: 0;
 	padding: 0 8px;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .quality {
