@@ -28,13 +28,10 @@ export const prefersMarkdown = (accept: string | null) => {
 	return markdown > 0 && markdown >= html;
 };
 
-export const DOCS_MARKDOWN_ROUTE = "/api/docs/markdown";
+export const DOCS_MARKDOWN_ROUTE = "/docs-markdown";
 
 const MARKDOWN_EXTENSION = /\.mdx?$/;
 
-// The docs path an agent asked for as Markdown, as the slug of its source
-// file, or null when the request should get the HTML page. "/docs" is the
-// Introduction page, as it is in HTML.
 export const docsMarkdownSlug = (
 	pathname: string,
 	accept: string | null,

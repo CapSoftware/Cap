@@ -12,19 +12,18 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
 }));
 
-import { GET } from "@/app/api/docs/markdown/[...slug]/route";
+import { GET } from "@/app/docs-markdown/[...slug]/route";
 import { CAP_AGENT_PROMPT } from "@/data/agent-prompt";
 import { DOCS_MARKDOWN_ROUTE, docsMarkdownSlug } from "@/lib/agent-markdown";
 import { docToMarkdown } from "@/lib/docs-markdown";
-import { proxy } from "../../proxy";
 import { getAllDocs, getDocBySlug } from "@/utils/docs";
+import { proxy } from "../../proxy";
 
 const getMarkdown = (slug: string, method = "GET") =>
 	GET(new Request(`https://cap.so/docs/${slug}.md`, { method }), {
 		params: Promise.resolve({ slug: slug.split("/") }),
 	});
 
-// Lines outside fenced code blocks, where MDX components would render.
 const proseLines = (markdown: string) => {
 	const lines: string[] = [];
 	let fence: string | null = null;

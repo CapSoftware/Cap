@@ -19,9 +19,6 @@ const FENCE = /^\s*(`{3,}|~{3,})/;
 const absoluteLinks = (line: string, origin: string) =>
 	line.replace(/\]\(\/(?!\/)/g, `](${origin}/`);
 
-// Docs are MDX. An agent gets the source with its frontmatter turned into a
-// title and summary, the site's components replaced by what they show, and
-// site-relative links made absolute. Code blocks are passed through as written.
 export function docToMarkdown(
 	doc: { metadata: { title: string; summary?: string }; content: string },
 	origin: string,

@@ -23,7 +23,7 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/agent-markdown", () => ({
 	agentMarkdownResponse: async () => null,
 	docsMarkdownSlug: () => null,
-	DOCS_MARKDOWN_ROUTE: "/api/docs/markdown",
+	DOCS_MARKDOWN_ROUTE: "/docs-markdown",
 }));
 
 const FORWARDED = "x-middleware-request-x-cap-infra-path";
