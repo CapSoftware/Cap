@@ -230,7 +230,7 @@ describe("startingEstimate", () => {
 
 	it("starts low on a line the browser calls slow", () => {
 		hint({ effectiveType: "3g", downlink: 1.6 });
-		expect(startingEstimate()).toBe(500_000);
+		expect(startingEstimate()).toBe(1_280_000);
 		hint({ effectiveType: "slow-2g" });
 		expect(startingEstimate()).toBe(500_000);
 		hint({ downlink: 0.4 });
