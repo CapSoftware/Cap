@@ -52,6 +52,14 @@ export const renditionLabel = (level: {
 	return resolutionLabel(level.width, level.height);
 };
 
+type Rendition = { width: number; height: number; bitrate: number };
+
+// Renditions are ranked by resolution, never by bitrate. The ladder is encoded
+// at constant quality, so a higher rung of a simple video can carry fewer bits
+// than a lower one, and hls.js lists levels in bitrate order.
+const sharperFirst = (a: Rendition, b: Rendition) =>
+	b.height - a.height || b.width - a.width || b.bitrate - a.bitrate;
+
 export const listLevels = (
 	levels: readonly {
 		width: number;
@@ -76,16 +84,18 @@ export const listLevels = (
 			});
 		}
 	});
-	return [...best.values()].sort(
-		(a, b) => b.width * b.height - a.width * a.height || b.bitrate - a.bitrate,
-	);
+	return [...best.values()].sort(sharperFirst);
 };
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
-// Safari and Firefox give no connection estimate. Assuming a slow line costs
-// a fast one its first segment at a lower rendition. Assuming a fast line
-// costs a slow one several seconds before the first frame.
-const DEFAULT_BITS_PER_SECOND = 1_500_000;
+// The line assumed before anything is measured: enough for the rendition
+// that fits a desktop player. Chrome's connection hint read about 1.6 Mbps on
+// a line measured at 190 Mbps, and Safari and Firefox give none, so the hint
+// only lowers this when it says the line is slow. A slow line the hint misses
+// is caught by the speed of the held segment once playing.
+const DEFAULT_BITS_PER_SECOND = 5_000_000;
+const SLOW_LINE_BITS_PER_SECOND = 500_000;
+const SLOW_LINE_TYPES = ["slow-2g", "2g", "3g"];
 
 // Seconds hls.js may buffer ahead of the playhead before anyone presses play.
 // Any value below one segment loads exactly the segment under the playhead.
@@ -95,7 +105,11 @@ export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 // measured on the segment held first, for it to replace that one before play.
 export const SECONDS_TO_SHARPEN = 0.5;
 
-type ConnectionHint = { downlink?: number };
+type ConnectionHint = {
+	downlink?: number;
+	effectiveType?: string;
+	saveData?: boolean;
+};
 
 const isApple = () => navigator.vendor.includes("Apple");
 
@@ -132,29 +146,47 @@ export const warmSource = (source: CapPlayerSource) => {
 	if (mode === "mse") void loadHls().catch(() => undefined);
 };
 
-const startingEstimate = () => {
+export const startingEstimate = () => {
 	const connection = (navigator as Navigator & { connection?: ConnectionHint })
 		.connection;
-	const megabits = connection?.downlink;
-	return megabits && megabits > 0
-		? megabits * 800_000
-		: DEFAULT_BITS_PER_SECOND;
+	const megabits = connection?.downlink ?? 0;
+	const slow =
+		connection?.saveData === true ||
+		SLOW_LINE_TYPES.includes(connection?.effectiveType ?? "") ||
+		(megabits > 0 && megabits < 1);
+	if (!slow) return DEFAULT_BITS_PER_SECOND;
+	return megabits > 0
+		? Math.min(megabits * 800_000, SLOW_LINE_BITS_PER_SECOND)
+		: SLOW_LINE_BITS_PER_SECOND;
 };
 
+// The smallest rendition that covers the player in either direction, or the
+// sharpest below it the line can carry. Returns an index into `levels`.
 export const pickStartingLevel = (
-	levels: readonly { bitrate: number; width: number }[],
-	wantedWidth: number,
+	levels: readonly Rendition[],
+	player: { width: number; height: number },
 	bitsPerSecond: number,
 ) => {
-	let pick = 0;
-	for (let i = 1; i < levels.length; i++) {
-		const level = levels[i];
-		const below = levels[i - 1];
-		if (!level || !below) break;
-		if (level.bitrate > bitsPerSecond || below.width >= wantedWidth) break;
-		pick = i;
+	const ranked = levels
+		.map((level, index) => ({ level, index }))
+		.sort((a, b) => -sharperFirst(a.level, b.level));
+	let pick = ranked[0]?.index ?? 0;
+	for (const [rank, { level, index }] of ranked.entries()) {
+		if (rank > 0 && level.bitrate <= bitsPerSecond) pick = index;
+		if (level.width >= player.width || level.height >= player.height) break;
 	}
 	return pick;
+};
+
+// Whether level `a` is sharper than level `b`, both indexes into `levels`.
+export const isSharper = (
+	levels: readonly Rendition[],
+	a: number,
+	b: number,
+) => {
+	const first = levels[a];
+	const second = levels[b];
+	return !!first && (!second || sharperFirst(first, second) < 0);
 };
 
 // A long video's playlists sign every segment. Asked for the short form, the
@@ -225,6 +257,11 @@ export const attachSource = (
 	const start = () => {
 		if (autoPlay) void playAllowingMuted(video);
 	};
+
+	const playerSize = () => ({
+		width: video.clientWidth * window.devicePixelRatio,
+		height: video.clientHeight * window.devicePixelRatio,
+	});
 
 	const position = () => ({
 		resumeAt: video.currentTime,
@@ -402,21 +439,15 @@ export const attachSource = (
 			// otherwise send it off to fetch a second rendition's playlist.
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
 				onLevels?.(listLevels(data.levels));
-				const level = pickStartingLevel(
-					data.levels,
-					video.clientWidth * window.devicePixelRatio,
-					estimate,
-				);
+				const level = pickStartingLevel(data.levels, playerSize(), estimate);
 				hls.startLevel = level;
 				if (!playRequested) hls.loadLevel = level;
 				hls.startLoad(startPending ? startAt : -1);
 			});
-			// The segment held before play is fetched at a rendition the line
-			// can surely carry, and it measures the line. Chrome's connection
-			// hint reads about 1.5 Mbps on fast lines, and other browsers give
-			// none. When the measured line can fetch the rendition that fits the
-			// player in time, the held segment is swapped for it, so the first
-			// seconds do not play soft.
+			// The segment held before play measures the line. When the measured
+			// line can fetch a sharper rendition that fits the player in time,
+			// such as 4K for a large high density screen, the held segment is
+			// swapped for it before play.
 			let swappedTo = AUTO_LEVEL;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
@@ -432,10 +463,10 @@ export const attachSource = (
 				if (swappedTo !== AUTO_LEVEL) return;
 				const level = pickStartingLevel(
 					hls.levels,
-					video.clientWidth * window.devicePixelRatio,
+					playerSize(),
 					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
 				);
-				if (level <= hls.loadLevel) return;
+				if (!isSharper(hls.levels, level, hls.loadLevel)) return;
 				swappedTo = level;
 				hls.currentLevel = level;
 			});
