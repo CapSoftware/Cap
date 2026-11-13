@@ -31,6 +31,7 @@ import {
 import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
+	firstMonthShortfallOwed,
 	type InfraDbExecutor,
 	latchCoveredShortfall,
 	latestStorageCharge,
@@ -258,7 +259,7 @@ async function settleFirstMonth(
 	const outstandingMicroCredits =
 		carried && standingShortSince
 			? Math.max(
-					carried.owedMicroCredits,
+					await firstMonthShortfallOwed(tx, account.id, standingShortSince),
 					settled.shortSince ? settled.owedMicroCredits : 0,
 				)
 			: null;

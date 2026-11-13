@@ -987,7 +987,7 @@ describe.runIf(Boolean(databaseUrl))(
 				"daily_part_in_month",
 				"daily_part_in_month",
 			] as const;
-			type Open = { kind: "daily" | "month"; since: string; owed: number };
+			type Period = { since: string; monthMax: number };
 			const failures: string[] = [];
 
 			for (let sequence = 0; sequence < 500; sequence++) {
@@ -996,7 +996,25 @@ describe.runIf(Boolean(databaseUrl))(
 				let balance = startBalance;
 				let held = 0;
 				const holds: { id: string; amount: number }[] = [];
-				let open: Open | null = null;
+				let period: Period | null = null;
+				let lastDaily: { since: string | null; owed: number } = {
+					since: null,
+					owed: 0,
+				};
+				const size = () =>
+					period
+						? Math.max(
+								period.monthMax,
+								lastDaily.since === period.since ? lastDaily.owed : 0,
+							)
+						: 0;
+				const close = (latch: boolean) => {
+					if (!period) return;
+					covered.add(period.since);
+					if (latch) latched.add(period.since);
+					period = null;
+					lastDaily = { since: null, owed: 0 };
+				};
 				const covered = new Set<string>();
 				const latched = new Set<string>();
 				const steps = between(2, 6);
@@ -1004,11 +1022,7 @@ describe.runIf(Boolean(databaseUrl))(
 				let dayIndex = 6;
 
 				const latch = () => {
-					if (open && balance - held >= open.owed) {
-						covered.add(open.since);
-						latched.add(open.since);
-						open = null;
-					}
+					if (period && balance - held >= size()) close(true);
 				};
 				const rowSince = async (referenceId: string) => {
 					const [row] = await database()
@@ -1034,7 +1048,7 @@ describe.runIf(Boolean(databaseUrl))(
 					let stepKind: (typeof kinds)[number] = kind;
 					if (kind === "daily_part_in_month") {
 						if (dayIndex < 0) continue;
-						if (open?.kind !== "month") {
+						if (!period || period.monthMax === 0) {
 							if (available <= 0) continue;
 							const holdId = id();
 							await database().insert(developerTranscripts).values({
@@ -1053,13 +1067,12 @@ describe.runIf(Boolean(databaseUrl))(
 							});
 							await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
 							log[log.length - 1] += ` month owed=${owed}`;
-							open = open
+							period = period
 								? {
-										kind: "month",
-										since: open.since,
-										owed: Math.max(open.owed, owed),
+										since: period.since,
+										monthMax: Math.max(period.monthMax, owed),
 									}
-								: { kind: "month", since: await rowSince(videoId), owed };
+								: { since: await rowSince(videoId), monthMax: owed };
 							await database()
 								.update(developerTranscripts)
 								.set({ status: "complete", reservedMicroCredits: 0 })
@@ -1099,19 +1112,13 @@ describe.runIf(Boolean(databaseUrl))(
 						const charged = Math.min(balance - held, owed);
 						balance -= charged;
 						if (charged < owed) {
-							open = open
-								? {
-										kind: open.kind,
-										since: open.since,
-										owed: Math.max(open.owed, owed),
-									}
-								: {
-										kind: "daily",
-										since: await rowSince(dateKey),
-										owed,
-									};
-						} else if (open?.kind === "daily") {
-							open = null;
+							const since: string =
+								(period as Period | null)?.since ?? (await rowSince(dateKey));
+							lastDaily = { since, owed };
+							period = period ?? { since, monthMax: 0 };
+						} else {
+							lastDaily = { since: null, owed: 0 };
+							if (period?.monthMax === 0) period = null;
 						}
 					} else if (
 						kind === "month_paid" ||
@@ -1142,17 +1149,12 @@ describe.runIf(Boolean(databaseUrl))(
 							const charged = Math.min(balance - held, owed);
 							balance -= charged;
 							if (charged < owed) {
-								open = open
+								period = period
 									? {
-											kind: "month",
-											since: open.since,
-											owed: Math.max(open.owed, owed),
+											since: period.since,
+											monthMax: Math.max(period.monthMax, owed),
 										}
-									: {
-											kind: "month",
-											since: await rowSince(videoId),
-											owed,
-										};
+									: { since: await rowSince(videoId), monthMax: owed };
 							}
 						}
 						if (videoIds.length > 1) {
@@ -1218,10 +1220,7 @@ describe.runIf(Boolean(databaseUrl))(
 						const added = Math.floor((cents / 100) * 100_000);
 						balance += added;
 						log[log.length - 1] += ` +${added}`;
-						if (open && balance >= open.owed) {
-							covered.add(open.since);
-							open = null;
-						}
+						if (period && balance >= size()) close(false);
 					}
 
 					const where = `sequence ${sequence} step ${step}: ${log.join(" | ")}`;
@@ -1231,17 +1230,19 @@ describe.runIf(Boolean(databaseUrl))(
 						);
 						break;
 					}
-					const short = open !== null && balance - held < open.owed;
+					const short = period !== null && balance - held < size();
 					const { standing } = await getInfraBilling(appId);
 					const expected = short
 						? {
 								state: "grace",
-								pausesAt: new Date(Date.parse(open?.since ?? "") + 7 * DAY_MS),
+								pausesAt: new Date(
+									Date.parse(period?.since ?? "") + 7 * DAY_MS,
+								),
 							}
 						: { state: "active", pausesAt: null };
 					if (JSON.stringify(standing) !== JSON.stringify(expected)) {
 						failures.push(
-							`${where}: standing ${JSON.stringify(standing)} expected ${JSON.stringify(expected)} open ${JSON.stringify(open)}`,
+							`${where}: standing ${JSON.stringify(standing)} expected ${JSON.stringify(expected)} period ${JSON.stringify(period)} size ${size()} lastDaily ${JSON.stringify(lastDaily)}`,
 						);
 						break;
 					}
@@ -1273,6 +1274,143 @@ describe.runIf(Boolean(databaseUrl))(
 
 			expect(failures).toEqual([]);
 		}, 600_000);
+
+		const chargeDay = (
+			appId: string,
+			accountId: string,
+			dailyMicroCredits: number,
+			daysAgo: number,
+		) =>
+			chargeStorageDay({
+				appId,
+				accountId,
+				usage: {
+					videoCount: 1,
+					totalMinutes: 1,
+					minutesByTier: emptyStorageMinutes(),
+					monthlyMicroCredits: dailyMicroCredits * 30,
+					dailyMicroCredits,
+				},
+				dateKey: new Date(Date.now() - daysAgo * DAY_MS)
+					.toISOString()
+					.slice(0, 10),
+				now: new Date(),
+			});
+
+		const setBalance = (accountId: string, balanceMicroCredits: number) =>
+			database()
+				.update(developerCreditAccounts)
+				.set({ balanceMicroCredits })
+				.where(eq(developerCreditAccounts.id, accountId));
+
+		it("forgives an older unpaid day once the latest day is covered, then a first month latches the whole period", async () => {
+			const { appId, accountId } = await makeApp(0);
+			expect(await chargeDay(appId, accountId, 5_000, 3)).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 0,
+			});
+			await setBalance(accountId, 450);
+			const transcriptId = id();
+			await database().insert(developerTranscripts).values({
+				id: transcriptId,
+				appId,
+				status: "processing",
+				sourceType: "upload",
+				reservedMicroCredits: 400,
+			});
+			expect(await chargeDay(appId, accountId, 300, 2)).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 50,
+				owedMicroCredits: 300,
+			});
+			await database()
+				.update(developerTranscripts)
+				.set({ status: "complete", reservedMicroCredits: 0 })
+				.where(eq(developerTranscripts.id, transcriptId));
+			expect(await balanceOf(accountId)).toBe(400);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, { duration: 106 }),
+				deletedAt: null,
+			});
+			expect(await balanceOf(accountId)).toBe(250);
+			const days = await database()
+				.select({ metadata: developerCreditTransactions.metadata })
+				.from(developerCreditTransactions)
+				.where(
+					and(
+						eq(developerCreditTransactions.accountId, accountId),
+						eq(developerCreditTransactions.type, "storage_daily"),
+					),
+				);
+			expect(days).toHaveLength(2);
+			for (const day of days) {
+				expect((day.metadata as { resolvedAt?: string }).resolvedAt).toEqual(
+					expect.any(String),
+				);
+			}
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+		});
+
+		it("sizes a run of short days by the latest day, as before first months", async () => {
+			const { appId, accountId } = await makeApp(0);
+			await chargeDay(appId, accountId, 1_000, 4);
+			const [first] = await database()
+				.select({ metadata: developerCreditTransactions.metadata })
+				.from(developerCreditTransactions)
+				.where(eq(developerCreditTransactions.accountId, accountId));
+			const shortSince = (first?.metadata as { shortSince: string }).shortSince;
+			const grace = {
+				state: "grace",
+				pausesAt: new Date(Date.parse(shortSince) + 7 * DAY_MS),
+			};
+
+			await setBalance(accountId, 10);
+			expect(await chargeDay(appId, accountId, 28, 3)).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 10,
+				shortSince: new Date(shortSince),
+			});
+			await setBalance(accountId, 20);
+			expect((await getInfraBilling(appId)).standing).toEqual(grace);
+			await setBalance(accountId, 100);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+
+			await setBalance(accountId, 100);
+			const third = await chargeDay(appId, accountId, 2_000, 2);
+			expect(third).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 100,
+			});
+			const thirdSince =
+				third.state === "billed" ? (third.shortSince ?? null) : null;
+			expect(thirdSince?.getTime()).toBeGreaterThan(Date.parse(shortSince));
+			await setBalance(accountId, 1_500);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt: new Date((thirdSince?.getTime() ?? 0) + 7 * DAY_MS),
+			});
+			await setBalance(accountId, 500);
+			expect(await chargeDay(appId, accountId, 400, 1)).toMatchObject({
+				state: "billed",
+				chargedMicroCredits: 400,
+				shortSince: null,
+			});
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+		});
 
 		it("sizes a first month grace period by a larger daily charge it carries", async () => {
 			const { appId, accountId } = await makeApp(900);

@@ -201,6 +201,12 @@ async function latestFirstMonthCharge(
 	);
 }
 
+const openShortfall = (shortSince: Date) =>
+	and(
+		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${shortSince.toISOString()}`,
+		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+	);
+
 const shortfallRows = (accountId: string, shortSince: Date) =>
 	and(
 		eq(developerCreditTransactions.accountId, accountId),
@@ -208,26 +214,47 @@ const shortfallRows = (accountId: string, shortSince: Date) =>
 			FIRST_MONTH_TRANSACTION_TYPE,
 			"storage_daily",
 		]),
-		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${shortSince.toISOString()}`,
-		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+		openShortfall(shortSince),
 	);
+
+export async function firstMonthShortfallOwed(
+	executor: InfraDbExecutor,
+	accountId: string,
+	shortSince: Date,
+) {
+	const field = (name: string) =>
+		sql`COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${name}`})) AS SIGNED), 0)`;
+	const [largest] = await executor
+		.select({
+			owedMicroCredits: sql<
+				string | number | null
+			>`MAX(GREATEST(CASE WHEN ${field("chargedMicroCredits")} < ${field("owedMicroCredits")} THEN ${field("owedMicroCredits")} ELSE 0 END, ${field("outstandingMicroCredits")}))`,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+				openShortfall(shortSince),
+			),
+		);
+	return Number(largest?.owedMicroCredits) || 0;
+}
 
 export async function shortfallOwed(
 	executor: InfraDbExecutor,
 	accountId: string,
 	shortSince: Date,
 ) {
-	const owedField = (field: string) =>
-		sql`COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${field}`})) AS SIGNED), 0)`;
-	const [largest] = await executor
-		.select({
-			owedMicroCredits: sql<
-				string | number | null
-			>`MAX(GREATEST(${owedField("owedMicroCredits")}, ${owedField("outstandingMicroCredits")}))`,
-		})
-		.from(developerCreditTransactions)
-		.where(shortfallRows(accountId, shortSince));
-	return Number(largest?.owedMicroCredits) || 0;
+	const daily = await latestDailyCharge(executor, accountId);
+	const dailyOwed =
+		daily?.shortSince?.getTime() === shortSince.getTime() && !daily.resolvedAt
+			? daily.owedMicroCredits
+			: 0;
+	return Math.max(
+		dailyOwed,
+		await firstMonthShortfallOwed(executor, accountId, shortSince),
+	);
 }
 
 async function sizedShortfall(
@@ -238,9 +265,10 @@ async function sizedShortfall(
 	if (!charge?.shortSince || charge.resolvedAt) return charge;
 	return {
 		...charge,
-		owedMicroCredits: Math.max(
-			charge.owedMicroCredits,
-			await shortfallOwed(executor, accountId, charge.shortSince),
+		owedMicroCredits: await shortfallOwed(
+			executor,
+			accountId,
+			charge.shortSince,
 		),
 	};
 }

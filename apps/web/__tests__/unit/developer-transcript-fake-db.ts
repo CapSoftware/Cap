@@ -239,12 +239,14 @@ function project(rows: Row[], fields: Record<string, unknown> | undefined) {
 			} else if (/count\(\*\)/i.test(text)) {
 				result[alias] = rows.length;
 			} else if (/MAX\(GREATEST\(/i.test(text)) {
-				const fields = dialect
-					.sqlToQuery(field as SQL)
-					.params.map((path) => String(path).replace(/^\$\./, ""));
 				const values = rows.map((row) => {
 					const metadata = metadataOf(row.metadata);
-					return Math.max(...fields.map((name) => Number(metadata[name]) || 0));
+					const owed = Number(metadata.owedMicroCredits) || 0;
+					const charged = Number(metadata.chargedMicroCredits) || 0;
+					return Math.max(
+						charged < owed ? owed : 0,
+						Number(metadata.outstandingMicroCredits) || 0,
+					);
 				});
 				result[alias] = values.length > 0 ? Math.max(...values) : null;
 			} else {
