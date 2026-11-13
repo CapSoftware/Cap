@@ -1,4 +1,10 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,5 +38,8 @@ const manifest = {
 	publishConfig: { access: "public" },
 };
 
-writeFileSync(join(out, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
+writeFileSync(
+	join(out, "package.json"),
+	`${JSON.stringify(manifest, null, "\t")}\n`,
+);
 console.log(`Wrote ${manifest.name}@${manifest.version} to ${out}`);
