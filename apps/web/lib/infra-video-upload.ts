@@ -24,6 +24,10 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
+import {
+	developerVideoPublicMetadata,
+	withoutReservedMetadata,
+} from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
@@ -390,8 +394,9 @@ async function replayKeyedVideo(
 				? "userId"
 				: video.maxResolutionTier !== request.maxResolutionTier
 					? "maxResolutionTier"
-					: canonicalJson(storedJson(video.metadata)) !==
-							canonicalJson(request.metadata)
+					: canonicalJson(
+								developerVideoPublicMetadata(storedJson(video.metadata)),
+							) !== canonicalJson(request.metadata)
 						? "metadata"
 						: null;
 	if (differs) {
@@ -444,7 +449,8 @@ export async function createInfraVideo({
 	const request: VideoRequest = {
 		name: name ?? "Untitled",
 		externalUserId: userId?.trim() || null,
-		metadata: metadata ?? null,
+		// The takedown marker key is Cap's own, so a client cannot set it.
+		metadata: withoutReservedMetadata(metadata) ?? null,
 		maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 	};
 	const videoId = idempotencyKey
@@ -465,7 +471,7 @@ export async function createInfraVideo({
 			externalUserId: request.externalUserId,
 			name: request.name,
 			s3Key: `developer/${appId}/${videoId}/video`,
-			metadata,
+			metadata: request.metadata,
 			playbackId,
 			maxResolutionTier: request.maxResolutionTier,
 		});
