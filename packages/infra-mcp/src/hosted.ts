@@ -62,7 +62,8 @@ export type HostedOptions = {
 };
 
 export function createHostedTools(options: HostedOptions): HostedTool[] {
-	const apiUrl = options.apiUrl.replace(/\/+$/, "");
+	let apiUrl = options.apiUrl;
+	while (apiUrl.endsWith("/")) apiUrl = apiUrl.slice(0, -1);
 	const config = {
 		secretKey: options.secretKey,
 		apiUrl,
