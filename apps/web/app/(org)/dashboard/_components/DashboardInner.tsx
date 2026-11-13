@@ -1,4 +1,5 @@
 "use client";
+import { LibraryDoodleFilters } from "./library-doodles";
 import Top from "./Navbar/Top";
 
 export default function DashboardInner({
@@ -8,6 +9,7 @@ export default function DashboardInner({
 }) {
 	return (
 		<div className="flex overflow-hidden w-full flex-col flex-1 md:mt-0 mt-[126px]">
+			<LibraryDoodleFilters />
 			<Top />
 			<main
 				className={
