@@ -6,8 +6,9 @@ import { faLinkedinIn } from "@fortawesome/free-brands-svg-icons/faLinkedinIn";
 import { faXTwitter } from "@fortawesome/free-brands-svg-icons/faXTwitter";
 import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import Link from "next/link";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { useState } from "react";
+import { COMPLIANCE_SEALS, ComplianceSeal } from "@/components/ComplianceSeals";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 type FooterLink = {
@@ -130,80 +131,10 @@ const socialLinks: {
 	},
 ];
 
-const complianceBadges: {
-	label: string;
-	status: "compliant" | "in progress";
-	content: ReactNode;
-}[] = [
-	{
-		label: "SOC 2",
-		status: "compliant",
-		content: (
-			<text
-				x="22"
-				y="25.5"
-				textAnchor="middle"
-				fontSize="8.5"
-				fontWeight="700"
-				letterSpacing="0.2"
-				className="fill-current"
-			>
-				SOC 2
-			</text>
-		),
-	},
-	{
-		label: "HIPAA",
-		status: "compliant",
-		content: (
-			<text
-				x="22"
-				y="25.5"
-				textAnchor="middle"
-				fontSize="8"
-				fontWeight="700"
-				letterSpacing="0.1"
-				className="fill-current"
-			>
-				HIPAA
-			</text>
-		),
-	},
-	{
-		label: "ISO 27001",
-		status: "compliant",
-		content: (
-			<>
-				<text
-					x="22"
-					y="21"
-					textAnchor="middle"
-					fontSize="8.5"
-					fontWeight="700"
-					className="fill-current"
-				>
-					ISO
-				</text>
-				<text
-					x="22"
-					y="29.5"
-					textAnchor="middle"
-					fontSize="6.5"
-					fontWeight="600"
-					letterSpacing="0.4"
-					className="fill-current"
-				>
-					27001
-				</text>
-			</>
-		),
-	},
-];
-
 const ComplianceBadges = () => (
 	<div>
 		<div className="flex flex-wrap gap-2.5 items-center text-gray-10">
-			{complianceBadges.map(({ label, status, content }) => (
+			{COMPLIANCE_SEALS.map(({ label, status, content }) => (
 				<Link
 					key={label}
 					href="https://trust.cap.so"
@@ -213,22 +144,7 @@ const ComplianceBadges = () => (
 					aria-label={`${label} ${status}. View Cap's Trust Portal`}
 					className="transition-colors text-gray-9 hover:text-gray-12"
 				>
-					<svg
-						viewBox="0 0 44 44"
-						fill="none"
-						aria-hidden="true"
-						className="size-9"
-					>
-						<circle cx="22" cy="22" r="21" stroke="currentColor" />
-						<circle
-							cx="22"
-							cy="22"
-							r="17.5"
-							stroke="currentColor"
-							strokeDasharray="1 2.5"
-						/>
-						{content}
-					</svg>
+					<ComplianceSeal className="size-9">{content}</ComplianceSeal>
 				</Link>
 			))}
 		</div>
