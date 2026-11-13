@@ -145,13 +145,16 @@ describe("cancelDeveloperVideoEncodes", () => {
 		expect(mocks.cancelJob.mock.calls).toEqual([["job-hls"]]);
 	});
 
-	it("reads only the deleted videos of an app that still have a running part", async () => {
+	it("reads only the videos the app delete just removed that still have a running part", async () => {
 		mocks.rows = [
 			{ id: "video-1", processing: processingState({ hls: running("job-1") }) },
 			{ id: "video-2", processing: processingState({ mp4: running("job-2") }) },
 		];
 
-		await cancelDeveloperVideoEncodes({ appId: "app-1" });
+		await cancelDeveloperVideoEncodes({
+			appId: "app-1",
+			deletedAt: new Date("2026-11-13T06:00:00.750Z"),
+		});
 
 		const query = whereSql();
 		expect(query.sql).toContain(
@@ -161,7 +164,8 @@ describe("cancelDeveloperVideoEncodes", () => {
 			"JSON_UNQUOTE(JSON_EXTRACT(`developer_videos`.`processing`, '$.mp4.state')) = 'running'",
 		);
 		expect(query.sql).toContain("`developer_videos`.`deletedAt` is not null");
-		expect(query.params).toEqual(["app-1"]);
+		expect(query.sql).toContain("`developer_videos`.`deletedAt` >= ?");
+		expect(query.params).toEqual(["app-1", "2026-11-13 06:00:00.000"]);
 		expect(mocks.cancelJob.mock.calls.flat().sort()).toEqual([
 			"job-1",
 			"job-2",

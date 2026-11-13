@@ -30,10 +30,11 @@ export async function deleteDeveloperApp(appId: string) {
 
 	if (!app) throw new Error("App not found");
 
+	const now = new Date();
 	await db().transaction(async (tx) => {
 		await tx
 			.update(developerApiKeys)
-			.set({ revokedAt: new Date() })
+			.set({ revokedAt: now })
 			.where(
 				and(
 					eq(developerApiKeys.appId, appId),
@@ -43,12 +44,12 @@ export async function deleteDeveloperApp(appId: string) {
 
 		await tx
 			.update(developerApps)
-			.set({ deletedAt: new Date() })
+			.set({ deletedAt: now })
 			.where(eq(developerApps.id, appId));
 
 		await tx
 			.update(developerVideos)
-			.set({ deletedAt: new Date() })
+			.set({ deletedAt: now })
 			.where(
 				and(
 					eq(developerVideos.appId, appId),
@@ -56,7 +57,7 @@ export async function deleteDeveloperApp(appId: string) {
 				),
 			);
 	});
-	await cancelDeveloperVideoEncodes({ appId });
+	await cancelDeveloperVideoEncodes({ appId, deletedAt: now });
 
 	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };

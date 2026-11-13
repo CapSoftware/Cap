@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
 import type { DeveloperVideoProcessingState } from "@cap/database/types";
-import { and, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, or, sql } from "drizzle-orm";
 import { DEVELOPER_VIDEO_PARTS } from "./developer-video-state";
 import { cancelMediaServerVideoJob } from "./media-client";
 
@@ -37,16 +37,31 @@ const hasRunningPart = () =>
 		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerVideos.processing}, '$.mp4.state')) = 'running'`,
 	);
 
+export type DeveloperVideoCancelTarget =
+	| { appId: string; videoId: string }
+	| { appId: string; deletedAt: Date };
+
+// deletedAt is a whole-second column and MySQL rounds on write, so the rows an
+// app delete wrote are at or after the second it started in. Earlier deletes
+// are left out: their parts stay running forever because callbacks for
+// deleted videos are ignored, and their jobs were cancelled back then.
+function deletedInSameSecondOrLater(deletedAt: Date) {
+	return gte(
+		developerVideos.deletedAt,
+		new Date(Math.floor(deletedAt.getTime() / 1000) * 1000),
+	);
+}
+
 // Only videos already marked deleted are touched, and only inside the given
 // app, so a caller cannot reach another app's jobs with a stray video id.
 // Called once the delete has committed. Reading the jobs afterwards closes the
 // gap with a dispatch that records its job id just before the delete: a job id
 // recorded after it is refused by mutateEncode, and dispatch cancels that job
 // itself. Webhooks from a cancelled job find the video deleted and are ignored.
-export async function cancelDeveloperVideoEncodes(target: {
-	appId: string;
-	videoId?: string;
-}): Promise<void> {
+// Every cancel goes out at once so a hung media server costs one timeout.
+export async function cancelDeveloperVideoEncodes(
+	target: DeveloperVideoCancelTarget,
+): Promise<void> {
 	try {
 		const videos = await db()
 			.select({
@@ -57,9 +72,12 @@ export async function cancelDeveloperVideoEncodes(target: {
 			.where(
 				and(
 					eq(developerVideos.appId, target.appId),
-					target.videoId === undefined
-						? hasRunningPart()
-						: eq(developerVideos.id, target.videoId),
+					"videoId" in target
+						? eq(developerVideos.id, target.videoId)
+						: and(
+								deletedInSameSecondOrLater(target.deletedAt),
+								hasRunningPart(),
+							),
 					isNotNull(developerVideos.deletedAt),
 				),
 			);

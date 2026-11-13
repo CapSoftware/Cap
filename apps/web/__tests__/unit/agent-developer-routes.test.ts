@@ -303,6 +303,7 @@ describe("developer routes of the agent API", () => {
 		]);
 		expect(state.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
 			appId: APP,
+			deletedAt: state.videoUpdates[0]?.deletedAt,
 		});
 	});
 
