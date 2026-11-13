@@ -1812,6 +1812,10 @@ pub fn carry_keyboard_with_clips(
     let new_holds = timeline.hold_windows();
     let clips = &timeline.segments;
     let carry = |output: f64| -> Option<f64> {
+        let held = old_holds
+            .iter()
+            .find(|(start, end)| output >= *start && output < *end)
+            .map(|(start, _)| output - start);
         let effective = output
             - old_holds
                 .iter()
@@ -1823,8 +1827,9 @@ pub fn carry_keyboard_with_clips(
             .zip(&old_offsets)
             .enumerate()
             .rev()
-            .filter(|(_, (clip, offset))| {
-                **offset <= effective && effective < **offset + clip.duration()
+            .filter(|(_, (clip, offset))| match held {
+                Some(_) => **offset <= effective && effective <= **offset + clip.duration(),
+                None => **offset <= effective && effective < **offset + clip.duration(),
             })
             .peekable();
         if owners.peek().is_none() {
@@ -1834,12 +1839,19 @@ pub fn carry_keyboard_with_clips(
             let source = clip.start + (effective - offset) * clip.timescale;
             let target = new_index(index);
             let clip = clips.get(target)?;
-            (clip.start..clip.end).contains(&source).then(|| {
-                effective_to_output(
-                    &new_holds,
-                    new_offsets[target] + (source - clip.start) / clip.timescale,
-                )
-            })
+            let moved = new_offsets[target] + (source - clip.start) / clip.timescale;
+            match held {
+                Some(into) => (clip.start <= source && source <= clip.end).then(|| {
+                    let frame = effective_to_output_end(&new_holds, moved);
+                    let still_held = new_holds
+                        .iter()
+                        .any(|(start, _)| (start - frame).abs() < 1e-9);
+                    if still_held { frame + into } else { frame }
+                }),
+                None => (clip.start..clip.end)
+                    .contains(&source)
+                    .then(|| effective_to_output(&new_holds, moved)),
+            }
         })
     };
     timeline.keyboard_segments.retain_mut(|segment| {

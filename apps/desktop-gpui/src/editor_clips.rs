@@ -409,6 +409,7 @@ pub(crate) fn move_clip(
         return false;
     }
 
+    let before = timeline.clone();
     let mut proposed = timeline.segments.clone();
     let moved = proposed.remove(from);
     proposed.insert(to, moved);
@@ -420,49 +421,15 @@ pub(crate) fn move_clip(
         drop_clip_transition(timeline, transition.segment_index as usize);
     }
 
-    let old_offsets = clip_timeline_offsets(timeline);
-    let old_holds = timeline.hold_windows();
-    let anchors: Vec<(usize, f64, f64)> = timeline
-        .keyboard_segments
-        .iter()
-        .map(|segment| {
-            let output = segment.keys.first().map_or(segment.start, |key| {
-                segment.start + key.time_offset / 1000.0
-            });
-            let effective = output
-                - old_holds
-                    .iter()
-                    .map(|(start, end)| (output - start).clamp(0.0, end - start))
-                    .sum::<f64>();
-            let held = old_holds
-                .iter()
-                .any(|(start, end)| output >= *start && output < *end);
-            let owner = old_offsets
-                .iter()
-                .rposition(|offset| *offset < effective || (!held && *offset == effective))
-                .unwrap_or(0);
-            (owner, output, effective)
-        })
-        .collect();
-
     timeline.segments = proposed;
     timeline.transitions = kept;
-
-    let new_offsets = clip_timeline_offsets(timeline);
-    let new_holds = timeline.hold_windows();
-    let new_index = |old: usize| match old.cmp(&from) {
+    timeline.keyboard_segments = before.keyboard_segments.clone();
+    edits::carry_keyboard_with_clips(&before, timeline, |old| match old.cmp(&from) {
         std::cmp::Ordering::Equal => to,
         _ if from < to && old > from && old <= to => old - 1,
         _ if to < from && old >= to && old < from => old + 1,
         _ => old,
-    };
-    for (segment, (owner, output, effective)) in timeline.keyboard_segments.iter_mut().zip(anchors)
-    {
-        let moved = new_offsets[new_index(owner)] + effective - old_offsets[owner];
-        let shift = edits::effective_to_output(&new_holds, moved) - output;
-        segment.start += shift;
-        segment.end += shift;
-    }
+    });
     timeline
         .keyboard_segments
         .sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -4199,6 +4166,26 @@ mod tests {
     }
 
     #[test]
+    fn keypresses_inside_a_fullscreen_hold_stay_when_other_clips_reorder() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 10.0),
+            segment(0, 20.0, 30.0),
+            segment(0, 40.0, 50.0),
+        ]);
+        config.text_segments = serde_json::from_value(serde_json::json!([{
+            "start": 5.0, "end": 7.0, "track": 0,
+            "content": "Hold", "layout": "fullscreen"
+        }]))
+        .unwrap();
+        config.keyboard_segments = vec![keypress("held", 6.0, 0.0), keypress("b", 15.0, 0.0)];
+        assert!(move_clip(&mut config, 1, 3));
+        assert_eq!(
+            keypress_starts(&config),
+            vec![("held".into(), 6.0), ("b".into(), 25.0)]
+        );
+    }
+
+    #[test]
     fn keypresses_keep_their_clip_offset_when_a_reorder_drops_a_transition() {
         let mut config = timeline(vec![
             segment(0, 0.0, 10.0),
@@ -4611,17 +4598,17 @@ mod tests {
                 config.keyboard_segments[0].end,
                 config.keyboard_segments[0].keys[0].time_offset,
             ),
-            (31.5, 32.5, 500.0)
+            (1.0, 1.5, 0.0)
         );
         assert_eq!(
             (
                 config.keyboard_segments[1].start,
                 config.keyboard_segments[1].end,
             ),
-            (31.5, 34.5)
+            (1.0, 2.5)
         );
-        assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
-        assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
+        assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 0.0);
+        assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 500.0);
         for (shot, (start, end)) in
             config
                 .camera3d_segments
