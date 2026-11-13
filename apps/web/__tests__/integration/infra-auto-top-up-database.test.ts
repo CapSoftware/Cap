@@ -701,6 +701,73 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((rows as { id: string }[]).map((row) => row.id)).toEqual([fresh]);
 		});
 
+		it("lets the sweep void a deleted app's lost $600 attempt, then tops up the owner's other app and never charges the deleted one", async () => {
+			const { autoTopUpIdempotencyKey, runAutoTopUp, runDueAutoTopUps } =
+				await import("@/lib/infra-auto-top-up");
+			const ownerId = await makeOwner();
+			const deleted = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const other = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const key = autoTopUpIdempotencyKey(deleted.accountId, {
+				topUps: 0,
+				declines: 0,
+			});
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata, createdAt)
+				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":60000}', UTC_TIMESTAMP() - INTERVAL 73 HOUR)`,
+				[id(), deleted.accountId, key],
+			);
+			await pool.query(
+				"UPDATE developer_apps SET deletedAt = UTC_TIMESTAMP() WHERE id = ?",
+				[deleted.appId],
+			);
+			const before = fixture.created.length;
+
+			expect(await runAutoTopUp(other.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+
+			let searched = 0;
+			fixture.duringSearch = async () => {
+				searched += 1;
+			};
+			await runDueAutoTopUps(new Date());
+
+			expect(searched).toBe(1);
+			const [rows] = await pool.query(
+				"SELECT id FROM developer_credit_transactions WHERE accountId = ?",
+				[deleted.accountId],
+			);
+			expect(rows).toEqual([]);
+
+			await runDueAutoTopUps(new Date());
+
+			const charged = fixture.created.slice(before);
+			expect(charged.map((intent) => intent.metadata.accountId)).toEqual([
+				other.accountId,
+			]);
+			expect(charged[0]?.amount).toBe(60_000);
+			expect(await topUpsOf(other.accountId)).toHaveLength(1);
+
+			await setBalance(deleted.accountId, 30_000);
+			expect(await runAutoTopUp(deleted.accountId)).toEqual({
+				state: "skipped",
+				reason: "app_deleted",
+			});
+			expect(
+				fixture.created.filter(
+					(intent) => intent.metadata.accountId === deleted.accountId,
+				),
+			).toEqual([]);
+		});
+
 		it("counts an unresolved payment of any age against the owner's ceiling until it resolves", async () => {
 			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
 			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
