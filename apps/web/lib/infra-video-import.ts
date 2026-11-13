@@ -203,7 +203,7 @@ function contentTypeStop(contentType: string | null): ImportStop | null {
 			"unsupported_format",
 			/^text\/html/i.test(contentType)
 				? "The URL returned a web page, not a video file"
-				: `The URL returned ${contentType.split(";")[0]}, not a video file`,
+				: "The URL returned a file that is not a video",
 		);
 	}
 	return null;
@@ -415,7 +415,8 @@ type Reservation =
 	| { state: "reserved" }
 	| { state: "busy"; retryAfterSeconds: number }
 	| { state: "rate_limited"; retryAfterSeconds: number }
-	| { state: "starting" };
+	| { state: "starting" }
+	| { state: "spent"; errorCode: string | null };
 
 export async function reserveImportSlot(input: {
 	appId: string;
@@ -434,11 +435,19 @@ export async function reserveImportSlot(input: {
 			.for("update");
 
 		const [existing] = await tx
-			.select({ state: developerVideoImports.state })
+			.select({
+				state: developerVideoImports.state,
+				errorCode: developerVideoImports.errorCode,
+			})
 			.from(developerVideoImports)
 			.where(eq(developerVideoImports.videoId, input.videoId))
 			.limit(1);
-		if (existing && existing.state !== "failed") return { state: "starting" };
+		// Every attempt that opens the URL is its own row, so a key reused after
+		// a failed attempt is refused rather than fetching again uncounted.
+		if (existing?.state === "failed") {
+			return { state: "spent", errorCode: existing.errorCode };
+		}
+		if (existing) return { state: "starting" };
 
 		const [running] = await tx
 			.select({ total: count(), oldest: min(developerVideoImports.startedAt) })
@@ -480,38 +489,29 @@ export async function reserveImportSlot(input: {
 			};
 		}
 
-		const row = {
+		await tx.insert(developerVideoImports).values({
+			videoId: input.videoId,
 			appId: input.appId,
 			keyId: input.keyId,
 			sourceUrl: input.sourceUrl,
-			state: "downloading" as const,
-			bytes: null,
-			errorCode: null,
+			state: "downloading",
 			startedAt: now,
-			finishedAt: null,
 			createdAt: now,
-		};
-		if (existing) {
-			await tx
-				.update(developerVideoImports)
-				.set(row)
-				.where(eq(developerVideoImports.videoId, input.videoId));
-		} else {
-			await tx
-				.insert(developerVideoImports)
-				.values({ videoId: input.videoId, ...row });
-		}
+		});
 		return { state: "reserved" };
 	});
 }
+
+type Executor = Pick<ReturnType<typeof db>, "update">;
 
 async function finishImport(
 	videoId: string,
 	outcome:
 		| { state: "complete"; bytes: number }
 		| { state: "failed"; code: ImportErrorCode },
+	executor: Executor = db(),
 ) {
-	await db()
+	await executor
 		.update(developerVideoImports)
 		.set(
 			outcome.state === "complete"
@@ -536,24 +536,32 @@ async function failImportedVideo(
 	videoId: string,
 	stop: ImportStop,
 ) {
-	await finishImport(videoId, { state: "failed", code: stop.code });
-	if (stop.code === "cancelled") return;
-	const [result] = await db()
-		.update(developerVideos)
-		.set({
-			status: "errored",
-			errorReason: `Import failed: ${stop.message}`.slice(0, 512),
-		})
-		.where(
-			and(
-				eq(developerVideos.id, videoId),
-				eq(developerVideos.appId, appId),
-				eq(developerVideos.status, "uploading"),
-				isNull(developerVideos.duration),
-				isNull(developerVideos.deletedAt),
-			),
-		);
-	if (result.affectedRows > 0) {
+	if (stop.code === "cancelled") {
+		await finishImport(videoId, { state: "failed", code: stop.code });
+		return;
+	}
+	// Both rows change together: a retry of a step that died between them
+	// would otherwise skip the failed import and leave the video uploading.
+	const failed = await db().transaction(async (tx) => {
+		await finishImport(videoId, { state: "failed", code: stop.code }, tx);
+		const [result] = await tx
+			.update(developerVideos)
+			.set({
+				status: "errored",
+				errorReason: `Import failed: ${stop.message}`.slice(0, 512),
+			})
+			.where(
+				and(
+					eq(developerVideos.id, videoId),
+					eq(developerVideos.appId, appId),
+					eq(developerVideos.status, "uploading"),
+					isNull(developerVideos.duration),
+					isNull(developerVideos.deletedAt),
+				),
+			);
+		return result.affectedRows > 0;
+	});
+	if (failed) {
 		announceDeveloperVideoEvent(
 			{ id: videoId, appId },
 			{ type: "video.errored" },
@@ -673,6 +681,16 @@ export async function createInfraVideoImport(
 			videoId: input.videoId,
 			sourceUrl: input.url,
 		});
+		if (reservation.state === "spent") {
+			return {
+				status: 409,
+				body: apiErrorBody(
+					"idempotency_conflict",
+					`This Idempotency-Key belongs to an import that failed${reservation.errorCode ? ` (${reservation.errorCode})` : ""}`,
+					"Fix the URL if needed, then send the import again with a new Idempotency-Key.",
+				),
+			};
+		}
 		if (reservation.state === "starting") {
 			return {
 				status: 409,
@@ -880,6 +898,9 @@ export async function streamSourceToParts(
 		pending = writer.put(number, bytes).then((etag) => {
 			parts.push({ partNumber: number, etag, size });
 		});
+		// A part can fail while the next read is still waiting. The handler
+		// keeps that from counting as unhandled; the next await still throws.
+		pending.catch(() => {});
 		buffer = new Uint8Array(options.partBytes);
 		filled = 0;
 	};
@@ -1061,17 +1082,11 @@ export async function runInfraVideoImport(
 			await finishImport(videoId, { state: "complete", bytes: totalBytes });
 			return "complete";
 		}
-		uploadId = null;
 		if (completed.status === 402) {
-			await failImportedVideo(
-				appId,
-				videoId,
-				new ImportStop(
-					"insufficient_credits",
-					String(completed.body.message ?? completed.body.error),
-				),
+			throw new ImportStop(
+				"insufficient_credits",
+				String(completed.body.message ?? completed.body.error),
 			);
-			return "failed";
 		}
 		const removed =
 			completed.status === 404 || completed.body.code === "upload_removed";

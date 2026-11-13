@@ -80,7 +80,6 @@ const MISSING_LINK_ADVICE: Record<
 const videoCanPlay = (video: Record<string, unknown>) =>
 	video.ready === true || video.status === "ready";
 
-// An imported video stays uploading while Cap downloads its file.
 const videoIsDownloading = (video: Record<string, unknown>) =>
 	asRecord(video.import).state === "downloading";
 

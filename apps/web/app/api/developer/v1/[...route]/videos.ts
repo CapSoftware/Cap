@@ -50,8 +50,6 @@ async function withCaptions(appId: string, videos: DeveloperVideoRow[]) {
 	}));
 }
 
-// Only a video created from a URL has an import, so every other video reads
-// exactly as before.
 async function withImport<T extends { id: string } | undefined>(video: T) {
 	if (!video) return video;
 	const imported = await developerVideoImportView(video.id);

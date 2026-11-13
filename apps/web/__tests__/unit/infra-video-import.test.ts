@@ -149,6 +149,16 @@ describe("checkImportUrl", () => {
 		["IPv4 loopback, short form", "https://127.1/a.mp4"],
 		["IPv4 loopback, decimal form", "https://2130706433/a.mp4"],
 		["IPv4 loopback, hex form", "https://0x7f000001/a.mp4"],
+		["IPv4 loopback, octal form", "https://0177.0.0.1/a.mp4"],
+		["metadata, decimal form", "https://2852039166/latest/meta-data/"],
+		["metadata, hex dotted form", "https://0xa9.0xfe.0xa9.0xfe/latest/"],
+		["this network, not zero", "https://0.1.2.3/a.mp4"],
+		["carrier NAT, top of range", "https://100.127.255.254/a.mp4"],
+		[
+			"GCP metadata name",
+			"https://metadata.google.internal/computeMetadata/v1/",
+		],
+		["a bare metadata name", "https://metadata/latest/"],
 		["cloud metadata", "https://169.254.169.254/latest/meta-data/"],
 		["RFC 1918 10/8", "https://10.0.0.1/a.mp4"],
 		["RFC 1918 172.16/12", "https://172.16.5.4/a.mp4"],
@@ -369,6 +379,24 @@ describe("what the URL serves", () => {
 		).toBe("too_large");
 	});
 
+	it("never repeats what the server sent in its answer", async () => {
+		const stop = await preflightImport(
+			"https://media.example.com/a",
+			serve(
+				okResponse([MP4_HEAD], {
+					"content-type": "text/plain; x=<script>alert(1)</script>",
+				}),
+			),
+		).catch((error) => error);
+		expect(stop.code).toBe("unsupported_format");
+		expect(stop.message).toBe("The URL returned a file that is not a video");
+		const page = await preflightImport(
+			"https://media.example.com/a",
+			serve(new Response("secret internal page", { status: 403 })),
+		).catch((error) => error);
+		expect(page.message).toBe("The URL answered 403");
+	});
+
 	it("accepts octet-stream and no type when the bytes look like a video", async () => {
 		const variants: Record<string, string>[] = [
 			{ "content-type": "application/octet-stream" },
@@ -510,6 +538,34 @@ describe("streamSourceToParts", () => {
 		expect(error.code).toBe("too_large");
 		expect(delivered).toBe(56);
 		expect(put).toHaveBeenCalledTimes(3);
+	});
+
+	it("reports a part that fails while the next read is still waiting", async () => {
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		try {
+			let reads = 0;
+			const slow = {
+				read: async () => {
+					reads++;
+					if (reads > 2) return { done: true as const, value: undefined };
+					await new Promise((resolve) => setTimeout(resolve, 30));
+					return { done: false as const, value: new Uint8Array(16) };
+				},
+			};
+			const error = await streamSourceToParts(
+				slow,
+				{ chunks: [], length: 0, done: false },
+				{ put: async () => Promise.reject(new Error("storage down")) },
+				{ maxBytes: 1_000, partBytes: 16 },
+			).catch((caught) => caught);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(error).toBeInstanceOf(Error);
+			expect(error.message).toBe("storage down");
+			expect(unhandled).not.toHaveBeenCalled();
+		} finally {
+			process.off("unhandledRejection", unhandled);
+		}
 	});
 
 	it("keeps the bytes it already read for the sniff", async () => {

@@ -344,6 +344,40 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(otherKey.status).toBe(202);
 			});
 
+			it("refuses a key reused after a failed attempt, without opening the URL again", async () => {
+				const appId = await seedApp();
+				const keyId = id();
+				const dead = {
+					isBlocked: async () => false,
+					request: vi.fn(async () => new Response("gone", { status: 404 })),
+				};
+				const input = request(appId, keyId, { idempotencyKey: "retry-key-1" });
+				const first = await createInfraVideoImport(input, {
+					startImport,
+					guards: dead,
+				});
+				expect(first.status).toBe(422);
+				for (let attempt = 0; attempt < 3; attempt++) {
+					const again = await createInfraVideoImport(input, {
+						startImport,
+						guards: dead,
+					});
+					expect(again.status).toBe(409);
+					if (again.status !== 409) return;
+					expect(again.body).toMatchObject({
+						code: "idempotency_conflict",
+						error:
+							"This Idempotency-Key belongs to an import that failed (url_unreachable)",
+					});
+				}
+				expect(dead.request).toHaveBeenCalledTimes(1);
+				const fresh = await createInfraVideoImport(
+					request(appId, keyId, { idempotencyKey: "retry-key-2" }),
+					{ startImport, guards: serving(mp4Bytes(64)) },
+				);
+				expect(fresh.status).toBe(202);
+			});
+
 			it("counts a refused preflight against the hour", async () => {
 				const appId = await seedApp();
 				const keyId = id();
@@ -623,6 +657,33 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
+			it("aborts the stored parts when completion fails for storage", async () => {
+				const appId = await seedApp();
+				const videoId = await seedImport(appId);
+				fixture.completeResult = {
+					status: 500,
+					body: { code: "internal_error", error: "Failed to complete upload" },
+				};
+				const outcome = await runInfraVideoImport(videoId, {
+					guards: serving(mp4Bytes(40)),
+					writer: recordingWriter().writer,
+					partBytes: 16,
+				});
+				expect(outcome).toBe("failed");
+				expect(mocks.abort).toHaveBeenCalledWith({
+					appId,
+					videoId,
+					uploadId: "upload-1",
+				});
+				expect(await importRow(videoId)).toMatchObject({
+					state: "failed",
+					errorCode: "storage_failed",
+				});
+				expect((await videoRow(videoId))?.errorReason).toBe(
+					"Import failed: The file could not be stored",
+				);
+			});
+
 			it("fails the video when completion is refused for credit", async () => {
 				const appId = await seedApp();
 				const videoId = await seedImport(appId);
@@ -641,7 +702,11 @@ describe.runIf(Boolean(databaseUrl))(
 					errorCode: "insufficient_credits",
 				});
 				expect((await videoRow(videoId))?.status).toBe("errored");
-				expect(mocks.abort).not.toHaveBeenCalled();
+				expect(mocks.abort).toHaveBeenCalledWith({
+					appId,
+					videoId,
+					uploadId: "upload-1",
+				});
 			});
 
 			it("leaves a deleted video alone", async () => {
