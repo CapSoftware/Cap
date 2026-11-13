@@ -61,29 +61,27 @@ const { formatMinutes } = await import("@/lib/infra-usage");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
 
-const CREATE_TABLE_WITHOUT_FINAL = `CREATE TABLE developer_delivery_daily (
-	appId varchar(15) NOT NULL,
-	day date NOT NULL,
-	tier varchar(8) NOT NULL,
-	seconds bigint NOT NULL,
-	bytes bigint NOT NULL,
-	requests int NOT NULL,
-	updatedAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	PRIMARY KEY (appId, day, tier)
+const CREATE_TABLE = `CREATE TABLE \`developer_delivery_daily\` (
+	\`appId\` varchar(15) NOT NULL,
+	\`day\` date NOT NULL,
+	\`tier\` varchar(8) NOT NULL,
+	\`seconds\` bigint NOT NULL DEFAULT 0,
+	\`bytes\` bigint NOT NULL DEFAULT 0,
+	\`requests\` int NOT NULL DEFAULT 0,
+	\`abandonedBytes\` bigint NOT NULL DEFAULT 0,
+	\`final\` boolean NOT NULL DEFAULT false,
+	\`finalizedAt\` timestamp,
+	\`updatedAt\` timestamp NOT NULL,
+	CONSTRAINT \`developer_delivery_daily_appId_day_tier_pk\` PRIMARY KEY(\`appId\`,\`day\`,\`tier\`)
 )`;
 
-const CREATE_TABLE = `CREATE TABLE developer_delivery_daily (
-	appId varchar(15) NOT NULL,
-	day date NOT NULL,
-	tier varchar(8) NOT NULL,
-	seconds bigint NOT NULL,
-	bytes bigint NOT NULL,
-	requests int NOT NULL,
-	final boolean NOT NULL DEFAULT false,
-	finalizedAt timestamp NULL,
-	updatedAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	PRIMARY KEY (appId, day, tier)
-)`;
+const CREATE_DAY_INDEX =
+	"CREATE INDEX `day_idx` ON `developer_delivery_daily` (`day`)";
+
+const CREATE_TABLE_WITHOUT_FINAL = CREATE_TABLE.replace(
+	/\n\t`final`[^\n]*\n\t`finalizedAt`[^\n]*/,
+	"",
+);
 
 const usageDelivery = async () => {
 	const response = await app.request("/");
@@ -148,7 +146,7 @@ describe.runIf(Boolean(databaseUrl))(
 		it("reports no delivery while the table has no final column yet", async () => {
 			await pool.query(CREATE_TABLE_WITHOUT_FINAL);
 			await pool.query(
-				"INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests) VALUES (?, '2026-11-02', '1080p', 600, 1, 1)",
+				"INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests, updatedAt) VALUES (?, '2026-11-02', '1080p', 600, 1, 1, NOW())",
 				[fixture.appId],
 			);
 			await expect(getDeliveredUsage(fixture.appId)).resolves.toBeNull();
@@ -158,18 +156,19 @@ describe.runIf(Boolean(databaseUrl))(
 
 		it("gives the same minutes in the console and in GET /usage", async () => {
 			await pool.query(CREATE_TABLE);
+			await pool.query(CREATE_DAY_INDEX);
 			await pool.query(
-				`INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests, final, finalizedAt) VALUES
-				(?, '2026-11-01', '1080p', 36000, 900000000, 1200, true, '2026-11-03 02:05:00'),
-				(?, '2026-11-01', '720p', 7200, 120000000, 300, true, '2026-11-03 02:05:00'),
-				(?, '2026-11-01', 'audio', 0, 5000000, 90, true, '2026-11-03 02:05:00'),
-				(?, '2026-11-15', '1080p', 18000, 450000000, 600, true, '2026-11-17 02:05:00'),
-				(?, '2026-11-19', '360p', 750, 4000000, 40, false, NULL),
-				(?, '2026-11-19', '720p', 12960, 210000000, 500, false, NULL),
-				(?, '2026-11-19', 'audio', 0, 3000000, 60, false, NULL),
-				(?, '2026-10-31', '1080p', 99999, 1, 1, true, '2026-11-02 02:05:00'),
-				(?, '2026-12-01', '1080p', 99999, 1, 1, false, NULL),
-				('otherapp0000001', '2026-11-18', '1080p', 99999, 1, 1, true, '2026-11-20 02:05:00')`,
+				`INSERT INTO developer_delivery_daily (appId, day, tier, seconds, bytes, requests, abandonedBytes, final, finalizedAt, updatedAt) VALUES
+				(?, '2026-11-01', '1080p', 36000, 900000000, 1200, 50000000, true, '2026-11-03 02:05:00', '2026-11-03 02:05:00'),
+				(?, '2026-11-01', '720p', 7200, 120000000, 300, 0, true, '2026-11-03 02:05:00', '2026-11-03 02:05:00'),
+				(?, '2026-11-01', 'audio', 0, 5000000, 90, 0, true, '2026-11-03 02:05:00', '2026-11-03 02:05:00'),
+				(?, '2026-11-15', '1080p', 18000, 450000000, 600, 0, true, '2026-11-17 02:05:00', '2026-11-17 02:05:00'),
+				(?, '2026-11-19', '360p', 750, 4000000, 40, 0, false, NULL, '2026-11-20 06:00:00'),
+				(?, '2026-11-19', '720p', 12960, 210000000, 500, 9000000, false, NULL, '2026-11-20 06:00:00'),
+				(?, '2026-11-19', 'audio', 0, 3000000, 60, 0, false, NULL, '2026-11-20 06:00:00'),
+				(?, '2026-10-31', '1080p', 99999, 1, 1, 0, true, '2026-11-02 02:05:00', '2026-11-02 02:05:00'),
+				(?, '2026-12-01', '1080p', 99999, 1, 1, 0, false, NULL, '2026-12-01 06:00:00'),
+				('otherapp0000001', '2026-11-18', '1080p', 99999, 1, 1, 0, true, '2026-11-20 02:05:00', '2026-11-20 02:05:00')`,
 				Array(9).fill(fixture.appId),
 			);
 
