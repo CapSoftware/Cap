@@ -421,6 +421,13 @@
 			"when": 1794555548432,
 			"tag": "0059_developer_video_first_month",
 			"breakpoints": true
+		},
+		{
+			"idx": 60,
+			"version": "5",
+			"when": 1794580290199,
+			"tag": "0060_developer_delivery_metering",
+			"breakpoints": true
 		}
 	]
 }
