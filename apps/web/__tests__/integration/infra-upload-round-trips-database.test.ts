@@ -4,6 +4,7 @@ import {
 	developerCreditAccounts,
 	developerVideos,
 } from "@cap/database/schema";
+import type { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
@@ -172,7 +173,7 @@ describe.runIf(Boolean(databaseUrl))(
 	() => {
 		let pool: Pool;
 		const appId = `rt${id()}`;
-		const ownerId = `rt${id()}`;
+		const ownerId = `rt${id()}` as User.UserId;
 		const videoIds: string[] = [];
 
 		beforeAll(async () => {
