@@ -150,52 +150,32 @@ describe("developer video player data", () => {
 	});
 
 	it.each([
-		"This file has no video track.",
-		"This file could not be read as a video. Upload a video file such as MP4, MOV, WebM or MKV.",
-		"The uploaded file is empty. Upload it again.",
-		"Video is longer than the 4 hour limit",
-	])("shows a viewer the reason about the file: %s", async (errorReason) => {
-		mocks.store.video = developerVideo({ status: "errored", errorReason });
-
-		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
-			kind: "failed",
-			reason: errorReason,
-		});
-	});
-
-	it.each([
+		["a reason about the file", "This file has no video track."],
+		[
+			"advice written for the uploader",
+			"This video could not be processed. Upload it again, or export it as an MP4 and upload that.",
+		],
 		[
 			"the app's credit shortfall",
 			"Not enough credit to store this video at its measured length and size. Add at least $0.05 of credit and upload it again.",
 		],
 		[
-			"a shorter credit refusal",
-			"Not enough credit for the video's full length",
-		],
-		[
-			"a file sentence that mentions credit",
-			"This video could not be stored because the app is out of credit.",
-		],
-		[
 			"a raw encoder string",
 			"ffmpeg exited 1: /tmp/cap-media-server/abc/input.mp4: Invalid data found",
 		],
-		[
-			"an internal processing reason",
-			"Processing failed because of a problem on our side. Upload the video again.",
-		],
 		["a missing reason", null],
-	])(
-		"shows a viewer one neutral sentence instead of %s",
-		async (_, errorReason) => {
-			mocks.store.video = developerVideo({ status: "errored", errorReason });
+	])("keeps %s away from a viewer", async (_, errorReason) => {
+		mocks.store.video = developerVideo({ status: "errored", errorReason });
 
-			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
-				kind: "failed",
-				reason: "Its owner can see what went wrong.",
-			});
-		},
-	);
+		const player = await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(player).toEqual({
+			name: expect.any(String),
+			width: expect.any(Number),
+			height: expect.any(Number),
+			kind: "failed",
+		});
+	});
 
 	it("offers nothing to play while the app is paused", async () => {
 		mocks.standing.mockResolvedValue({

@@ -69,12 +69,27 @@ vi.mock("@/lib/developer-transcript-store", () => ({
 	listTranscripts: mocks.listTranscripts,
 	isTranscriptIdempotencyKey: () => true,
 }));
+vi.mock("@/lib/developer-transcript-usage", () => ({
+	getSpeechUsage: async () => ({
+		balanceMicroCredits: mocks.accounts[0]?.balanceMicroCredits ?? 0,
+		availableMicroCredits: 0,
+		heldMicroCredits: 0,
+		speech: {
+			periodStart: "2026-11-01T00:00:00.000Z",
+			seconds: 0,
+			microCredits: 0,
+			transcripts: 0,
+		},
+	}),
+}));
 vi.mock("@/lib/infra-standing", async (original) => ({
 	...(await original<typeof import("@/lib/infra-standing")>()),
 	getInfraBilling: mocks.billing,
 	infraBillingJson: (billing: Record<string, unknown>) => billing,
 }));
 vi.mock("@/lib/infra-video-upload", () => ({
+	MAX_UPLOAD_BYTES: 36_000_000_000,
+	openUpload: vi.fn(),
 	createInfraVideo: mocks.createVideo,
 	initiateInfraUpload: mocks.initiate,
 	presignInfraUploadParts: vi.fn(),

@@ -11,6 +11,7 @@ import {
 	isDeveloperPublicKey,
 	missingUploadTokenRefusal,
 	publicKeyRefusal,
+	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
 } from "@/lib/developer-upload-token";
 
@@ -157,6 +158,91 @@ describe("upload token", () => {
 		expect(
 			verifyDeveloperUploadToken(`${token.slice(0, -1)}_`, NOW),
 		).toMatchObject({ reason: "invalid" });
+	});
+});
+
+describe("upload token size cap", () => {
+	const issuedBeforeTheCap =
+		"cut_eyJ2IjoxLCJhcHAiOiJhcHAtMSIsInZpZGVvIjoidmlkZW8tMSIsImV4cCI6MTc5NDQ4MTIwMDAwMCwib3JpZ2luIjoiaHR0cHM6Ly9hcHAuZXhhbXBsZS5jb20ifQ.vxfWYfqpiizehUCsXA4N2lvp8X_PeXKgMWrk8QO3Si4";
+
+	it("still verifies a token issued before the cap existed", () => {
+		expect(verifyDeveloperUploadToken(issuedBeforeTheCap, NOW)).toEqual({
+			ok: true,
+			token: fields,
+		});
+	});
+
+	it("issues the same token as before when no cap is set", () => {
+		expect(createDeveloperUploadToken(fields)).toBe(issuedBeforeTheCap);
+		expect(
+			"maxBytes" in
+				(
+					verifyDeveloperUploadToken(issuedBeforeTheCap, NOW) as {
+						token: object;
+					}
+				).token,
+		).toBe(false);
+	});
+
+	it("carries the cap it was made with", () => {
+		const token = createDeveloperUploadToken({
+			...fields,
+			maxBytes: 250_000_000,
+		});
+
+		expect(token).not.toBe(issuedBeforeTheCap);
+		expect(verifyDeveloperUploadToken(token, NOW)).toEqual({
+			ok: true,
+			token: { ...fields, maxBytes: 250_000_000 },
+		});
+	});
+
+	it.each([
+		["a larger cap", { max: 500_000_000 }],
+		["no cap", {}],
+	])(
+		"refuses a capped payload rewritten for %s under the old signature",
+		(_label, change) => {
+			const token = createDeveloperUploadToken({
+				...fields,
+				maxBytes: 250_000_000,
+			});
+			const payload = encode({
+				v: 1,
+				app: fields.appId,
+				video: fields.videoId,
+				exp: fields.expiresAt,
+				origin: fields.corsOrigin,
+				...change,
+			});
+
+			expect(
+				verifyDeveloperUploadToken(
+					`cut_${payload}.${parts(token).signature}`,
+					NOW,
+				),
+			).toEqual({ ok: false, reason: "invalid" });
+		},
+	);
+
+	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"does not issue a token with the cap %s",
+		(maxBytes) => {
+			expect(() =>
+				createDeveloperUploadToken({ ...fields, maxBytes }),
+			).toThrow();
+		},
+	);
+});
+
+describe("an expired upload token", () => {
+	it("points at the route that renews it", () => {
+		expect(uploadTokenRefusal("expired")).toMatchObject({
+			code: "upload_token_expired",
+			hint: expect.stringContaining(
+				"POST /api/developer/v1/uploads/{videoId}/token",
+			),
+		});
 	});
 });
 

@@ -19,6 +19,7 @@ import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
+import { exactUserIdMatch } from "@/lib/developer-user-scope";
 import {
 	developerVideoPageUrls,
 	developerVideoPlaybackUrls,
@@ -159,9 +160,10 @@ export async function getDeveloperAppVideos(
 		isNull(developerVideos.deletedAt),
 	];
 
-	if (options?.userId) {
-		conditions.push(eq(developerVideos.externalUserId, options.userId));
-	}
+	const userMatch = options?.userId
+		? exactUserIdMatch(developerVideos.externalUserId, options.userId)
+		: undefined;
+	if (userMatch) conditions.push(userMatch);
 
 	const rows = await db()
 		.select({
