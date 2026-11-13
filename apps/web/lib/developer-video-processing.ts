@@ -938,12 +938,14 @@ async function completedOutcome(
 	renditions?: DeveloperVideoRendition[];
 }> {
 	const keys = developerVideoKeys(video, processing.encodeId, token);
-	const poster = await headDeveloperVideoObject(keys.poster);
-	const posterBytes = poster?.bytes ?? 0;
 	const needsDuration = processing.probe?.duration == null;
 
 	if (part === "mp4") {
-		const output = await headDeveloperVideoObject(keys.mp4);
+		const [poster, output] = await Promise.all([
+			headDeveloperVideoObject(keys.poster),
+			headDeveloperVideoObject(keys.mp4),
+		]);
+		const posterBytes = poster?.bytes ?? 0;
 		if (!output || output.bytes === 0) {
 			return {
 				outcome: { type: "failed", reason: "Encoded MP4 was not stored" },
@@ -967,9 +969,13 @@ async function completedOutcome(
 			outcome: { type: "failed", reason: "Encoder reported no renditions" },
 		};
 	}
-	const master = await readDeveloperVideoText(
-		`${keys.hlsPrefix}${DEVELOPER_VIDEO_MASTER_PLAYLIST}`,
-	);
+	const [poster, master] = await Promise.all([
+		headDeveloperVideoObject(keys.poster),
+		readDeveloperVideoText(
+			`${keys.hlsPrefix}${DEVELOPER_VIDEO_MASTER_PLAYLIST}`,
+		),
+	]);
+	const posterBytes = poster?.bytes ?? 0;
 	if (!master || !ladderMatchesMaster(ladder.renditions, master)) {
 		return {
 			outcome: {

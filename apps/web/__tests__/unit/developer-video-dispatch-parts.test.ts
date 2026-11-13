@@ -53,6 +53,7 @@ vi.mock("@/lib/media-container", () => ({
 }));
 
 const {
+	applyDeveloperVideoProgress,
 	dispatchDeveloperVideoParts,
 	prepareDeveloperVideoProcessing,
 } = await import("@/lib/developer-video-processing");
@@ -225,5 +226,98 @@ describe("source facts from preparation", () => {
 
 		expect(seen.source).toBeUndefined();
 		expect(mocks.head).not.toHaveBeenCalled();
+	});
+});
+
+describe("settling a finished part", () => {
+	const running = (token: string) => ({
+		state: "running" as const,
+		token,
+		jobId: "job-1",
+		startedAt: 2_000,
+	});
+
+	it("asks for the poster and the MP4 at the same time", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({ mp4: running("t1") }),
+		});
+		const pending: Array<() => void> = [];
+		mocks.head.mockImplementation(
+			(key: string) =>
+				new Promise((resolve) => {
+					pending.push(() =>
+						resolve({
+							bytes: key.endsWith(".mp4") ? 2_000 : 50,
+							contentType: null,
+						}),
+					);
+				}),
+		);
+
+		const settling = applyDeveloperVideoProgress(
+			{ videoId: "video-1", phase: "complete" },
+			"mp4",
+			"t1",
+		);
+		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		for (const resolve of pending) resolve();
+
+		expect(await settling).toEqual({ success: true, applied: true });
+		expect(video().processing?.mp4).toMatchObject({ state: "complete" });
+		expect(video().processing?.bytes).toMatchObject({ mp4: 2_000, poster: 50 });
+	});
+
+	it("asks for the poster and the master playlist at the same time", async () => {
+		mocks.store.video = developerVideo({
+			processing: processingState({ hls: running("t2") }),
+		});
+		const pending: Array<() => void> = [];
+		mocks.head.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					pending.push(() => resolve({ bytes: 50, contentType: null }));
+				}),
+		);
+		mocks.readText.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					pending.push(() =>
+						resolve(
+							[
+								"#EXTM3U",
+								"#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080",
+								"1080p.m3u8",
+							].join("\n"),
+						),
+					);
+				}),
+		);
+
+		const settling = applyDeveloperVideoProgress(
+			{
+				videoId: "video-1",
+				phase: "complete",
+				ladder: {
+					encoder: "libx264",
+					renditions: [
+						{
+							name: "1080p",
+							width: 1920,
+							height: 1080,
+							bandwidth: 4_000_000,
+							bytes: 5_000,
+						},
+					],
+					audio: { bytes: 300 },
+				},
+			},
+			"hls",
+			"t2",
+		);
+		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		for (const resolve of pending) resolve();
+
+		expect(await settling).toEqual({ success: true, applied: true });
+		expect(video().processing?.hls).toMatchObject({ state: "complete" });
 	});
 });
