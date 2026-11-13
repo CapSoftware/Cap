@@ -274,21 +274,24 @@ describe("creating an upload with the secret key", () => {
 	});
 
 	it.each([
-		["a public key", "cpk_app1_page"],
-		["an upload token", "cut_abc.def"],
-		["no key", null],
-	])("refuses %s and inserts nothing", async (_label, credential) => {
-		const response = await post(
-			rest,
-			"/api/developer/v1/uploads",
-			credential,
-			{},
-		);
+		["a public key", "cpk_app1_page", 403, "public_key_not_allowed"],
+		["an upload token", "cut_abc.def", 401, "invalid_secret_key"],
+		["no key", null, 401, "invalid_secret_key"],
+	])(
+		"refuses %s and inserts nothing",
+		async (_label, credential, status, code) => {
+			const response = await post(
+				rest,
+				"/api/developer/v1/uploads",
+				credential,
+				{},
+			);
 
-		expect(response.status).toBe(401);
-		expect(await response.json()).toMatchObject({ code: "invalid_secret_key" });
-		expect(inserts()).toHaveLength(0);
-	});
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code });
+			expect(inserts()).toHaveLength(0);
+		},
+	);
 
 	it.each([
 		[60, 60],
@@ -794,15 +797,15 @@ describe("renewing the token of an open upload", () => {
 	});
 
 	it.each([
-		["a public key", "cpk_app1_page"],
-		["no key", null],
-	])("refuses %s", async (_label, credential) => {
+		["a public key", "cpk_app1_page", 403, "public_key_not_allowed"],
+		["no key", null, 401, "invalid_secret_key"],
+	])("refuses %s", async (_label, credential, status, code) => {
 		const first = await created();
 
 		const response = await renew(first.videoId, {}, credential);
 
-		expect(response.status).toBe(401);
-		expect(await response.json()).toMatchObject({ code: "invalid_secret_key" });
+		expect(response.status).toBe(status);
+		expect(await response.json()).toMatchObject({ code });
 	});
 
 	it("cannot be renewed with the upload token itself", async () => {

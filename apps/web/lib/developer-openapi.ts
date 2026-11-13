@@ -14,6 +14,7 @@ import {
 	transcriptFailureCodesText,
 	transcriptRequestErrorsText,
 } from "@/lib/developer-transcript-errors";
+import { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -234,6 +235,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 
 const restErrors = {
 	"401": response("Unauthorized"),
+	"403": response("Forbidden"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -335,11 +337,16 @@ const playbackProperties = {
 		format: "uri",
 		description: "Poster image. Null until ready.",
 	},
+	takenDown: {
+		type: "boolean",
+		description:
+			"True when Cap has taken the video down after a report. Its playback URLs are null, its playback files answer 410 Gone to new requests, and its page and embed show only that the video is not available, until Cap restores it. Signed media links a player already loaded keep working until they expire, at most 18 hours later. status is unchanged, and the video is stored and billed as before. Email hello@cap.so about a takedown.",
+	},
 	outputs: {
 		type: "object",
 		required: ["hls", "mp4"],
 		description:
-			"Whether each output is still coming. ready means its URL is set. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
+			"Whether each output is still coming. ready means its URL is set, except while takenDown is true, when every URL is null. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
 		properties: {
 			hls: {
 				type: "string",
@@ -445,9 +452,18 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
 			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
+			"",
+			`Agents can use the same operations as tools through the hosted MCP server at ${baseUrl}${INFRA_MCP_PATH} (Streamable HTTP). Send the secret key as Authorization: Bearer. Its requests count toward the same per-key limit. Setup for Claude Code, Cursor and Codex is at https://cap.so/docs/api/get-started#10-use-with-agents-mcp.`,
 		].join("\n"),
 		termsOfService: "https://cap.so/terms",
 		contact: { name: "Cap", email: "hello@cap.so", url: "https://cap.so" },
+		"x-mcp": {
+			url: `${baseUrl}${INFRA_MCP_PATH}`,
+			transport: "streamable-http",
+			authorization: "Authorization: Bearer <secret key>",
+			documentation:
+				"https://cap.so/docs/api/get-started#10-use-with-agents-mcp",
+		},
 	},
 	externalDocs: { description: "REST API guide", url: API_DOCS_URL },
 	servers: [{ url: baseUrl, description: "Cap" }],
@@ -633,7 +649,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
@@ -659,7 +674,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
 					"503": response("Unavailable"),
@@ -683,7 +697,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"503": response("Unavailable"),
@@ -841,7 +854,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "presignSdkUploadPart",
 				summary: "Presign upload parts",
 				description:
-					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count. A part number above the last one the upload's size limit allows (maxBytes divided by 5,242,880 and rounded up, or 6,867 with no maxBytes) returns 400 with code part_number_too_large and signs nothing, so number the parts from 1 with no gaps.",
+					"Returns presigned URLs, each valid for one hour. Send partNumbers to sign up to 50 parts in one request and get parts back, or partNumber to sign one part and get presignedUrl back. PUT the bytes for each part to its URL and keep the ETag response header for completeSdkUpload. Every part except the last must be at least 5 MB (5,242,880 bytes). More than 50 part numbers, or none, returns 400 with code invalid_part_count. A part number above the last one the upload's size limit allows (maxBytes divided by 5,242,880 and rounded up, or 6,867 with no maxBytes) returns 400 with code part_number_too_large and signs nothing, so number the parts from 1 with no gaps. Signing does not contact storage, so an uploadId that is wrong or was aborted is not refused here: the PUT to its URL fails, and completeSdkUpload answers 404 with code upload_not_found.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("PresignPartRequest"),
@@ -877,7 +890,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "abortSdkUpload",
 				summary: "Abort a multipart upload",
 				description:
-					"Cancels an unfinished upload and discards its parts. Returns 404 with code upload_not_found when no open upload matches the uploadId, which means there is nothing left to abort.",
+					"Cancels an unfinished upload and discards its parts. Abort is safe to repeat: when no open upload matches the uploadId, for example because it was already aborted, it answers 200 with success true again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("AbortUploadRequest"),
@@ -1749,7 +1762,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			Forbidden: json(
 				ref("Error"),
-				"The request is not allowed. On the upload operations the code is public_key_not_allowed when a public key was sent, origin_not_allowed when the Origin header differs from the token's corsOrigin, and video_mismatch when the body names a video other than the token's. Elsewhere, the account cannot use this feature yet.",
+				"The request is not allowed. The code is public_key_not_allowed when a public key was sent where a secret key or upload token is required. On the upload operations the code is origin_not_allowed when the Origin header differs from the token's corsOrigin, and video_mismatch when the body names a video other than the token's. Elsewhere, the account cannot use this feature yet.",
 			),
 			NotFound: json(
 				ref("Error"),

@@ -24,6 +24,10 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
+import {
+	developerVideoPublicMetadata,
+	withoutReservedMetadata,
+} from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import { lockInfraAccount } from "@/lib/infra-balance";
@@ -391,8 +395,9 @@ async function replayKeyedVideo(
 				? "userId"
 				: video.maxResolutionTier !== request.maxResolutionTier
 					? "maxResolutionTier"
-					: canonicalJson(storedJson(video.metadata)) !==
-							canonicalJson(request.metadata)
+					: canonicalJson(
+								developerVideoPublicMetadata(storedJson(video.metadata)),
+							) !== canonicalJson(request.metadata)
 						? "metadata"
 						: null;
 	if (differs) {
@@ -446,7 +451,8 @@ export async function createInfraVideo({
 	const request: VideoRequest = {
 		name: name ?? "Untitled",
 		externalUserId: userId?.trim() || null,
-		metadata: metadata ?? null,
+		// The takedown marker key is Cap's own, so a client cannot set it.
+		metadata: withoutReservedMetadata(metadata) ?? null,
 		maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 	};
 	const videoId = idempotencyKey
@@ -467,7 +473,7 @@ export async function createInfraVideo({
 			externalUserId: request.externalUserId,
 			name: request.name,
 			s3Key: `developer/${appId}/${videoId}/video`,
-			metadata,
+			metadata: request.metadata,
 			playbackId,
 			maxResolutionTier: request.maxResolutionTier,
 		});
@@ -1070,11 +1076,8 @@ export async function abortInfraUpload({
 
 		return ok({ success: true });
 	} catch (error) {
-		if (storageErrorCode(error) === "NoSuchUpload") {
-			return uploadNotFound(
-				"Nothing was aborted. The upload was already aborted or completed, or the uploadId is wrong.",
-			);
-		}
+		if (storageErrorCode(error) === "NoSuchUpload")
+			return ok({ success: true });
 		console.error("Error aborting multipart upload:", error);
 		return storageFailure("Failed to abort upload");
 	}

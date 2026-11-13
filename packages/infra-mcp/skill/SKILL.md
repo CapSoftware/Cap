@@ -65,6 +65,6 @@ Tell the user before you do something that keeps costing money, such as uploadin
 
 ## Limits to respect
 
-- The API allows 60 requests a minute for each key. The wait tools already pace themselves, so call a wait tool and let it run, and do not poll `videos_get` or `transcripts_get` in a loop.
+- The API limits how many requests each key can send a minute. The wait tools already pace themselves, so call a wait tool and let it run, and do not poll `videos_get` or `transcripts_get` in a loop.
 - A video can be up to 36 GB and 4 hours. A transcript source can be up to 2 GB and 4 hours.
 - Lists return 50 items unless you set `limit` (up to 100). When `nextOffset` is not null, pass it as `offset` for the next page.
