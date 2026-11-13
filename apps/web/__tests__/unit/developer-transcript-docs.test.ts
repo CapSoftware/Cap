@@ -133,6 +133,61 @@ describe("the language parameter", () => {
 	});
 });
 
+describe("transcribing a stored video", () => {
+	const request = spec.components.schemas.CreateTranscriptRequest as {
+		oneOf?: { required: string[] }[];
+		required?: string[];
+		properties: Record<string, unknown>;
+	};
+	const transcript = spec.components.schemas.Transcript as {
+		properties: {
+			videoId?: { type: string[] };
+			source: { properties: { type: { enum: string[] } } };
+		};
+	};
+
+	it("accepts videoId or url on Create Transcript in the OpenAPI document", () => {
+		expect(Object.keys(request.properties)).toEqual(
+			expect.arrayContaining(["url", "videoId"]),
+		);
+		expect(request.required).toBeUndefined();
+		expect(request.oneOf).toEqual([
+			{ required: ["url"] },
+			{ required: ["videoId"] },
+		]);
+	});
+
+	it("describes the videoId field and the video source type on the transcript", () => {
+		expect(transcript.properties.videoId?.type).toEqual(["string", "null"]);
+		expect(transcript.properties.source.properties.type.enum).toEqual([
+			"upload",
+			"url",
+			"video",
+		]);
+	});
+
+	it("documents videoId, what it costs and that captions come from it", () => {
+		expect(transcriptDocs).toContain(
+			"| `videoId` | string | One of `url` or `videoId` |",
+		);
+		expect(transcriptDocs).toContain(
+			'"source": { "type": "video", "url": null }',
+		);
+		expect(transcriptDocs).toContain('"videoId": "abc123def456"');
+		expect(transcriptDocs).toContain(
+			"It costs the transcript price only, $0.10 per audio hour.",
+		);
+		expect(transcriptDocs).toContain(
+			"Captions for the hosted player are generated from the newest completed transcript of a video in each language.",
+		);
+		expect(transcriptDocs).toContain("`videoId`, `contentLength`, `name`");
+	});
+
+	it("leaves the captions file and the player to the playback docs", () => {
+		expect(transcriptDocs).not.toMatch(/\.vtt|WebVTT|captions\//i);
+	});
+});
+
 describe("transcript docs keep up with the API", () => {
 	it("states the characters an Idempotency-Key may contain", () => {
 		expect(transcriptDocs).toContain(

@@ -153,13 +153,23 @@ const transcriptSchema = {
 			type: "object",
 			required: ["type"],
 			properties: {
-				type: { type: "string", enum: ["upload", "url"] },
+				type: {
+					type: "string",
+					enum: ["upload", "url", "video"],
+					description:
+						"upload for a file sent to Cap, url for a public URL, video for a video the app stores.",
+				},
 				url: {
 					type: ["string", "null"],
 					description:
-						"The URL the transcript was created from, without its query string or fragment. null for an upload.",
+						"The URL the transcript was created from, without its query string or fragment. null for an upload and for a stored video.",
 				},
 			},
+		},
+		videoId: {
+			type: ["string", "null"],
+			description:
+				"The video this transcript was created from with videoId. null for every other transcript. Captions for the hosted player are generated from the newest completed transcript of a video in each language.",
 		},
 		durationSeconds: {
 			type: ["number", "null"],
@@ -578,7 +588,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
 				description:
-					"Creates a transcript from a public audio or video URL and starts it. The URL must use http or https on the default port and resolve to a public address. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. The file must finish downloading within 15 minutes. Poll getTranscript every few seconds until status is complete or error. To transcribe a video the app already stores, send the video's mp4Url as url once the video is ready. A field the request does not know returns 400 with code invalid_request.",
+					"Creates a transcript from a public audio or video URL, or from a video the app already stores, and starts it. Send exactly one of url or videoId. The URL must use http or https on the default port and resolve to a public address, and the file must finish downloading within 15 minutes. With videoId the video must belong to this app, not be deleted and be ready: Cap reads its stored MP4 directly, so nothing is downloaded and the URL size limit does not apply. An unknown or deleted video returns 404 video_not_found, and one that is not ready returns 409 video_not_ready. A video transcript costs the transcript price only, $0.10 per audio hour. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A stored video is held for its known length. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every few seconds until status is complete or error. A field the request does not know returns 400 with code invalid_request.",
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -591,6 +601,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
 					"403": response("Forbidden"),
+					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
 					"503": response("Unavailable"),
@@ -1054,7 +1065,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			},
 			CreateTranscriptRequest: {
 				type: "object",
-				required: ["url"],
+				description: "Send exactly one of url or videoId.",
+				oneOf: [{ required: ["url"] }, { required: ["videoId"] }],
 				additionalProperties: false,
 				properties: {
 					url: {
@@ -1062,7 +1074,14 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						format: "uri",
 						maxLength: 2048,
 						description:
-							"Public http or https URL of an audio or video file. The mp4Url of a ready video of this app works.",
+							"Public http or https URL of an audio or video file. Leave it out when you send videoId.",
+					},
+					videoId: {
+						type: "string",
+						minLength: 1,
+						maxLength: 64,
+						description:
+							"ID of a ready video of this app. Cap transcribes its stored MP4 directly. Leave it out when you send url.",
 					},
 					...transcriptOptionProperties,
 				},
