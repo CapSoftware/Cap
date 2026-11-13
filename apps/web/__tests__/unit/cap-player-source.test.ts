@@ -1039,6 +1039,23 @@ describe("attachSource sharpening while the pointer rests on play", () => {
 		sharpen();
 
 		expect(hls.currentLevel).toBe(-1);
+
+		held(hls);
+
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("drops a waiting swap once play is pressed", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		sharpen();
+		void video.play();
+		held(hls);
+
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("leaves a playing video alone", async () => {

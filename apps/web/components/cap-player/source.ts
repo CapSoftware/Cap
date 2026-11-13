@@ -422,6 +422,9 @@ export const attachSource = (
 			// player, so a fast line does not play its first seconds soft.
 			let heldSeconds = 0;
 			let swappedTo = AUTO_LEVEL;
+			// A pointer can rest on play before the held segment has arrived.
+			// The swap then waits for it.
+			let sharpenWhenHeld = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
 				if (!playRequested) heldSeconds = data.frag.duration;
@@ -432,9 +435,11 @@ export const attachSource = (
 					const at = video.currentTime;
 					video.currentTime = at;
 				}
+				if (sharpenWhenHeld) sharpen();
 			});
 			sharpen = () => {
 				if (playRequested || startPending || picked !== AUTO_LEVEL) return;
+				sharpenWhenHeld = !heldSeconds;
 				if (!heldSeconds) return;
 				const level = pickStartingLevel(
 					hls.levels,
