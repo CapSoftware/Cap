@@ -12,6 +12,7 @@ import { billableVideo } from "@/lib/developer-pricing";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
+import { settleFirstMonthAtReady } from "@/lib/infra-storage-minimum";
 import {
 	chargeDeveloperVideoUpload,
 	DEVELOPER_VIDEO_MAX_DURATION_SECONDS,
@@ -110,6 +111,7 @@ async function mutateDeveloperVideo(
 	mutate: (video: DeveloperVideoRow) => DeveloperVideoUpdate | null,
 	executor?: InfraDbExecutor,
 ): Promise<DeveloperVideoRow | null> {
+	let becameReady = false;
 	const run = async (tx: InfraDbExecutor) => {
 		const [video] = await tx
 			.select()
@@ -119,13 +121,16 @@ async function mutateDeveloperVideo(
 		if (!video) return null;
 		const updates = mutate(video);
 		if (!updates) return null;
+		becameReady = video.status !== "ready" && updates.status === "ready";
 		await tx
 			.update(developerVideos)
 			.set(updates)
 			.where(eq(developerVideos.id, videoId));
 		return { ...video, ...updates } as DeveloperVideoRow;
 	};
-	return executor ? run(executor) : db().transaction(run);
+	const updated = await (executor ? run(executor) : db().transaction(run));
+	if (updated && becameReady) await settleFirstMonthAtReady(updated, executor);
+	return updated;
 }
 
 async function mutateEncode(

@@ -22,7 +22,7 @@ export type LedgerDescription = {
 
 const TYPE_LABELS: Record<string, string> = {
 	topup: "Top-up",
-	video_create: "Video upload",
+	video_create: "Storage, first month",
 	storage_daily: "Storage",
 	transcription: "Transcription",
 	refund: "Refund",
@@ -55,6 +55,12 @@ const NOTES: Record<string, string> = {
 		"The balance could not pay for this day. It is not charged later.",
 	"Storage, part paid":
 		"The balance paid for part of this day. The rest is not charged later.",
+	"Storage, first month":
+		"One month of storage for this video, charged when it became ready. It is charged daily after that.",
+	"Storage, first month, unpaid":
+		"The balance could not pay for this video's first month. It is not charged later.",
+	"Storage, first month, part paid":
+		"The balance paid for part of this video's first month. The rest is not charged later.",
 };
 
 const DECLINED_WITHOUT_PAYMENT = /^declined-(\d{4}-\d{2}-\d{2})$/;
@@ -67,7 +73,17 @@ function ledgerLabel(row: LedgerRow) {
 			? "Storage, unpaid"
 			: "Storage, part paid";
 	}
+	if (row.type === "video_create" && firstMonthFellShort(row)) {
+		return row.amountMicroCredits === 0
+			? "Storage, first month, unpaid"
+			: "Storage, first month, part paid";
+	}
 	return TYPE_LABELS[row.type] ?? row.type;
+}
+
+function firstMonthFellShort(row: LedgerRow) {
+	const charge = parseStorageCharge(row);
+	return charge.owedMicroCredits > Math.abs(row.amountMicroCredits);
 }
 
 function ledgerReference(row: LedgerRow) {

@@ -258,6 +258,47 @@ describe("what each row says", () => {
 	});
 });
 
+describe("a video's first month of storage", () => {
+	const firstMonth = (
+		amount: number,
+		owed: number,
+		shortSince: string | null,
+	) =>
+		row({
+			type: "video_create",
+			amountMicroCredits: amount,
+			referenceId: "v1d3o9k2m4x7n1p",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: owed,
+				chargedMicroCredits: -amount,
+				shortSince,
+				durationSeconds: 600,
+				tier: "1080p",
+				paidUntil: "2026-12-12T00:00:00.000Z",
+			},
+		});
+
+	it("names a paid month and points at the video", () => {
+		expect(describeLedgerRow(firstMonth(-850, 850, null))).toEqual({
+			label: "Storage, first month",
+			note: "One month of storage for this video, charged when it became ready. It is charged daily after that.",
+			reference: { kind: "Video", value: "v1d3o9k2m4x7n1p" },
+		});
+	});
+
+	it("says when the balance paid part of the month or none of it", () => {
+		const since = "2026-11-12T14:05:09.000Z";
+		expect(describeLedgerRow(firstMonth(-300, 850, since)).label).toBe(
+			"Storage, first month, part paid",
+		);
+		expect(describeLedgerRow(firstMonth(0, 850, since))).toMatchObject({
+			label: "Storage, first month, unpaid",
+			note: "The balance could not pay for this video's first month. It is not charged later.",
+		});
+	});
+});
+
 describe("the API shape", () => {
 	it("carries exact dollars beside the micro-credits", () => {
 		expect(serializeLedgerRow(row())).toEqual({

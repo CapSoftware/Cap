@@ -16,10 +16,15 @@ import {
 } from "@/lib/infra-standing";
 import { getStorageUsageByApp } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
+import {
+	chargeMissedFirstMonths,
+	firstMonthShortfallsSince,
+} from "@/lib/infra-storage-minimum";
 import { utcDateKey } from "@/lib/infra-usage";
 
 const BATCH_SIZE = 10;
 const GRACE_MS = INFRA_GRACE_DAYS * 24 * 60 * 60 * 1000;
+const CRON_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export async function GET(request: Request) {
 	const cronSecret = process.env.CRON_SECRET;
@@ -56,6 +61,7 @@ export async function GET(request: Request) {
 		.where(isNull(developerApps.deletedAt));
 
 	const topUpsBefore = await runDueAutoTopUps(now);
+	const firstMonths = await chargeMissedFirstMonths(now);
 
 	let processed = 0;
 	let short = 0;
@@ -83,6 +89,9 @@ export async function GET(request: Request) {
 		);
 		const usageByApp = await getStorageUsageByApp(
 			pending.map((account) => account.appId),
+			undefined,
+			db(),
+			{ dailyChargeAt: now },
 		);
 
 		for (let i = 0; i < pending.length; i += BATCH_SIZE) {
@@ -92,7 +101,7 @@ export async function GET(request: Request) {
 					if (!usage) return null;
 					if (usage.dailyMicroCredits <= 0) {
 						const lastCharge = await latestStorageCharge(db(), account.id);
-						if (!lastCharge?.shortSince) return null;
+						if (!lastCharge?.shortSince || lastCharge.firstMonth) return null;
 					}
 					const result = await chargeStorageDay({
 						appId: account.appId,
@@ -129,6 +138,18 @@ export async function GET(request: Request) {
 		}
 	}
 
+	const shortfalls = await firstMonthShortfallsSince(
+		accounts.map((account) => account.id),
+		new Date(now.getTime() - CRON_INTERVAL_MS),
+	);
+	for (const [accountId, shortSince] of shortfalls) {
+		await sendInfraOutOfCreditEmail({
+			accountId,
+			shortSince,
+			pausesAt: new Date(shortSince.getTime() + GRACE_MS),
+		});
+	}
+
 	const topUpsAfter = await runDueAutoTopUps(now);
 	const autoTopUps = {
 		attempted: topUpsBefore.attempted + topUpsAfter.attempted,
@@ -141,6 +162,7 @@ export async function GET(request: Request) {
 		date: today,
 		appsProcessed: processed,
 		appsShort: short,
+		firstMonths,
 		autoTopUps,
 	});
 }

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	selects: [] as Record<string, unknown>[][],
 	getStorageUsageByApp: vi.fn(),
+	chargeMissedFirstMonths: vi.fn(),
+	firstMonthShortfallsSince: vi.fn(),
 	chargeStorageDay: vi.fn(),
 	latestStorageCharge: vi.fn(),
 	runDueAutoTopUps: vi.fn(),
@@ -38,6 +40,10 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("@/lib/infra-storage", () => ({
 	getStorageUsageByApp: mocks.getStorageUsageByApp,
 }));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	chargeMissedFirstMonths: mocks.chargeMissedFirstMonths,
+	firstMonthShortfallsSince: mocks.firstMonthShortfallsSince,
+}));
 vi.mock("@/lib/infra-storage-billing", () => ({
 	chargeStorageDay: mocks.chargeStorageDay,
 }));
@@ -57,6 +63,7 @@ import { GET } from "@/app/api/cron/developer-storage/route";
 
 const CRON_SECRET = "test-cron-secret";
 const NO_TOP_UPS = { attempted: 0, succeeded: 0, failed: 0 };
+const NO_FIRST_MONTHS = { charged: 0, short: 0, failed: 0 };
 
 const usage = (dailyMicroCredits: number) => ({
 	videoCount: dailyMicroCredits > 0 ? 1 : 0,
@@ -99,6 +106,10 @@ beforeEach(() => {
 	]) {
 		mock.mockReset();
 	}
+	mocks.chargeMissedFirstMonths.mockReset();
+	mocks.chargeMissedFirstMonths.mockResolvedValue(NO_FIRST_MONTHS);
+	mocks.firstMonthShortfallsSince.mockReset();
+	mocks.firstMonthShortfallsSince.mockResolvedValue(new Map());
 	mocks.runDueAutoTopUps.mockResolvedValue(NO_TOP_UPS);
 	mocks.latestStorageCharge.mockResolvedValue(null);
 	mocks.chargeStorageDay.mockResolvedValue(billed());
@@ -147,7 +158,10 @@ describe("developer-storage cron job", () => {
 			autoTopUps: NO_TOP_UPS,
 		});
 		expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-		expect(mocks.getStorageUsageByApp).toHaveBeenCalledWith(["app-1", "app-2"]);
+		expect(mocks.getStorageUsageByApp.mock.calls[0]?.[0]).toEqual([
+			"app-1",
+			"app-2",
+		]);
 		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(2);
 		expect(mocks.chargeStorageDay).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -174,7 +188,7 @@ describe("developer-storage cron job", () => {
 		const { body } = await authorized();
 
 		expect(body.appsProcessed).toBe(1);
-		expect(mocks.getStorageUsageByApp).toHaveBeenCalledWith(["app-2"]);
+		expect(mocks.getStorageUsageByApp.mock.calls[0]?.[0]).toEqual(["app-2"]);
 		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
 		expect(mocks.chargeStorageDay.mock.calls[0]?.[0]).toMatchObject({
 			accountId: "account-2",
@@ -307,6 +321,82 @@ describe("developer-storage cron job", () => {
 
 		expect(order).toEqual(["top-up", "charge", "top-up"]);
 		expect(body.autoTopUps).toEqual({ attempted: 3, succeeded: 2, failed: 1 });
+	});
+
+	it("charges missed first months after the first top-ups and before the day is measured", async () => {
+		const order: string[] = [];
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.runDueAutoTopUps.mockImplementation(async () => {
+			order.push("top-up");
+			return NO_TOP_UPS;
+		});
+		mocks.chargeMissedFirstMonths.mockImplementation(async () => {
+			order.push("first months");
+			return { charged: 2, short: 1, failed: 0 };
+		});
+		mocks.getStorageUsageByApp.mockImplementation(async () => {
+			order.push("measure");
+			return new Map([["app-1", usage(28)]]);
+		});
+
+		const { body } = await authorized();
+
+		expect(order).toEqual(["top-up", "first months", "measure", "top-up"]);
+		expect(body.firstMonths).toEqual({ charged: 2, short: 1, failed: 0 });
+	});
+
+	it("does not open a daily charge to settle a short first month when nothing is charged daily", async () => {
+		const shortSince = new Date(Date.now() - 60 * 60 * 1000);
+		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([["app-1", usage(0)]]),
+		);
+		mocks.latestStorageCharge.mockResolvedValue({
+			createdAt: shortSince,
+			owedMicroCredits: 5_600,
+			shortSince,
+			firstMonth: true,
+		});
+
+		await authorized();
+
+		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+	});
+
+	it("emails each account whose first month fell short since the last run, once, with the pause date seven days on", async () => {
+		const shortSince = new Date(Date.now() - 60 * 60 * 1000);
+		mocks.selects = [
+			[
+				{ id: "account-1", appId: "app-1" },
+				{ id: "account-2", appId: "app-2" },
+			],
+			[],
+		];
+		mocks.getStorageUsageByApp.mockResolvedValue(
+			new Map([
+				["app-1", usage(0)],
+				["app-2", usage(0)],
+			]),
+		);
+		mocks.firstMonthShortfallsSince.mockResolvedValue(
+			new Map([["account-2", shortSince]]),
+		);
+
+		const before = Date.now();
+		await authorized();
+
+		const [accountIds, since] =
+			mocks.firstMonthShortfallsSince.mock.calls[0] ?? [];
+		expect(accountIds).toEqual(["account-1", "account-2"]);
+		expect(before - (since as Date).getTime()).toBeGreaterThanOrEqual(
+			6 * 60 * 60 * 1000 - 1000,
+		);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledTimes(1);
+		expect(mocks.sendInfraOutOfCreditEmail).toHaveBeenCalledWith({
+			accountId: "account-2",
+			shortSince,
+			pausesAt: new Date(shortSince.getTime() + 7 * 24 * 60 * 60 * 1000),
+		});
 	});
 
 	it("answers with zero apps when there are none", async () => {
