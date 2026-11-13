@@ -24,7 +24,7 @@ Limits and polling:
 - A secret key allows 300 requests a minute across the REST endpoints, and all the keys of one account together 1,200 a minute. Each upload token allows 1,200 a minute across the upload endpoints. Requests with a rejected key or token are limited to 30 a minute per address. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`. On a `429`, wait for the `Retry-After` seconds, then retry.
 - There is no public webhook API. After an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. A ready video can still have `hlsUrl` null for a moment while `mp4Url` plays.
 - Transcripts: `POST /api/developer/v1/transcripts` with a public `url` or the `videoId` of a ready video the app stores, or `POST /api/developer/v1/transcripts/uploads`, PUT the file, then `POST /api/developer/v1/transcripts/{id}/start`. Poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`.
-- Errors are JSON with `error`, `code`, `message`, `hint` and `docs` fields. A 4xx other than `429` and a `409` with code `completion_in_progress` will not succeed if repeated.
+- Errors are JSON with `error`, `code`, `message`, `hint` and `docs` fields. Follow each error's `hint`. A 4xx will not succeed if repeated unchanged, except a `429`, a `409` with code `completion_in_progress`, and a `409` with code `video_not_ready` for a video that is still processing.
 
 Every page under https://cap.so/docs is available as Markdown: add `.md` to its URL (for example https://cap.so/docs/api/rest-api.md) or request it with `Accept: text/markdown`.
 
