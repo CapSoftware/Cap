@@ -126,7 +126,7 @@ Send request bodies as JSON with the header `Content-Type: application/json`. Ma
 | `500` | Internal server error (`internal_error`). Retry with backoff |
 | `503` | Transcription is temporarily unavailable. Retry later |
 
-A `4xx` response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: `429`, and `409` with the code `completion_in_progress`.
+A `4xx` response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: `429`, and `409` with the code `completion_in_progress` from complete. The same `409` from abort is different: do not repeat the abort (see [Abort Upload](/docs/api/rest-api#abort-upload)).
 
 ## Rate Limits
 
@@ -1299,11 +1299,13 @@ Complete can itself return `409` with a `code`:
 | `completion_in_progress` | Another request is completing this upload right now, for example your own earlier request whose response was lost. | Wait for the seconds in the `Retry-After` header, then send the same complete request again, and repeat for as long as it answers this way. If the earlier request was cut off, that can last up to 15 minutes. Do not abort the upload or delete the video. |
 | `upload_removed` | The upload sat unrecorded for more than a day and was removed. | Create a new upload and send the file again. |
 
-Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header: wait for the completion to finish. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
+Abort also returns `409` with `completion_in_progress` while a completion holds the video, without a `Retry-After` header. See [Abort Upload](/docs/api/rest-api#abort-upload) for what to do. Every SDK API endpoint returns `404` with the code `video_not_found` once the video is deleted. To upload a new file, create a new upload.
 
 #### Abort Upload
 
 Cancel an in-progress multipart upload and discard its parts. Abort is safe to repeat: when no open upload matches the `uploadId`, for example because it was already aborted, it answers `200` with `{ "success": true }` again.
+
+If abort returns `409` with the code `completion_in_progress`, the upload is being completed and can no longer be aborted. Do not repeat the abort. From your server, wait until [`GET /api/developer/v1/videos/:id`](/docs/api/rest-api#get-video) no longer shows the video as `processing`, then [delete the video](/docs/api/rest-api#delete-video) if you do not want it.
 
 ```
 POST /api/developer/sdk/v1/upload/multipart/abort

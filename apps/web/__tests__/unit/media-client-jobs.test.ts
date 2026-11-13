@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	cancelMediaServerVideoJob,
 	readMediaServerVideoJob,
 	startMediaServerVideoJob,
 	tryProbeVideoViaMediaServer,
@@ -287,5 +288,74 @@ describe("tryProbeVideoViaMediaServer", () => {
 			message: "Media input could not be read",
 			unusable: true,
 		});
+	});
+});
+
+describe("cancelMediaServerVideoJob", () => {
+	it("asks the media server to cancel the job with the shared secret", async () => {
+		mockFetch.mockResolvedValue(json({ success: true }));
+
+		expect(await cancelMediaServerVideoJob("job/1")).toBe("cancelled");
+
+		const [url, init] = mockFetch.mock.calls[0] ?? [];
+		expect(url).toBe("http://media.example/video/process/job%2F1/cancel");
+		expect(init).toMatchObject({
+			method: "POST",
+			headers: { "x-media-server-secret": "test-secret" },
+			redirect: "error",
+		});
+		expect(init.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it.each([
+		{
+			name: "a job that already finished",
+			response: () =>
+				json({ error: "Job already finished", code: "INVALID_STATE" }, 400),
+			result: "finished",
+		},
+		{
+			name: "a job no media server knows",
+			response: () => json({ error: "Job not found", code: "NOT_FOUND" }, 404),
+			result: "missing",
+		},
+		{
+			name: "a 404 that did not come from the media server",
+			response: () => new Response("Application not found", { status: 404 }),
+			result: "failed",
+		},
+		{
+			name: "a server error",
+			response: () => json({ error: "boom" }, 500),
+			result: "failed",
+		},
+	])("reports $name as $result", async ({ response, result }) => {
+		mockFetch.mockResolvedValue(response());
+
+		expect(await cancelMediaServerVideoJob("job-1")).toBe(result);
+	});
+
+	it("reports a media server it cannot reach as failed", async () => {
+		mockFetch.mockRejectedValue(networkError("ECONNREFUSED"));
+
+		expect(await cancelMediaServerVideoJob("job-1")).toBe("failed");
+	});
+
+	it("gives up after five seconds", async () => {
+		const timeout = vi.spyOn(AbortSignal, "timeout");
+		timeout.mockImplementation(() => AbortSignal.abort());
+		mockFetch.mockImplementation(
+			(_url: string, init: RequestInit) =>
+				new Promise((_resolve, reject) => {
+					if (init.signal?.aborted) reject(init.signal.reason);
+					init.signal?.addEventListener("abort", () =>
+						reject(init.signal?.reason),
+					);
+				}),
+		);
+
+		expect(await cancelMediaServerVideoJob("job-1")).toBe("failed");
+		expect(timeout).toHaveBeenCalledWith(5_000);
+		timeout.mockRestore();
 	});
 });
