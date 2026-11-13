@@ -1,6 +1,8 @@
 import { pipeline, type Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { createGunzip } from "node:zlib";
+import type { DeveloperVideoResolutionTier } from "@cap/database/types";
+import { planDeveloperVideoEncode } from "./developer-video-plan";
 
 export const DELIVERY_RENDITION_TIERS = [
 	"360p",
@@ -189,6 +191,9 @@ export function hlsSecondsDelivered(
 export interface DeliveryVideo {
 	appId: string;
 	duration: number | null;
+	width: number | null;
+	height: number | null;
+	maxResolutionTier: DeveloperVideoResolutionTier;
 	renditions: { name: string; width: number; height: number; bytes: number }[];
 	mp4Bytes: number | null;
 }
@@ -196,6 +201,9 @@ export interface DeliveryVideo {
 export function readDeliveryVideo(row: {
 	appId: string;
 	duration: number | null;
+	width: number | null;
+	height: number | null;
+	maxResolutionTier: DeveloperVideoResolutionTier;
 	renditions: unknown;
 	processing: unknown;
 }): DeliveryVideo {
@@ -218,6 +226,9 @@ export function readDeliveryVideo(row: {
 	return {
 		appId: row.appId,
 		duration: row.duration,
+		width: row.width,
+		height: row.height,
+		maxResolutionTier: row.maxResolutionTier,
 		renditions,
 		mp4Bytes: typeof mp4Bytes === "number" ? mp4Bytes : null,
 	};
@@ -243,7 +254,66 @@ export function deliveryMp4Tier(
 			tier = rendition.name as DeliveryRenditionTier;
 		}
 	}
-	return tier;
+	if (tier) return tier;
+	if (!video.width || !video.height) return null;
+	try {
+		const { ladderMaxTier } = planDeveloperVideoEncode(
+			{ width: video.width, height: video.height },
+			video.maxResolutionTier,
+		);
+		return ladderTopTier(video.width, video.height, ladderMaxTier);
+	} catch {
+		return null;
+	}
+}
+
+const LADDER = [
+	{ name: "2160p", shortSide: 2160 },
+	{ name: "1440p", shortSide: 1440 },
+	{ name: "1080p", shortSide: 1080 },
+	{ name: "720p", shortSide: 720 },
+	{ name: "360p", shortSide: 360 },
+] as const;
+const MAX_ENCODE_DIMENSION = 4096;
+const WIDESCREEN = 16 / 9;
+
+// Mirrors the top rung name of planHlsLadder in apps/media-server/src/lib/
+// hls-ladder.ts, which names renditions by their encoded size. The MP4 is
+// encoded at that top rung's size, so a video whose HLS failed still gets the
+// label its top rendition would have had.
+export function ladderTopTier(
+	width: number,
+	height: number,
+	maxTier: DeliveryRenditionTier,
+): DeliveryRenditionTier {
+	const maxIndex = Math.max(
+		0,
+		LADDER.findIndex((tier) => tier.name === maxTier),
+	);
+	const sourceShort = Math.min(width, height);
+	const sourceLong = Math.max(width, height);
+	const topShort = Math.min(sourceShort, LADDER[maxIndex]?.shortSide ?? 2160);
+	const scale = Math.min(
+		1,
+		topShort / sourceShort,
+		MAX_ENCODE_DIMENSION / sourceLong,
+	);
+	const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
+	const pixels = even(width * scale) * even(height * scale);
+	let byShort = LADDER.length - 1;
+	let byPixels = LADDER.length - 1;
+	for (let index = LADDER.length - 2; index >= 0; index--) {
+		const upper = LADDER[index];
+		const lower = LADDER[index + 1];
+		if (!upper || !lower) continue;
+		if (topShort >= Math.sqrt(upper.shortSide * lower.shortSide))
+			byShort = index;
+		if (pixels >= WIDESCREEN * upper.shortSide * lower.shortSide) {
+			byPixels = index;
+		}
+	}
+	const top = LADDER[Math.max(maxIndex, Math.min(byShort, byPixels))];
+	return top?.name ?? "360p";
 }
 
 export interface DeliveryResolver {
@@ -481,11 +551,12 @@ function isCount(value: unknown): value is number {
 
 export function readDeliveryParts(value: unknown): DeliveryPart[] {
 	if (!Array.isArray(value)) return [];
-	return value.filter(
-		(part): part is DeliveryPart =>
-			Array.isArray(part) &&
-			part.length === 8 &&
-			typeof part[0] === "string" &&
+	return value.flatMap((raw: unknown) => {
+		if (!Array.isArray(raw) || (raw.length !== 7 && raw.length !== 8)) {
+			return [];
+		}
+		const part = raw.length === 7 ? [...raw, 0] : raw;
+		return typeof part[0] === "string" &&
 			DAY.test(part[0]) &&
 			typeof part[1] === "string" &&
 			typeof part[2] === "string" &&
@@ -494,6 +565,8 @@ export function readDeliveryParts(value: unknown): DeliveryPart[] {
 			isCount(part[4]) &&
 			isCount(part[5]) &&
 			isCount(part[6]) &&
-			isCount(part[7]),
-	);
+			isCount(part[7])
+			? [part as DeliveryPart]
+			: [];
+	});
 }

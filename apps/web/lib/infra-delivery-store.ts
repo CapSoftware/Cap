@@ -25,6 +25,7 @@ import {
 	type DeliveryLogFile,
 	type DeliveryLogLocation,
 	type DeliveryLogSource,
+	type DeliveryProcessedFile,
 	type DeliveryStore,
 	deliveryLogHour,
 } from "./infra-delivery-metering";
@@ -98,6 +99,9 @@ export const storageDeliveryResolver: DeliveryResolver = {
 			.select({
 				appId: developerVideos.appId,
 				duration: developerVideos.duration,
+				width: developerVideos.width,
+				height: developerVideos.height,
+				maxResolutionTier: developerVideos.maxResolutionTier,
 				renditions: developerVideos.renditions,
 				processing: developerVideos.processing,
 			})
@@ -109,22 +113,27 @@ export const storageDeliveryResolver: DeliveryResolver = {
 };
 
 export const databaseDeliveryStore: DeliveryStore = {
-	async processedEtags(files) {
-		const known = new Map<string, string>();
+	async processedFiles(files) {
+		const known = new Map<string, DeliveryProcessedFile>();
 		for (const batch of chunks(files)) {
 			const rows = await db()
 				.select({
 					file: developerDeliveryLogFiles.logFile,
 					etag: developerDeliveryLogFiles.etag,
+					processedAt: developerDeliveryLogFiles.processedAt,
 				})
 				.from(developerDeliveryLogFiles)
 				.where(inArray(developerDeliveryLogFiles.logFile, batch));
-			for (const row of rows) known.set(row.file, row.etag);
+			for (const row of rows) {
+				known.set(row.file, {
+					etag: row.etag,
+					processedAt: new Date(row.processedAt),
+				});
+			}
 		}
 		return known;
 	},
-	async saveFile(file, parts) {
-		const processedAt = new Date();
+	async saveFile(file, parts, processedAt) {
 		await db()
 			.insert(developerDeliveryLogFiles)
 			.values({

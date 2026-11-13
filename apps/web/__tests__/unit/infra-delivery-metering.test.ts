@@ -84,6 +84,20 @@ const VIDEO_ROW: DeliveryVideo = {
 		{ name: "360p", width: 640, height: 360, bytes: 105_000 },
 	],
 	mp4Bytes: 10_500_000,
+	width: 1920,
+	height: 1080,
+	maxResolutionTier: "1080p",
+};
+
+const MP4_ONLY = "vidmp4only00001";
+const MP4_ONLY_ROW: DeliveryVideo = {
+	appId: APP,
+	duration: 30,
+	renditions: [],
+	mp4Bytes: 60_000_000,
+	width: 3840,
+	height: 2160,
+	maxResolutionTier: "2160p",
 };
 
 class FakeResolver implements DeliveryResolver {
@@ -97,6 +111,7 @@ class FakeResolver implements DeliveryResolver {
 	}
 	async video({ videoId }: { videoId: string }) {
 		this.videoCalls.push(videoId);
+		if (videoId === MP4_ONLY) return MP4_ONLY_ROW;
 		return videoId === VIDEO ? VIDEO_ROW : null;
 	}
 }
@@ -283,6 +298,22 @@ describe("deliveredSeconds", () => {
 		).toEqual({ tier: "1080p", seconds: 3, method: "mp4-estimate" });
 	});
 
+	it("counts an MP4-only video (HLS failed) under its resolution tier", async () => {
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `/developer/${APP}/${MP4_ONLY}/e/o/video.mp4`,
+					"sc-status": "200",
+					"sc-bytes": "4000400",
+					"sc-content-len": "4000000",
+					"sc-range-start": "-",
+					"sc-range-end": "-",
+				}),
+				new FakeResolver(),
+			),
+		).toEqual({ tier: "2160p", seconds: 2, method: "mp4-estimate" });
+	});
+
 	it("drops an MP4 whose video is unknown or belongs to another app", async () => {
 		const resolver = new FakeResolver();
 		expect(
@@ -377,6 +408,9 @@ describe("readDeliveryVideo", () => {
 		const video = readDeliveryVideo({
 			appId: APP,
 			duration: 100,
+			width: 1920,
+			height: 1080,
+			maxResolutionTier: "1080p",
 			renditions: [
 				{ name: "720p", width: 1280, height: 720, bytes: 5 },
 				{ name: "1080p", width: 1920, height: 1080, bytes: 9 },
@@ -388,6 +422,9 @@ describe("readDeliveryVideo", () => {
 		expect(video).toEqual({
 			appId: APP,
 			duration: 100,
+			width: 1920,
+			height: 1080,
+			maxResolutionTier: "1080p",
 			renditions: [
 				{ name: "720p", width: 1280, height: 720, bytes: 5 },
 				{ name: "1080p", width: 1920, height: 1080, bytes: 9 },
@@ -400,12 +437,116 @@ describe("readDeliveryVideo", () => {
 				readDeliveryVideo({
 					appId: APP,
 					duration: 1,
+					width: null,
+					height: null,
+					maxResolutionTier: "1080p",
 					renditions: null,
 					processing: null,
 				}),
 			),
 		).toBeNull();
 	});
+
+	// Expected names come from planHlsLadder in apps/media-server, which cannot
+	// load under this runner, given the web encode plan's ladderMaxTier.
+	it.each([
+		[3840, 2160, "1080p", "1080p"],
+		[3840, 2160, "1440p", "1440p"],
+		[3840, 2160, "2160p", "2160p"],
+		[2560, 1440, "1080p", "1080p"],
+		[2560, 1440, "1440p", "1440p"],
+		[2560, 1440, "2160p", "1440p"],
+		[1920, 1080, "1080p", "1080p"],
+		[1920, 1080, "1440p", "1080p"],
+		[1920, 1080, "2160p", "1080p"],
+		[1080, 1920, "1080p", "1080p"],
+		[1080, 1920, "1440p", "1080p"],
+		[1080, 1920, "2160p", "1080p"],
+		[1920, 804, "1080p", "1080p"],
+		[1920, 804, "1440p", "1080p"],
+		[1920, 804, "2160p", "1080p"],
+		[1280, 720, "1080p", "720p"],
+		[1280, 720, "1440p", "720p"],
+		[1280, 720, "2160p", "720p"],
+		[1000, 562, "1080p", "720p"],
+		[1000, 562, "1440p", "720p"],
+		[1000, 562, "2160p", "720p"],
+		[854, 480, "1080p", "360p"],
+		[854, 480, "1440p", "360p"],
+		[854, 480, "2160p", "360p"],
+		[640, 360, "1080p", "360p"],
+		[640, 360, "1440p", "360p"],
+		[640, 360, "2160p", "360p"],
+		[480, 270, "1080p", "360p"],
+		[480, 270, "1440p", "360p"],
+		[480, 270, "2160p", "360p"],
+		[4096, 1716, "1080p", "720p"],
+		[4096, 1716, "1440p", "1080p"],
+		[4096, 1716, "2160p", "2160p"],
+		[5120, 2880, "1080p", "1080p"],
+		[5120, 2880, "1440p", "1440p"],
+		[5120, 2880, "2160p", "2160p"],
+		[1440, 1080, "1080p", "1080p"],
+		[1440, 1080, "1440p", "1080p"],
+		[1440, 1080, "2160p", "1080p"],
+		[720, 1280, "1080p", "720p"],
+		[720, 1280, "1440p", "720p"],
+		[720, 1280, "2160p", "720p"],
+		[2160, 3840, "1080p", "1080p"],
+		[2160, 3840, "1440p", "1440p"],
+		[2160, 3840, "2160p", "2160p"],
+		[1366, 768, "1080p", "720p"],
+		[1366, 768, "1440p", "720p"],
+		[1366, 768, "2160p", "720p"],
+		[3440, 1440, "1080p", "720p"],
+		[3440, 1440, "1440p", "1080p"],
+		[3440, 1440, "2160p", "1440p"],
+		[1600, 900, "1080p", "1080p"],
+		[1600, 900, "1440p", "1080p"],
+		[1600, 900, "2160p", "1080p"],
+		[2048, 858, "1080p", "1080p"],
+		[2048, 858, "1440p", "1080p"],
+		[2048, 858, "2160p", "1080p"],
+	] as const)(
+		"names an HLS-less %ix%i MP4 up to %s as the encoder's top rendition, %s",
+		(width, height, maxResolutionTier, tier) => {
+			expect(
+				deliveryMp4Tier({
+					appId: APP,
+					duration: 10,
+					width,
+					height,
+					maxResolutionTier,
+					renditions: [],
+					mp4Bytes: 1,
+				}),
+			).toBe(tier);
+		},
+	);
+
+	it.each([
+		[3840, 2160, "2160p", "2160p"],
+		[3840, 2160, "1080p", "1080p"],
+		[1920, 1080, "1440p", "1080p"],
+		[1080, 1920, "1080p", "1080p"],
+		[1280, 720, "1080p", "720p"],
+		[640, 360, "1080p", "360p"],
+	] as const)(
+		"labels an MP4 with no HLS renditions from the encode plan: %ix%i up to %s is %s",
+		(width, height, maxResolutionTier, tier) => {
+			expect(
+				deliveryMp4Tier({
+					appId: APP,
+					duration: 10,
+					width,
+					height,
+					maxResolutionTier,
+					renditions: [],
+					mp4Bytes: 1,
+				}),
+			).toBe(tier);
+		},
+	);
 });
 
 describe("meterDeliveryLog", () => {
@@ -509,11 +650,14 @@ describe("readDeliveryParts", () => {
 				good,
 				["2026-11-12", APP, VIDEO, "mp4", 1, 2, 3, 4],
 				["2026-11-12", APP, VIDEO, "720p", -1, 2, 3, 4],
-				["2026-11-12", APP, VIDEO, "720p", 1, 2, 3],
+				["2026-11-12", APP, VIDEO, "720p", 1, 2, 3, 4, 5],
 				["bad", APP, VIDEO, "720p", 1, 2, 3, 4],
 				"x",
 			]),
 		).toEqual([good]);
+		expect(
+			readDeliveryParts([["2026-11-12", APP, VIDEO, "720p", 1, 2, 3]]),
+		).toEqual([["2026-11-12", APP, VIDEO, "720p", 1, 2, 3, 0]]);
 		expect(readDeliveryParts(null)).toEqual([]);
 	});
 });
@@ -587,22 +731,28 @@ type StoredRow = DeliveryRow & {
 class MemoryStore implements DeliveryStore {
 	files = new Map<
 		string,
-		{ etag: string; hour: Date; parts: DeliveryPart[] }
+		{ etag: string; hour: Date; parts: DeliveryPart[]; processedAt: Date }
 	>();
 	rows: StoredRow[] = [];
 	day(day: string) {
 		return this.rows.filter((row) => row.day === day);
 	}
-	async processedEtags(files: string[]) {
-		const known = new Map<string, string>();
+	async processedFiles(files: string[]) {
+		const known = new Map<string, { etag: string; processedAt: Date }>();
 		for (const file of files) {
 			const row = this.files.get(file);
-			if (row) known.set(file, row.etag);
+			if (row)
+				known.set(file, { etag: row.etag, processedAt: row.processedAt });
 		}
 		return known;
 	}
-	async saveFile(file: DeliveryLogFile, parts: DeliveryPart[]) {
-		this.files.set(file.file, { etag: file.etag, hour: file.hour, parts });
+	async saveFile(file: DeliveryLogFile, parts: DeliveryPart[], now: Date) {
+		this.files.set(file.file, {
+			etag: file.etag,
+			hour: file.hour,
+			parts,
+			processedAt: now,
+		});
 	}
 	async partsNear(from: Date, to: Date) {
 		return [...this.files.values()]
@@ -822,7 +972,6 @@ describe("runDeliveryMetering", () => {
 		await run(logs, store, at("2026-11-13T23:23:00Z"));
 		const settled = structuredClone(store.day("2026-11-12"));
 
-		logs.put("D.2026-11-12-23.late.gz", [play("2026-11-12")]);
 		const early = await run(logs, store, at("2026-11-14T01:59:59Z"));
 		expect(early.finalized).toEqual([]);
 		expect(store.day("2026-11-12")).toEqual(settled);
@@ -839,6 +988,78 @@ describe("runDeliveryMetering", () => {
 				finalizedAt: at("2026-11-14T02:00:00Z"),
 			})),
 		);
+	});
+
+	it("reads a late file of D at finalization and includes it in the final totals", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		logs.put("D.2026-11-12-10.a.gz", [play("2026-11-12")]);
+		await run(logs, store, at("2026-11-13T23:23:00Z"));
+		logs.put("D.2026-11-12-23.late.gz", [play("2026-11-12")]);
+		const early = await run(logs, store, at("2026-11-14T01:59:59Z"));
+		expect(early.processed).toBe(0);
+		expect(store.day("2026-11-12")[0]?.requests).toBe(1);
+		const due = await run(logs, store, at("2026-11-14T02:00:00Z"));
+		expect(due).toMatchObject({ processed: 1, finalized: ["2026-11-12"] });
+		expect(store.day("2026-11-12")[0]).toMatchObject({
+			requests: 2,
+			final: true,
+			updatedAt: at("2026-11-14T02:00:00Z"),
+		});
+	});
+
+	it("does not finalize D while a file the last D+1 run left behind at its file cap is unread", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		for (let hour = 20; hour < 23; hour++) {
+			logs.put(`D.2026-11-12-${hour}.x.gz`, [play("2026-11-12")]);
+		}
+		const last = await run(logs, store, at("2026-11-13T23:23:00Z"), 2);
+		expect(last).toMatchObject({ processed: 2, remaining: 1 });
+		expect(store.day("2026-11-12")[0]?.requests).toBe(2);
+
+		const open = logs.open.bind(logs);
+		logs.open = async (file) => {
+			if (file.includes("-22.")) throw new Error("boom");
+			return open(file);
+		};
+		const failing = await run(logs, store, at("2026-11-14T02:00:00Z"));
+		expect(failing).toMatchObject({
+			failed: 1,
+			finalized: [],
+			deferred: ["2026-11-12"],
+		});
+		expect(store.day("2026-11-12")[0]).toMatchObject({
+			requests: 2,
+			final: false,
+		});
+
+		const stillFailing = await run(logs, store, at("2026-11-14T03:00:00Z"));
+		expect(stillFailing).toMatchObject({ failed: 1, deferred: ["2026-11-12"] });
+
+		logs.open = open;
+		const read = await run(logs, store, at("2026-11-14T04:00:00Z"));
+		expect(read).toMatchObject({ processed: 1, finalized: ["2026-11-12"] });
+		expect(store.day("2026-11-12")[0]).toMatchObject({
+			requests: 3,
+			final: true,
+		});
+	});
+
+	it("recomputes D at finalization when a file of D was read after D's last recompute", async () => {
+		const logs = new MemoryLogs();
+		const store = new MemoryStore();
+		logs.put("D.2026-11-12-10.a.gz", [play("2026-11-12")]);
+		await run(logs, store, at("2026-11-13T22:23:00Z"));
+		logs.put("D.2026-11-13-00.b.gz", [play("2026-11-12")]);
+		await run(logs, store, at("2026-11-14T00:23:00Z"));
+		expect(store.day("2026-11-12")[0]?.requests).toBe(1);
+		const due = await run(logs, store, at("2026-11-14T02:23:00Z"));
+		expect(due).toMatchObject({ processed: 0, finalized: ["2026-11-12"] });
+		expect(store.day("2026-11-12")[0]).toMatchObject({
+			requests: 2,
+			final: true,
+		});
 	});
 
 	it("never rewrites or deletes a final day", async () => {
