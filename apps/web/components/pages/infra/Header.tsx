@@ -33,10 +33,36 @@ export const Header = ({ anchorBase = "" }: { anchorBase?: string }) => (
 				</nav>
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5">
-				<Link href={LINKS.home} className={`${NAV_ITEM} hidden sm:inline-flex`}>
-					Cap.so
+				<Link
+					href={LINKS.home}
+					aria-label="Back to Cap"
+					className={`${NAV_ITEM} group/back inline-flex items-center gap-1 pl-1.5`}
+				>
+					<svg
+						aria-hidden="true"
+						viewBox="0 0 16 16"
+						className="size-3.5 shrink-0 opacity-70 transition-transform duration-200 group-hover/back:-translate-x-0.5 motion-reduce:transition-none"
+					>
+						<path
+							d="M9.75 3.75 5.5 8l4.25 4.25"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="1.5"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+					</svg>
+					<span className="min-[420px]:hidden md:inline lg:hidden">Cap</span>
+					<span className="hidden min-[420px]:inline md:hidden lg:inline">
+						Back to Cap
+					</span>
 				</Link>
-				<Link href={LINKS.signIn} className={NAV_ITEM}>
+				{/* A phone has room for one text link. Start building already sends a
+				    signed-out visitor through sign in, so that slot goes back to Cap. */}
+				<Link
+					href={LINKS.signIn}
+					className={`${NAV_ITEM} hidden sm:inline-flex`}
+				>
 					Sign in
 				</Link>
 				<StartLink className="inline-flex h-8 items-center whitespace-nowrap rounded-[7px] bg-[#E8ECF4] px-3 text-[13.5px] font-medium text-[#050506] transition-colors duration-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.8)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050506]" />
