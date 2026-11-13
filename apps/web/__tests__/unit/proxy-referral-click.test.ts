@@ -87,6 +87,14 @@ describe("proxy referral click capture", () => {
 		expect(clickCookie(response)).toBeUndefined();
 	});
 
+	it.each([
+		"/dev/playback-id-0123456789ab",
+		"/dev/playback-id-0123456789ab/embed",
+	])("sets no cookie at all on the developer video page %s", async (path) => {
+		const response = await send(`https://cap.so${path}?dub_id=click_1`);
+		expect(response.headers.getSetCookie()).toEqual([]);
+	});
+
 	it("ignores non-GET requests", async () => {
 		const response = await send("https://cap.so/?dub_id=click_1", {
 			method: "POST",

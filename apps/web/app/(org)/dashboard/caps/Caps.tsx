@@ -147,12 +147,15 @@ export const Caps = ({
 				);
 			}
 		}),
-		onMutate: (ids: Video.VideoId[]) => {
+		onMutate: (ids: Video.VideoId[]) =>
 			toast.loading(
 				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-			);
-		},
-		onSuccess: (data: { success: number; error?: number }) => {
+			),
+		onSuccess: (
+			data: { success: number; error?: number },
+			_ids: Video.VideoId[],
+			toastId: string | number | undefined,
+		) => {
 			setSelectedCaps([]);
 			router.refresh();
 			if (data.error) {
@@ -162,21 +165,27 @@ export const Caps = ({
 					}, but failed to delete ${data.error} cap${
 						data.error === 1 ? "" : "s"
 					}`,
+					{ id: toastId },
 				);
 			} else {
 				toast.success(
 					`Successfully deleted ${data.success} cap${
 						data.success === 1 ? "" : "s"
 					}`,
+					{ id: toastId },
 				);
 			}
 		},
-		onError: (error: unknown) => {
+		onError: (
+			error: unknown,
+			_ids: Video.VideoId[],
+			toastId: string | number | undefined,
+		) => {
 			const message =
 				error instanceof Error
 					? error.message
 					: "An error occurred while deleting caps";
-			toast.error(message);
+			toast.error(message, { id: toastId });
 		},
 	});
 
@@ -201,10 +210,16 @@ export const Caps = ({
 				(e.key === "Delete" || e.key === "Backspace") &&
 				selectedCaps.length > 0
 			) {
+				const active = document.activeElement;
+				// Deleting is immediate and permanent, so the key only counts on the
+				// page itself: not inside an open dialog (Move, Share), not while a
+				// held key repeats, and not while the previous delete is running.
 				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
+					!e.repeat &&
+					!isDeletingCaps &&
+					!["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName || "") &&
+					!(active instanceof HTMLElement && active.isContentEditable) &&
+					!active?.closest('[role="dialog"], [role="alertdialog"]')
 				) {
 					if (e.key === "Backspace") {
 						e.preventDefault();
@@ -231,7 +246,7 @@ export const Caps = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [selectedCaps, data, deleteCaps]);
+	}, [selectedCaps, data, deleteCaps, isDeletingCaps]);
 
 	useEffect(() => {
 		const handleDragStart = () => setIsDraggingCap(true);

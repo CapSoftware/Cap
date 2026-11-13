@@ -59,6 +59,23 @@ export async function isRateLimited(
 	}
 }
 
+/**
+ * The firewall's decision for a keyed rule, or `undefined` when it cannot
+ * answer: the cases in which `isRateLimited` falls back to its own window.
+ * For callers that keep and report their own window, such as the developer
+ * API, and need to know whether the shared rule decided.
+ */
+export function sharedRateLimitDecision(
+	ruleId: string,
+	opts: { key: string; headers: Headers },
+): Promise<boolean | undefined> {
+	return checkFirewallRateLimit(
+		ruleId,
+		firewallRequestHeaders(opts.headers),
+		opts.key,
+	);
+}
+
 async function appRouterHeaders(): Promise<Headers> {
 	try {
 		return new Headers(await nextHeaders());
@@ -94,9 +111,7 @@ async function checkFirewallRateLimit(
 // Self-hosted proxies (nginx, Caddy, Traefik) append it to x-forwarded-for, so
 // there only the last entry comes from infrastructure. IPv6 is grouped by /64,
 // the block one host is normally assigned.
-export function rateLimitClientAddress(
-	headersList: Headers,
-): string | undefined {
+export function clientAddress(headersList: Headers): string | undefined {
 	const forwardedFor = headersList
 		.get("x-forwarded-for")
 		?.split(",")
@@ -107,6 +122,13 @@ export function rateLimitClientAddress(
 		process.env.VERCEL === "1"
 			? realIp || forwardedFor?.[0]
 			: forwardedFor?.at(-1) || realIp;
+	return address || undefined;
+}
+
+export function rateLimitClientAddress(
+	headersList: Headers,
+): string | undefined {
+	const address = clientAddress(headersList);
 	return address ? clientNetwork(address) : undefined;
 }
 
@@ -189,6 +211,14 @@ export const RATE_LIMIT_IDS = {
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
 	VIEWER_DOWNLOAD: "rl_viewer_download",
+	/** Usage event batches from the iOS app (OpenPanel ingest). Suggested: 30 / 1m per key (user). */
+	MOBILE_EVENTS: "rl_mobile_events",
+	/** Code attempts on Cap Infra credit checkout (guessing guard). Suggested: 10 / 10m per key (user). */
+	INFRA_CREDIT_CODE: "rl_infra_credit_code",
+	/** Developer REST API requests per secret key. 60 / 1m per key (hash of the credential). */
+	DEVELOPER_API_KEY: "rl_developer_api_key",
+	/** Developer SDK upload requests per upload token. 1200 / 1m per key (hash of the credential). */
+	DEVELOPER_UPLOAD_TOKEN: "rl_developer_upload_token",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -237,6 +267,8 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	},
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.INFRA_CREDIT_CODE]: { limit: 10, windowMs: 10 * MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

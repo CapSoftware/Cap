@@ -217,12 +217,16 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
     // MARK: Handing over between processes
 
     /// Lets the screen recorder end the moment the user stops instead of waiting for the last uploads.
-    public func handOff(_ jobId: String, durationSeconds: Double?) async {
+    /// Returns the state the recording was handed over in, or nil when there was nothing left to hand over
+    /// because it had already finished here.
+    @discardableResult
+    public func handOff(_ jobId: String, durationSeconds: Double?) async -> RecordingJob.Phase? {
         guard var job = state.withLock({ state -> RecordingJob? in
             state.inFlight[jobId] = nil
             state.targets[jobId] = nil
             return state.removeJob(jobId)
-        }) else { return }
+        }) else { return nil }
+        let taken = job.phase
         if let session = session.withLock({ $0 }) {
             for task in await session.allTasks where Self.parse(task.taskDescription)?.jobId == jobId {
                 task.cancel()
@@ -239,6 +243,7 @@ public final class RecordingUploads: NSObject, Sendable, URLSessionDataDelegate 
         Self.write(job, to: root)
         let directory = root.appending(path: jobId, directoryHint: .isDirectory)
         FileManager.default.createFile(atPath: directory.appending(path: Self.handOffMarker).path(percentEncoded: false), contents: nil)
+        return taken
     }
 
     public func adopt() async {

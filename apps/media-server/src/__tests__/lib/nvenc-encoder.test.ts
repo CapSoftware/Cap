@@ -15,7 +15,10 @@ import {
 	buildProcessVideoArgs,
 	type ProcessVideoArgsInput,
 	pickMobileSafeH264Level,
+	probeVideoSourceTraits,
 	processVideo,
+	requireVideoSourceTraits,
+	sourceHasAudio,
 } from "../../lib/media-video";
 import {
 	buildNvencEncodeArgs,
@@ -438,6 +441,128 @@ describe("process video args", () => {
 		]);
 	});
 
+	test("converts a 4K HDR source to standard range on the CPU at the size it is encoded at", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const sdrColor = [
+			"-color_primaries",
+			"bt709",
+			"-color_trc",
+			"bt709",
+			"-colorspace",
+			"bt709",
+			"-color_range",
+			"tv",
+		];
+		const toSdr =
+			"zscale=w=1920:h=1080:tin=smpte2084:pin=bt2020:min=bt2020nc:t=linear:npl=203," +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			"zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, {
+					inputPath: "in.mov",
+					hdr: "smpte2084",
+					nvenc: { options: defaults, gpuDecode: true },
+				}),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			...nvencVideoArgs,
+			"-vf",
+			`${toSdr},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-bsf:v",
+			"h264_metadata=level=4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+		expect(
+			buildProcessVideoArgs(
+				processArgs(source, { inputPath: "in.mov", hdr: "arib-std-b67" }),
+			),
+		).toEqual([
+			"ffmpeg",
+			"-threads",
+			"2",
+			"-i",
+			"in.mov",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"medium",
+			"-crf",
+			"23",
+			"-vf",
+			`${toSdr.replace("smpte2084", "arib-std-b67")},${cpuScale}`,
+			"-pix_fmt",
+			"yuv420p",
+			"-level:v",
+			"4.2",
+			...sdrColor,
+			...outputTail,
+		]);
+	});
+
+	test("converts an HDR source from the colours it declares", () => {
+		const source = metadata(3840, 2160, "hevc");
+		const filter = (hdrColor: ProcessVideoArgsInput["hdrColor"]) => {
+			const args = buildProcessVideoArgs(
+				processArgs(source, { hdr: "arib-std-b67", hdrColor }),
+			);
+			return args[args.indexOf("-vf") + 1];
+		};
+		const toSdr = (primaries: string, matrix: string) =>
+			`zscale=w=1920:h=1080:tin=arib-std-b67:pin=${primaries}:min=${matrix}:t=linear:npl=203,` +
+			"format=gbrpf32le,zscale=p=bt709," +
+			"tonemap=tonemap=mobius:param=0.3:peak=4.93:desat=0," +
+			`zscale=t=bt709:m=bt709:r=tv,format=yuv420p,${cpuScale}`;
+		expect(filter({ primaries: "bt709", matrix: "bt709" })).toBe(
+			toSdr("bt709", "bt709"),
+		);
+		expect(filter({ primaries: "smpte432", matrix: "bt2020nc" })).toBe(
+			toSdr("smpte432", "bt2020nc"),
+		);
+		expect(filter(undefined)).toBe(toSdr("bt2020", "bt2020nc"));
+		expect(filter({ primaries: "bt2020", matrix: "unknown" })).toBe(
+			toSdr("bt2020", "bt2020nc"),
+		);
+		for (const untagged of [
+			{ primaries: null, matrix: null },
+			{ primaries: "unknown", matrix: "unknown" },
+		]) {
+			expect(filter(untagged)).toBe(toSdr("bt2020:p=bt2020", "bt2020nc"));
+		}
+	});
+
+	test("encodes audio the probe cannot name instead of leaving it out", () => {
+		const source = metadata(1920, 1080, "h264");
+		const args = buildProcessVideoArgs(
+			processArgs(source, {
+				hasAudio: sourceHasAudio({ audioCodec: null, audioChannels: 2 }),
+				audioTranscode: true,
+			}),
+		);
+		expect(args).not.toContain("-an");
+		expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
+	});
+
+	test("decides whether a source has audio from its track", () => {
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: 6 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "aac", audioChannels: 2 })).toBe(true);
+		expect(sourceHasAudio({ audioCodec: "opus", audioChannels: null })).toBe(
+			true,
+		);
+		expect(sourceHasAudio({ audioCodec: null, audioChannels: null })).toBe(
+			false,
+		);
+	});
+
 	test("runs a 4K HEVC source fully on the GPU", () => {
 		const source = metadata(3840, 2160, "hevc");
 		expect(
@@ -598,6 +723,73 @@ describe("process video args", () => {
 			"-an",
 			...outputTail.slice(2),
 		]);
+	});
+});
+
+describe("source traits", () => {
+	const fixture = (name: string) =>
+		join(import.meta.dir, "..", "fixtures", name);
+
+	test("reads HDR and rotation in one probe", async () => {
+		const hdrColor = { primaries: "bt2020", matrix: "bt2020nc" };
+		expect(await probeVideoSourceTraits(fixture("test-rotated.mp4"))).toEqual({
+			rotation: 90,
+			hdr: "smpte2084",
+			hdrColor,
+		});
+		expect(
+			await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual({ rotation: 0, hdr: "smpte2084", hdrColor });
+	});
+
+	test("plans an encode from the same traits", async () => {
+		expect(
+			await requireVideoSourceTraits(fixture("test-hdr-tagged.mp4")),
+		).toEqual(await probeVideoSourceTraits(fixture("test-hdr-tagged.mp4")));
+		expect(
+			await requireVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("refuses to plan an encode for a source that cannot be probed", async () => {
+		await expect(
+			requireVideoSourceTraits(fixture("missing.mp4")),
+		).rejects.toThrow(
+			"Could not read the colour information of the source video",
+		);
+	});
+
+	test("refuses Dolby Vision profile 5, which has no convertible base layer", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+		await expect(
+			requireVideoSourceTraits(fixture("test-dolby-vision-p5.mp4")),
+		).rejects.toThrow("Dolby Vision profile 5");
+	});
+
+	test("stops with the cancellation when the job is cancelled mid probe", async () => {
+		const cancelled = new AbortController();
+		cancelled.abort(new Error("cancelled by the caller"));
+		await expect(
+			requireVideoSourceTraits(
+				fixture("test-with-audio.mp4"),
+				cancelled.signal,
+			),
+		).rejects.toThrow("cancelled by the caller");
+	});
+
+	test("reports a standard range, unrotated source as neither", async () => {
+		expect(
+			await probeVideoSourceTraits(fixture("test-with-audio.mp4")),
+		).toEqual({ rotation: 0, hdr: null });
+	});
+
+	test("reports nothing known for a file that cannot be probed", async () => {
+		expect(await probeVideoSourceTraits(fixture("missing.mp4"))).toEqual({
+			rotation: null,
+			hdr: null,
+		});
 	});
 });
 

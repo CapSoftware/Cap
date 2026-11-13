@@ -1,4 +1,5 @@
 import { serverEnv } from "@cap/env";
+import { readStreamBounded } from "@/lib/public-media-fetch";
 
 interface MediaServerError {
 	error: string;
@@ -103,7 +104,7 @@ export function isMediaServerConfigured(): boolean {
 
 export async function checkMediaServerHealth(): Promise<{
 	status: string;
-	ffmpeg: { available: boolean; version: string };
+	ffmpeg: { available: boolean; version?: string };
 }> {
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -230,6 +231,7 @@ export async function probeVideoViaMediaServer(
 
 export async function convertAudioToMp3ViaMediaServer(
 	audioUrl: string,
+	options: { maxBytes?: number } = {},
 ): Promise<Buffer> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
@@ -257,6 +259,10 @@ export async function convertAudioToMp3ViaMediaServer(
 		);
 	}
 
+	if (options.maxBytes !== undefined && response.body) {
+		return readStreamBounded(response.body, options.maxBytes);
+	}
+
 	const arrayBuffer = await response.arrayBuffer();
 	return Buffer.from(arrayBuffer);
 }
@@ -279,4 +285,174 @@ export async function fetchConvertedVideoViaMediaServer(
 		},
 		{ maxRetries: 0 },
 	);
+}
+
+export type MediaServerJobStart =
+	| { status: "started"; jobId: string }
+	| { status: "busy" }
+	| { status: "unreachable" }
+	| { status: "unconfirmed" }
+	| { status: "unavailable" }
+	| { status: "rejected"; message: string };
+
+const JOB_START_TIMEOUT_MS = 30_000;
+const PROBE_ATTEMPT_TIMEOUT_MS = 60_000;
+const NEVER_CONNECTED_CODES = new Set([
+	"ECONNREFUSED",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+]);
+
+function neverConnected(error: unknown): boolean {
+	const cause = error instanceof Error ? error.cause : undefined;
+	const code =
+		cause && typeof cause === "object" && "code" in cause
+			? cause.code
+			: undefined;
+	return typeof code === "string" && NEVER_CONNECTED_CODES.has(code);
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+	const errorData = (await response
+		.json()
+		.catch(() => ({}))) as Partial<MediaServerError>;
+	return (
+		errorData.details ||
+		errorData.error ||
+		`Media server answered ${response.status}`
+	);
+}
+
+export async function startMediaServerVideoJob(
+	path: "/video/ladder" | "/video/process",
+	body: Record<string, unknown>,
+): Promise<MediaServerJobStart> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	let response: Response;
+	try {
+		response = await fetch(`${mediaServerUrl}${path}`, {
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({ ...body, webhookSecret: mediaServerSecret }),
+			signal: AbortSignal.timeout(JOB_START_TIMEOUT_MS),
+		});
+	} catch (error) {
+		return { status: neverConnected(error) ? "unreachable" : "unconfirmed" };
+	}
+
+	if (response.ok) {
+		const data = (await response.json().catch(() => ({}))) as {
+			jobId?: unknown;
+		};
+		if (typeof data.jobId !== "string" || data.jobId.length === 0) {
+			return { status: "unconfirmed" };
+		}
+		return { status: "started", jobId: data.jobId };
+	}
+
+	if (response.status === 404 || response.status === 405) {
+		await response.body?.cancel().catch(() => {});
+		return { status: "unavailable" };
+	}
+	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
+		await response.body?.cancel().catch(() => {});
+		return { status: "busy" };
+	}
+	return { status: "rejected", message: await readErrorMessage(response) };
+}
+
+export const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
+
+export type MediaServerJobStatus =
+	| { status: "running" }
+	| { status: "finished"; progress: Record<string, unknown> }
+	| { status: "missing" }
+	| { status: "unreachable" };
+
+const JOB_STATUS_TIMEOUT_MS = 10_000;
+const TERMINAL_JOB_PHASES = new Set(["complete", "error", "cancelled"]);
+
+// Only the media server's own "job not found" counts as missing. A proxy or
+// a host that is still starting can answer 404 too, and the job may be alive
+// behind it.
+export async function readMediaServerVideoJob(
+	jobId: string,
+	videoId: string,
+): Promise<MediaServerJobStatus> {
+	const unreachable = { status: "unreachable" } as const;
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/status`,
+			{
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_STATUS_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (!body || typeof body !== "object") return unreachable;
+		if (response.status === 404) {
+			return "code" in body && body.code === "NOT_FOUND"
+				? { status: "missing" }
+				: unreachable;
+		}
+		if (
+			!response.ok ||
+			!("jobId" in body) ||
+			body.jobId !== jobId ||
+			!("videoId" in body) ||
+			body.videoId !== videoId ||
+			!("phase" in body) ||
+			typeof body.phase !== "string"
+		) {
+			return unreachable;
+		}
+		return TERMINAL_JOB_PHASES.has(body.phase)
+			? { status: "finished", progress: { ...body } }
+			: { status: "running" };
+	} catch {
+		return unreachable;
+	}
+}
+
+export type MediaServerProbeAttempt =
+	| { status: "ok"; metadata: MediaServerProbeResult }
+	| { status: "unreachable" }
+	| { status: "rejected"; message: string; unusable: boolean };
+
+export async function tryProbeVideoViaMediaServer(
+	videoUrl: string,
+): Promise<MediaServerProbeAttempt> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	let response: Response;
+	try {
+		response = await fetch(`${mediaServerUrl}/video/probe`, {
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({ videoUrl }),
+			signal: AbortSignal.timeout(PROBE_ATTEMPT_TIMEOUT_MS),
+		});
+	} catch {
+		return { status: "unreachable" };
+	}
+
+	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
+		await response.body?.cancel().catch(() => {});
+		return { status: "unreachable" };
+	}
+	if (!response.ok) {
+		return {
+			status: "rejected",
+			message: await readErrorMessage(response),
+			unusable: response.status === 422,
+		};
+	}
+	const data = (await response.json()) as { metadata: MediaServerProbeResult };
+	return { status: "ok", metadata: data.metadata };
 }

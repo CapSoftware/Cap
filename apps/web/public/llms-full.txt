@@ -150,7 +150,7 @@ Environment variables: `CAP_API_KEY` (headless/CI upload auth), `CAP_SERVER_URL`
 Canonical workflow:
 `cap doctor --json` → `cap targets --json` → `cap record start --screen <id> --json` (or `--detach`) → `cap record stop --id <recordingId> --json` → `cap project validate <path.cap> --json` → `cap export <path.cap> --json` → `cap upload <file> --json`.
 
-A REST API and webhooks are also available — see https://cap.so/docs/api/rest-api and https://cap.so/docs/api/webhooks. Usage-based developer API credits are billed at ~$0.05/min recording and ~$0.001/min/month storage, with auto top-up.
+A developer REST API is also available for hosting video in your own product: start with the guide at https://cap.so/docs/api/get-started, then see the reference at https://cap.so/docs/api/rest-api and the OpenAPI description at https://cap.so/openapi.json. It is paid for from prepaid credits, with optional auto top-up. Uploading and encoding are free. Stored video is charged daily by length and resolution tier: $0.85 (1080p), $1.45 (1440p) or $2.80 (2160p) per 1,000 minutes per 30 day month. Transcription costs $0.10 per audio hour. `GET /api/developer/v1/usage` returns these rates in `rates`, and `GET /api/developer/v1/transactions` returns every credit and charge. The billing rules (daily storage charge, transcript rounding and holds, top-ups from $5 to $1,000, codes, the Cap Pro monthly credit, auto top-up and what happens when credit runs out) are at https://cap.so/docs/api/billing. There is no public webhook subscription API: poll the status endpoint instead (https://cap.so/docs/api/webhooks).
 
 ## Platforms
 
@@ -238,6 +238,7 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - Analytics: https://cap.so/docs/sharing/analytics
 - Comments: https://cap.so/docs/sharing/comments
 - Embeds: https://cap.so/docs/sharing/embeds
+- Developer API guide: https://cap.so/docs/api/get-started
 - REST API: https://cap.so/docs/api/rest-api
 - Webhooks: https://cap.so/docs/api/webhooks
 - S3 config (AWS): https://cap.so/docs/s3-config/aws-s3
@@ -268,4 +269,4 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - **Does Cap work on Mac and Windows?** Yes — native apps for macOS (Apple Silicon & Intel) and Windows, plus a Linux .deb package and a browser viewer.
 - **Can I use my own storage?** Yes — connect your own Google Drive or any S3-compatible bucket, use Cap Cloud, or keep recordings entirely local.
 - **Does Cap record system audio and 4K?** Yes — system audio plus screen, camera, and mic, up to 4K at 60fps.
-- **Is there an API/CLI?** Yes — a `cap` CLI built for AI agents (`--json`, `cap guide --json`), a REST API, and webhooks.
+- **Is there an API/CLI?** Yes: a `cap` CLI built for AI agents (`--json`, `cap guide --json`) and a developer REST API. There is no public webhook subscription API.

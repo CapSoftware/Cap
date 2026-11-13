@@ -32,11 +32,11 @@ enum UploadEvent<'a> {
     Uploaded { id: &'a str, link: &'a str },
 }
 
-struct VideoMeta {
-    duration_in_secs: f64,
-    width: u32,
-    height: u32,
-    fps: f64,
+pub(crate) struct VideoMeta {
+    pub(crate) duration_in_secs: f64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) fps: f64,
 }
 
 fn prefer_agent_upload_sources(
@@ -370,7 +370,7 @@ async fn upload_agent_target(
     }
 }
 
-fn probe_video_meta(path: &Path) -> Result<VideoMeta, String> {
+pub(crate) fn probe_video_meta(path: &Path) -> Result<VideoMeta, String> {
     ffmpeg::init().map_err(|e| format!("Failed to initialise FFmpeg: {e}"))?;
 
     let input = ffmpeg::format::input(path)

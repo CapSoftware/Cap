@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/infra-access", () => ({
+	canUseInfra: () => true,
+}));
+
 vi.mock("@cap/database", () => {
 	const mockDb = {
 		select: vi.fn(() => mockDb),
@@ -13,6 +17,7 @@ vi.mock("@cap/database", () => {
 		values: vi.fn(() => Promise.resolve()),
 		transaction: vi.fn((fn) => fn(mockDb)),
 		leftJoin: vi.fn(() => mockDb),
+		innerJoin: vi.fn(() => mockDb),
 		orderBy: vi.fn(() => mockDb),
 		offset: vi.fn(() => mockDb),
 	};
@@ -58,7 +63,9 @@ vi.mock("@cap/database/schema", () => ({
 	developerVideos: {
 		id: "id",
 		appId: "appId",
+		name: "name",
 		deletedAt: "deletedAt",
+		updatedAt: "updatedAt",
 	},
 	developerCreditAccounts: {
 		id: "id",
@@ -104,6 +111,7 @@ interface MockDb {
 	values: MockFn;
 	transaction: MockFn;
 	leftJoin: MockFn;
+	innerJoin: MockFn;
 	orderBy: MockFn;
 	offset: MockFn;
 	[key: string]: MockFn | undefined;
@@ -137,6 +145,7 @@ function resetMockDb() {
 	mockDb.limit.mockReturnValue(Promise.resolve([]));
 	mockDb.values.mockReturnValue(Promise.resolve());
 	mockDb.leftJoin.mockReturnValue(mockDb);
+	mockDb.innerJoin.mockReturnValue(mockDb);
 	mockDb.orderBy.mockReturnValue(mockDb);
 	mockDb.offset.mockReturnValue(mockDb);
 	mockDb.transaction.mockImplementation((fn) => fn(mockDb));
@@ -152,6 +161,15 @@ describe("createDeveloperApp", () => {
 		createDeveloperApp = mod.createDeveloperApp;
 	});
 
+	const create = async (name: string) => {
+		const result = await createDeveloperApp({
+			name,
+			environment: "development",
+		});
+		if ("success" in result) throw new Error(result.message);
+		return result;
+	};
+
 	it("throws Unauthorized when no user", async () => {
 		mockGetCurrentUser.mockResolvedValue(null);
 		await expect(
@@ -159,18 +177,15 @@ describe("createDeveloperApp", () => {
 		).rejects.toThrow("Unauthorized");
 	});
 
-	it("throws App name is required when empty name", async () => {
+	it("returns a message instead of throwing for an empty name", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		await expect(
 			createDeveloperApp({ name: "", environment: "development" }),
-		).rejects.toThrow("App name is required");
-	});
-
-	it("throws App name is required when whitespace-only name", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
+		).resolves.toEqual({ success: false, message: "Give the app a name." });
 		await expect(
 			createDeveloperApp({ name: "   ", environment: "development" }),
-		).rejects.toThrow("App name is required");
+		).resolves.toEqual({ success: false, message: "Give the app a name." });
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("creates app with trimmed name", async () => {
@@ -191,19 +206,13 @@ describe("createDeveloperApp", () => {
 
 	it("creates public key with cpk_ prefix", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const result = await createDeveloperApp({
-			name: "Test",
-			environment: "development",
-		});
+		const result = await create("Test");
 		expect(result.publicKey).toMatch(/^cpk_/);
 	});
 
 	it("creates secret key with csk_ prefix", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const result = await createDeveloperApp({
-			name: "Test",
-			environment: "development",
-		});
+		const result = await create("Test");
 		expect(result.secretKey).toMatch(/^csk_/);
 	});
 
@@ -219,10 +228,7 @@ describe("createDeveloperApp", () => {
 
 	it("returns appId, publicKey, secretKey", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const result = await createDeveloperApp({
-			name: "Test",
-			environment: "development",
-		});
+		const result = await create("Test");
 
 		expect(result).toHaveProperty("appId");
 		expect(result).toHaveProperty("publicKey");
@@ -232,10 +238,7 @@ describe("createDeveloperApp", () => {
 
 	it("public key prefix is first 12 chars", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		const result = await createDeveloperApp({
-			name: "Test",
-			environment: "development",
-		});
+		const result = await create("Test");
 
 		const expectedPrefix = result.publicKey.slice(0, 12);
 		const keysValuesCall = mockDb.values.mock.calls[1]?.[0];
@@ -363,6 +366,15 @@ describe("updateDeveloperApp", () => {
 		});
 		expect(result).toEqual({ success: true });
 	});
+
+	it("returns a message instead of throwing for an empty name", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		await expect(
+			updateDeveloperApp({ appId: "app-456", name: "   " }),
+		).resolves.toEqual({ success: false, message: "Give the app a name." });
+		expect(mockDb.update).not.toHaveBeenCalled();
+	});
 });
 
 describe("addDeveloperDomain", () => {
@@ -382,53 +394,59 @@ describe("addDeveloperDomain", () => {
 		).rejects.toThrow("Unauthorized");
 	});
 
-	it("throws Domain is required when empty", async () => {
+	it("returns a plain message instead of throwing for an empty domain", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		await expect(addDeveloperDomain("app-456", "")).rejects.toThrow(
-			"Domain is required",
-		);
+		for (const empty of ["", "   "]) {
+			await expect(addDeveloperDomain("app-456", empty)).resolves.toEqual({
+				success: false,
+				message: "Enter a domain, for example myshop.com.",
+			});
+		}
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
-	it("throws Domain is required when whitespace only", async () => {
+	it("returns a plain message instead of throwing for an invalid domain", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		await expect(addDeveloperDomain("app-456", "   ")).rejects.toThrow(
-			"Domain is required",
-		);
+		for (const invalid of [
+			"not a domain",
+			"just-hostname",
+			"ftp://example.com",
+			"javascript:alert(1)",
+		]) {
+			const result = await addDeveloperDomain("app-456", invalid);
+			expect(result).toMatchObject({ success: false });
+			expect(result).toHaveProperty("message", expect.any(String));
+		}
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
-	it("validates domain format with regex", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		await expect(addDeveloperDomain("app-456", "not-a-url")).rejects.toThrow(
-			"Domain must be a valid origin (e.g. https://myapp.com)",
-		);
-	});
-
-	it("accepts https://example.com", async () => {
+	it("accepts a bare domain as an https origin", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await addDeveloperDomain("app-456", "https://example.com");
-		expect(result).toEqual({ success: true });
+		const result = await addDeveloperDomain("app-456", "myshop.com");
+
+		expect(result).toEqual({ success: true, domain: "https://myshop.com" });
+		expect(mockDb.values).toHaveBeenCalledWith(
+			expect.objectContaining({ domain: "https://myshop.com" }),
+		);
+	});
+
+	it("stores the origin and drops a path and query", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		const result = await addDeveloperDomain(
+			"app-456",
+			"https://example.com/some/path?x=1",
+		);
+
+		expect(result).toEqual({ success: true, domain: "https://example.com" });
 	});
 
 	it("accepts http://localhost:3000", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
 		const result = await addDeveloperDomain("app-456", "http://localhost:3000");
-		expect(result).toEqual({ success: true });
-	});
-
-	it("rejects invalid domains without protocol", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		await expect(addDeveloperDomain("app-456", "example.com")).rejects.toThrow(
-			"Domain must be a valid origin (e.g. https://myapp.com)",
-		);
-	});
-
-	it("rejects bare hostnames", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		await expect(
-			addDeveloperDomain("app-456", "just-hostname"),
-		).rejects.toThrow("Domain must be a valid origin (e.g. https://myapp.com)");
+		expect(result).toEqual({ success: true, domain: "http://localhost:3000" });
 	});
 
 	it("normalizes to lowercase", async () => {
@@ -441,11 +459,75 @@ describe("addDeveloperDomain", () => {
 		);
 	});
 
-	it("returns success true", async () => {
+	it("says so when the domain is already allowed", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await addDeveloperDomain("app-456", "https://example.com");
-		expect(result).toEqual({ success: true });
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([{ id: "domain-1" }]);
+
+		await expect(addDeveloperDomain("app-456", "example.com")).resolves.toEqual(
+			{
+				success: false,
+				message: "https://example.com is already allowed.",
+			},
+		);
+		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
+
+	it("throws App not found for an app the user does not own", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		await expect(
+			addDeveloperDomain("app-456", "https://example.com"),
+		).rejects.toThrow("App not found");
+	});
+});
+
+describe("renameDeveloperVideo", () => {
+	let renameDeveloperVideo: typeof import("@/actions/developers/rename-video").renameDeveloperVideo;
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetMockDb();
+		const mod = await import("@/actions/developers/rename-video");
+		renameDeveloperVideo = mod.renameDeveloperVideo;
+	});
+
+	it("throws Unauthorized when no user", async () => {
+		mockGetCurrentUser.mockResolvedValue(null);
+		await expect(
+			renameDeveloperVideo("app-456", "video-1", "New name"),
+		).rejects.toThrow("Unauthorized");
+	});
+
+	it("returns a message instead of throwing for an empty or overlong name", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		await expect(
+			renameDeveloperVideo("app-456", "video-1", "   "),
+		).resolves.toEqual({ success: false, message: "Give the video a name." });
+		await expect(
+			renameDeveloperVideo("app-456", "video-1", "a".repeat(256)),
+		).resolves.toMatchObject({ success: false });
+		expect(mockDb.update).not.toHaveBeenCalled();
+	});
+
+	it("throws Video not found for a video outside the user's apps", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		await expect(
+			renameDeveloperVideo("app-456", "video-1", "New name"),
+		).rejects.toThrow("Video not found");
+		expect(mockDb.update).not.toHaveBeenCalled();
+	});
+
+	it("saves the trimmed name", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([{ id: "video-1" }]);
+
+		await expect(
+			renameDeveloperVideo("app-456", "video-1", "  Launch film  "),
+		).resolves.toEqual({ success: true, name: "Launch film" });
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "Launch film" }),
+		);
 	});
 });
 
@@ -642,107 +724,6 @@ describe("addCreditsToAccount", () => {
 			amountCents: 750,
 		});
 		expect(result).toBe(750000);
-	});
-});
-
-describe("updateDeveloperAutoTopUp", () => {
-	let updateDeveloperAutoTopUp: typeof import("@/actions/developers/update-auto-topup").updateDeveloperAutoTopUp;
-
-	beforeEach(async () => {
-		vi.clearAllMocks();
-		resetMockDb();
-		const mod = await import("@/actions/developers/update-auto-topup");
-		updateDeveloperAutoTopUp = mod.updateDeveloperAutoTopUp;
-	});
-
-	it("throws Unauthorized when no user", async () => {
-		mockGetCurrentUser.mockResolvedValue(null);
-		await expect(
-			updateDeveloperAutoTopUp({ appId: "app-456", enabled: true }),
-		).rejects.toThrow("Unauthorized");
-	});
-
-	it("throws App not found when app does not exist", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValue([]);
-		await expect(
-			updateDeveloperAutoTopUp({ appId: "app-456", enabled: true }),
-		).rejects.toThrow("App not found");
-	});
-
-	it("throws Threshold must be non-negative for negative threshold", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		await expect(
-			updateDeveloperAutoTopUp({
-				appId: "app-456",
-				enabled: true,
-				thresholdMicroCredits: -100,
-			}),
-		).rejects.toThrow("Threshold must be non-negative");
-	});
-
-	it("throws Top-up amount must be positive for zero amount", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		await expect(
-			updateDeveloperAutoTopUp({
-				appId: "app-456",
-				enabled: true,
-				amountCents: 0,
-			}),
-		).rejects.toThrow("Top-up amount must be positive");
-	});
-
-	it("throws Top-up amount must be positive for negative amount", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		await expect(
-			updateDeveloperAutoTopUp({
-				appId: "app-456",
-				enabled: true,
-				amountCents: -50,
-			}),
-		).rejects.toThrow("Top-up amount must be positive");
-	});
-
-	it("updates enabled flag", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		await updateDeveloperAutoTopUp({ appId: "app-456", enabled: false });
-
-		expect(mockDb.set).toHaveBeenCalledWith(
-			expect.objectContaining({ autoTopUpEnabled: false }),
-		);
-	});
-
-	it("conditionally updates threshold and amount", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		await updateDeveloperAutoTopUp({
-			appId: "app-456",
-			enabled: true,
-			thresholdMicroCredits: 50000,
-			amountCents: 1000,
-		});
-
-		expect(mockDb.set).toHaveBeenCalledWith(
-			expect.objectContaining({
-				autoTopUpEnabled: true,
-				autoTopUpThresholdMicroCredits: 50000,
-				autoTopUpAmountCents: 1000,
-			}),
-		);
-	});
-
-	it("returns success true", async () => {
-		mockGetCurrentUser.mockResolvedValue(mockUser);
-		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await updateDeveloperAutoTopUp({
-			appId: "app-456",
-			enabled: true,
-		});
-		expect(result).toEqual({ success: true });
 	});
 });
 
