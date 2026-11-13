@@ -5,7 +5,7 @@ import {
 	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
-import type { SQL } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const dialect = new MySqlDialect();
@@ -130,6 +130,41 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditAccounts) {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
+		if (keys === "attemptKey,id") {
+			const cutoff = rendered.params.find(
+				(param) =>
+					typeof param === "string" &&
+					/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(param),
+			);
+			const attempts = ledger.rows
+				.filter((row) =>
+					["auto_top_up", "auto_top_up_failed", "auto_top_up_pending"].includes(
+						String(row.referenceType),
+					),
+				)
+				.map((row) => row.createdAt.getTime());
+			const lastAttempt = attempts.length > 0 ? Math.max(...attempts) : null;
+			const due =
+				account.autoTopUpEnabled &&
+				account.stripePaymentMethodId &&
+				account.balanceMicroCredits <
+					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits &&
+				(lastAttempt === null || lastAttempt <= asTime(cutoff));
+			return due
+				? [
+						{
+							id: account.id,
+							attemptKey:
+								lastAttempt === null
+									? "1970-01-01 00:00:00"
+									: new Date(lastAttempt)
+											.toISOString()
+											.slice(0, 19)
+											.replace("T", " "),
+						},
+					]
+				: [];
+		}
 		if (
 			keys === "id" &&
 			/`id` = \?$/.test(rendered.sql) &&
@@ -255,12 +290,19 @@ function select(fields: Record<string, unknown>) {
 			return chain;
 		},
 		innerJoin: () => chain,
+		leftJoin: () => chain,
 		where(condition: SQL | undefined) {
 			query.where = condition;
 			const rows = Promise.resolve().then(() => runSelect(query));
 			const result = Object.assign(rows, {
 				orderBy: () => result,
-				groupBy: () => result,
+				groupBy: () =>
+					Object.assign(result, {
+						as: (alias: string) => ({
+							appId: sql.raw(`\`${alias}\`.\`appId\``),
+							heldMicroCredits: sql.raw("`heldMicroCredits`"),
+						}),
+					}),
 				limit: () => result,
 				for: () => result,
 			});

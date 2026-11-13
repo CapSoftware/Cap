@@ -12,7 +12,6 @@ import {
 	asc,
 	desc,
 	eq,
-	gt,
 	inArray,
 	isNotNull,
 	isNull,
@@ -23,7 +22,7 @@ import { addCreditsToAccount } from "@/lib/developer-credits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
-import { availableBalance, heldTranscriptsQuery } from "@/lib/infra-balance";
+import { availableBalance, heldTranscriptsByApp } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
 import { disputedSince } from "@/lib/infra-standing";
 import { utcDateKey } from "@/lib/infra-usage";
@@ -148,6 +147,25 @@ const ATTEMPT_LEDGER_TYPES = {
 	[AUTO_TOP_UP_FAILED_REFERENCE_TYPE]: "topup_failed",
 	[AUTO_TOP_UP_PENDING_REFERENCE_TYPE]: "topup_pending",
 } as const;
+
+const NEVER_ATTEMPTED = "1970-01-01 00:00:00";
+
+const sqlTime = (date: Date) =>
+	date.toISOString().slice(0, 23).replace("T", " ");
+
+export function autoTopUpRetryCutoff(now: Date) {
+	return new Date(now.getTime() - ATTEMPT_INTERVAL_MS);
+}
+
+export function autoTopUpLastAttemptAt() {
+	return sql`(select max(${developerCreditTransactions.createdAt}) from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${developerCreditAccounts.id} and ${inArray(
+		developerCreditTransactions.type,
+		ATTEMPT_REFERENCE_TYPES.map((type) => ATTEMPT_LEDGER_TYPES[type]),
+	)} and ${inArray(
+		developerCreditTransactions.referenceType,
+		ATTEMPT_REFERENCE_TYPES,
+	)})`;
+}
 
 async function lastAttempt(
 	accountId: string,
@@ -386,7 +404,7 @@ export async function runAutoTopUp(
 	const previous = await lastAttempt(accountId);
 	if (
 		previous &&
-		now.getTime() - new Date(previous.createdAt).getTime() < ATTEMPT_INTERVAL_MS
+		new Date(previous.createdAt).getTime() > autoTopUpRetryCutoff(now).getTime()
 	) {
 		return { state: "skipped", reason: "recent_attempt" };
 	}
@@ -463,24 +481,35 @@ export async function runAutoTopUp(
 	return { state: "failed", reason: paymentIntent.status };
 }
 
-function dueAutoTopUpsAfter(cursor: string | null) {
+type DueCursor = { attemptKey: string; id: string };
+
+function dueAutoTopUpsAfter(now: Date, cursor: DueCursor | null) {
+	const attemptKey = sql`cast(coalesce(${autoTopUpLastAttemptAt()}, ${NEVER_ATTEMPTED}) as char)`;
+	const held = heldTranscriptsByApp(db());
 	return db()
-		.select({ id: developerCreditAccounts.id })
+		.select({
+			id: developerCreditAccounts.id,
+			attemptKey: sql<string>`${attemptKey}`.as("attemptKey"),
+		})
 		.from(developerCreditAccounts)
 		.innerJoin(
 			developerApps,
 			eq(developerCreditAccounts.appId, developerApps.id),
 		)
+		.leftJoin(held, eq(held.appId, developerCreditAccounts.appId))
 		.where(
 			and(
 				eq(developerCreditAccounts.autoTopUpEnabled, true),
 				isNotNull(developerCreditAccounts.stripePaymentMethodId),
 				isNull(developerApps.deletedAt),
-				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + (${heldTranscriptsQuery(db(), developerCreditAccounts.appId, null)})`,
-				cursor ? gt(developerCreditAccounts.id, cursor) : undefined,
+				sql`${developerCreditAccounts.balanceMicroCredits} < ${developerCreditAccounts.autoTopUpThresholdMicroCredits} + coalesce(${held.heldMicroCredits}, 0)`,
+				sql`${attemptKey} <= ${sqlTime(autoTopUpRetryCutoff(now))}`,
+				cursor
+					? sql`(${attemptKey} > ${cursor.attemptKey} or (${attemptKey} = ${cursor.attemptKey} and ${developerCreditAccounts.id} > ${cursor.id}))`
+					: undefined,
 			),
 		)
-		.orderBy(asc(developerCreditAccounts.id))
+		.orderBy(sql`attemptKey`, asc(developerCreditAccounts.id))
 		.limit(DUE_PAGE_SIZE);
 }
 
@@ -489,9 +518,9 @@ export async function runDueAutoTopUps(
 	{ until = Number.POSITIVE_INFINITY }: { until?: number } = {},
 ) {
 	const summary = { attempted: 0, succeeded: 0, failed: 0 };
-	let cursor: string | null = null;
+	let cursor: DueCursor | null = null;
 	for (;;) {
-		const due = await dueAutoTopUpsAfter(cursor);
+		const due: DueCursor[] = await dueAutoTopUpsAfter(now, cursor);
 		for (const account of due) {
 			if (Date.now() >= until) return summary;
 			try {
@@ -509,7 +538,7 @@ export async function runDueAutoTopUps(
 		}
 		const last = due.at(-1);
 		if (!last || due.length < DUE_PAGE_SIZE) return summary;
-		cursor = last.id;
+		cursor = last;
 	}
 }
 
