@@ -444,16 +444,25 @@ describe("developer transcribe workflow", () => {
 			expect(transcript()?.reservedMicroCredits).toBe(0);
 		});
 
-		it("costs nothing when deleted after the audio was read but before it was sent", async () => {
+		it("costs nothing when deleted after the audio was extracted and held for but before it was sent", async () => {
 			thirtySeconds();
-			const realFetch = globalThis.fetch;
-			vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-				const response = await realFetch(input);
-				if (String(input) === `http://storage.test/${AUDIO_KEY}`) deleteNow();
-				return response;
-			});
+			const storage = await import("@/lib/developer-transcript-storage");
+			let reserved = 0;
+			const read = vi
+				.spyOn(storage, "getDeveloperObjectText")
+				.mockImplementation(async (key: string) => {
+					const bytes = context.objects.get(key);
+					if (key === RESULT_KEY && !bytes) {
+						reserved = Number(transcript()?.reservedMicroCredits);
+						deleteNow();
+					}
+					return bytes ? new TextDecoder().decode(bytes) : null;
+				});
 
 			const result = await run();
+			read.mockRestore();
+
+			expect(reserved).toBeGreaterThan(0);
 
 			expect(result.success).toBe(false);
 			expect(context.transcribe).not.toHaveBeenCalled();
@@ -511,10 +520,13 @@ describe("developer transcribe workflow", () => {
 				throw new Error("speech is down");
 			});
 
-			await expect(run()).rejects.toThrow("speech is down");
+			const result = await run();
 
+			expect(result.success).toBe(false);
+			expect(context.transcribe).toHaveBeenCalledTimes(1);
 			expect(transcript()).toMatchObject({
 				status: "error",
+				errorCode: "source_missing",
 				billedMicroCredits: 0,
 				reservedMicroCredits: 0,
 			});
