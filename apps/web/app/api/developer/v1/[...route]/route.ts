@@ -1,32 +1,5 @@
-import { Hono } from "hono";
 import { handle } from "hono/vercel";
-import {
-	developerApiError,
-	developerApiNotFound,
-	developerRateLimiter,
-	developerResponseHeaders,
-} from "../../../utils";
-
-import * as transactions from "./transactions";
-import * as transcripts from "./transcripts";
-import * as uploads from "./uploads";
-import * as usage from "./usage";
-import * as videos from "./videos";
-import * as webhooks from "./webhooks";
-
-const app = new Hono()
-	.basePath("/api/developer/v1")
-	.use(developerResponseHeaders)
-	.use(developerRateLimiter)
-	.route("/videos", videos.app)
-	.route("/uploads", uploads.app)
-	.route("/transcripts", transcripts.app)
-	.route("/usage", usage.app)
-	.route("/transactions", transactions.app)
-	.route("/webhooks", webhooks.app)
-	.onError(developerApiError);
-
-app.notFound((c) => developerApiNotFound(c, app.routes));
+import { app } from "./app";
 
 export const GET = handle(app);
 export const POST = handle(app);

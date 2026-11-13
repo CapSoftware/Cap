@@ -84,25 +84,51 @@ beforeEach(() => {
 
 describe("webhook routes and a bad key", () => {
 	it.each([
-		["no key", {}],
-		["a public key", { Authorization: "Bearer cpk_public_key" }],
-		["an upload token", { Authorization: "Bearer cut_upload_token" }],
-		["an agent token", { Authorization: "Bearer cap_cli_token" }],
-		["a signing secret", { Authorization: "Bearer cws_signing_secret" }],
-		["a malformed header", { Authorization: "csk_valid_key" }],
-	])("refuses %s without a single database query", async (_label, headers) => {
-		for (const [method, path] of ROUTES) {
-			const response = await call(method, path, headers);
-			expect(response.status).toBe(401);
-			expect(await response.json()).toMatchObject({
-				code: "invalid_secret_key",
-			});
-		}
-		expect(mocks.queries).toBe(0);
-		for (const mock of Object.values(mocks.store)) {
-			expect(mock).not.toHaveBeenCalled();
-		}
-	});
+		["no key", {}, 401, "invalid_secret_key"],
+		[
+			"a public key",
+			{ Authorization: "Bearer cpk_public_key" },
+			403,
+			"public_key_not_allowed",
+		],
+		[
+			"an upload token",
+			{ Authorization: "Bearer cut_upload_token" },
+			401,
+			"invalid_secret_key",
+		],
+		[
+			"an agent token",
+			{ Authorization: "Bearer cap_cli_token" },
+			401,
+			"invalid_secret_key",
+		],
+		[
+			"a signing secret",
+			{ Authorization: "Bearer cws_signing_secret" },
+			401,
+			"invalid_secret_key",
+		],
+		[
+			"a malformed header",
+			{ Authorization: "csk_valid_key" },
+			401,
+			"invalid_secret_key",
+		],
+	])(
+		"refuses %s without a single database query",
+		async (_label, headers, status, code) => {
+			for (const [method, path] of ROUTES) {
+				const response = await call(method, path, headers);
+				expect(response.status).toBe(status);
+				expect(await response.json()).toMatchObject({ code });
+			}
+			expect(mocks.queries).toBe(0);
+			for (const mock of Object.values(mocks.store)) {
+				expect(mock).not.toHaveBeenCalled();
+			}
+		},
+	);
 
 	it("refuses an unknown or revoked secret key before reaching any endpoint", async () => {
 		mocks.keyRows = [];

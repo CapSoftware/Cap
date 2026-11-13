@@ -63,6 +63,7 @@ import {
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
 import {
+	looksLikeHtml,
 	MEDIA_CONTAINER_SNIFF_BYTES,
 	sniffMedia,
 	urlIsSelfContainedMedia,
@@ -181,6 +182,7 @@ const FAILURE_MESSAGES = {
 	source_blocked: "The URL does not point to a public address",
 	no_audio_track: "The file has no audio track",
 	unsupported_format: "The file is not a supported audio or video format",
+	web_page: "The URL returned a web page, not a media file",
 	duration_too_long: "The audio is longer than the 4 hour limit",
 	transcription_failed: "The transcript could not be created",
 } as const;
@@ -652,7 +654,12 @@ async function prepareSource(
 			if (source.head.length > 0 && sniffMedia(source.head) !== "media") {
 				await source.cancel();
 				return stop(
-					failure("unsupported_format", FAILURE_MESSAGES.unsupported_format),
+					failure(
+						"unsupported_format",
+						looksLikeHtml(source.head)
+							? FAILURE_MESSAGES.web_page
+							: FAILURE_MESSAGES.unsupported_format,
+					),
 				);
 			}
 			const contentType =

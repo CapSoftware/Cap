@@ -5,6 +5,10 @@ import {
 	DEVELOPER_VIDEO_MP4_FILE,
 	DEVELOPER_VIDEO_POSTER_FILE,
 } from "./developer-video-plan";
+import {
+	developerVideoIsTakenDown,
+	developerVideoPublicMetadata,
+} from "./developer-video-takedown";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
 
@@ -14,11 +18,32 @@ export interface DeveloperVideoOutputs {
 	poster: boolean;
 }
 
+// A row read in full carries its metadata. A list that does not load
+// metadata selects the takedown flag on its own instead.
+type TakedownSource = { metadata: unknown } | { takenDown: boolean };
+
+type PlayableFields = Pick<
+	DeveloperVideoRow,
+	"status" | "playbackId" | "processing"
+> &
+	TakedownSource;
+
+export function developerVideoTakenDown(video: TakedownSource): boolean {
+	return "takenDown" in video
+		? video.takenDown
+		: developerVideoIsTakenDown(video);
+}
+
 export function developerVideoOutputs(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
+	video: PlayableFields,
 ): DeveloperVideoOutputs {
 	const processing = video.processing;
-	if (video.status !== "ready" || !video.playbackId || !processing) {
+	if (
+		video.status !== "ready" ||
+		!video.playbackId ||
+		!processing ||
+		developerVideoTakenDown(video)
+	) {
 		return { hls: false, mp4: false, poster: false };
 	}
 	return {
@@ -40,16 +65,19 @@ export interface DeveloperVideoOutputStates {
 }
 
 // A null hlsUrl or mp4Url alone cannot say whether that output is still being
-// encoded or will never exist. "ready" matches a non-null URL exactly. A part
-// waiting for a busy encoder to retry is still "processing". "none" is only
-// for videos uploaded before encoding existed, which never get these outputs.
+// encoded or will never exist. "ready" matches a non-null URL exactly, except
+// on a video Cap took down: its URLs are null while takenDown is true, and its
+// outputs keep saying what was encoded, so a restore needs no new encode and a
+// client is not told to keep waiting. A part waiting for a busy encoder to
+// retry is still "processing". "none" is only for videos uploaded before
+// encoding existed, which never get these outputs.
 export function developerVideoOutputStates(
 	video: Pick<
 		DeveloperVideoRow,
 		"status" | "playbackId" | "processing" | "duration" | "width"
 	>,
 ): DeveloperVideoOutputStates {
-	const outputs = developerVideoOutputs(video);
+	const outputs = developerVideoOutputs({ ...video, takenDown: false });
 	const processing = video.processing;
 	const state = (part: "hls" | "mp4"): DeveloperVideoOutputState => {
 		if (outputs[part]) return "ready";
@@ -84,9 +112,11 @@ export function developerPlaybackBaseUrl(): string {
 	return base.replace(/\/+$/, "");
 }
 
-export function developerVideoPlaybackUrls(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
-): { hlsUrl: string | null; mp4Url: string | null; posterUrl: string | null } {
+export function developerVideoPlaybackUrls(video: PlayableFields): {
+	hlsUrl: string | null;
+	mp4Url: string | null;
+	posterUrl: string | null;
+} {
 	const outputs = developerVideoOutputs(video);
 	const base = `${developerPlaybackBaseUrl()}/${video.playbackId}`;
 	return {
@@ -123,7 +153,7 @@ export type AgentDeveloperVideoRow = Pick<
 	| "processing"
 	| "createdAt"
 	| "updatedAt"
->;
+> & { takenDown: boolean };
 
 export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 	const status = developerVideoIsReady(video) ? "ready" : video.status;
@@ -142,6 +172,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		maxResolutionTier: video.maxResolutionTier,
 		renditions: video.renditions ?? [],
 		transcriptionStatus: video.transcriptionStatus,
+		takenDown: video.takenDown === true,
 		...developerVideoPlaybackUrls(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
@@ -160,8 +191,10 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	} = video;
 	return {
 		...fields,
+		metadata: developerVideoPublicMetadata(video.metadata),
 		duration: developerVideoReportedDuration(video),
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
 		outputs: developerVideoOutputStates(video),
 		...(video.playbackId
@@ -197,6 +230,7 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		errorReason: video.errorReason,
 		playbackId: video.playbackId,
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
 		outputs: developerVideoOutputStates(video),
 	};

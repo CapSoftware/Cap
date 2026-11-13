@@ -27,6 +27,7 @@ const row = (index: number): AgentDeveloperVideoRow => ({
 	height: 720,
 	fps: 30,
 	maxResolutionTier: "1080p",
+	takenDown: false,
 	renditions: [
 		{
 			name: "720p",
