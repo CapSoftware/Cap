@@ -1455,6 +1455,8 @@ When the upload is already H.264 and fits the tier, Cap can keep its video as up
 
 Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you create an upload and when you get or list a video. Both are built from the video's `playbackId`, need no API key or sign-in, set no cookies and are kept out of search engines.
 
+The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
+
 - `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
 - `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
 
