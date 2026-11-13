@@ -60,6 +60,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 | `transcripts_delete` | Deletes a transcript, its text and its files for good. | Free |
 | `account_usage` | Returns balance, standing, whether uploads are accepted, stored minutes, daily storage cost and rates. | Free |
 | `account_transactions` | Lists the ledger, newest first. | Free |
+| `docs_read` | Returns a section of the Cap Infra docs (`get-started`, `rest-api`, `webhooks` or `billing`) as Markdown, found by heading with `section` or by search with `query`, up to 8 KB with a link to the rest. With neither, returns the page outline. Fetched from cap.so, or `CAP_API_URL`, and cached for 10 minutes. | Free |
 
 There is no tool that adds credit. Buying credit needs a signed-in browser, so when the API answers that the app is out of credit, the result says so and carries the console link in `addCreditAt`. `account_usage` carries that link only when the app cannot take an upload or is in `grace` or `paused`.
 
