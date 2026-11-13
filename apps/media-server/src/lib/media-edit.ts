@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { file } from "bun";
 import { type EncodeStallWindows, watchEncodeProgress } from "./encode-stall";
-import { FfmpegExitError, ffmpegErrorLines } from "./ffmpeg-errors";
+import { collectFfmpegErrorLine, FfmpegExitError } from "./ffmpeg-errors";
 import type { VideoMetadata } from "./job-manager";
 import { redactLogText } from "./log-redaction";
 import { spawn } from "./media-spawn";
@@ -249,29 +249,74 @@ async function drainStream(stream: ReadableStream<Uint8Array> | null) {
 	}
 }
 
-async function readStream(
+export const STDERR_TAIL_BYTES = 64 * 1024;
+
+// FFmpeg writes progress and warnings to stderr for as long as it runs, and a
+// damaged input can make it write a line per packet. Only the end is ever
+// used, so the stream is read to its end and at most the last maxBytes are
+// kept.
+export async function readStreamTail(
 	stream: ReadableStream<Uint8Array> | null,
 	onText?: (text: string) => void,
+	maxBytes: number = STDERR_TAIL_BYTES,
 ) {
 	if (!stream) return "";
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
+	let heldBytes = 0;
 	const live = new TextDecoder();
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			chunks.push(value);
 			onText?.(live.decode(value, { stream: true }));
+			chunks.push(
+				value.length > maxBytes ? value.slice(value.length - maxBytes) : value,
+			);
+			heldBytes += Math.min(value.length, maxBytes);
+			while (heldBytes > maxBytes) {
+				const oldest = chunks[0];
+				if (!oldest) break;
+				const excess = heldBytes - maxBytes;
+				if (oldest.length <= excess) {
+					chunks.shift();
+					heldBytes -= oldest.length;
+				} else {
+					chunks[0] = oldest.slice(excess);
+					heldBytes -= excess;
+				}
+			}
 		}
 	} finally {
 		reader.releaseLock();
 	}
 
-	const decoder = new TextDecoder();
-	return chunks
-		.map((chunk) => decoder.decode(chunk, { stream: true }))
-		.join("");
+	const held = new Uint8Array(heldBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		held.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return new TextDecoder().decode(held);
+}
+
+const MAX_PENDING_LINE_LENGTH = 4096;
+
+// Hands complete lines to a listener as text arrives in pieces. A line that
+// never ends is cut off rather than held.
+export function lineReader(onLine: (line: string) => void) {
+	let pending = "";
+	return {
+		push(text: string) {
+			const parts = (pending + text).split(/\r\n|\r|\n/);
+			pending = (parts.pop() ?? "").slice(0, MAX_PENDING_LINE_LENGTH);
+			for (const line of parts) onLine(line);
+		},
+		end() {
+			if (pending) onLine(pending);
+			pending = "";
+		},
+	};
 }
 
 async function withTimeout<T>(
@@ -335,20 +380,28 @@ export async function runFfmpegCommand(
 	try {
 		await withTimeout(
 			(async () => {
+				// The first error lines can come long before the exit, with more
+				// output than is kept after them, so they are picked out as
+				// they arrive.
+				const errorLines: string[] = [];
+				const lines = lineReader((line) =>
+					collectFfmpegErrorLine(errorLines, line),
+				);
 				const [stderrText, exitCode] = await Promise.all([
-					readStream(
-						proc.stderr as ReadableStream<Uint8Array>,
-						progressWatch.observe,
-					),
+					readStreamTail(proc.stderr as ReadableStream<Uint8Array>, (text) => {
+						progressWatch.observe(text);
+						lines.push(text);
+					}),
 					drainStream(proc.stdout as ReadableStream<Uint8Array>).then(
 						() => proc.exited,
 					),
 				]);
 
+				lines.end();
 				if (exitCode !== 0) {
 					throw new FfmpegExitError(
 						`FFmpeg exited with code ${exitCode}. Last stderr: ${redactLogText(stderrText.slice(-2000))}`,
-						ffmpegErrorLines(stderrText),
+						errorLines,
 					);
 				}
 			})(),
