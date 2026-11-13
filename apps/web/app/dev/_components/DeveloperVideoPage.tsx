@@ -13,6 +13,10 @@ import {
 	type DeveloperVideoPlayer,
 	loadDeveloperVideoPlayer,
 } from "@/lib/developer-video-player";
+import {
+	DEVELOPER_VIDEO_UNAVAILABLE,
+	developerVideoReportHref,
+} from "@/lib/developer-video-takedown";
 import { INFRA_VIDEO_PUBLIC_FAILURE } from "@/lib/infra-video-view";
 import { RefreshUntilReady } from "./RefreshUntilReady";
 
@@ -24,7 +28,10 @@ export async function developerVideoMetadata(
 	playbackId: string,
 ): Promise<Metadata> {
 	const player = await loadPlayer(playbackId);
-	const title = player?.name ?? "Video not found";
+	const title =
+		player?.kind === "taken_down"
+			? "Video not available"
+			: (player?.name ?? "Video not found");
 	const images =
 		player?.kind === "playing" && player.poster ? [player.poster] : [];
 	return {
@@ -111,6 +118,9 @@ function Stage({
 	if (player.kind === "failed") {
 		return <Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />;
 	}
+	if (player.kind === "taken_down") {
+		return <Notice title={DEVELOPER_VIDEO_UNAVAILABLE} />;
+	}
 	return (
 		<>
 			<Notice
@@ -123,21 +133,58 @@ function Stage({
 	);
 }
 
+// The embed sits on someone else's page, so its link only shows while the
+// pointer is over a player whose controls are showing, or on keyboard focus.
+const EMBED_REPORT_CLASS =
+	"pointer-events-none absolute right-2 top-2 z-10 rounded-[6px] bg-[rgba(5,5,6,0.55)] px-2 py-1 text-[12px] leading-none text-[rgba(232,236,244,0.72)] opacity-0 outline-none transition-opacity duration-200 hover:text-[#E8ECF4] focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)] [.group:hover:not(:has([data-idle=true]))_&]:pointer-events-auto [.group:hover:not(:has([data-idle=true]))_&]:opacity-100";
+
 export function DeveloperVideoView({
+	playbackId,
 	player,
 	variant,
 	playback = developerVideoPlayback({}, variant),
 }: {
+	playbackId: string;
 	player: DeveloperVideoPlayer;
 	variant: DeveloperVideoPageVariant;
 	playback?: DeveloperVideoPlayback;
 }) {
+	// A taken down video gets one plain sentence and nothing from the video:
+	// no player, poster, title or link. Every playback file answers 410.
+	if (player.kind === "taken_down") {
+		return (
+			<div
+				className={
+					variant === "embed"
+						? "fixed inset-0 grid place-items-center bg-black px-5 text-center"
+						: "grid min-h-dvh place-items-center px-5 text-center"
+				}
+			>
+				{variant === "embed" && <style>{"html,body{background:#000}"}</style>}
+				<h1 className="m-0 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
+					{DEVELOPER_VIDEO_UNAVAILABLE}
+				</h1>
+			</div>
+		);
+	}
+
+	const reportHref = developerVideoReportHref(playbackId);
+
 	if (variant === "embed") {
 		return (
-			<div className="fixed inset-0 bg-black">
+			<div className="group fixed inset-0 bg-black">
 				<style>{"html,body{background:#000}"}</style>
 				<h1 className="sr-only">{player.name}</h1>
 				<Stage player={player} playback={playback} />
+				<a
+					href={reportHref}
+					target="_blank"
+					rel="noopener noreferrer"
+					aria-label="Report this video"
+					className={EMBED_REPORT_CLASS}
+				>
+					Report
+				</a>
 			</div>
 		);
 	}
@@ -160,9 +207,18 @@ export function DeveloperVideoView({
 					>
 						<Stage player={player} playback={playback} />
 					</div>
-					<h1 className="m-0 mt-5 text-[18px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4] [overflow-wrap:anywhere]">
-						{player.name}
-					</h1>
+					<div className="mt-5 flex items-baseline justify-between gap-4">
+						<h1 className="m-0 min-w-0 text-[18px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4] [overflow-wrap:anywhere]">
+							{player.name}
+						</h1>
+						<a
+							href={reportHref}
+							aria-label="Report this video"
+							className="shrink-0 rounded-[4px] text-[13px] leading-[1.3] text-[rgba(232,236,244,0.42)] outline-none transition-colors hover:text-[rgba(232,236,244,0.8)] focus-visible:text-[#E8ECF4] focus-visible:ring-1 focus-visible:ring-[rgba(232,236,244,0.6)]"
+						>
+							Report
+						</a>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -182,6 +238,7 @@ export async function DeveloperVideoPage({
 	if (!player) notFound();
 	return (
 		<DeveloperVideoView
+			playbackId={playbackId}
 			player={player}
 			variant={variant}
 			playback={developerVideoPlayback(query, variant)}

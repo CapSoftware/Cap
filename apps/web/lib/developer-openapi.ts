@@ -336,11 +336,16 @@ const playbackProperties = {
 		format: "uri",
 		description: "Poster image. Null until ready.",
 	},
+	takenDown: {
+		type: "boolean",
+		description:
+			"True when Cap has taken the video down after a report. Its playback URLs are null, its playback files answer 410 Gone to new requests, and its page and embed show only that the video is not available, until Cap restores it. Signed media links a player already loaded keep working until they expire, at most 18 hours later. status is unchanged, and the video is stored and billed as before. Email hello@cap.so about a takedown.",
+	},
 	outputs: {
 		type: "object",
 		required: ["hls", "mp4"],
 		description:
-			"Whether each output is still coming. ready means its URL is set. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
+			"Whether each output is still coming. ready means its URL is set, except while takenDown is true, when every URL is null. processing means it is being encoded, or will be retried, so check again later. failed means it will not be produced. none is only for videos uploaded before encoding existed.",
 		properties: {
 			hls: {
 				type: "string",
