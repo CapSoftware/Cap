@@ -974,7 +974,11 @@ describe("response headers on the developer APIs", () => {
 			await call(rest, "GET", "/api/developer/v1/nope", { key }),
 			await call(rest, "POST", "/api/developer/v1/usage", { key }),
 		];
-		for (let request = 3; request < 60; request++) {
+		for (
+			let request = 3;
+			request < DEVELOPER_KEY_REQUESTS_PER_MINUTE;
+			request++
+		) {
 			await call(rest, "GET", "/api/developer/v1/usage", { key });
 		}
 		answers.push(await call(rest, "GET", "/api/developer/v1/usage", { key }));
