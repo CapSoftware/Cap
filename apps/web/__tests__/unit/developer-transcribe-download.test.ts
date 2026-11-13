@@ -80,6 +80,25 @@ vi.mock("@/lib/developer-transcripts", async (importOriginal) => ({
 	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS: 2_000,
 }));
 
+// requestPublicOnly refuses a loopback address, by name or as a literal, so
+// the local server is reached through a name this lookup pins to it.
+vi.mock("@/lib/s3-endpoint-policy", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/lib/s3-endpoint-policy")>();
+	const publicOnlyLookup: typeof actual.publicOnlyLookup = (
+		_hostname,
+		options,
+		callback,
+	) => {
+		if (typeof options === "object" && options.all) {
+			callback(null, [{ address: "127.0.0.1", family: 4 }]);
+			return;
+		}
+		callback(null, "127.0.0.1", 4);
+	};
+	return { ...actual, publicOnlyLookup };
+});
+
 vi.mock("@/lib/public-media-fetch", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@/lib/public-media-fetch")>();
@@ -258,7 +277,7 @@ const serve = async (options: {
 	await new Promise<void>((resolve) =>
 		state.server.listen(0, "127.0.0.1", resolve),
 	);
-	context.origin = `http://127.0.0.1:${(state.server.address() as AddressInfo).port}`;
+	context.origin = `http://media.test:${(state.server.address() as AddressInfo).port}`;
 	origin = state;
 	return state;
 };

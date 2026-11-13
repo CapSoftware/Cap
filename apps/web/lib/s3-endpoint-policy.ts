@@ -15,8 +15,12 @@ for (const [network, prefix] of [
 	["169.254.0.0", 16],
 	["172.16.0.0", 12],
 	["192.0.0.0", 24],
+	["192.0.2.0", 24],
+	["192.88.99.0", 24],
 	["192.168.0.0", 16],
 	["198.18.0.0", 15],
+	["198.51.100.0", 24],
+	["203.0.113.0", 24],
 	["224.0.0.0", 4],
 	["240.0.0.0", 4],
 ] as const) {
@@ -26,10 +30,17 @@ for (const [network, prefix] of [
 // BlockList already applies the IPv4 rules to IPv4-mapped addresses
 // (::ffff:a.b.c.d and ::ffff:7f00:1). Adding ::ffff:0:0/96 here would also
 // match every plain IPv4 address, so only the IPv4-compatible (::/96) and NAT64
-// (64:ff9b::/96) forms are blocked outright.
+// (64:ff9b::/96) forms are blocked outright. 6to4 (2002::/16) and Teredo
+// (2001::/32) carry an IPv4 address inside them, so a relay could deliver the
+// request to a private IPv4 host that the IPv4 rules never saw.
 for (const [network, prefix] of [
 	["::", 96],
 	["64:ff9b::", 96],
+	["64:ff9b:1::", 48],
+	["100::", 64],
+	["2001::", 32],
+	["2001:db8::", 32],
+	["2002::", 16],
 	["fc00::", 7],
 	["fe80::", 10],
 	["fec0::", 10],
