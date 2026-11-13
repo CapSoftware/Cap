@@ -1,0 +1,822 @@
+---
+title: "Get Started"
+summary: "Upload a video from a browser or a server, wait for it to process and play it on your page"
+tags: "API, Integration, Guide"
+---
+
+This guide takes you from a new app to a video playing on your page. Every code example on this page was run against the live API. The [REST API](/docs/api/rest-api) reference has every field and error.
+
+A video takes four steps:
+
+1. Your server creates an upload with the secret key and gets an upload token.
+2. The browser, or your server, uploads the file with that token.
+3. Your server checks the video's status until it is `ready`.
+4. Your page plays it.
+
+## 1. Create an app and get its secret key
+
+1. Open [cap.so/dashboard/infra](/dashboard/infra) and create an app.
+2. Copy the secret key. It starts with `csk_` and is shown once, when the app is created. If you lose it, generate a new one on the app's API keys page. That revokes the old key.
+3. Add credit on the app's Billing page. An app with no credit cannot upload. [Billing](/docs/api/billing) explains what is charged.
+
+Keep the key in an environment variable on your server:
+
+```bash
+export CAP_SECRET_KEY=csk_your_secret_key
+```
+
+## 2. Create an upload on your server
+
+Your server calls [Create Upload](/docs/api/rest-api#create-upload) with the secret key. Cap creates the video and returns an upload token that starts with `cut_`.
+
+The secret key never goes to the browser. It can read and delete every video in the app, and the REST API sends no CORS headers, so a page cannot call it. The upload token does go to the browser. It uploads that one video and nothing else, and it stops working when the upload completes, when the video is deleted or when it expires.
+
+Save this as `server.mjs`. It needs Node 20 or later and no packages. It serves the page from the next step, creates uploads for it, renews an upload token for it and checks a video's status for it.
+
+```js
+import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+
+const CAP_API = "https://cap.so/api/developer/v1";
+const SECRET_KEY = process.env.CAP_SECRET_KEY;
+const PORT = Number(process.env.PORT ?? 3000);
+const ORIGIN = `http://localhost:${PORT}`;
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+
+async function capApi(method, path, body) {
+  const headers = { Authorization: `Bearer ${SECRET_KEY}` };
+  if (body) headers["Content-Type"] = "application/json";
+  const response = await fetch(CAP_API + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return {
+    status: response.status,
+    json: await response.json(),
+    retryAfter: response.headers.get("Retry-After"),
+  };
+}
+
+function signedInUserId(request) {
+  return "user_42";
+}
+
+async function handle(request, response) {
+  const url = new URL(request.url, ORIGIN);
+  const send = (status, value, retryAfter) => {
+    const headers = { "Content-Type": "application/json" };
+    if (retryAfter) headers["Retry-After"] = retryAfter;
+    response.writeHead(status, headers);
+    response.end(JSON.stringify(value));
+  };
+  const userId = signedInUserId(request);
+  const forUser = `userId=${encodeURIComponent(userId)}`;
+  const tokenOptions = { corsOrigin: ORIGIN, maxBytes: MAX_UPLOAD_BYTES };
+
+  if (request.method === "POST" && url.pathname === "/api/uploads") {
+    const { status, json } = await capApi("POST", "/uploads", {
+      name: (url.searchParams.get("name") || "Untitled").slice(0, 255),
+      userId,
+      ...tokenOptions,
+    });
+    if (status !== 200) return send(status, { error: json.code });
+    return send(200, { videoId: json.data.videoId, token: json.data.token });
+  }
+
+  const tokenPath = url.pathname.match(/^\/api\/uploads\/([\w-]+)\/token$/);
+  if (request.method === "POST" && tokenPath) {
+    const videoId = tokenPath[1];
+    const owned = await capApi("GET", `/videos/${videoId}/status?${forUser}`);
+    if (owned.status !== 200) {
+      return send(owned.status, { error: owned.json.code });
+    }
+    const { status, json } = await capApi(
+      "POST",
+      `/uploads/${videoId}/token`,
+      tokenOptions,
+    );
+    if (status !== 200) return send(status, { error: json.code });
+    return send(200, { token: json.data.token });
+  }
+
+  const statusPath = url.pathname.match(/^\/api\/videos\/([\w-]+)\/status$/);
+  if (request.method === "GET" && statusPath) {
+    const { status, json, retryAfter } = await capApi(
+      "GET",
+      `/videos/${statusPath[1]}/status?${forUser}`,
+    );
+    if (status !== 200) return send(status, { error: json.code }, retryAfter);
+    const video = json.data;
+    if (video.status === "errored") {
+      console.error(`Video ${video.id} failed: ${video.errorReason}`);
+    }
+    return send(200, {
+      status: video.status,
+      hlsUrl: video.hlsUrl,
+      mp4Url: video.mp4Url,
+      posterUrl: video.posterUrl,
+      width: video.width,
+      height: video.height,
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/") {
+    response.writeHead(200, { "Content-Type": "text/html" });
+    return response.end(
+      await readFile(new URL("./index.html", import.meta.url)),
+    );
+  }
+
+  send(404, { error: "not_found" });
+}
+
+createServer((request, response) => {
+  handle(request, response).catch(() => {
+    response.writeHead(502, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "upstream_failed" }));
+  });
+}).listen(PORT, () => console.log(`Open ${ORIGIN}`));
+```
+
+- Replace `signedInUserId` with your own session check, and refuse the request when nobody is signed in. Your server decides who gets a token.
+- `userId` ties the video to one of your users. See [Scope videos to your users](/docs/api/get-started#7-scope-videos-to-your-users).
+- `corsOrigin` is the exact origin of the page that uploads, with no path or trailing slash. The upload endpoints then refuse a browser on any other origin. Leave it out when a server uploads.
+- `maxBytes` is the largest file the token may upload. Without it a token can upload a file of any size up to 36 GB into storage you pay for.
+- The token works for one hour. Set `timeoutSeconds`, up to `86400`, to change that. When a token expires before the upload completes, the page asks this server for a new one and carries on with the same upload. See [Renew Upload Token](/docs/api/rest-api#renew-upload-token).
+- Field names are exact. A field Create Upload does not know is refused with `400`.
+
+## 3. Upload the file from the browser
+
+The browser sends the file in parts with the upload token: initiate, get signed URLs for the parts, `PUT` each part's bytes to its URL, then complete. [Multipart Upload](/docs/api/rest-api#multipart-upload) is the reference for the calls.
+
+Save this as `index.html` beside `server.mjs`. It uses no library.
+
+```html
+<!doctype html>
+<meta charset="utf-8" />
+<title>Upload a video</title>
+
+<input id="file" type="file" accept="video/*" />
+<progress id="progress" value="0" max="1"></progress>
+<p id="status"></p>
+
+<script>
+  const UPLOAD_API = "https://cap.so/api/developer/sdk/v1/upload/multipart";
+  const PART_SIZE = 8 * 1024 * 1024;
+  const SIGN_AT_ONCE = 10;
+
+  async function uploadStep(upload, step, body) {
+    for (let attempt = 1; ; attempt++) {
+      const response = await fetch(`${UPLOAD_API}/${step}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${upload.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      const json = await response.json();
+      if (response.ok) return json;
+      if (json.code !== "upload_token_expired" || attempt === 2) {
+        throw new Error(json.code);
+      }
+      const renewed = await fetch(`/api/uploads/${upload.videoId}/token`, {
+        method: "POST",
+      });
+      if (!renewed.ok) throw new Error("the server could not renew the upload");
+      upload.token = (await renewed.json()).token;
+    }
+  }
+
+  function readVideoInfo(file) {
+    return new Promise((resolve) => {
+      const probe = document.createElement("video");
+      const finish = (info) => {
+        URL.revokeObjectURL(probe.src);
+        resolve(info);
+      };
+      probe.preload = "metadata";
+      probe.onloadedmetadata = () =>
+        finish(
+          Number.isFinite(probe.duration) && probe.duration > 0
+            ? {
+                durationInSecs: probe.duration,
+                width: probe.videoWidth,
+                height: probe.videoHeight,
+              }
+            : { durationInSecs: 1 },
+        );
+      probe.onerror = () => finish({ durationInSecs: 1 });
+      probe.src = URL.createObjectURL(file);
+    });
+  }
+
+  function putPart(url, blob, onSent) {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open("PUT", url);
+      request.upload.onprogress = (event) => onSent(event.loaded);
+      request.onload = () =>
+        request.status === 200
+          ? resolve(request.getResponseHeader("ETag"))
+          : reject(new Error(`part upload failed with ${request.status}`));
+      request.onerror = () => reject(new Error("part upload failed"));
+      request.send(blob);
+    });
+  }
+
+  async function uploadVideo(file, upload, onProgress) {
+    const info = await readVideoInfo(file);
+    const { uploadId } = await uploadStep(upload, "initiate", {
+      contentType: file.type || "video/mp4",
+      contentLength: file.size,
+    });
+    const partCount = Math.ceil(file.size / PART_SIZE);
+    const urls = new Map();
+    const sign = async (first, last) => {
+      const partNumbers = [];
+      for (let number = first; number <= last; number++) {
+        partNumbers.push(number);
+      }
+      const signed = await uploadStep(upload, "presign-part", {
+        uploadId,
+        partNumbers,
+      });
+      for (const part of signed.parts) {
+        urls.set(part.partNumber, part.presignedUrl);
+      }
+    };
+    const parts = [];
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      const start = (partNumber - 1) * PART_SIZE;
+      const blob = file.slice(start, start + PART_SIZE);
+      if (!urls.has(partNumber)) {
+        await sign(
+          partNumber,
+          Math.min(partNumber + SIGN_AT_ONCE - 1, partCount),
+        );
+      }
+      const sendPart = () =>
+        putPart(urls.get(partNumber), blob, (sent) =>
+          onProgress((start + sent) / file.size),
+        );
+      const etag = await sendPart().catch(async () => {
+        await sign(partNumber, partNumber);
+        return sendPart();
+      });
+      parts.push({ partNumber, etag, size: blob.size });
+    }
+    await uploadStep(upload, "complete", { uploadId, parts, ...info });
+  }
+
+  document.getElementById("file").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const status = document.getElementById("status");
+    const progress = document.getElementById("progress");
+    try {
+      status.textContent = "Uploading";
+      const created = await fetch(
+        `/api/uploads?name=${encodeURIComponent(file.name)}`,
+        { method: "POST" },
+      );
+      if (!created.ok) throw new Error("the server could not create an upload");
+      const upload = await created.json();
+      let furthest = 0;
+      progress.value = 0;
+      await uploadVideo(file, upload, (fraction) => {
+        furthest = Math.max(furthest, fraction);
+        progress.value = furthest;
+      });
+      status.textContent = "Processing";
+      const video = await waitForVideo(upload.videoId);
+      status.textContent = "Ready";
+      playVideo(video);
+    } catch (error) {
+      status.textContent = `Failed: ${error.message}`;
+    }
+  });
+</script>
+```
+
+`waitForVideo` and `playVideo` are added in the next two steps.
+
+- **Parts.** Every part except the last must be at least 5 MB, and an upload takes up to 10,000 parts. A file smaller than one part is sent as a single part.
+- **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made.
+- **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
+- **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
+- **File size.** Initiate takes the file's size as `contentLength`, so a file over the token's `maxBytes` is refused with the code `file_too_large` before any of it is sent.
+- **Progress.** `fetch` does not report upload progress, so the parts are sent with `XMLHttpRequest`. The bar keeps the furthest point reached, so it does not step back while a failed part is sent again.
+- **Retry.** A part that fails is sent once more with a new signed URL. A second failure stops the upload.
+- **An expired token.** A call that answers `upload_token_expired` gets a new token from your server and is sent again. Nothing already uploaded is lost.
+- **Resuming.** Calling initiate again returns the same `uploadId` when the upload was opened in the last 6 hours, with the same token or a renewed one. Keep each finished part's `partNumber`, `etag` and `size`, upload only the parts that are missing, then list every part in complete.
+
+## 4. Wait for the video
+
+Completing the upload starts processing. [Get Video Status](/docs/api/rest-api#get-video-status) moves from `uploading` to `processing`, then to `ready` or `errored`. The page asks your server, and your server asks Cap with the secret key.
+
+Add this to `index.html`, below the upload script:
+
+```html
+<script>
+  async function waitForVideo(videoId) {
+    const giveUpAt = Date.now() + 15 * 60 * 1000;
+    let delay = 3000;
+    let readyChecks = 0;
+    while (Date.now() < giveUpAt) {
+      let wait = delay;
+      const response = await fetch(`/api/videos/${videoId}/status`);
+      if (response.status === 429) {
+        wait = (Number(response.headers.get("Retry-After")) || 10) * 1000;
+      } else if (!response.ok) {
+        throw new Error(`status check failed with ${response.status}`);
+      } else {
+        const video = await response.json();
+        if (video.status === "errored") {
+          throw new Error("the video could not be processed");
+        }
+        if (video.status === "ready" && (video.hlsUrl || ++readyChecks > 3)) {
+          return video;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      delay = Math.min(delay * 1.5, 15000);
+    }
+    throw new Error("the video is still processing");
+  }
+</script>
+```
+
+- **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
+- **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
+- **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
+- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+
+## 5. Play it
+
+A ready video has an adaptive HLS playlist (`hlsUrl`), an MP4 (`mp4Url`) and a poster image (`posterUrl`). They need no key and answer any origin. Store them and reuse them for as long as the video exists.
+
+Add this to `index.html`, below the other scripts:
+
+```html
+<video
+  id="player"
+  controls
+  playsinline
+  style="width: 100%; max-width: 720px"
+></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script>
+  const player = document.getElementById("player");
+  let hls = null;
+  let fallbackUrl = null;
+
+  function stopHls() {
+    if (hls) hls.destroy();
+    hls = null;
+  }
+
+  function playMp4() {
+    const position = player.currentTime;
+    const wasPlaying = !player.paused;
+    stopHls();
+    if (!fallbackUrl) return;
+    player.src = fallbackUrl;
+    player.currentTime = position;
+    if (wasPlaying) player.play();
+  }
+
+  function playVideo({ hlsUrl, mp4Url, posterUrl, width, height }) {
+    stopHls();
+    player.removeEventListener("error", playMp4);
+    fallbackUrl = mp4Url;
+    if (posterUrl) player.poster = posterUrl;
+    if (width && height) player.style.aspectRatio = `${width} / ${height}`;
+
+    if (hlsUrl && window.Hls && Hls.isSupported()) {
+      const megabits = navigator.connection?.downlink;
+      const estimate = megabits > 0 ? megabits * 800000 : 1500000;
+      hls = new Hls({
+        autoStartLoad: false,
+        abrEwmaDefaultEstimate: estimate,
+        abrEwmaDefaultEstimateMax: estimate,
+        startFragPrefetch: true,
+        capLevelToPlayerSize: true,
+      });
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event, { levels }) => {
+        const wanted = player.clientWidth * window.devicePixelRatio;
+        let level = 0;
+        while (
+          levels[level + 1] &&
+          levels[level + 1].bitrate <= estimate &&
+          levels[level].width < wanted
+        ) {
+          level++;
+        }
+        hls.startLevel = level;
+        hls.startLoad();
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal || data.response?.code === 403) playMp4();
+      });
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(player);
+    } else if (hlsUrl && player.canPlayType("application/vnd.apple.mpegurl")) {
+      player.src = hlsUrl;
+      player.addEventListener("error", playMp4, { once: true });
+    } else if (mp4Url) {
+      player.src = mp4Url;
+    }
+  }
+</script>
+```
+
+Start the server, open the page and choose a video file:
+
+```bash
+node server.mjs
+```
+
+Safari plays HLS by itself. Every other browser needs [hls.js](https://github.com/video-dev/hls.js). What each setting is for:
+
+| Setting | Why |
+|---------|-----|
+| `autoStartLoad: false`, then `startLevel` and `startLoad()` | Start on a rendition the viewer's connection can carry. Without it hls.js starts on the first rendition the playlist lists, which is too large for a slow connection |
+| `abrEwmaDefaultEstimate` and `abrEwmaDefaultEstimateMax` | Give hls.js the browser's own estimate of the connection. Safari and Firefox do not give one, so the page assumes a slow connection there: the video starts on the smallest rendition and steps up once hls.js has measured a download |
+| `startFragPrefetch` | Fetch the first segment while the video element is still being set up |
+| `capLevelToPlayerSize` | Never load a rendition larger than the player on the page |
+| The `403` check | Media links inside the playlist expire after 12 hours. A `403` means one has expired, so switch to the MP4 at once instead of letting hls.js retry |
+| `playMp4` on a fatal error | Keep playing from the same position if HLS fails for any other reason |
+| `stopHls` at the start of `playVideo` | Stop the previous video's player before starting the next one on the same page |
+
+[Play a Video](/docs/api/rest-api#play-a-video) covers a Content Security Policy, bitrates and what happens when playback stops.
+
+### Use the hosted player instead
+
+Every upload also returns `shareUrl` and `embedUrl`. They are Cap's hosted player for the video, and they need no status checks and no player code. Both work as soon as the upload is created: the page says the video is processing and switches to the player by itself.
+
+- Send `shareUrl` to a viewer as a link.
+- Put `embedUrl` in an iframe on your page:
+
+```html
+<iframe
+  src="EMBED_URL"
+  title="Product demo"
+  style="width: 100%; aspect-ratio: 16 / 9; border: 0"
+  allow="fullscreen; picture-in-picture"
+  loading="lazy"
+></iframe>
+```
+
+`loading="lazy"` leaves an embed further down the page unloaded until the viewer scrolls near it. The embed takes options in its URL, such as a start time, autoplay and loop. See [Embed Parameters](/docs/api/rest-api#embed-parameters).
+
+Use the hosted player when you want a video on a page with the least work. Build your own player, as above, when you need to control how it looks or react to what the viewer does. [Share and Embed](/docs/api/rest-api#share-and-embed) has the details.
+
+## 6. Upload from your server
+
+When your backend already has the file, it can do the whole upload itself. It creates the upload without `corsOrigin`, then makes the same calls with the token.
+
+A server has no `<video>` element to read the duration with. Send the real `durationInSecs`, `width` and `height` if you have them, for example from `ffprobe`. Otherwise send `durationInSecs: 1`, as these examples do, and Cap replaces it with the measured length.
+
+Both examples ask for a token that works for 24 hours, the longest allowed. The token never leaves your server, so a long life costs nothing, and a large file on a slow connection has time to finish. An upload that could take longer than that needs a new token part way through: see [Renew Upload Token](/docs/api/rest-api#renew-upload-token).
+
+Both examples send a part once more when its upload fails, and wait and send the request again when the API answers `429`.
+
+### Node
+
+Save this as `cap-api.mjs`. It needs Node 20 or later and no packages.
+
+```js
+import { open } from "node:fs/promises";
+
+const CAP_API = "https://cap.so/api/developer/v1";
+const UPLOAD_API = "https://cap.so/api/developer/sdk/v1/upload/multipart";
+const SECRET_KEY = process.env.CAP_SECRET_KEY;
+const PART_SIZE = 8 * 1024 * 1024;
+const SIGN_AT_ONCE = 10;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const forUser = (userId) =>
+  userId === undefined ? "" : `userId=${encodeURIComponent(userId)}`;
+
+async function request(url, method, credential, body) {
+  const headers = { Authorization: `Bearer ${credential}` };
+  if (body) headers["Content-Type"] = "application/json";
+  for (let attempt = 1; ; attempt++) {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (response.status === 429 && attempt < 5) {
+      await sleep((Number(response.headers.get("Retry-After")) || 10) * 1000);
+      continue;
+    }
+    const json = await response.json();
+    if (response.ok) return json;
+    throw new Error(`${method} ${url} answered ${response.status} ${json.code}`);
+  }
+}
+
+export const capApi = (method, path, body) =>
+  request(CAP_API + path, method, SECRET_KEY, body);
+
+export async function createUpload({ name, userId }) {
+  const { data } = await capApi("POST", "/uploads", {
+    name,
+    userId,
+    timeoutSeconds: 86400,
+  });
+  return data;
+}
+
+export async function uploadFile(path, token) {
+  const step = (name, body) =>
+    request(`${UPLOAD_API}/${name}`, "POST", token, body);
+  const file = await open(path);
+  try {
+    const { size } = await file.stat();
+    const { uploadId } = await step("initiate", {
+      contentType: "video/mp4",
+      contentLength: size,
+    });
+    const partCount = Math.ceil(size / PART_SIZE);
+    const parts = [];
+    for (let first = 1; first <= partCount; first += SIGN_AT_ONCE) {
+      const partNumbers = [];
+      const last = Math.min(first + SIGN_AT_ONCE - 1, partCount);
+      for (let number = first; number <= last; number++) {
+        partNumbers.push(number);
+      }
+      const signed = await step("presign-part", { uploadId, partNumbers });
+      for (const { partNumber, presignedUrl } of signed.parts) {
+        const start = (partNumber - 1) * PART_SIZE;
+        const length = Math.min(PART_SIZE, size - start);
+        const { buffer } = await file.read(
+          Buffer.alloc(length),
+          0,
+          length,
+          start,
+        );
+        const sendPart = async () => {
+          const put = await fetch(presignedUrl, { method: "PUT", body: buffer });
+          if (!put.ok) {
+            throw new Error(`part ${partNumber} answered ${put.status}`);
+          }
+          return put.headers.get("etag");
+        };
+        const etag = await sendPart().catch(sendPart);
+        parts.push({ partNumber, etag, size: length });
+      }
+    }
+    await step("complete", { uploadId, parts, durationInSecs: 1 });
+  } finally {
+    await file.close();
+  }
+}
+
+export async function waitForVideo(videoId, userId) {
+  const giveUpAt = Date.now() + 15 * 60 * 1000;
+  let readyChecks = 0;
+  while (Date.now() < giveUpAt) {
+    const { data } = await capApi(
+      "GET",
+      `/videos/${encodeURIComponent(videoId)}/status?${forUser(userId)}`,
+    );
+    if (data.status === "errored") throw new Error(data.errorReason);
+    if (data.status === "ready" && (data.hlsUrl || ++readyChecks > 3)) {
+      return data;
+    }
+    await sleep(3000);
+  }
+  throw new Error("the video is still processing");
+}
+```
+
+Use it like this, in `upload.mjs`:
+
+```js
+import { basename } from "node:path";
+import { createUpload, uploadFile, waitForVideo } from "./cap-api.mjs";
+
+const [path, userId] = process.argv.slice(2);
+
+const upload = await createUpload({ name: basename(path), userId });
+await uploadFile(path, upload.token);
+const video = await waitForVideo(upload.videoId, userId);
+
+console.log(video.id, video.status, `${video.width}x${video.height}`);
+console.log(video.hlsUrl ?? video.mp4Url);
+console.log(upload.embedUrl);
+```
+
+```bash
+node upload.mjs demo.mp4 user_42
+```
+
+### Python
+
+Save this as `cap_api.py`. It needs Python 3.9 or later and only the standard library.
+
+```python
+import json
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CAP_API = "https://cap.so/api/developer/v1"
+UPLOAD_API = "https://cap.so/api/developer/sdk/v1/upload/multipart"
+SECRET_KEY = os.environ["CAP_SECRET_KEY"]
+PART_SIZE = 8 * 1024 * 1024
+SIGN_AT_ONCE = 10
+
+
+def for_user(user_id):
+    return "" if user_id is None else urllib.parse.urlencode({"userId": user_id})
+
+
+def request(url, method, credential, body=None):
+    headers = {"Authorization": f"Bearer {credential}"}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
+    for attempt in range(1, 6):
+        call = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(call) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and attempt < 5:
+                time.sleep(int(error.headers.get("Retry-After") or 10))
+                continue
+            code = json.load(error).get("code")
+            raise RuntimeError(f"{method} {url} answered {error.code} {code}") from None
+
+
+def cap_api(method, path, body=None):
+    return request(CAP_API + path, method, SECRET_KEY, body)
+
+
+def create_upload(name, user_id=None):
+    body = {"name": name, "timeoutSeconds": 86400}
+    if user_id is not None:
+        body["userId"] = user_id
+    return cap_api("POST", "/uploads", body)["data"]
+
+
+def put_part(url, chunk):
+    put = urllib.request.Request(url, data=chunk, method="PUT")
+    with urllib.request.urlopen(put) as response:
+        return response.headers["ETag"]
+
+
+def upload_file(path, token):
+    def step(name, body):
+        return request(f"{UPLOAD_API}/{name}", "POST", token, body)
+
+    size = os.path.getsize(path)
+    upload_id = step("initiate", {"contentType": "video/mp4", "contentLength": size})[
+        "uploadId"
+    ]
+    part_count = -(-size // PART_SIZE)
+    parts = []
+    with open(path, "rb") as file:
+        for first in range(1, part_count + 1, SIGN_AT_ONCE):
+            last = min(first + SIGN_AT_ONCE - 1, part_count)
+            signed = step(
+                "presign-part",
+                {"uploadId": upload_id, "partNumbers": list(range(first, last + 1))},
+            )
+            for part in signed["parts"]:
+                file.seek((part["partNumber"] - 1) * PART_SIZE)
+                chunk = file.read(PART_SIZE)
+                try:
+                    etag = put_part(part["presignedUrl"], chunk)
+                except OSError:
+                    etag = put_part(part["presignedUrl"], chunk)
+                parts.append(
+                    {"partNumber": part["partNumber"], "etag": etag, "size": len(chunk)}
+                )
+    step("complete", {"uploadId": upload_id, "parts": parts, "durationInSecs": 1})
+
+
+def wait_for_video(video_id, user_id=None, timeout=900):
+    encoded_id = urllib.parse.quote(video_id, safe="")
+    give_up_at = time.monotonic() + timeout
+    ready_checks = 0
+    while time.monotonic() < give_up_at:
+        video = cap_api("GET", f"/videos/{encoded_id}/status?{for_user(user_id)}")["data"]
+        if video["status"] == "errored":
+            raise RuntimeError(video["errorReason"])
+        if video["status"] == "ready":
+            ready_checks += 1
+            if video["hlsUrl"] or ready_checks > 3:
+                return video
+        time.sleep(3)
+    raise TimeoutError("the video is still processing")
+```
+
+Use it like this, in `upload.py`:
+
+```python
+import os
+import sys
+
+from cap_api import create_upload, upload_file, wait_for_video
+
+path, user_id = sys.argv[1], sys.argv[2]
+
+upload = create_upload(os.path.basename(path), user_id)
+upload_file(path, upload["token"])
+video = wait_for_video(upload["videoId"], user_id)
+
+print(video["id"], video["status"], f'{video["width"]}x{video["height"]}')
+print(video["hlsUrl"] or video["mp4Url"])
+print(upload["embedUrl"])
+```
+
+```bash
+python3 upload.py demo.mp4 user_42
+```
+
+## 7. Scope videos to your users
+
+Pass your own user's ID as `userId` when you create an upload. Cap stores it on the video and returns it as `externalUserId`. Then pass the same `userId` on every call you make for that user:
+
+- [List Videos](/docs/api/rest-api#list-videos) returns only that user's videos.
+- [Get Video](/docs/api/rest-api#get-video), [Get Video Status](/docs/api/rest-api#get-video-status) and [Delete Video](/docs/api/rest-api#delete-video) answer `404` with the code `video_not_found` for a video that belongs to someone else, and leave it alone.
+
+That lets your server pass a video ID from the browser straight through, without a lookup of its own first. Encode the ID when you put it in the URL, as the helpers below do, so an ID with a `#` or a `?` in it cannot cut the `userId` off the request. The match is exact, so `alice` and `Alice` are different users, and an empty `userId` is refused with `400` rather than treated as no filter. When nobody is signed in, refuse the request yourself.
+
+Deleting a video removes it from every list at once. Its playback links stop working for new viewers within about a minute.
+
+Add these to `cap-api.mjs`:
+
+```js
+export async function listVideos(userId) {
+  const videos = [];
+  for (let offset = 0; ; offset += 100) {
+    const { data, pagination } = await capApi(
+      "GET",
+      `/videos?limit=100&offset=${offset}&${forUser(userId)}`,
+    );
+    videos.push(...data);
+    if (!pagination.hasMore) return videos;
+  }
+}
+
+export async function deleteVideo(videoId, userId) {
+  await capApi(
+    "DELETE",
+    `/videos/${encodeURIComponent(videoId)}?${forUser(userId)}`,
+  );
+}
+```
+
+Add these to `cap_api.py`:
+
+```python
+def list_videos(user_id=None):
+    videos = []
+    offset = 0
+    while True:
+        page = cap_api(
+            "GET", f"/videos?limit=100&offset={offset}&{for_user(user_id)}"
+        )
+        videos.extend(page["data"])
+        if not page["pagination"]["hasMore"]:
+            return videos
+        offset += 100
+
+
+def delete_video(video_id, user_id=None):
+    video = urllib.parse.quote(video_id, safe="")
+    cap_api("DELETE", f"/videos/{video}?{for_user(user_id)}")
+```
+
+Leave `userId` out of every call if your app has no users of its own. The helpers send an empty `userId` as it is, so list, status and delete refuse it with `400` and never fall back to every user's videos.
+
+## 8. Transcribe audio
+
+The same secret key turns an audio or video file into text. It is a separate call from uploading a video, and it takes three steps:
+
+1. Create the transcript with `POST /api/developer/v1/transcripts/uploads`, sending the file's exact size in bytes as `contentLength`. The response holds the transcript's `id` and a signed `upload.url`.
+2. `PUT` the file to `upload.url`.
+3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` until `status` is `complete` or `error`, leaving at least 3 seconds between checks. A complete transcript has its `text`.
+
+A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
+
+[Transcripts](/docs/api/rest-api#transcripts) is the reference, with a request for each step, word and segment timings and every error code.
+
+## 9. What it costs
+
+Uploading and encoding are free. Stored video and transcription are paid for from the app's prepaid credit. [Billing](/docs/api/billing) has the prices and the rules.
+
+- The app's Billing page in the console shows the balance and every charge.
+- [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
+- [List Transactions](/docs/api/rest-api#list-transactions) returns every credit and charge.
