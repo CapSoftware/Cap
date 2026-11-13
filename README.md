@@ -188,6 +188,8 @@ Cap uses [Tinybird](https://www.tinybird.co) for viewer telemetry dashboards. Se
 
 `analytics:setup` can remove Tinybird resources outside the checked-in analytics configuration. Use it only against the workspace you intend to manage from this repo.
 
+Viewer locations (country and city) come from Vercel's `x-vercel-ip-*` headers. When self-hosting elsewhere, set `CAP_GEOIP_DATABASE_PATH` to a GeoIP2/GeoLite2 City `.mmdb` file, such as [MaxMind GeoLite2 City](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) or [DB-IP City Lite](https://db-ip.com/db/download/ip-to-city-lite), and Cap looks up the viewer's `X-Real-IP` in it. Without it, views are recorded with no location.
+
 ## Contributing
 
 Cap is built in public. Issues, pull requests, design feedback, bug reports, docs fixes, and bounties are welcome.
