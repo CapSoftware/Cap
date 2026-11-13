@@ -886,10 +886,11 @@ bearer_token_env_var = "CAP_SECRET_KEY"
 The tools:
 
 - `videos_import`: create a video from a public https link to the file. Cap downloads it, so nothing is uploaded.
-- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding. A result signs up to 10 parts. For a larger file, `nextFromPart` says where to continue: call `videos_create_upload` again with the `videoId`, the same `contentLength` and `fromPart`.
 - `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
 - `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
 - `account_usage` and `account_transactions`: the balance, prices and every charge.
+- `docs_read`: read a section of these docs, such as the embed options, webhook signatures or billing rules, by heading or by search.
 
 Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
 

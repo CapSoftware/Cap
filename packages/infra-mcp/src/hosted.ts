@@ -1,5 +1,7 @@
 import type { z } from "zod";
 import { CONSOLE_PATH } from "./config";
+import { creditLinkFor } from "./credit-link";
+import { DOC_PAGES, type DocPage, type DocsSource } from "./docs";
 import { type ClientTuning, InfraClient } from "./http";
 import { createRedactor } from "./redact";
 import {
@@ -15,8 +17,8 @@ import { DEFAULT_UPLOAD_TUNING } from "./upload";
 import { SERVER_NAME, SERVER_VERSION } from "./version";
 import { DEFAULT_WAIT_TUNING, type WaitTuning } from "./wait";
 
-export { SERVER_NAME, SERVER_VERSION };
-export type { RunHooks, ToolResult };
+export { DOC_PAGES, SERVER_NAME, SERVER_VERSION };
+export type { DocPage, DocsSource, RunHooks, ToolResult };
 
 export const HOSTED_MAX_WAIT_SECONDS = 45;
 export const HOSTED_TOOL_BUDGET_MS = 50_000;
@@ -41,6 +43,7 @@ export const HOSTED_INSTRUCTIONS = [
 	`Wait tools return within ${HOSTED_MAX_WAIT_SECONDS} seconds; when a result has timedOut, call the same tool again.`,
 	"Stored video is billed one month when it becomes ready, then daily until deleted, and transcripts are billed per audio hour. Check account_usage before large jobs.",
 	"Credit can only be added in the console by a signed-in person. When a tool reports out of credit, give them the addCreditAt link.",
+	"For embed options, webhooks, billing rules and anything else in the docs, use docs_read.",
 ].join(" ");
 
 export type HostedTool = {
@@ -55,11 +58,13 @@ export type HostedTool = {
 export type HostedOptions = {
 	apiUrl: string;
 	secretKey: string;
+	appId?: string;
 	fetch: typeof fetch;
 	log: (line: string) => void;
 	client?: Partial<ClientTuning>;
 	wait?: Partial<WaitTuning>;
 	budgetMs?: number;
+	docs?: DocsSource;
 };
 
 export function createHostedTools(options: HostedOptions): HostedTool[] {
@@ -71,23 +76,27 @@ export function createHostedTools(options: HostedOptions): HostedTool[] {
 		consoleUrl: `${apiUrl}${CONSOLE_PATH}`,
 	};
 	const redact = createRedactor(config.secretKey);
+	const client = new InfraClient(
+		config,
+		{ ...HOSTED_CLIENT_TUNING, ...options.client },
+		options.fetch,
+	);
+	const credit = creditLinkFor(config.consoleUrl, client, options.appId);
 	const run = createToolRunner({
-		consoleUrl: config.consoleUrl,
+		credit,
 		redact,
 		log: (line) => options.log(redact(`${SERVER_NAME}: ${line}`)),
 		budgetMs: options.budgetMs ?? HOSTED_TOOL_BUDGET_MS,
 	});
 	const tools = createTools({
 		config,
-		client: new InfraClient(
-			config,
-			{ ...HOSTED_CLIENT_TUNING, ...options.client },
-			options.fetch,
-		),
+		client,
 		upload: DEFAULT_UPLOAD_TUNING,
 		wait: { ...HOSTED_WAIT_TUNING, ...options.wait },
 		surface: "hosted",
 		maxWaitSeconds: HOSTED_MAX_WAIT_SECONDS,
+		docs: options.docs,
+		credit,
 	});
 	return tools.map((tool) => ({
 		name: tool.name,

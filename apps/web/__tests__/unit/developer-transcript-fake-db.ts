@@ -118,8 +118,11 @@ function compile(condition: SQL | undefined, outer: Row = {}): Predicate {
 		}
 		const field = jsonField();
 		expect("is");
+		const negated = peek() === "not";
+		if (negated) take();
 		expect("null");
-		return (row) => field(row) === null || field(row) === undefined;
+		return (row) =>
+			(field(row) === null || field(row) === undefined) !== negated;
 	};
 
 	const coalescedJsonComparison = (): Predicate => {

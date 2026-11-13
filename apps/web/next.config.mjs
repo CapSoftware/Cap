@@ -40,6 +40,7 @@ const nextConfig = {
 		"/dashboard/settings/organization/billing": ["./lib/baa/*.pdf"],
 		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
 		"/docs-markdown/**": ["./content/docs/**/*.mdx"],
+		"/api/developer/mcp": ["./content/docs/api/*.mdx"],
 	},
 	transpilePackages: [
 		"@cap/ui",

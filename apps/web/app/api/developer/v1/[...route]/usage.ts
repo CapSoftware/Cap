@@ -37,6 +37,7 @@ app.get("/", async (c) => {
 
 	return c.json({
 		data: {
+			appId,
 			balanceMicroCredits,
 			balanceDollars: creditDollars(balanceMicroCredits),
 			totalVideos: stored.videoCount,
@@ -44,7 +45,10 @@ app.get("/", async (c) => {
 			totalDurationMinutes: stored.totalMinutes,
 			standing,
 			upload,
-			storage: infraStorageJson(storage),
+			storage: {
+				...infraStorageJson(storage),
+				storedMonthlyMicroCredits: Math.round(stored.monthlyMicroCredits),
+			},
 			...speech,
 			delivery: deliveryJson(delivered),
 			rates: {

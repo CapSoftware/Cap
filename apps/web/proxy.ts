@@ -15,6 +15,8 @@ import {
 	agentMarkdownResponse,
 	DOCS_MARKDOWN_ROUTE,
 	docsMarkdownSlug,
+	INFRA_MARKDOWN_ROUTE,
+	isInfraMarkdownRequest,
 } from "@/lib/agent-markdown";
 import { restrictEmbedFraming } from "@/lib/developer-embed-origins";
 import { embedPlaybackId } from "@/lib/infra-embed-ancestors";
@@ -229,6 +231,12 @@ async function route(request: NextRequest) {
 			return NextResponse.rewrite(
 				new URL(`${DOCS_MARKDOWN_ROUTE}/${docsSlug}`, url.origin),
 			);
+		}
+		if (
+			(request.method === "GET" || request.method === "HEAD") &&
+			isInfraMarkdownRequest(path, request.headers.get("accept"))
+		) {
+			return NextResponse.rewrite(new URL(INFRA_MARKDOWN_ROUTE, url.origin));
 		}
 
 		const markdown = await agentMarkdownResponse(request, { isPublicAsset });

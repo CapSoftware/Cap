@@ -2,14 +2,18 @@ import { db } from "@cap/database";
 import { developerTranscripts, developerVideos } from "@cap/database/schema";
 import type { DeveloperVideoStatus } from "@cap/database/types";
 import { isLanguageCode, SUPPORTED_LANGUAGES } from "@cap/web-domain";
-import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import {
 	getDeveloperObjectText,
 	putDeveloperObject,
 	removeDeveloperObject,
 } from "@/lib/developer-transcript-storage";
 import { buildWebVtt } from "@/lib/developer-transcript-vtt";
-import type { TranscriptResultObject } from "@/lib/developer-transcripts";
+import {
+	TRANSCRIPT_CAPTIONS_WRITTEN_KEY,
+	type TranscriptResultObject,
+	withCaptionsWritten,
+} from "@/lib/developer-transcripts";
 import { developerPlaybackBaseUrl } from "@/lib/developer-video-api";
 import { developerVideoKeys } from "@/lib/developer-video-plan";
 
@@ -17,6 +21,12 @@ export const CAPTIONS_CONTENT_TYPE = "text/vtt; charset=utf-8";
 export const CAPTIONS_UNKNOWN_LANGUAGE = "und";
 
 const SYNC_ATTEMPTS = 5;
+
+// A track is listed once its file is in storage, which the writer records on
+// the transcript after the upload succeeds. Transcripts that completed before
+// that record existed already have their file, so one that completed longer
+// ago than this is listed without it.
+export const CAPTIONS_UNMARKED_AFTER_MS = 10 * 60 * 1000;
 
 export type DeveloperVideoCaption = {
 	language: string;
@@ -60,6 +70,17 @@ export function captionsFileLanguage(file: string): string | null {
 	return file.match(CAPTIONS_FILE_PATTERN)?.[1] ?? null;
 }
 
+const CAPTIONS_PLAYLIST_PATTERN =
+	/^captions-([a-z]{2,3}(?:-[a-z0-9]{2,8})*)\.m3u8$/;
+
+export function captionsPlaylistName(language: string) {
+	return `captions-${captionLanguage(language)}.m3u8`;
+}
+
+export function captionsPlaylistLanguage(file: string): string | null {
+	return file.match(CAPTIONS_PLAYLIST_PATTERN)?.[1] ?? null;
+}
+
 const captionSources = (video: VideoRef) =>
 	and(
 		eq(developerTranscripts.appId, video.appId),
@@ -69,13 +90,22 @@ const captionSources = (video: VideoRef) =>
 		gt(developerTranscripts.wordCount, 0),
 	);
 
+const captionsInStorage = () =>
+	or(
+		sql`JSON_EXTRACT(${developerTranscripts.metadata}, '$.${sql.raw(TRANSCRIPT_CAPTIONS_WRITTEN_KEY)}') IS NOT NULL`,
+		lt(
+			developerTranscripts.completedAt,
+			new Date(Date.now() - CAPTIONS_UNMARKED_AFTER_MS),
+		),
+	);
+
 export async function developerVideoCaptions(
 	video: VideoRef,
 ): Promise<DeveloperVideoCaption[]> {
 	const rows = await db()
 		.selectDistinct({ language: developerTranscripts.language })
 		.from(developerTranscripts)
-		.where(captionSources(video));
+		.where(and(captionSources(video), captionsInStorage()));
 	const languages = [
 		...new Set(rows.map((row) => captionLanguage(row.language))),
 	];
@@ -146,6 +176,7 @@ export async function developerVideosCaptionLinks(
 					eq(developerTranscripts.status, "complete"),
 					isNull(developerTranscripts.deletedAt),
 					gt(developerTranscripts.wordCount, 0),
+					captionsInStorage(),
 				),
 			);
 	} catch (error) {
@@ -224,6 +255,33 @@ async function videoIsStored(video: VideoRef) {
 	return row !== undefined && !row.deletedAt;
 }
 
+async function markCaptionsWritten(transcriptId: string) {
+	const [row] = await db()
+		.select({
+			metadata: developerTranscripts.metadata,
+			updatedAt: developerTranscripts.updatedAt,
+		})
+		.from(developerTranscripts)
+		.where(eq(developerTranscripts.id, transcriptId))
+		.limit(1);
+	if (!row) return;
+	// Only Cap writes a transcript's metadata after it is created, so this
+	// read and write cannot lose a client's change. updatedAt is kept, so the
+	// record does not move the time the API reports.
+	await db()
+		.update(developerTranscripts)
+		.set({
+			metadata: withCaptionsWritten(row.metadata, new Date()),
+			updatedAt: row.updatedAt,
+		})
+		.where(
+			and(
+				eq(developerTranscripts.id, transcriptId),
+				eq(developerTranscripts.updatedAt, row.updatedAt),
+			),
+		);
+}
+
 async function captionsFor(resultKey: string | null) {
 	if (!resultKey) return null;
 	const stored = await getDeveloperObjectText(resultKey);
@@ -255,6 +313,7 @@ export async function syncVideoCaptions(input: {
 		const captions = source ? await captionsFor(source.resultKey) : null;
 		if (source && captions !== null) {
 			await putDeveloperObject(key, captions, CAPTIONS_CONTENT_TYPE);
+			await markCaptionsWritten(source.id);
 		} else {
 			await removeDeveloperObject(key);
 		}
@@ -274,6 +333,7 @@ export type VideoForTranscript =
 	| {
 			state: "ok";
 			name: string;
+			externalUserId: string | null;
 			sourceKey: string;
 			durationSeconds: number | null;
 	  }
@@ -289,6 +349,7 @@ export async function findVideoForTranscript(
 			id: developerVideos.id,
 			appId: developerVideos.appId,
 			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
 			status: developerVideos.status,
 			duration: developerVideos.duration,
 			processing: developerVideos.processing,
@@ -319,6 +380,7 @@ export async function findVideoForTranscript(
 	return {
 		state: "ok",
 		name: video.name,
+		externalUserId: video.externalUserId ?? null,
 		sourceKey: developerVideoKeys(video, processing.encodeId, mp4.output).mp4,
 		durationSeconds:
 			typeof video.duration === "number" && video.duration > 0

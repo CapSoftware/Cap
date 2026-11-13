@@ -772,7 +772,10 @@ export async function createInfraVideoImport(
 		if (!admission.allowed) {
 			await releaseImportSlot(input.videoId, "insufficient_credits");
 			await scheduleAutoTopUp({ appId: input.appId });
-			return { status: 402, body: uploadAdmissionError(admission) };
+			return {
+				status: 402,
+				body: uploadAdmissionError(admission, input.appId),
+			};
 		}
 	}
 

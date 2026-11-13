@@ -186,6 +186,7 @@ import {
 	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
+import { legacyDeveloperVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
@@ -435,6 +436,30 @@ describe("developer video upload target", () => {
 		expect(first.video.id).toBe(
 			developerVideoIdForIdempotencyKey("app-1", "same-key-00000001"),
 		);
+	});
+});
+
+describe("a video created under an Idempotency-Key before ids changed", () => {
+	it("is returned again for the same key, and a new key gets a regular id", async () => {
+		const key = "older-key-00000001";
+		const legacy = legacyDeveloperVideoIdForIdempotencyKey("app-1", key);
+		fake().seed(developerVideos, {
+			id: legacy,
+			appId: "app-1",
+			name: "demo.mov",
+			s3Key: `developer/app-1/${legacy}/video`,
+			playbackId: "playback-legacy-0001",
+			duration: null,
+			deletedAt: null,
+		});
+
+		const repeated = await create({ idempotencyKey: key });
+		const fresh = await create({ idempotencyKey: "newer-key-00000001" });
+		if (!repeated.ok || !fresh.ok) throw new Error("create failed");
+
+		expect(repeated.video.id).toBe(legacy);
+		expect(fresh.video.id).toMatch(/^[0-9a-hjkmnp-tv-z]{15}$/);
+		expect(videos()).toHaveLength(2);
 	});
 });
 

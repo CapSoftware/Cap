@@ -35,7 +35,7 @@ vi.mock("@/lib/developer-key-hash", () => ({
 }));
 vi.mock("@/lib/infra-standing", () => ({
 	getInfraBilling: async () => ({
-		stored: { videoCount: 2, totalMinutes: 12.5 },
+		stored: { videoCount: 2, totalMinutes: 12.5, monthlyMicroCredits: 1062.5 },
 		storage: { uploadingVideos: 1 },
 	}),
 	infraBillingJson: () => ({
@@ -102,6 +102,29 @@ describe("GET /usage", () => {
 			},
 		});
 		expect(mocks.speech).toHaveBeenCalledWith("app-1");
+	});
+
+	it("says which app the key belongs to, so a credit link can name it", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.appId).toBe("app-1");
+	});
+
+	it("adds the monthly cost of every stored video to the storage figures", async () => {
+		const response = await app.request("/", {
+			headers: { Authorization: "Bearer csk_valid_key" },
+		});
+		const { data } = (await response.json()) as {
+			data: Record<string, unknown>;
+		};
+		expect(data.storage).toEqual({
+			dailyMicroCredits: 0,
+			storedMonthlyMicroCredits: 1063,
+		});
 	});
 
 	it("keeps every field it returned before", async () => {

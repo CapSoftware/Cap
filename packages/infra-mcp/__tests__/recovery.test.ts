@@ -13,6 +13,7 @@ import { type StubApi, type StubRequest, startStubApi } from "./stub-api";
 let stub: StubApi;
 let session: Session;
 let files: Awaited<ReturnType<typeof tempFiles>>;
+const billing = () => `${stub.url}/dashboard/infra/app_stub/billing`;
 
 beforeEach(async () => {
 	stub = await startStubApi();
@@ -215,7 +216,7 @@ describe("account_usage", () => {
 			const usage = await session.call("account_usage");
 			expect(usage.isError).toBe(false);
 			expect(usage.body.upload).toMatchObject({ allowed: false, reason: code });
-			expect(usage.body.addCreditAt).toBe(`${stub.url}/dashboard/infra`);
+			expect(usage.body.addCreditAt).toBe(billing());
 		},
 	);
 });
@@ -470,7 +471,7 @@ describe("a completion that fails on the server after the file was assembled", (
 		expect(failed.body).toMatchObject({
 			error: { code: "insufficient_credits", status: 402, fileRemoved: true },
 			videoStatus: "unknown",
-			addCreditAt: `${stub.url}/dashboard/infra`,
+			addCreditAt: billing(),
 		});
 		expect(failed.body.next).toMatch(/videos_get/);
 		expect(stub.calls("POST", "/abort")).toHaveLength(0);
