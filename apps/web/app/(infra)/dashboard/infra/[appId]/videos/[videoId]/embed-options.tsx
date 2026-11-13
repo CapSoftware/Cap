@@ -9,45 +9,11 @@ import {
 	infraVideoEmbedCode,
 } from "@/lib/infra-video-view";
 import { KeyRow } from "../../../_components/copy";
-import { FOCUS, MUTED, TEXT_LINK } from "../../../_components/ui";
+import { FOCUS, MUTED, TEXT_LINK, Toggle } from "../../../_components/ui";
 
 const DEFAULT_ACCENT = "#3b82f6";
 
 type Switch = Exclude<keyof InfraEmbedOptions, "color">;
-
-function Toggle({
-	label,
-	on,
-	onChange,
-}: {
-	label: string;
-	on: boolean;
-	onChange: (on: boolean) => void;
-}) {
-	return (
-		<button
-			type="button"
-			aria-pressed={on}
-			onClick={() => onChange(!on)}
-			className={clsx(
-				"inline-flex h-8 items-center gap-2 rounded-[8px] px-3 text-[13px] transition-[background-color,box-shadow,color] duration-200",
-				on
-					? "bg-[rgba(222,230,246,0.1)] text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.3)]"
-					: "text-[rgba(232,236,244,0.58)] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12)] hover:text-[#E8ECF4] hover:shadow-[inset_0_0_0_1px_rgba(222,230,246,0.22)]",
-				FOCUS,
-			)}
-		>
-			<span
-				aria-hidden="true"
-				className={clsx(
-					"size-1.5 rounded-full transition-colors duration-200",
-					on ? "bg-[#E8ECF4]" : "bg-[rgba(232,236,244,0.24)]",
-				)}
-			/>
-			{label}
-		</button>
-	);
-}
 
 export function EmbedOptions({
 	embedUrl,
