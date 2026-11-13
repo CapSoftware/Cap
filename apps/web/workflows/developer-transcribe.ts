@@ -348,7 +348,7 @@ const handOff = (transcriptId: string, stage: string, error: unknown) => {
 	);
 };
 
-async function runTranscriptFastPath(
+export async function runTranscriptFastPath(
 	transcriptId: string,
 	runId: string,
 ): Promise<FastPath> {
