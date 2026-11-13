@@ -84,6 +84,18 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
 }));
 
+const mockCheckoutStripe = {
+	customers: {
+		listTaxIds: vi.fn(),
+		createTaxId: vi.fn(),
+		deleteTaxId: vi.fn(),
+	},
+};
+
+vi.mock("@/lib/checkout/stripe", () => ({
+	checkoutStripe: () => mockCheckoutStripe,
+}));
+
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
@@ -366,9 +378,10 @@ describe("POST /api/developer/credits/checkout", () => {
 			mode: "payment",
 			invoice_creation: {
 				enabled: true,
-				invoice_data: { description: "Cap Infra credits" },
+				invoice_data: { description: "Cap Infra credits for Test App" },
 			},
 			payment_intent_data: {
+				description: "Cap Infra credits for Test App",
 				receipt_email: "test@example.com",
 				metadata: { type: "developer_credits", accountId: "account-001" },
 			},
@@ -713,5 +726,174 @@ describe("POST /api/developer/credits/checkout", () => {
 		expect(call.line_items[0].price_data.unit_amount).toBe(5000);
 		expect(call.line_items[0].price_data.currency).toBe("usd");
 		expect(call.line_items[0].quantity).toBe(1);
+	});
+});
+
+describe("credit checkout for a named app and a US business", () => {
+	const fundedAccount = { ...mockAccount, stripeCustomerId: "cus_exist" };
+	let POST: typeof import("@/app/api/developer/credits/checkout/route").POST;
+	let buyer = 0;
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetMockDb();
+		POST = (await import("@/app/api/developer/credits/checkout/route")).POST;
+		buyer += 1;
+		mockGetCurrentUser.mockResolvedValue({
+			...mockUser,
+			id: `user-business-${buyer}`,
+			stripeCustomerId: "cus_exist",
+		});
+		mockStripe.checkout.sessions.create.mockResolvedValue({
+			url: "https://checkout.stripe.com/test",
+		});
+		mockCheckoutStripe.customers.listTaxIds.mockResolvedValue({ data: [] });
+		mockCheckoutStripe.customers.createTaxId.mockResolvedValue({});
+		mockCheckoutStripe.customers.deleteTaxId.mockResolvedValue({});
+	});
+
+	const lastParams = () =>
+		mockStripe.checkout.sessions.create.mock.calls[0]?.[0] as Record<
+			string,
+			unknown
+		>;
+
+	it("names the app on the Stripe page, the invoice and the payment, and offers card and Link only", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([{ ...mockApp, name: "  Course   site  " }])
+			.mockResolvedValueOnce([fundedAccount]);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000 }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(lastParams()).toMatchObject({
+			payment_method_types: ["card", "link"],
+			custom_text: {
+				submit: {
+					message:
+						"Cap Infra credits for Course site. Credit stays with this app and cannot be moved to another app.",
+				},
+			},
+			invoice_creation: {
+				invoice_data: { description: "Cap Infra credits for Course site" },
+			},
+			payment_intent_data: {
+				description: "Cap Infra credits for Course site",
+			},
+		});
+		expect(lastParams()).not.toHaveProperty("payment_method_configuration");
+	});
+
+	it("saves a US EIN on the customer before the session is created", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "123456789" }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(mockCheckoutStripe.customers.createTaxId).toHaveBeenCalledWith(
+			"cus_exist",
+			{ type: "us_ein", value: "12-3456789" },
+		);
+		expect(
+			mockCheckoutStripe.customers.createTaxId.mock.invocationCallOrder[0],
+		).toBeLessThan(
+			mockStripe.checkout.sessions.create.mock.invocationCallOrder[0] ?? 0,
+		);
+		expect(mockCheckoutStripe.customers.deleteTaxId).not.toHaveBeenCalled();
+	});
+
+	it("keeps an EIN the customer already has and adds nothing twice", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+		mockCheckoutStripe.customers.listTaxIds.mockResolvedValue({
+			data: [{ id: "txi_1", type: "us_ein", value: "12-3456789" }],
+		});
+
+		await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "12-3456789" }),
+		);
+
+		expect(mockCheckoutStripe.customers.createTaxId).not.toHaveBeenCalled();
+		expect(mockCheckoutStripe.customers.deleteTaxId).not.toHaveBeenCalled();
+		expect(mockStripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
+	});
+
+	it("replaces a different saved EIN and leaves other tax IDs alone", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+		mockCheckoutStripe.customers.listTaxIds.mockResolvedValue({
+			data: [
+				{ id: "txi_vat", type: "eu_vat", value: "DE123456789" },
+				{ id: "txi_old", type: "us_ein", value: "98-7654321" },
+			],
+		});
+
+		await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "12-3456789" }),
+		);
+
+		expect(mockCheckoutStripe.customers.deleteTaxId).toHaveBeenCalledTimes(1);
+		expect(mockCheckoutStripe.customers.deleteTaxId).toHaveBeenCalledWith(
+			"cus_exist",
+			"txi_old",
+		);
+		expect(mockCheckoutStripe.customers.createTaxId).toHaveBeenCalledWith(
+			"cus_exist",
+			{ type: "us_ein", value: "12-3456789" },
+		);
+	});
+
+	it("touches no tax IDs when the EIN is left blank", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "   " }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(mockCheckoutStripe.customers.listTaxIds).not.toHaveBeenCalled();
+		expect(mockCheckoutStripe.customers.createTaxId).not.toHaveBeenCalled();
+	});
+
+	it("refuses an EIN that is not 9 digits before opening a checkout", async () => {
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "12-345" }),
+		);
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({
+			error: "Enter the EIN as 9 digits, for example 12-3456789",
+		});
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+		expect(mockCheckoutStripe.customers.listTaxIds).not.toHaveBeenCalled();
+	});
+
+	it("opens no checkout when Stripe will not save the EIN", async () => {
+		mockDb.limit
+			.mockResolvedValueOnce([mockApp])
+			.mockResolvedValueOnce([fundedAccount]);
+		mockCheckoutStripe.customers.createTaxId.mockRejectedValue(
+			new Error("tax id rejected"),
+		);
+
+		const res = await POST(
+			makeRequest({ appId: "app-456", amountCents: 1000, usEin: "123456789" }),
+		);
+
+		expect(res.status).toBe(500);
+		expect(await res.json()).toEqual({
+			error: "Could not save the EIN. Try again or leave it blank",
+		});
+		expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 });
