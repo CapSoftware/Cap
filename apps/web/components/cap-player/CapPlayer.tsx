@@ -9,6 +9,14 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	activeCueText,
+	type CapPlayerCaption,
+	initialCaptions,
+	loadCaptionsFile,
+	releaseCaptionsFiles,
+	toggledCaptions,
+} from "./captions";
 import styles from "./player.module.css";
 import {
 	type Attachment,
@@ -19,6 +27,7 @@ import {
 	resolutionLabel,
 } from "./source";
 
+export type { CapPlayerCaption } from "./captions";
 export { resolutionLabel } from "./source";
 
 export type CapPlayerControl =
@@ -26,6 +35,7 @@ export type CapPlayerControl =
 	| "time"
 	| "speed"
 	| "quality"
+	| "captions"
 	| "pip"
 	| "fullscreen";
 
@@ -39,6 +49,8 @@ export interface CapPlayerProps {
 	loop?: boolean;
 	controls?: boolean;
 	startAt?: number;
+	captions?: readonly CapPlayerCaption[];
+	showCaptions?: boolean;
 	focusOnMount?: boolean;
 	accentColor?: string;
 	hideControls?: readonly CapPlayerControl[];
@@ -61,8 +73,14 @@ const MENU_MIN_HEIGHT = 76;
 const HOVER_INTENT_MS = 100;
 const PLAYS = '[data-action="toggle"], [data-action="surface"]';
 const NO_CONTROLS: readonly CapPlayerControl[] = [];
+const NO_CAPTIONS: readonly CapPlayerCaption[] = [];
+const CAPTIONS_OFF = -1;
 
-type MenuName = "speed" | "quality";
+type MenuName = "speed" | "quality" | "captions";
+
+type NativeViewVideo = HTMLVideoElement & {
+	webkitDisplayingFullscreen?: boolean;
+};
 
 export const clock = (seconds: number) => {
 	const whole = Math.max(0, Math.floor(seconds));
@@ -157,6 +175,16 @@ const PipIcon = () => (
 	<Icon>
 		<rect x="1.8" y="3" width="12.4" height="10" rx="1.6" {...STROKE} />
 		<rect x="8.2" y="8" width="4.4" height="3.4" rx="0.7" />
+	</Icon>
+);
+
+const CaptionsIcon = () => (
+	<Icon>
+		<rect x="1.8" y="3" width="12.4" height="10" rx="2" {...STROKE} />
+		<path
+			d="M7.1 6.7a1.9 1.9 0 1 0 0 2.6m4.6-2.6a1.9 1.9 0 1 0 0 2.6"
+			{...STROKE}
+		/>
 	</Icon>
 );
 
@@ -255,6 +283,8 @@ export const CapPlayer = ({
 	loop = false,
 	controls = true,
 	startAt = 0,
+	captions = NO_CAPTIONS,
+	showCaptions = false,
 	focusOnMount = false,
 	accentColor,
 	hideControls = NO_CONTROLS,
@@ -280,8 +310,32 @@ export const CapPlayer = ({
 	const attachmentRef = useRef<Attachment | null>(null);
 	const menuDismissedAt = useRef(-1);
 	const levelsRef = useRef<readonly CapPlayerLevel[]>([]);
-	const live = useRef({ onFirstPlay, onEnded, speeds });
-	live.current = { onFirstPlay, onEnded, speeds };
+	const captionTracks = useRef(new Map<string, HTMLTrackElement>());
+	const captionFiles = useRef(new Map<string, Promise<string>>());
+
+	const [unavailable, setUnavailable] = useState<readonly string[]>([]);
+	const [captionsOn, setCaptionsOn] = useState(() =>
+		initialCaptions(captions, showCaptions),
+	);
+	const [cue, setCue] = useState("");
+	const rememberedCaptions = useRef(captionsOn);
+	const offered = captions.filter(
+		(caption) => !unavailable.includes(caption.language),
+	);
+	const toggleCaptions = () => {
+		if (offered.length === 0) return false;
+		const next = toggledCaptions(
+			captionsOn,
+			rememberedCaptions.current,
+			offered,
+		);
+		if (next !== null) rememberedCaptions.current = next;
+		setCaptionsOn(next);
+		return true;
+	};
+
+	const live = useRef({ onFirstPlay, onEnded, speeds, toggleCaptions });
+	live.current = { onFirstPlay, onEnded, speeds, toggleCaptions };
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
@@ -347,6 +401,72 @@ export const CapPlayer = ({
 	useLayoutEffect(() => {
 		if (showsVolume) videoRef.current?.dispatchEvent(new Event("volumechange"));
 	}, [showsVolume]);
+
+	useEffect(() => {
+		const files = captionFiles.current;
+		return () => releaseCaptionsFiles(files);
+	}, []);
+
+	useEffect(() => {
+		const video = videoRef.current as NativeViewVideo | null;
+		const caption = captions.find((entry) => entry.language === captionsOn);
+		for (const [language, element] of captionTracks.current) {
+			if (language !== caption?.language && element.track) {
+				element.track.mode = "disabled";
+			}
+		}
+		setCue("");
+		const element = caption && captionTracks.current.get(caption.language);
+		if (!video || !caption || !element) return;
+
+		let cancelled = false;
+		let detach: () => void = () => undefined;
+		// The player draws the cues itself so they match it and clear the
+		// control bar. Picture in picture and the video's own full screen on
+		// iPhone cannot show anything the page draws, so there the browser
+		// shows them instead.
+		const nativeView = () =>
+			document.pictureInPictureElement === video ||
+			video.webkitDisplayingFullscreen === true;
+		loadCaptionsFile(captionFiles.current, caption.url).then(
+			(src) => {
+				if (cancelled) return;
+				if (element.getAttribute("src") !== src) element.src = src;
+				const track = element.track;
+				if (!track) return;
+				const paint = () =>
+					setCue(nativeView() ? "" : activeCueText(track.activeCues));
+				const place = () => {
+					track.mode = nativeView() ? "showing" : "hidden";
+					paint();
+				};
+				const viewEvents = [
+					"enterpictureinpicture",
+					"leavepictureinpicture",
+					"webkitbeginfullscreen",
+					"webkitendfullscreen",
+				];
+				track.addEventListener("cuechange", paint);
+				for (const name of viewEvents) video.addEventListener(name, place);
+				detach = () => {
+					track.removeEventListener("cuechange", paint);
+					for (const name of viewEvents) {
+						video.removeEventListener(name, place);
+					}
+				};
+				place();
+			},
+			() => {
+				if (cancelled) return;
+				setUnavailable((languages) => [...languages, caption.language]);
+				setCaptionsOn(null);
+			},
+		);
+		return () => {
+			cancelled = true;
+			detach();
+		};
+	}, [captions, captionsOn]);
 
 	useEffect(() => {
 		if (!menu) return;
@@ -679,6 +799,8 @@ export const CapPlayer = ({
 				stepSpeed(1);
 			} else if (key === "<") {
 				stepSpeed(-1);
+			} else if (key === "c") {
+				if (!live.current.toggleCaptions()) return;
 			} else {
 				return;
 			}
@@ -874,6 +996,37 @@ export const CapPlayer = ({
 		checked: value === speed,
 	}));
 
+	const captionItems: MenuItem[] = [
+		{ value: CAPTIONS_OFF, label: "Off", checked: captionsOn === null },
+		...offered.map((caption, index) => ({
+			value: index,
+			label: caption.label,
+			checked: caption.language === captionsOn,
+		})),
+	];
+
+	const pickCaptions = (value: number) => {
+		const language = offered[value]?.language ?? null;
+		if (language !== null) rememberedCaptions.current = language;
+		setCaptionsOn(language);
+		closeMenu("captions");
+	};
+
+	const captionTrack = (caption: CapPlayerCaption | undefined) =>
+		caption
+			? {
+					srcLang: caption.language,
+					label: caption.label,
+					ref: (element: HTMLTrackElement | null) => {
+						if (element) captionTracks.current.set(caption.language, element);
+						else captionTracks.current.delete(caption.language);
+					},
+				}
+			: {};
+
+	const captionsLabel =
+		offered.find((caption) => caption.language === captionsOn)?.label ?? "off";
+
 	const canPickQuality = levels.length > 1;
 	const pickedLabel = levels.find((level) => level.index === picked)?.label;
 	const quality = pickedLabel ?? resolution;
@@ -906,8 +1059,16 @@ export const CapPlayer = ({
 				data-action="surface"
 				aria-label={title}
 			>
-				<track kind="captions" />
+				<track kind="captions" {...captionTrack(captions[0])} />
+				{captions.slice(1).map((caption) => (
+					<track key={caption.url} kind="captions" {...captionTrack(caption)} />
+				))}
 			</video>
+			{cue ? (
+				<div className={styles.captions}>
+					<span className={styles.cue}>{cue}</span>
+				</div>
+			) : null}
 			<div className={styles.spinner} aria-hidden="true" />
 			{failed ? (
 				<p className={styles.failed} role="alert">
@@ -1045,6 +1206,40 @@ export const CapPlayer = ({
 						) : (
 							<span className={styles.quality}>{resolution}</span>
 						)
+					) : null}
+					{shows("captions") && offered.length === 1 ? (
+						<button
+							type="button"
+							className={styles.control}
+							aria-pressed={captionsOn !== null}
+							aria-label="Captions"
+							onClick={toggleCaptions}
+						>
+							<CaptionsIcon />
+						</button>
+					) : null}
+					{shows("captions") && offered.length > 1 ? (
+						<div className={styles.anchor} data-menu-anchor="captions">
+							<button
+								type="button"
+								className={styles.control}
+								aria-haspopup="menu"
+								aria-expanded={menu === "captions"}
+								aria-label={`Captions, ${captionsLabel}`}
+								data-on={captionsOn !== null}
+								onClick={() => setMenu(menu === "captions" ? null : "captions")}
+							>
+								<CaptionsIcon />
+							</button>
+							{menu === "captions" ? (
+								<Menu
+									label="Captions"
+									items={captionItems}
+									onPick={pickCaptions}
+									onClose={() => closeMenu("captions")}
+								/>
+							) : null}
+						</div>
 					) : null}
 					{shows("pip") && pip.supported ? (
 						<button
