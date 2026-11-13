@@ -124,6 +124,10 @@ pub enum DeepLinkAction {
         capture_system_audio: bool,
         mode: cap_recording::RecordingMode,
     },
+    StartDefaultRecording {
+        #[serde(default)]
+        mode: Option<cap_recording::RecordingMode>,
+    },
     StopRecording,
     #[cfg(debug_assertions)]
     PauseRecording,
@@ -334,6 +338,18 @@ impl DeepLinkAction {
                 // The name -> target resolution, verbatim from
                 // `deeplink_actions.rs:200-231`.
                 let capture_target: ScreenCaptureTarget = match capture_mode {
+                    CaptureMode::Screen(name) if name == "default" || name == "primary" => {
+                        ScreenCaptureTarget::Display {
+                            id: scap_targets::Display::primary().id(),
+                        }
+                    }
+                    CaptureMode::Screen(name) if name == "cursor" => {
+                        ScreenCaptureTarget::Display {
+                            id: scap_targets::Display::get_containing_cursor()
+                                .unwrap_or_else(scap_targets::Display::primary)
+                                .id(),
+                        }
+                    }
                     CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
                         .find(|(s, _)| s.name == name)
@@ -440,6 +456,22 @@ impl DeepLinkAction {
                         permit.cancel();
                     }
                 });
+                Ok(())
+            }
+            DeepLinkAction::StartDefaultRecording { mode } => {
+                let mode = match mode {
+                    Some(cap_recording::RecordingMode::Studio) => {
+                        Some(crate::main_window::Mode::Studio)
+                    }
+                    Some(cap_recording::RecordingMode::Instant) => {
+                        Some(crate::main_window::Mode::Instant)
+                    }
+                    Some(cap_recording::RecordingMode::Screenshot) => {
+                        return Err("Use take_screenshot for screenshots".to_string());
+                    }
+                    None => None,
+                };
+                crate::hotkeys::start_default_recording(mode, cx);
                 Ok(())
             }
             DeepLinkAction::StopRecording => {
@@ -829,6 +861,56 @@ mod tests {
                 mode: cap_recording::RecordingMode::Studio,
             })
         );
+    }
+
+    #[test]
+    fn parses_start_default_recording_action_urls() {
+        let default_url = Url::parse(
+            "cap-desktop://action?value=%7B%22start_default_recording%22%3A%7B%7D%7D",
+        )
+        .unwrap();
+        assert_eq!(
+            DeepLinkAction::try_from(&default_url),
+            Ok(DeepLinkAction::StartDefaultRecording { mode: None })
+        );
+
+        let studio_url = Url::parse(
+            "cap-desktop://action?value=%7B%22start_default_recording%22%3A%7B%22mode%22%3A%22studio%22%7D%7D",
+        )
+        .unwrap();
+        assert_eq!(
+            DeepLinkAction::try_from(&studio_url),
+            Ok(DeepLinkAction::StartDefaultRecording {
+                mode: Some(cap_recording::RecordingMode::Studio),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_start_recording_action_url_default_and_cursor_screen() {
+        for screen_alias in ["default", "primary", "cursor"] {
+            let value = serde_json::json!({
+                "start_recording": {
+                    "capture_mode": { "screen": screen_alias },
+                    "camera": null,
+                    "mic_label": null,
+                    "capture_system_audio": true,
+                    "mode": "instant"
+                }
+            })
+            .to_string();
+            let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+            assert_eq!(
+                DeepLinkAction::try_from(&url),
+                Ok(DeepLinkAction::StartRecording {
+                    capture_mode: CaptureMode::Screen(screen_alias.to_string()),
+                    camera: None,
+                    mic_label: None,
+                    capture_system_audio: true,
+                    mode: cap_recording::RecordingMode::Instant,
+                })
+            );
+        }
     }
 
     #[test]

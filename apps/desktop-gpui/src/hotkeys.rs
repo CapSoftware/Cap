@@ -1073,6 +1073,14 @@ fn microphone_available(name: &str) -> bool {
 /// where it was. Deliberate: this app's start path reads the window's mode,
 /// and a recording visibly in Studio mode with the pill saying Instant is the
 /// worse mismatch.
+pub(crate) fn start_default_recording(mode: Option<Mode>, cx: &mut App) {
+    let resolved_mode = match mode.unwrap_or_else(Mode::from_store) {
+        Mode::Studio => Mode::Studio,
+        Mode::Instant | Mode::Screenshot => Mode::Instant,
+    };
+    start_from_hotkey(resolved_mode, cx);
+}
+
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
     app_windows::set_recording_mode(mode, cx);
     let main = cx.global::<app_windows::AppWindows>().main;
