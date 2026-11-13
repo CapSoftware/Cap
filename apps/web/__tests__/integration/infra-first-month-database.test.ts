@@ -7,7 +7,7 @@ import {
 	developerVideos,
 } from "@cap/database/schema";
 import type { DeveloperVideoProcessingState } from "@cap/database/types";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
@@ -978,6 +978,9 @@ describe.runIf(Boolean(databaseUrl))(
 				"daily_short",
 				"month_paid",
 				"month_short",
+				"month_short_pair",
+				"hold",
+				"release",
 				"hold",
 				"release",
 				"top_up",
@@ -985,7 +988,7 @@ describe.runIf(Boolean(databaseUrl))(
 			type Open = { kind: "daily" | "month"; since: string; owed: number };
 			const failures: string[] = [];
 
-			for (let sequence = 0; sequence < 200; sequence++) {
+			for (let sequence = 0; sequence < 500; sequence++) {
 				const startBalance = pick([0, 500, 5_000, 20_000]);
 				const { appId, accountId } = await makeApp(startBalance);
 				let balance = startBalance;
@@ -1067,34 +1070,70 @@ describe.runIf(Boolean(databaseUrl))(
 						} else if (open?.kind === "daily") {
 							open = null;
 						}
-					} else if (kind === "month_paid" || kind === "month_short") {
+					} else if (
+						kind === "month_paid" ||
+						kind === "month_short" ||
+						kind === "month_short_pair"
+					) {
 						const minutes = Math.min(
 							240,
 							kind === "month_paid"
 								? Math.floor(available / 85)
 								: Math.floor(available / 85) + between(1, 200),
 						);
-						if (kind === "month_short" && minutes * 85 <= available) continue;
+						if (kind !== "month_paid" && minutes * 85 <= available) continue;
 						if (minutes < 1) continue;
-						const owed = minutes * 85;
-						latch();
-						const videoId = await makeVideo(appId, { duration: minutes * 60 });
-						await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
-						log[log.length - 1] += ` owed=${owed}`;
-						const charged = Math.min(balance - held, owed);
-						balance -= charged;
-						if (charged < owed) {
-							open = open
-								? {
-										kind: "month",
-										since: open.since,
-										owed: Math.max(open.owed, owed),
-									}
-								: {
-										kind: "month",
-										since: await rowSince(videoId),
-										owed,
-									};
+						if (kind === "month_short_pair" && minutes >= 240) continue;
+						const sizes =
+							kind === "month_short_pair"
+								? [minutes, between(minutes + 1, 240)]
+								: [minutes];
+						const videoIds: string[] = [];
+						for (const size of sizes) {
+							const owed = size * 85;
+							latch();
+							const videoId = await makeVideo(appId, { duration: size * 60 });
+							await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
+							videoIds.push(videoId);
+							log[log.length - 1] += ` owed=${owed}`;
+							const charged = Math.min(balance - held, owed);
+							balance -= charged;
+							if (charged < owed) {
+								open = open
+									? {
+											kind: "month",
+											since: open.since,
+											owed: Math.max(open.owed, owed),
+										}
+									: {
+											kind: "month",
+											since: await rowSince(videoId),
+											owed,
+										};
+							}
+						}
+						if (videoIds.length > 1) {
+							const [first] = await database()
+								.select({ createdAt: developerCreditTransactions.createdAt })
+								.from(developerCreditTransactions)
+								.where(
+									and(
+										eq(developerCreditTransactions.accountId, accountId),
+										eq(
+											developerCreditTransactions.referenceId,
+											videoIds[0] ?? "",
+										),
+									),
+								);
+							await database()
+								.update(developerCreditTransactions)
+								.set({ createdAt: first?.createdAt ?? new Date() })
+								.where(
+									and(
+										eq(developerCreditTransactions.accountId, accountId),
+										inArray(developerCreditTransactions.referenceId, videoIds),
+									),
+								);
 						}
 					} else if (kind === "hold") {
 						if (available <= 0) continue;
@@ -1191,6 +1230,98 @@ describe.runIf(Boolean(databaseUrl))(
 
 			expect(failures).toEqual([]);
 		}, 600_000);
+
+		it("reads the largest unpaid month of a shortfall when two fall short in the same second", async () => {
+			const { appId, accountId } = await makeApp(900);
+			const transcriptId = id();
+			await database().insert(developerTranscripts).values({
+				id: transcriptId,
+				appId,
+				status: "processing",
+				sourceType: "upload",
+				reservedMicroCredits: 900,
+			});
+			const smallVideo = await makeVideo(appId);
+			await settleFirstMonthAtReady({ id: smallVideo, deletedAt: null });
+			const largeVideo = await makeVideo(appId, {
+				duration: 3_600,
+				width: 3840,
+				height: 2160,
+				maxResolutionTier: "2160p",
+			});
+			await settleFirstMonthAtReady({ id: largeVideo, deletedAt: null });
+			const rows = await firstMonthRows(accountId);
+			const small = rows.find((row) => row.referenceId === smallVideo);
+			const large = rows.find((row) => row.referenceId === largeVideo);
+			const shortSince = (small?.metadata as { shortSince: string }).shortSince;
+			expect(small?.metadata).toMatchObject({ owedMicroCredits: 850 });
+			expect(large?.metadata).toMatchObject({
+				owedMicroCredits: 16_800,
+				outstandingMicroCredits: 16_800,
+				shortSince,
+			});
+			const second = new Date(Math.floor(Date.now() / 1000) * 1000 - 5_000);
+			const smallId = `0${id().slice(1)}`;
+			const largeId = `z${id().slice(1)}`;
+			for (const [from, to] of [
+				[small?.id ?? "", smallId],
+				[large?.id ?? "", largeId],
+			] as const) {
+				await database()
+					.update(developerCreditTransactions)
+					.set({ id: to, createdAt: second })
+					.where(eq(developerCreditTransactions.id, from));
+			}
+
+			await database()
+				.update(developerTranscripts)
+				.set({ status: "complete", reservedMicroCredits: 0 })
+				.where(eq(developerTranscripts.id, transcriptId));
+			const pausesAt = new Date(Date.parse(shortSince) + 7 * DAY_MS);
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt,
+			});
+
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, { duration: 60 }),
+				deletedAt: null,
+			});
+			expect(await balanceOf(accountId)).toBe(815);
+			const after = new Map(
+				(await firstMonthRows(accountId)).map((row) => [
+					row.id,
+					(row.metadata as { resolvedAt?: string }).resolvedAt,
+				]),
+			);
+			expect(after.get(smallId)).toBeUndefined();
+			expect(after.get(largeId)).toBeUndefined();
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "grace",
+				pausesAt,
+			});
+
+			await database()
+				.update(developerCreditAccounts)
+				.set({ balanceMicroCredits: 17_000 })
+				.where(eq(developerCreditAccounts.id, accountId));
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, { duration: 60 }),
+				deletedAt: null,
+			});
+			const covered = new Map(
+				(await firstMonthRows(accountId)).map((row) => [
+					row.id,
+					(row.metadata as { resolvedAt?: string }).resolvedAt,
+				]),
+			);
+			expect(covered.get(smallId)).toEqual(expect.any(String));
+			expect(covered.get(largeId)).toBe(covered.get(smallId));
+			expect((await getInfraBilling(appId)).standing).toEqual({
+				state: "active",
+				pausesAt: null,
+			});
+		});
 
 		it("resolves every copy of a covered first month shortfall together, and no other shortfall", async () => {
 			const { appId, accountId } = await makeApp(900);

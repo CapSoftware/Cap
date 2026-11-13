@@ -190,9 +190,12 @@ async function latestFirstMonthCharge(
 				),
 			)
 	).map(parseStorageCharge);
+	const largestFirst = [...sameSecond].sort(
+		(a, b) => b.owedMicroCredits - a.owedMicroCredits,
+	);
 	return (
-		sameSecond.find((charge) => charge.shortSince && !charge.resolvedAt) ??
-		sameSecond.find((charge) => charge.shortSince) ??
+		largestFirst.find((charge) => charge.shortSince && !charge.resolvedAt) ??
+		largestFirst.find((charge) => charge.shortSince) ??
 		sameSecond[0] ??
 		null
 	);
@@ -228,22 +231,34 @@ export async function latchCoveredShortfall(
 	) {
 		return false;
 	}
+	const sameShortfall = and(
+		eq(developerCreditTransactions.accountId, accountId),
+		inArray(developerCreditTransactions.type, [
+			FIRST_MONTH_TRANSACTION_TYPE,
+			"storage_daily",
+		]),
+		sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
+		sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+	);
+	const owedField = (field: string) =>
+		sql`COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${field}`})) AS SIGNED), 0)`;
+	const [largest] = await tx
+		.select({
+			owedMicroCredits: sql<
+				string | number | null
+			>`MAX(GREATEST(${owedField("owedMicroCredits")}, ${owedField("outstandingMicroCredits")}))`,
+		})
+		.from(developerCreditTransactions)
+		.where(sameShortfall);
+	if (availableMicroCredits < (Number(largest?.owedMicroCredits) || 0)) {
+		return false;
+	}
 	await tx
 		.update(developerCreditTransactions)
 		.set({
 			metadata: sql`JSON_SET(COALESCE(${developerCreditTransactions.metadata}, JSON_OBJECT()), '$.resolvedAt', ${now.toISOString()})`,
 		})
-		.where(
-			and(
-				eq(developerCreditTransactions.accountId, accountId),
-				inArray(developerCreditTransactions.type, [
-					FIRST_MONTH_TRANSACTION_TYPE,
-					"storage_daily",
-				]),
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')) = ${charge.shortSince.toISOString()}`,
-				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
-			),
-		);
+		.where(sameShortfall);
 	return true;
 }
 

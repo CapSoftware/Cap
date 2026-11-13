@@ -239,6 +239,23 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		if (keys === "accountId,createdAt,id,metadata") {
 			return latestStorageDayRows();
 		}
+		if (keys === "owedMicroCredits") {
+			const shortSince = rendered.params.at(-1);
+			const owed = ledger.rows
+				.filter(
+					(row) =>
+						(row.type === "video_create" || row.type === "storage_daily") &&
+						row.metadata?.shortSince === shortSince &&
+						row.metadata?.resolvedAt === undefined,
+				)
+				.map((row) =>
+					Math.max(
+						Number(row.metadata?.owedMicroCredits) || 0,
+						Number(row.metadata?.outstandingMicroCredits) || 0,
+					),
+				);
+			return [{ owedMicroCredits: owed.length ? Math.max(...owed) : null }];
+		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
 			return storageRows().filter((row) => row.createdAt.getTime() >= since);
