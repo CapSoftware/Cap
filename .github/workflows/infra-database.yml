@@ -4,20 +4,24 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "apps/web/**"
-      - "packages/database/**"
-      - "packages/web-*/**"
-      - "bun.lock"
-      - ".github/actions/setup-js/**"
+      - "apps/web/lib/infra-**"
+      - "apps/web/lib/developer-**"
+      - "apps/web/__tests__/integration/**"
+      - "apps/web/app/api/developer/**"
+      - "apps/web/app/api/cron/developer-storage/**"
+      - "packages/database/schema.ts"
+      - "packages/database/migrations/**"
       - ".github/workflows/infra-database.yml"
   push:
     branches: [main]
     paths:
-      - "apps/web/**"
-      - "packages/database/**"
-      - "packages/web-*/**"
-      - "bun.lock"
-      - ".github/actions/setup-js/**"
+      - "apps/web/lib/infra-**"
+      - "apps/web/lib/developer-**"
+      - "apps/web/__tests__/integration/**"
+      - "apps/web/app/api/developer/**"
+      - "apps/web/app/api/cron/developer-storage/**"
+      - "packages/database/schema.ts"
+      - "packages/database/migrations/**"
       - ".github/workflows/infra-database.yml"
 
 permissions:
@@ -56,7 +60,8 @@ jobs:
         run: bun run drizzle-kit migrate --config=drizzle.config.ts
       # The suites insert billing rows without their parent apps and owners,
       # so they run on the migrated schema without foreign keys, the same as
-      # the local scratch database they were written against.
+      # the local scratch database they were written against. This job does
+      # not test foreign key behaviour.
       - name: Drop foreign keys
         run: |
           mysql --protocol=TCP -h 127.0.0.1 -u root -N -e \
