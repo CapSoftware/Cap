@@ -3,6 +3,7 @@ import {
 	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
+	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
 import type { DeveloperVideoProcessingState } from "@cap/database/types";
@@ -559,6 +560,65 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 			expect(await balanceOf(part.accountId)).toBe(1_000);
 			expect((await getInfraBilling(part.appId)).standing.state).toBe("active");
+		});
+
+		it("latches a shortfall once when a released hold covers it, so it never comes back", async () => {
+			const { appId, accountId } = await makeApp(900);
+			const transcriptId = id();
+			await database().insert(developerTranscripts).values({
+				id: transcriptId,
+				appId,
+				status: "processing",
+				sourceType: "upload",
+				reservedMicroCredits: 900,
+			});
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId),
+				deletedAt: null,
+			});
+			const [month] = await firstMonthRows(accountId);
+			expect(month).toMatchObject({ amountMicroCredits: 0 });
+			expect((await getInfraBilling(appId)).standing.state).toBe("grace");
+
+			await database()
+				.update(developerTranscripts)
+				.set({ status: "complete", reservedMicroCredits: 0 })
+				.where(eq(developerTranscripts.id, transcriptId));
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, { duration: 1 }),
+				deletedAt: null,
+			});
+			const latchedRow = async () => {
+				const [row] = await database()
+					.select({ metadata: developerCreditTransactions.metadata })
+					.from(developerCreditTransactions)
+					.where(eq(developerCreditTransactions.id, month?.id ?? ""));
+				return row?.metadata as {
+					resolvedAt?: string;
+					owedMicroCredits?: number;
+				};
+			};
+			const first = await latchedRow();
+			expect(first.resolvedAt).toEqual(expect.any(String));
+			expect(first.owedMicroCredits).toBe(850);
+
+			await settleFirstMonthAtReady({
+				id: await makeVideo(appId, { duration: 1 }),
+				deletedAt: null,
+			});
+			expect((await latchedRow()).resolvedAt).toBe(first.resolvedAt);
+			expect(await balanceOf(accountId)).toBe(898);
+
+			await database()
+				.update(developerCreditAccounts)
+				.set({ balanceMicroCredits: 100 })
+				.where(eq(developerCreditAccounts.id, accountId));
+			const later = await getInfraBilling(
+				appId,
+				undefined,
+				new Date(Date.now() + 10 * DAY_MS),
+			);
+			expect(later.standing).toEqual({ state: "active", pausesAt: null });
 		});
 
 		it("never throws from the ready path when the charge fails", async () => {

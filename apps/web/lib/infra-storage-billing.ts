@@ -10,6 +10,7 @@ import type { StorageUsage } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import {
 	type InfraDbExecutor,
+	latchCoveredShortfall,
 	latestStorageCharge,
 	restoredSinceCharge,
 	STORAGE_DAY_REFERENCE_TYPE,
@@ -136,7 +137,10 @@ export async function chargeStorageDay({
 
 		const usage = measure ? await measure(tx) : measuredBefore;
 		const lastCharge = await latestStorageCharge(tx, accountId);
+		const available = (await availableBalance(appId, tx)) ?? 0;
+		const latched = await latchCoveredShortfall(tx, lastCharge, available, now);
 		const unresolvedShortSince =
+			!latched &&
 			lastCharge?.shortSince &&
 			!(await restoredSinceCharge(tx, accountId, lastCharge))
 				? lastCharge.shortSince
@@ -171,8 +175,6 @@ export async function chargeStorageDay({
 							},
 						})
 				: Promise.resolve();
-
-		const available = (await availableBalance(appId, tx)) ?? 0;
 
 		if (unresolvedShortSince && usage.dailyMicroCredits > 0 && available <= 0) {
 			await recordSnapshot(0);

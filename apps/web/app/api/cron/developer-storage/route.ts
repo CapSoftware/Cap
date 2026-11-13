@@ -102,7 +102,7 @@ export async function GET(request: Request) {
 					if (!usage) return null;
 					if (usage.dailyMicroCredits <= 0) {
 						const lastCharge = await latestStorageCharge(db(), account.id);
-						if (!lastCharge?.shortSince || lastCharge.firstMonth) return null;
+						if (!lastCharge?.shortSince) return null;
 					}
 					const result = await chargeStorageDay({
 						appId: account.appId,

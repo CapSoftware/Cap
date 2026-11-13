@@ -462,6 +462,69 @@ describe("a first month the balance could not pay", () => {
 	});
 });
 
+describe("a shortfall the available balance comes to cover without new credit", () => {
+	it("is latched as resolved once, stays resolved through later paid days, and a new shortfall starts its own grace", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		ledger.account.balanceMicroCredits = 900;
+		ledger.heldMicroCredits = 900;
+		const shortSince = new Date(ledger.now);
+		const month = {
+			id: "first-month-held",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 900,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 850,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			} as Record<string, unknown>,
+			createdAt: new Date(ledger.now),
+		};
+		ledger.rows.push(month);
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		ledger.heldMicroCredits = 0;
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+			shortSince: null,
+		});
+		const latched = month.metadata.resolvedAt;
+		expect(latched).toBe(new Date(ledger.now).toISOString());
+
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(844);
+		expect(month.metadata.resolvedAt).toBe(latched);
+
+		advanceDays(8);
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+
+		ledger.account.balanceMicroCredits = 0;
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 0,
+			fellShort: true,
+		});
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(ledger.now.getTime() + 7 * DAY_MS),
+		});
+		expect(month.metadata.resolvedAt).toBe(latched);
+	});
+});
+
 describe("standing through the ledger", () => {
 	it("goes active, grace, paused and back to active", async () => {
 		ledger.account.balanceMicroCredits = 200;

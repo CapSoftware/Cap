@@ -135,7 +135,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				1,
 			);
 		}
-		if (keys === "createdAt,metadata") {
+		if (keys === "createdAt,id,metadata") {
 			const [, type, at] = rendered.params;
 			const ofType = newestFirst(
 				ledger.rows.filter((row) => row.type === type),
@@ -240,7 +240,19 @@ function update(table: unknown) {
 	return {
 		set(values: Record<string, unknown>) {
 			return {
-				async where() {
+				async where(condition?: SQL) {
+					if (table === developerCreditTransactions && values.metadata) {
+						const [id] = condition ? dialect.sqlToQuery(condition).params : [];
+						const resolvedAt = dialect
+							.sqlToQuery(values.metadata as SQL)
+							.params.find((param) => typeof param === "string");
+						const row = ledger.rows.find((entry) => entry.id === id);
+						if (!row || row.metadata?.resolvedAt !== undefined) {
+							return [{ affectedRows: 0 }];
+						}
+						row.metadata = { ...row.metadata, resolvedAt };
+						return [{ affectedRows: 1 }];
+					}
 					if (table !== developerCreditAccounts) return [{ affectedRows: 0 }];
 					const { balanceMicroCredits, ...rest } = values;
 					if (balanceMicroCredits !== undefined) {

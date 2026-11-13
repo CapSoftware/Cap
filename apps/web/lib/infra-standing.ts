@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte } from "drizzle-orm";
+import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
@@ -29,9 +29,11 @@ export type InfraAppStanding = {
 };
 
 export type StorageCharge = {
+	id?: string;
 	createdAt: Date;
 	owedMicroCredits: number;
 	shortSince: Date | null;
+	resolvedAt?: Date | null;
 	firstMonth?: boolean;
 };
 
@@ -71,18 +73,24 @@ export function storageChargeDay(metadata: unknown): string | null {
 	return typeof snapshotDate === "string" ? snapshotDate : null;
 }
 
+const dateField = (value: unknown) => {
+	const date = typeof value === "string" ? new Date(value) : null;
+	return date && !Number.isNaN(date.getTime()) ? date : null;
+};
+
 export function parseStorageCharge(row: {
+	id?: string;
 	createdAt: Date;
 	metadata: unknown;
 }): StorageCharge {
 	const fields = metadataFields(row.metadata);
-	const shortSince =
-		typeof fields.shortSince === "string" ? new Date(fields.shortSince) : null;
+	const resolvedAt = dateField(fields.resolvedAt);
 	return {
+		...(row.id ? { id: row.id } : {}),
 		createdAt: new Date(row.createdAt),
 		owedMicroCredits: Math.max(0, Number(fields.owedMicroCredits) || 0),
-		shortSince:
-			shortSince && !Number.isNaN(shortSince.getTime()) ? shortSince : null,
+		shortSince: dateField(fields.shortSince),
+		...(resolvedAt ? { resolvedAt } : {}),
 	};
 }
 
@@ -115,6 +123,7 @@ async function latestChargeOfType(
 ) {
 	const [row] = await executor
 		.select({
+			id: developerCreditTransactions.id,
 			createdAt: developerCreditTransactions.createdAt,
 			metadata: developerCreditTransactions.metadata,
 		})
@@ -148,6 +157,7 @@ async function latestFirstMonthCharge(
 	const sameSecond = (
 		await executor
 			.select({
+				id: developerCreditTransactions.id,
 				createdAt: developerCreditTransactions.createdAt,
 				metadata: developerCreditTransactions.metadata,
 			})
@@ -160,7 +170,10 @@ async function latestFirstMonthCharge(
 			)
 	).map(parseStorageCharge);
 	return (
-		sameSecond.find((charge) => charge.shortSince) ?? sameSecond[0] ?? null
+		sameSecond.find((charge) => charge.shortSince && !charge.resolvedAt) ??
+		sameSecond.find((charge) => charge.shortSince) ??
+		sameSecond[0] ??
+		null
 	);
 }
 
@@ -179,11 +192,40 @@ export async function latestStorageCharge(
 	return daily;
 }
 
+export async function latchCoveredShortfall(
+	tx: InfraDbExecutor,
+	charge: StorageCharge | null,
+	availableMicroCredits: number,
+	now: Date,
+) {
+	if (
+		!charge?.id ||
+		!charge.shortSince ||
+		charge.resolvedAt ||
+		availableMicroCredits < charge.owedMicroCredits
+	) {
+		return false;
+	}
+	await tx
+		.update(developerCreditTransactions)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${developerCreditTransactions.metadata}, JSON_OBJECT()), '$.resolvedAt', ${now.toISOString()})`,
+		})
+		.where(
+			and(
+				eq(developerCreditTransactions.id, charge.id),
+				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+			),
+		);
+	return true;
+}
+
 export async function restoredSinceCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 	charge: StorageCharge,
 ) {
+	if (charge.resolvedAt) return true;
 	const [credit] = await executor
 		.select({ id: developerCreditTransactions.id })
 		.from(developerCreditTransactions)

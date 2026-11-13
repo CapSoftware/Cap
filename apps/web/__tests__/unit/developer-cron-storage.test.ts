@@ -360,7 +360,7 @@ describe("developer-storage cron job", () => {
 		expect(body.firstMonths).toEqual({ charged: 2, short: 1, failed: 0 });
 	});
 
-	it("does not open a daily charge to settle a short first month when nothing is charged daily", async () => {
+	it("opens the day's charge for a short first month even when nothing is charged daily, so a recovery can be recorded", async () => {
 		const shortSince = new Date(Date.now() - 60 * 60 * 1000);
 		mocks.selects = [[{ id: "account-1", appId: "app-1" }], []];
 		mocks.getStorageUsageByApp.mockResolvedValue(
@@ -375,7 +375,7 @@ describe("developer-storage cron job", () => {
 
 		await authorized();
 
-		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+		expect(mocks.chargeStorageDay).toHaveBeenCalledTimes(1);
 	});
 
 	it("emails an account whose first month fell short in the last day and is still short, with the pause date seven days on", async () => {

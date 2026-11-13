@@ -30,6 +30,7 @@ import {
 	FIRST_MONTH_REFERENCE_TYPE,
 	FIRST_MONTH_TRANSACTION_TYPE,
 	type InfraDbExecutor,
+	latchCoveredShortfall,
 	latestStorageCharge,
 	parseStorageCharge,
 	restoredSinceCharge,
@@ -181,15 +182,18 @@ async function settleFirstMonth(
 		isTier(video.maxResolutionTier) ? video.maxResolutionTier : null,
 	);
 	const lastCharge = await latestStorageCharge(tx, account.id);
+	const available =
+		(await availableBalance(appId, tx)) ?? account.balanceMicroCredits;
+	const latched = await latchCoveredShortfall(tx, lastCharge, available, now);
 	const unresolvedShortSince =
+		!latched &&
 		lastCharge?.shortSince &&
 		!(await restoredSinceCharge(tx, account.id, lastCharge))
 			? lastCharge.shortSince
 			: null;
 	const settled = settleStorageDay({
 		balanceMicroCredits: account.balanceMicroCredits,
-		availableMicroCredits:
-			(await availableBalance(appId, tx)) ?? account.balanceMicroCredits,
+		availableMicroCredits: available,
 		owedMicroCredits: firstMonthStorageMicroCredits({ durationSeconds, tier }),
 		unresolvedShortSince,
 		now,
