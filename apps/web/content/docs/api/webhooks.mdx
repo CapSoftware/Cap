@@ -225,7 +225,7 @@ def verify_cap_webhook(raw_body: bytes, signature_header: str, secret: str) -> b
 
 ### A complete receiver
 
-This server uses only Node.js. Save the function above as `verify-cap-webhook.mjs` next to it and start it with your signing secret in `CAP_WEBHOOK_SECRET`. It reads the raw body, checks the signature, answers `200` straight away, then handles the event.
+This server uses only Node.js. Save the function above as `verify-cap-webhook.mjs` next to it and start it with your signing secret in `CAP_WEBHOOK_SECRET`. It reads the raw body, refuses one over 1 MB (Cap's events are far smaller), checks the signature, answers `200` straight away, then handles the event.
 
 ```js
 import { createServer } from "node:http";
@@ -250,7 +250,16 @@ createServer((req, res) => {
     return;
   }
   const chunks = [];
-  req.on("data", (chunk) => chunks.push(chunk));
+  let size = 0;
+  req.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > 1_000_000) {
+      res.writeHead(413).end();
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on("end", () => {
     const rawBody = Buffer.concat(chunks).toString("utf8");
     if (!verifyCapWebhook(rawBody, req.headers["cap-signature"], secret)) {

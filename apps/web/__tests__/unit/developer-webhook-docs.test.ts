@@ -192,6 +192,13 @@ describe("the webhooks guide", () => {
 					}
 				}
 			};
+			const oversized = await post("").then(() =>
+				fetch(url, { method: "POST", body: "x".repeat(2_000_000) }).then(
+					(response) => response.status,
+					() => "reset",
+				),
+			);
+			expect([413, "reset"]).toContain(oversized);
 			const now = Math.floor(Date.now() / 1000);
 			expect(
 				(await post(signWebhookBody(`${secret}x`, body, now))).status,
