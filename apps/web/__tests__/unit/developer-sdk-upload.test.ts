@@ -474,8 +474,10 @@ describe("developer SDK multipart upload", () => {
 		const response = await post("/abort", { uploadId: "upload-1" });
 
 		expect(response.status).toBe(409);
+		expect(response.headers.get("Retry-After")).toBeNull();
 		await expect(response.json()).resolves.toMatchObject({
 			code: "completion_in_progress",
+			hint: "Do not repeat the abort. Wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 		});
 		expect(mocks.abort).not.toHaveBeenCalled();
 	});

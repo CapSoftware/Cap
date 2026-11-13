@@ -398,7 +398,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/infra. A step by step guide with browser, Node and Python examples is at https://cap.so/docs/api/get-started.",
 			"",
-			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
+			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress` from complete. The same 409 from abort means the upload is being completed: do not repeat the abort. Retry 5xx with backoff.",
 			"",
 			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
@@ -832,7 +832,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "abortSdkUpload",
 				summary: "Abort a multipart upload",
 				description:
-					"Cancels an unfinished upload and discards its parts. Returns 404 with code upload_not_found when no open upload matches the uploadId, which means there is nothing left to abort.",
+					"Cancels an unfinished upload and discards its parts. Returns 404 with code upload_not_found when no open upload matches the uploadId, which means there is nothing left to abort. Returns 409 with code completion_in_progress, and no Retry-After, when the upload is being completed: do not repeat the abort. From your server, wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("AbortUploadRequest"),
@@ -1716,7 +1716,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			CompletionInProgress: json(
 				ref("Error"),
-				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
+				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On abort it carries no Retry-After and means the upload is being completed: do not repeat the abort; wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
 			),
 			UploadCompleted: json(
 				ref("Error"),
