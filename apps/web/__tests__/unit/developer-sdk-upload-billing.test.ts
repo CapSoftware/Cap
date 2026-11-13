@@ -90,6 +90,17 @@ vi.mock("@cap/database", async () => {
 				},
 			];
 		}
+		if (keys === "deletedAt,duration,status") {
+			return [
+				{
+					status: mocks.status,
+					duration: mocks.recordedReads.length
+						? (mocks.recordedReads.shift() ?? null)
+						: mocks.storedDuration,
+					deletedAt: mocks.deletedAt,
+				},
+			];
+		}
 		if (keys === "deletedAt,duration") {
 			return [
 				{
@@ -760,6 +771,7 @@ describe("removing files that were assembled but never recorded", () => {
 	const old = () => Effect.succeed({ LastModified: hoursAgo(25) });
 
 	beforeEach(() => {
+		mocks.status = "uploading";
 		mocks.storedDuration = null;
 		mocks.deletedAt = null;
 		mocks.events = [];
@@ -915,12 +927,55 @@ describe("removing files that were assembled but never recorded", () => {
 
 		expect(await removeUnrecordedInfraFiles(now)).toBe(1);
 
-		expect(mocks.events).toEqual(["lock", "retire"]);
+		expect(mocks.events).toEqual(["lock", "lock", "retire"]);
 		expect(mocks.videoUpdates).toEqual([{ deletedAt: now }]);
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
+		expect(mocks.listUploads).toHaveBeenCalledTimes(2);
 		expect(mocks.listUploads).toHaveBeenCalledWith({
 			prefix: "developer/app-1/empty/video",
 		});
+	});
+
+	it("does not retire a video with no file whose completion took its claim before the sweep reached the lock", async () => {
+		mocks.unrecorded = [row("finishing")];
+		mocks.headObject.mockImplementation(missing);
+		mocks.listUploads.mockImplementation(() => {
+			mocks.status = "processing";
+			return Effect.succeed({ Uploads: [] });
+		});
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.deletedAt).toBe(null);
+	});
+
+	it("does not retire a video with no file when storage shows a file or an open upload once the row is locked", async () => {
+		mocks.unrecorded = [row("late")];
+		mocks.headObject
+			.mockImplementationOnce(missing)
+			.mockImplementation(() => Effect.succeed({ LastModified: hoursAgo(0) }));
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+
+		mocks.headObject.mockReset();
+		mocks.headObject.mockImplementation(missing);
+		mocks.listUploads
+			.mockImplementationOnce(() => Effect.succeed({ Uploads: [] }))
+			.mockImplementation(() =>
+				Effect.succeed({
+					Uploads: [
+						{
+							Key: "developer/app-1/late/video",
+							UploadId: "upload-2",
+							Initiated: now,
+						},
+					],
+				}),
+			);
+
+		expect(await removeUnrecordedInfraFiles(now)).toBe(0);
+		expect(mocks.videoUpdates).toEqual([]);
+		expect(mocks.deletedAt).toBe(null);
 	});
 
 	it("leaves a video with no file alone while an upload for it is still open", async () => {
