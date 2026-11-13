@@ -42,6 +42,7 @@ const TOOL_KINDS: Record<string, "read" | "write" | "delete"> = {
 	transcripts_delete: "delete",
 	account_usage: "read",
 	account_transactions: "read",
+	docs_read: "read",
 };
 
 describe("tool list", () => {
