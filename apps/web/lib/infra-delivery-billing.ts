@@ -50,7 +50,7 @@ export type DeliveryLedgerRow = {
 		chargedMicroCredits: number;
 		shortSince: string | null;
 		fellShort: boolean;
-		unpaid?: true;
+		duringShortfall?: true;
 		deliveredSeconds: number;
 		minutesByTier: Record<string, number>;
 		microCreditsPer1000Minutes: number;
@@ -189,9 +189,7 @@ export async function chargeDeliveryDay({
 				chargedMicroCredits: settled.chargedMicroCredits,
 				shortSince: settled.shortSince?.toISOString() ?? null,
 				fellShort: settled.fellShort,
-				...(unresolvedShortSince && settled.chargedMicroCredits === 0
-					? { unpaid: true as const }
-					: {}),
+				...(unresolvedShortSince ? { duringShortfall: true as const } : {}),
 				deliveredSeconds: delivered.seconds,
 				minutesByTier: minutesByTier(delivered.secondsByTier),
 				microCreditsPer1000Minutes: DELIVERY_MICRO_CREDITS_PER_1000_MINUTES,

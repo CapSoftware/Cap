@@ -66,7 +66,7 @@ describe("latest storage day", () => {
 		expect(state.queries).toHaveLength(3);
 		const delivery = state.queries[2] as { sql: string; params: unknown[] };
 		expect(delivery.sql).toBe(
-			"select `id`, `createdAt`, `metadata` from `developer_credit_transactions` where (`developer_credit_transactions`.`accountId` = ? and `developer_credit_transactions`.`type` = ? and `developer_credit_transactions`.`referenceType` = ? and JSON_EXTRACT(`developer_credit_transactions`.`metadata`, '$.unpaid') IS NULL) order by `developer_credit_transactions`.`createdAt` desc, `developer_credit_transactions`.`referenceId` desc, `developer_credit_transactions`.`id` desc limit ?",
+			"select `id`, `createdAt`, `metadata` from `developer_credit_transactions` where (`developer_credit_transactions`.`accountId` = ? and `developer_credit_transactions`.`type` = ? and `developer_credit_transactions`.`referenceType` = ? and JSON_EXTRACT(`developer_credit_transactions`.`metadata`, '$.duringShortfall') IS NULL) order by `developer_credit_transactions`.`createdAt` desc, `developer_credit_transactions`.`referenceId` desc, `developer_credit_transactions`.`id` desc limit ?",
 		);
 		expect(delivery.params).toEqual([
 			"account-1",

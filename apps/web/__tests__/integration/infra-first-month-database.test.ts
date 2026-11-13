@@ -1215,6 +1215,7 @@ describe.runIf(Boolean(databaseUrl))(
 							.toISOString()
 							.slice(0, 10);
 						latch();
+						const openShortfall = period !== null;
 						const result = await chargeDeliveryDay({
 							appId,
 							accountId,
@@ -1237,18 +1238,15 @@ describe.runIf(Boolean(databaseUrl))(
 						delivered.billed++;
 						const charged = Math.max(0, Math.min(balance - held, owed));
 						balance -= charged;
-						if (charged < owed) {
-							delivered.short++;
-							if (period) delivered.carried++;
-							if (!(period && charged === 0)) {
-								const since: string =
-									(period as Period | null)?.since ?? (await rowSince(dateKey));
-								lastDaily = { since, owed };
-								period = period ?? { since, monthMax: 0 };
-							}
+						if (charged < owed) delivered.short++;
+						if (openShortfall) {
+							if (charged < owed) delivered.carried++;
+						} else if (charged < owed) {
+							const since = await rowSince(dateKey);
+							lastDaily = { since, owed };
+							period = { since, monthMax: 0 };
 						} else {
 							lastDaily = { since: null, owed: 0 };
-							if (period?.monthMax === 0) period = null;
 						}
 					} else if (stepKind === "daily_paid" || stepKind === "daily_short") {
 						if (dayIndex < 0) continue;

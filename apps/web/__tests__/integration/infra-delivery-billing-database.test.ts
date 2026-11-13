@@ -5,7 +5,7 @@ import {
 	developerCreditTransactions,
 	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
@@ -61,7 +61,7 @@ vi.mock("@/lib/infra-auto-top-up", async (importOriginal) => ({
 
 const { addCreditsToAccount } = await import("@/lib/developer-credits");
 const { emptyStorageMinutes } = await import("@/lib/developer-pricing");
-const { getInfraAppStanding, getInfraBilling } = await import(
+const { getInfraAppStanding, getInfraBilling, shortfallOwed } = await import(
 	"@/lib/infra-standing"
 );
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
@@ -670,7 +670,7 @@ describe.runIf(Boolean(databaseUrl))(
 					chargedMicroCredits: 0,
 					shortSince: shortSince.toISOString(),
 					fellShort: false,
-					unpaid: true,
+					duringShortfall: true,
 				});
 				expect((await getInfraBilling(appId)).standing).toEqual(grace);
 
@@ -733,8 +733,197 @@ describe.runIf(Boolean(databaseUrl))(
 					chargedMicroCredits: 0,
 					fellShort: true,
 				});
-				expect(first?.metadata).not.toHaveProperty("unpaid");
+				expect(first?.metadata).not.toHaveProperty("duringShortfall");
 				await expectRecoveryNeedsTheWholeShortfall(appId, accountId, NOW);
+			});
+		});
+
+		describe("a delivery day charged while a shortfall is open", () => {
+			const SHORT_OWED = 100_000;
+			const topUp = (accountId: string, amountCents: number) =>
+				addCreditsToAccount({
+					accountId,
+					amountCents,
+					referenceId: id(),
+					referenceType: "stripe_payment_intent",
+				});
+			const storageShort = async (appId: string, accountId: string) =>
+				chargeStorageDay({
+					appId,
+					accountId,
+					usage: {
+						videoCount: 1,
+						totalMinutes: 1,
+						minutesByTier: emptyStorageMinutes(),
+						monthlyMicroCredits: SHORT_OWED * 30,
+						dailyMicroCredits: SHORT_OWED,
+					},
+					dateKey: storageDay(0),
+					now: NOW,
+				});
+			const grace = {
+				state: "grace",
+				pausesAt: new Date(NOW.getTime() + 7 * DAY_MS),
+			};
+
+			it("never clears a storage shortfall by paying a small delivery day in full", async () => {
+				const { appId, accountId } = await makeApp(0);
+				expect(await storageShort(appId, accountId)).toMatchObject({
+					fellShort: true,
+				});
+				await topUp(accountId, 1);
+				await writeDay(appId, dayKey(2, NOW), [{ tier: "1080p", seconds: 60 }]);
+				await settle(NOW);
+
+				const [row] = await deliveryRows(accountId);
+				expect(row).toMatchObject({ amountMicroCredits: -95 });
+				expect(row?.metadata).toMatchObject({
+					shortSince: null,
+					duringShortfall: true,
+				});
+				expect((await getInfraBilling(appId)).standing).toEqual(grace);
+				expect(await shortfallOwed(database(), accountId, NOW)).toBe(
+					SHORT_OWED,
+				);
+			});
+
+			it("never lowers what a storage shortfall needs with a delivery day that is itself short", async () => {
+				const { appId, accountId } = await makeApp(0);
+				await storageShort(appId, accountId);
+				await topUp(accountId, 1);
+				await writeDay(appId, dayKey(2, NOW), FIXTURE_TIERS);
+				await settle(NOW);
+
+				const [row] = await deliveryRows(accountId);
+				expect(row).toMatchObject({ amountMicroCredits: -1_000 });
+				expect(row?.metadata).toMatchObject({
+					owedMicroCredits: FIXTURE_MICRO_CREDITS,
+					shortSince: NOW.toISOString(),
+					fellShort: false,
+					duringShortfall: true,
+				});
+				expect((await getInfraBilling(appId)).standing).toEqual(grace);
+				expect(await shortfallOwed(database(), accountId, NOW)).toBe(
+					SHORT_OWED,
+				);
+
+				await topUp(accountId, 100);
+				expect((await getInfraBilling(appId)).standing).toEqual({
+					state: "active",
+					pausesAt: null,
+				});
+			});
+
+			it("lets a later storage day paid in full clear an open delivery shortfall, as a later storage day clears a storage shortfall", async () => {
+				const delivery = await makeApp(0);
+				await writeDay(delivery.appId, dayKey(2, NOW), [
+					{ tier: "1080p", seconds: Math.ceil((SHORT_OWED * 60) / 95) },
+				]);
+				await settle(NOW);
+				expect((await getInfraBilling(delivery.appId)).standing).toEqual(grace);
+				await database()
+					.update(developerCreditTransactions)
+					.set({
+						createdAt: sql`${developerCreditTransactions.createdAt} - INTERVAL 2 SECOND`,
+					})
+					.where(eq(developerCreditTransactions.accountId, delivery.accountId));
+				await topUp(delivery.accountId, 1);
+				const storagePaid = await chargeStorageDay({
+					appId: delivery.appId,
+					accountId: delivery.accountId,
+					usage: {
+						videoCount: 1,
+						totalMinutes: 1,
+						minutesByTier: emptyStorageMinutes(),
+						monthlyMicroCredits: 3_000,
+						dailyMicroCredits: 100,
+					},
+					dateKey: storageDay(0),
+					now: NOW,
+				});
+
+				const storageOnly = await makeApp(0);
+				await chargeStorageDay({
+					appId: storageOnly.appId,
+					accountId: storageOnly.accountId,
+					usage: {
+						videoCount: 1,
+						totalMinutes: 1,
+						minutesByTier: emptyStorageMinutes(),
+						monthlyMicroCredits: SHORT_OWED * 30,
+						dailyMicroCredits: SHORT_OWED,
+					},
+					dateKey: storageDay(1),
+					now: NOW,
+				});
+				await topUp(storageOnly.accountId, 1);
+				const storageOnlyPaid = await chargeStorageDay({
+					appId: storageOnly.appId,
+					accountId: storageOnly.accountId,
+					usage: {
+						videoCount: 1,
+						totalMinutes: 1,
+						minutesByTier: emptyStorageMinutes(),
+						monthlyMicroCredits: 3_000,
+						dailyMicroCredits: 100,
+					},
+					dateKey: storageDay(0),
+					now: NOW,
+				});
+
+				expect(storagePaid).toMatchObject({
+					state: "billed",
+					chargedMicroCredits: 100,
+					shortSince: null,
+				});
+				expect(storageOnlyPaid).toMatchObject({
+					state: "billed",
+					chargedMicroCredits: 100,
+					shortSince: null,
+				});
+				const active = { state: "active", pausesAt: null };
+				expect((await getInfraBilling(delivery.appId)).standing).toEqual(
+					active,
+				);
+				expect((await getInfraBilling(storageOnly.appId)).standing).toEqual(
+					active,
+				);
+			});
+
+			it("still resolves a delivery-only app active when paid and grace when short", async () => {
+				const paid = await makeApp(1_000_000);
+				const short = await makeApp(1_000);
+				for (const app of [paid, short]) {
+					await writeDay(app.appId, dayKey(2, NOW), FIXTURE_TIERS);
+				}
+				await settle(NOW);
+
+				const [paidRow] = await deliveryRows(paid.accountId);
+				const [shortRow] = await deliveryRows(short.accountId);
+				expect(paidRow?.metadata).not.toHaveProperty("duringShortfall");
+				expect(shortRow?.metadata).not.toHaveProperty("duringShortfall");
+				expect((await getInfraBilling(paid.appId)).standing).toEqual({
+					state: "active",
+					pausesAt: null,
+				});
+				expect((await getInfraBilling(short.appId)).standing).toEqual(grace);
+			});
+
+			it("reads no delivery row for standing while the flag is off", async () => {
+				const { appId } = await makeApp(1_000);
+				await writeDay(appId, dayKey(2, NOW), FIXTURE_TIERS);
+				await settle(NOW);
+				expect((await getInfraBilling(appId)).standing).toEqual(grace);
+
+				vi.stubEnv("CAP_INFRA_DELIVERY_BILLING_FROM", "");
+				try {
+					expect((await getInfraBilling(appId)).standing).toEqual({
+						state: "active",
+						pausesAt: null,
+					});
+				} finally {
+					vi.unstubAllEnvs();
+				}
 			});
 		});
 

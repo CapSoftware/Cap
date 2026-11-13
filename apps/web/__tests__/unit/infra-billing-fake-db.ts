@@ -324,7 +324,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 						(row) =>
 							row.type === type &&
 							row.referenceType === at &&
-							row.metadata?.unpaid === undefined,
+							row.metadata?.duringShortfall === undefined,
 					)
 					.sort(
 						(a, b) =>
