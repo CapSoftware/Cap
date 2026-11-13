@@ -46,10 +46,10 @@ function toolsWith(
 }
 
 describe("videos_import", () => {
-	it("is served by the hosted endpoint, and not yet by the stdio package", () => {
+	it("is served by the hosted endpoint and the stdio package", () => {
 		const client = { call: vi.fn() };
 		expect(toolsWith(client, "hosted").names).toContain("videos_import");
-		expect(toolsWith(client, "local").names).not.toContain("videos_import");
+		expect(toolsWith(client, "local").names).toContain("videos_import");
 		expect(
 			createHostedTools({
 				apiUrl: "https://cap.test",

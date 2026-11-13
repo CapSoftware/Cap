@@ -30,6 +30,7 @@ const EM_DASH = String.fromCharCode(0x2014);
 
 const TOOL_KINDS: Record<string, "read" | "write" | "delete"> = {
 	videos_upload: "write",
+	videos_import: "write",
 	videos_get: "read",
 	videos_wait: "read",
 	videos_list: "read",
@@ -343,9 +344,12 @@ describe("transcripts", () => {
 		expect(waited.body.status).toBe("complete");
 	});
 
-	it("creates from a stored video through its MP4 link", async () => {
+	it("creates from a stored video by its videoId once it has an MP4", async () => {
 		const file = await files.write("Interview.mp4", 500);
-		const uploaded = await session.call("videos_upload", { path: file.path });
+		const uploaded = await session.call("videos_upload", {
+			path: file.path,
+			userId: "user_7",
+		});
 		const videoId = String(uploaded.body.videoId);
 
 		const early = await session.call("transcripts_create", { videoId });
@@ -363,13 +367,17 @@ describe("transcripts", () => {
 			metadata: { team: "sales" },
 		});
 		expect(created.isError).toBe(false);
-		const playbackId = stub.videos.get(videoId)?.playbackId;
 		expect(stub.calls("POST", "/transcripts")[0]?.body).toEqual({
-			url: `${stub.url}/api/developer/playback/${playbackId}/video.mp4`,
-			name: "Interview",
-			metadata: { team: "sales", videoId },
+			videoId,
+			metadata: { team: "sales" },
 		});
-		expect(created.body.metadata).toEqual({ team: "sales", videoId });
+		expect(created.body).toMatchObject({
+			videoId,
+			name: "Interview",
+			userId: "user_7",
+			source: { type: "video", url: null },
+			metadata: { team: "sales" },
+		});
 	});
 
 	it("asks for exactly one source", async () => {
