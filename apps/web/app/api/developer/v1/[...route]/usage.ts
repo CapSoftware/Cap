@@ -31,7 +31,10 @@ app.get("/", async (c) => {
 	const [billing, credit, delivered] = await Promise.all([
 		getInfraBilling(appId),
 		getSpeechUsage(appId),
-		getDeliveredUsage(appId),
+		getDeliveredUsage(appId).catch((error) => {
+			console.error("[developer-usage] Delivery usage unavailable", error);
+			return null;
+		}),
 	]);
 	const { stored, storage } = billing;
 
