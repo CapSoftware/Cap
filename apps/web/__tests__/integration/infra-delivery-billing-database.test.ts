@@ -101,7 +101,7 @@ const FIXTURE_TIERS = [
 const FIXTURE_MICRO_CREDITS = 6703;
 
 const ROLLUP_TABLE =
-	"create table developer_delivery_daily (appId varchar(15) not null, day date not null, tier varchar(8) not null, seconds bigint not null default 0, bytes bigint not null default 0, requests int not null default 0, abandonedBytes bigint not null default 0, final boolean not null default false, finalizedAt timestamp null, updatedAt timestamp not null, primary key (appId, day, tier), index day_idx (day))";
+	"CREATE TABLE IF NOT EXISTS `developer_delivery_daily` (`appId` varchar(15) NOT NULL, `day` date NOT NULL, `tier` varchar(8) NOT NULL, `seconds` bigint NOT NULL DEFAULT 0, `bytes` bigint NOT NULL DEFAULT 0, `requests` int NOT NULL DEFAULT 0, `abandonedBytes` bigint NOT NULL DEFAULT 0, `final` boolean NOT NULL DEFAULT false, `finalizedAt` timestamp, `updatedAt` timestamp NOT NULL, CONSTRAINT `developer_delivery_daily_appId_day_tier_pk` PRIMARY KEY(`appId`,`day`,`tier`), CONSTRAINT `developer_delivery_daily_appId_developer_apps_id_fk` FOREIGN KEY (`appId`) REFERENCES `developer_apps`(`id`) ON DELETE no action ON UPDATE no action, INDEX `day_idx` (`day`))";
 
 describe.runIf(Boolean(databaseUrl))(
 	"delivery debit against a real database",
@@ -198,12 +198,7 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 			pool = createPool({ uri: databaseUrl, connectionLimit: 8 });
 			fixture.database = drizzle(pool);
-			const [existing] = await pool.query(
-				"select count(*) as count from information_schema.tables where table_schema = database() and table_name = 'developer_delivery_daily'",
-			);
-			if (Number((existing as { count: number }[])[0]?.count) === 0) {
-				await pool.query(ROLLUP_TABLE);
-			}
+			await pool.query(ROLLUP_TABLE);
 		});
 
 		beforeEach(async () => {
