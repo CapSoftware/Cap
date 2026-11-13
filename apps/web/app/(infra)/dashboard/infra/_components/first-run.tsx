@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import Link from "next/link";
 import { useState } from "react";
+import { PRO_CREDIT_TRIAL_MESSAGE } from "@/lib/infra-pro-credit-eligibility";
 import { infraAppPath } from "@/lib/infra-routes";
 import type { InfraProCredit } from "../infra-data";
 import { AgentSetup } from "./agent-setup";
@@ -66,8 +67,10 @@ export function FirstRun({
 					<p className={clsx(LEAD, "mt-4")}>
 						Infra is separate from Cap. Your recordings, plan and team stay
 						exactly as they are.
-						{proCredit.status !== "not_pro" &&
-							" Your Cap Pro plan adds $5 of Infra credit every month."}
+						{proCredit.status === "trial"
+							? ` ${PRO_CREDIT_TRIAL_MESSAGE}`
+							: proCredit.status !== "not_pro" &&
+								" Your Cap Pro plan adds $5 of Infra credit every month."}
 					</p>
 				</div>
 				<div className="min-w-0 max-w-[620px]">
@@ -121,7 +124,8 @@ export function FirstRun({
 							{!created ? (
 								<StepNote>
 									Uploading needs a balance. Credits start at $5
-									{proCredit.status === "not_pro"
+									{proCredit.status === "not_pro" ||
+									proCredit.status === "trial"
 										? "."
 										: ", and your Cap Pro plan covers the first $5 each month."}
 								</StepNote>
