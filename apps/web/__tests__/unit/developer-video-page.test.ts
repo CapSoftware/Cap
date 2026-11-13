@@ -172,7 +172,7 @@ describe("developer video page parameters", () => {
 		expect(embed({})).toContain('preload="none"');
 	});
 
-	it("shows the control bar and no centre button by default", () => {
+	it("shows the control bar and one labelled play button by default", () => {
 		const html = embed({});
 
 		expect(html).toContain('data-controls="true"');

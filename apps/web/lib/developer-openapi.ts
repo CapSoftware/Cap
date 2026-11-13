@@ -485,17 +485,18 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 	info: {
 		title: "Cap Developer API",
 		version: "1.0.0",
-		summary: "Create, upload and manage videos recorded through Cap.",
+		summary: "Host video in your product and turn audio or video into text.",
 		description: [
-			"The Cap Developer API lets your product record, upload and manage videos with Cap.",
+			"The Cap Developer API does two things for your product. It hosts video: upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4 or with the hosted player. It turns speech into text: send an audio or video file and get a transcript back, with timings.",
 			"",
-			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos and read credit usage.",
+			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos, transcribe audio and video, and read credit usage.",
 			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for up to 50 parts at a time, then completeSdkUpload. If the token expires before the upload completes, renewUploadToken returns a new one for the same video and the upload continues with the same uploadId.",
 			"A public `cpk_` key cannot create or upload videos. Only an upload token made with the secret key can.",
+			"To transcribe a file at a public URL, call createTranscript. To transcribe a file you hold, call createTranscriptUpload, PUT the file to the URL it returns, then call startTranscript. Poll getTranscript until its status is `complete` or `error`.",
 			"",
-			"Create a developer app and its keys at https://cap.so/dashboard/infra.",
+			"Create a developer app and its keys at https://cap.so/dashboard/infra. A step by step guide with browser, Node and Python examples is at https://cap.so/docs/api/get-started.",
 			"",
-			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with three exceptions that say to wait and repeat it: 408, 429 and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
+			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
 			"",
 			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
@@ -2115,7 +2116,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			CompletionInProgress: json(
 				ref("Error"),
-				"Another request is completing this upload (code completion_in_progress): retry shortly, do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
+				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
 			),
 			UploadCompleted: json(
 				ref("Error"),
