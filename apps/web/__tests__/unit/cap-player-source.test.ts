@@ -940,7 +940,49 @@ describe("attachSource with hls.js", () => {
 		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
 		expect(hls.currentLevel).toBe(-1);
 		void video.play();
+		expect(hls.currentLevel).toBe(-1);
+		video.dispatchEvent(new Event("timeupdate"));
 		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("steps up only once a frame is on screen where the browser can say so", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+		let frame: (() => void) | null = null;
+		Object.assign(video, {
+			requestVideoFrameCallback: (callback: () => void) => {
+				frame = callback;
+				return 1;
+			},
+		});
+
+		attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect(hls.currentLevel).toBe(-1);
+		(frame as (() => void) | null)?.();
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("does not step up after it has stopped", async () => {
+		macSafari();
+		const video = new FakeVideo(true);
+
+		const { stop } = attach(video, { hls: HLS });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", { frag: { type: "main", level: 0, duration: 4 } });
+		void video.play();
+		stop();
+		video.dispatchEvent(new Event("timeupdate"));
+
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("stays low at play when the first segment shows a slow line", async () => {

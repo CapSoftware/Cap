@@ -193,9 +193,11 @@ export const warmSource = (source: CapPlayerSource) => {
 	if (mode === "mse") void loadHls().catch(() => undefined);
 };
 
+const connectionHint = () =>
+	(navigator as Navigator & { connection?: ConnectionHint }).connection;
+
 export const startingEstimate = () => {
-	const connection = (navigator as Navigator & { connection?: ConnectionHint })
-		.connection;
+	const connection = connectionHint();
 	if (!connection) return UNHINTED_BITS_PER_SECOND;
 	if (connection.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
 	const megabits = connection?.downlink ?? 0;
@@ -589,8 +591,32 @@ export const attachSource = (
 			// when playback starts, and after hls.js's own seek to a start time.
 			let sharper = AUTO_LEVEL;
 			let swappedTo = AUTO_LEVEL;
+			// Without a connection hint every line starts low. Safari draws its
+			// first frame about 300 ms after play, and a switch made at play
+			// flushed the held segment first, so the first frame waited for the
+			// sharper one (about 200 ms later on a fast line). There the switch
+			// waits until a frame is on screen.
+			let framed = connectionHint() !== undefined;
+			let watchingFrame = false;
+			let destroyed = false;
+			const onFirstFrame = () => {
+				video.removeEventListener("timeupdate", onFirstFrame);
+				if (destroyed || framed) return;
+				framed = true;
+				switchWhenPlaying();
+			};
+			const watchFirstFrame = () => {
+				if (framed || watchingFrame) return;
+				watchingFrame = true;
+				if ("requestVideoFrameCallback" in video) {
+					video.requestVideoFrameCallback(onFirstFrame);
+				} else {
+					video.addEventListener("timeupdate", onFirstFrame);
+				}
+			};
 			const switchWhenPlaying = () => {
 				if (sharper === AUTO_LEVEL || !playRequested || startPending) return;
+				if (!framed) return;
 				const level = sharper;
 				sharper = AUTO_LEVEL;
 				if (picked !== AUTO_LEVEL) return;
@@ -602,6 +628,7 @@ export const attachSource = (
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
 				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
 				else hls.nextLevel = picked;
+				watchFirstFrame();
 				switchWhenPlaying();
 			};
 			// hls.js seeks to the start time itself. The time stays pending
@@ -612,6 +639,8 @@ export const attachSource = (
 				switchWhenPlaying();
 			};
 			const destroy = () => {
+				destroyed = true;
+				video.removeEventListener("timeupdate", onFirstFrame);
 				hlsSeeks = false;
 				video.removeEventListener("play", bufferFreely);
 				video.removeEventListener("seeked", reachedStart);
