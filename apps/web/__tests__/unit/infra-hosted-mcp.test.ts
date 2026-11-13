@@ -230,14 +230,20 @@ async function callTool(
 		content: { text: string }[];
 		isError?: boolean;
 	};
-	const text = result.content[0]?.text ?? "null";
-	let body: Record<string, unknown> & { error?: Record<string, unknown> };
+	return {
+		raw,
+		isError: result.isError === true,
+		body: parseToolText(result.content[0]?.text ?? "null"),
+	};
+}
+
+// The SDK answers a call its schema refuses with plain text, not JSON.
+function parseToolText(text: string) {
 	try {
-		body = JSON.parse(text);
+		return JSON.parse(text);
 	} catch {
-		body = { text };
+		return { text };
 	}
-	return { raw, isError: result.isError === true, body };
 }
 
 describe("hosted Cap Infra MCP auth", () => {
