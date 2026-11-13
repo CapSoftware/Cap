@@ -12,7 +12,7 @@ import { CapPlayer } from "@/components/cap-player/CapPlayer";
 import { DEVELOPER_VIDEO_REPORT_EMAIL } from "@/lib/developer-video-takedown";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
-import { formatBytes, formatDuration } from "@/lib/infra-usage";
+import { formatBytes, formatDurationOrDash } from "@/lib/infra-usage";
 import {
 	type InfraVideoDetail,
 	infraVideoDisplayState,
@@ -33,6 +33,7 @@ import {
 } from "../../../_components/ui";
 import { useLocalUpload } from "../../../_components/uploads";
 import { VideoStatus } from "../../../_components/video-status";
+import { EmbedOptions } from "./embed-options";
 
 const createdFormat = new Intl.DateTimeFormat("en-US", {
 	month: "short",
@@ -86,6 +87,7 @@ function Player({ video }: { video: InfraVideoDetail }) {
 				source={source}
 				title={video.name}
 				poster={video.posterUrl ?? undefined}
+				captions={video.captions}
 				aspectRatio={
 					video.width && video.height
 						? `${video.width} / ${video.height}`
@@ -186,7 +188,7 @@ export function VideoClient({
 		</Button>
 	);
 	const playable = video.hlsUrl !== null || video.mp4Url !== null;
-	const duration = formatDuration(video.duration);
+	const duration = formatDurationOrDash(video.duration);
 	const size = formatBytes(video.storedBytes);
 	const links = [
 		{ label: "HLS", value: video.hlsUrl },
@@ -339,11 +341,11 @@ export function VideoClient({
 				</div>
 
 				<dl className={clsx("m-0 border-t", RULE)}>
-					{duration && <Fact label="Duration">{duration}</Fact>}
+					<Fact label="Duration">{duration}</Fact>
 					{size && (
 						<Fact
 							label="Stored size"
-							note="The original file plus every encoded size. Storage is billed by the minute, not by size."
+							note="Includes the original and every rendition. Storage is billed by minutes, not bytes."
 						>
 							{size}
 						</Fact>
@@ -353,6 +355,14 @@ export function VideoClient({
 							{video.width}×{video.height}
 						</Fact>
 					) : null}
+					{video.captions.length > 0 && (
+						<Fact
+							label="Captions"
+							note="Shown in the hosted player and the embed. Add captions=1 to the embed link to turn them on from the start."
+						>
+							{video.captions.map((caption) => caption.label).join(", ")}
+						</Fact>
+					)}
 					<Fact label="Uploaded">
 						{createdFormat.format(new Date(video.createdAt))}
 					</Fact>
@@ -372,7 +382,11 @@ export function VideoClient({
 					description="A hosted player for this video. Send the link to a viewer, or paste the embed code into a page."
 				>
 					<KeyRow label="Share link" value={video.shareUrl} />
-					<KeyRow label="Embed code" value={video.embedCode} />
+					<EmbedOptions
+						embedUrl={`${video.shareUrl}/embed`}
+						video={video}
+						hasCaptions={video.captions.length > 0}
+					/>
 				</Block>
 			)}
 

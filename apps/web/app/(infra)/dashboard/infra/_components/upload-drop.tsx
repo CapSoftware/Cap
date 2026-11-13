@@ -4,10 +4,14 @@ import clsx from "clsx";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { infraAppPath } from "@/lib/infra-routes";
+import {
+	INFRA_SUPPORTED_VIDEO_FORMATS,
+	INFRA_VIDEO_FILE_ACCEPT,
+} from "@/lib/infra-video-formats";
 import { Button, LIT, MONO, TEXT_LINK } from "./ui";
 import { useUploads } from "./uploads";
 
-export function UploadDrop() {
+export function UploadDrop({ creditsLink = true }: { creditsLink?: boolean }) {
 	const { appId, active, waiting, failures, add, cancel } = useUploads();
 	const input = useRef<HTMLInputElement>(null);
 	const [over, setOver] = useState(false);
@@ -35,7 +39,7 @@ export function UploadDrop() {
 			<input
 				ref={input}
 				type="file"
-				accept="video/*,.mkv"
+				accept={INFRA_VIDEO_FILE_ACCEPT}
 				multiple
 				className="sr-only"
 				tabIndex={-1}
@@ -101,8 +105,8 @@ export function UploadDrop() {
 						</p>
 						{failures.length === 0 && (
 							<p className="m-0 mt-1 text-[13px] leading-[1.5] text-[rgba(232,236,244,0.5)]">
-								MP4, MOV or WebM, one or several. Uploads are free, and stored
-								video is billed by the minute.
+								{INFRA_SUPPORTED_VIDEO_FORMATS}, one or several. Uploads are
+								free, and stored video is billed by the minute.
 							</p>
 						)}
 					</div>
@@ -132,7 +136,7 @@ export function UploadDrop() {
 							{failure.message}
 							{failure.skipped > 0 &&
 								` ${failure.skipped} more ${failure.skipped === 1 ? "file was" : "files were"} not started.`}{" "}
-							{failure.needsCredits && (
+							{creditsLink && failure.needsCredits && (
 								<Link
 									href={infraAppPath(appId, "billing")}
 									className={clsx(TEXT_LINK, "text-[#E8ECF4]")}

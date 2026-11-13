@@ -541,6 +541,109 @@ describe("developer video playback route", () => {
 		}
 	});
 
+	describe("choosing renditions", () => {
+		const stored = ladder(
+			variant("1080p", 4_573_338, "1920x1080"),
+			variant("720p", 2_501_452, "1280x720"),
+			variant("360p", 739_748, "640x360"),
+		);
+		const served = async (query: string) =>
+			(await play("master.m3u8", PLAYBACK_ID, asking(query))).text();
+
+		beforeEach(() => {
+			mocks.readText.mockResolvedValue(stored);
+		});
+
+		it("serves a master that lists only the picked rendition, with its audio", async () => {
+			const body = await served("?rendition=1080p");
+
+			expect(order(body)).toEqual(["1080p.m3u8"]);
+			expect(body).toContain(
+				'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="audio",URI="audio.m3u8"',
+			);
+			expect(body).toContain("RESOLUTION=1920x1080");
+		});
+
+		it("keeps renditions no taller than the cap", async () => {
+			expect(order(await served("?max=720"))).toEqual([
+				"720p.m3u8",
+				"360p.m3u8",
+			]);
+			expect(order(await served("?max=1080"))).toEqual([
+				"720p.m3u8",
+				"1080p.m3u8",
+				"360p.m3u8",
+			]);
+		});
+
+		it("keeps the smallest rendition when the cap is below every one", async () => {
+			expect(order(await served("?max=240"))).toEqual(["360p.m3u8"]);
+		});
+
+		it("carries a cap and a pick into the short form", async () => {
+			expect(
+				(await served("?max=720&segments=short"))
+					.split("\n")
+					.filter((line) => line.endsWith(".m3u8?segments=short")),
+			).toEqual(["720p.m3u8?segments=short", "360p.m3u8?segments=short"]);
+			expect(order(await served("?rendition=360p&max=720"))).toEqual([
+				"360p.m3u8",
+			]);
+		});
+
+		describe("on a constant quality ladder, where bandwidth does not rise with height", () => {
+			const uneven = ladder(
+				variant("2160p", 1_600_000, "3840x2160"),
+				variant("1080p", 800_000, "1920x1080"),
+				variant("720p", 1_900_000, "1280x720"),
+				variant("360p", 900_000, "640x360"),
+			);
+			const names = (body: string) => order(body).sort();
+
+			beforeEach(() => {
+				mocks.readText.mockResolvedValue(uneven);
+			});
+
+			it("caps by height, not bandwidth", async () => {
+				expect(names(await served("?max=1080"))).toEqual([
+					"1080p.m3u8",
+					"360p.m3u8",
+					"720p.m3u8",
+				]);
+				expect(names(await served("?max=720"))).toEqual([
+					"360p.m3u8",
+					"720p.m3u8",
+				]);
+			});
+
+			it("falls back to the shortest rendition, not the cheapest", async () => {
+				expect(order(await served("?max=240"))).toEqual(["360p.m3u8"]);
+			});
+
+			it("picks a rendition by its name whatever its bandwidth", async () => {
+				expect(order(await served("?rendition=1080p"))).toEqual(["1080p.m3u8"]);
+				expect(names(await served("?rendition=2160p&max=1080"))).toEqual(
+					names(await served("?max=1080")),
+				);
+			});
+		});
+
+		it.each([
+			"?rendition=480p",
+			"?rendition=audio",
+			"?rendition=../1080p",
+			"?rendition=1080p.m3u8",
+			"?rendition=1080p&rendition=720p",
+			"?max=720p",
+			"?max=-1",
+			"?max=abc",
+			"?max=720&max=360",
+			"?rendition=%0A%23EXT-X-ENDLIST",
+		])("leaves the master as it serves it for %s", async (query) => {
+			expect(await served(query)).toBe(await served(""));
+		});
+	});
+
 	it("redirects a segment listed by file name to the URL the playlist signs", async () => {
 		mocks.readText.mockResolvedValue(storedRendition(16));
 
@@ -727,6 +830,99 @@ describe("developer video playback route", () => {
 
 		expect(response.status).toBe(502);
 		expect(response.headers.get("cache-control")).toBe("no-store");
+	});
+
+	describe("captions", () => {
+		const CAPTIONS_KEY = "developer/app-1/video-1/captions/en.vtt";
+		const vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello there\n";
+
+		beforeEach(() => {
+			mocks.readText.mockImplementation(async (key: string) =>
+				key === CAPTIONS_KEY ? vtt : null,
+			);
+		});
+
+		it("serves the WebVTT file from storage to any origin with the playlists' cache", async () => {
+			const response = await play("captions-en.vtt");
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(vtt);
+			expect(response.headers.get("content-type")).toBe(
+				"text/vtt; charset=utf-8",
+			);
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
+			expect(response.headers.get("location")).toBeNull();
+			expect(mocks.readText).toHaveBeenCalledWith(CAPTIONS_KEY);
+		});
+
+		it("signs no storage URL for captions", async () => {
+			await play("captions-en.vtt");
+
+			expect(mocks.sign).not.toHaveBeenCalled();
+		});
+
+		it("reads the file of a language with a region and of an unreported language", async () => {
+			await play("captions-pt-br.vtt");
+			await play("captions-und.vtt");
+
+			expect(mocks.readText.mock.calls.map(([key]) => key)).toEqual([
+				"developer/app-1/video-1/captions/pt-br.vtt",
+				"developer/app-1/video-1/captions/und.vtt",
+			]);
+		});
+
+		it("answers 404 without caching when the video has no captions in that language", async () => {
+			const response = await play("captions-fr.vtt");
+
+			expect(response.status).toBe(404);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+		});
+
+		it("answers 404 for captions of a deleted video", async () => {
+			mocks.store.video = null;
+
+			expect((await play("captions-en.vtt")).status).toBe(404);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
+		it("answers 410 for captions of a video that was taken down", async () => {
+			mocks.store.video = ready({
+				metadata: {
+					__capTakedown: { at: "2026-11-13T07:00:00.000Z", metadata: null },
+				},
+			});
+
+			const response = await play("captions-en.vtt");
+
+			expect(response.status).toBe(410);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
+		it("refuses captions of a paused app", async () => {
+			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+
+			expect((await play("captions-en.vtt")).status).toBe(402);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			"captions-EN.vtt",
+			"captions-.vtt",
+			"captions-en",
+			"captions-e.vtt",
+			"captions-en-.vtt",
+			"captions-en/../x.vtt",
+			"captions-en.vtt.bak",
+			"en.vtt",
+			"captions-english-language.vtt",
+		])("answers 404 for the captions file name %s", async (file) => {
+			expect((await play(file)).status).toBe(404);
+			expect(mocks.readText).not.toHaveBeenCalled();
+		});
 	});
 
 	it("answers preflight and HEAD requests", async () => {

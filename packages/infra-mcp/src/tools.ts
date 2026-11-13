@@ -6,6 +6,7 @@ import { inspectFile, storageTimeoutMs } from "./files";
 import { createHostedUploadTools } from "./hosted-upload";
 import { asRecord, confirmed, dataOf, listOf, storagePut } from "./http";
 import {
+	captionsNext,
 	page,
 	transactionRow,
 	transcriptView,
@@ -303,7 +304,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_upload",
 			title: "Upload a video",
 			description:
-				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free, and stored video is billed daily by its length and resolution tier until it is deleted. Pass videoId to retry a failed upload into the same video.",
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Pass videoId to retry a failed upload into the same video.",
 			kind: "write",
 			input: {
 				path: z
@@ -497,7 +498,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_delete",
 			title: "Delete a video",
 			description:
-				"Delete a video and its files for good. This cannot be undone, breaks its playback, share and embed links, and stops its daily storage charge.",
+				"Delete a video and its files for good. This cannot be undone, breaks its playback, share and embed links, and stops its daily storage charge. The first month, charged when it became ready, is not given back.",
 			kind: "delete",
 			input: { videoId, userId: userScope },
 			run: async (args, call) => {
@@ -564,12 +565,15 @@ export function createTools(deps: ToolDeps): Tool[] {
 					(source) => source !== undefined,
 				);
 				if (sources.length !== 1) {
-					throw new LocalError(
+					throw new ApiError(
+						400,
 						"invalid_source",
 						local
 							? "Send exactly one of url, path or videoId"
 							: "Send exactly one of url or videoId",
-						null,
+						local
+							? "Use url for a public audio or video link, path for a file on this machine, or videoId for a ready video in this app. Send only one of them."
+							: "Use url for a public audio or video link, or videoId for a ready video in this app. Send only one of them.",
 					);
 				}
 				const headers =
@@ -679,6 +683,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					...transcript(found, true),
 					...(args.words ? { words: found.words ?? null } : {}),
 					...(args.segments ? { segments: found.segments ?? null } : {}),
+					...captionsNext(found),
 				};
 			},
 		}),
@@ -720,6 +725,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 						? { id: args.transcriptId, status: "unknown" }
 						: transcript(last)),
 					...waitOutcome(outcome, "transcripts_wait"),
+					...(outcome.settled && last !== null ? captionsNext(last) : {}),
 					...(last?.status === "uploading"
 						? {
 								next: "This transcript never received its file. Remove it with transcripts_delete, then create it again.",
@@ -749,6 +755,11 @@ export function createTools(deps: ToolDeps): Tool[] {
 					...(found.status === "error" && found.error !== null
 						? { error: asRecord(found.error) }
 						: {}),
+					...(found.status === "complete" || found.status === "error"
+						? {}
+						: {
+								next: "The transcript is not complete yet, so there is no text. Call transcripts_wait with this id, then transcripts_text again.",
+							}),
 				};
 			},
 		}),
@@ -823,6 +834,12 @@ export function createTools(deps: ToolDeps): Tool[] {
 					standing === "paused";
 				return {
 					...usage,
+					...(typeof usage.totalDurationMinutes === "number"
+						? {
+								totalDurationMinutes:
+									Math.round(usage.totalDurationMinutes * 100) / 100,
+							}
+						: {}),
 					...(needsCredit ? { addCreditAt: config.consoleUrl } : {}),
 				};
 			},

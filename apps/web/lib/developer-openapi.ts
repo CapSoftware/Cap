@@ -6,8 +6,11 @@ import {
 } from "@/lib/developer-pricing";
 import {
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
+	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_RATE_LIMIT_WINDOW_SECONDS,
+	DEVELOPER_TRANSCRIPT_POLL_SECONDS,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+	DEVELOPER_VIDEO_STATUS_POLL_SECONDS,
 } from "@/lib/developer-rate-limits";
 import {
 	TRANSCRIPT_FAILURE_CODES,
@@ -16,6 +19,7 @@ import {
 } from "@/lib/developer-transcript-errors";
 import {
 	MAX_WEBHOOK_ENDPOINTS_PER_APP,
+	READY_EVENT_MAX_WAIT_MS,
 	WEBHOOK_DISABLE_AFTER_FAILURES,
 	WEBHOOK_EVENT_TYPES,
 	WEBHOOK_MAX_ATTEMPTS,
@@ -380,7 +384,7 @@ const errorSchema = {
 const PLAYER_PAGE_DESCRIPTION =
 	"Hosted player page for the video, built from its playbackId. Public, needs no API key and works before the video is ready. Takes the query parameter t (seconds) to start at a time.";
 const PLAYER_EMBED_DESCRIPTION =
-	"The hosted player with nothing around it, for an iframe on any origin. Built from the playbackId. Takes the query parameters autoplay=1, muted=1, loop=1, t (seconds to start at) and controls=0.";
+	"The hosted player with nothing around it, for an iframe on any origin. Built from the playbackId. Takes the query parameters autoplay=1, muted=1, loop=1, t (seconds to start at), controls=0 and captions=1 (captions on from the start, for a video that has them).";
 
 const playbackProperties = {
 	status: {
@@ -464,6 +468,23 @@ const developerVideoSchema = {
 	type: "object",
 	required: ["id", "appId", "name", "createdAt", "updatedAt"],
 	properties: {
+		captions: {
+			type: "array",
+			description:
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its url can briefly answer 404. Returned by Get Video and List Videos, not in webhook payloads.",
+			items: {
+				type: "object",
+				required: ["language", "url"],
+				properties: {
+					language: {
+						type: "string",
+						description:
+							"Language code of the captions, or und when it is not known.",
+					},
+					url: { type: "string", description: "The WebVTT file." },
+				},
+			},
+		},
 		id: { type: "string", description: "Developer video ID." },
 		appId: { type: "string", description: "Developer app that owns it." },
 		externalUserId: {
@@ -532,22 +553,24 @@ const developerVideoSchema = {
 export const developerOpenApiSpec = (baseUrl: string) => ({
 	openapi: "3.1.0",
 	info: {
-		title: "Cap Developer API",
+		title: "Cap Infra API",
 		version: "1.0.0",
 		summary: "Host video in your product and turn audio or video into text.",
 		description: [
-			"The Cap Developer API does two things for your product. It hosts video: upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4 or with the hosted player. It turns speech into text: send an audio or video file and get a transcript back, with timings.",
+			"The Cap Infra API does two things for your product. It hosts video: upload a file, Cap encodes it, and you play it back as adaptive HLS or MP4 or with the hosted player. It turns speech into text: send an audio or video file and get a transcript back, with timings.",
 			"",
 			"Use the REST operations (secret `csk_` key, server-side only) to create uploads, list, inspect and delete videos, transcribe audio and video, and read credit usage.",
 			"To upload a video, call createUpload from your server. It creates the video and returns an upload token (`cut_`) for that one video. Send the token from the browser as the Bearer credential of the SDK operations: initiateSdkUpload, presignSdkUploadPart for up to 50 parts at a time, then completeSdkUpload. If the token expires before the upload completes, renewUploadToken returns a new one for the same video and the upload continues with the same uploadId.",
 			"A public `cpk_` key cannot create or upload videos. Only an upload token made with the secret key can.",
-			"To transcribe a file at a public URL, call createTranscript. To transcribe a file you hold, call createTranscriptUpload, PUT the file to the URL it returns, then call startTranscript. Poll getTranscript until its status is `complete` or `error`.",
+			`To transcribe a file at a public URL, call createTranscript. To transcribe a file you hold, call createTranscriptUpload, PUT the file to the URL it returns, then call startTranscript. Poll getTranscript every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until its status is \`complete\` or \`error\`.`,
+			"",
+			`After completeSdkUpload, poll getDeveloperVideoStatus every ${DEVELOPER_VIDEO_STATUS_POLL_SECONDS} seconds until its status is \`ready\` or \`errored\`. A short video is usually ready on the first check.`,
 			"",
 			"Create a developer app and its keys at https://cap.so/dashboard/infra. A step by step guide with browser, Node and Python examples is at https://cap.so/docs/api/get-started.",
 			"",
-			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress`. Retry 5xx with backoff.",
+			"Every error is a JSON object with an `error` string and a stable `code`, and usually a `hint` that says what to change. Validation errors (code `invalid_request`) add an `issues` array naming each failing field. A request body must be JSON sent with `Content-Type: application/json`: malformed JSON returns 400 `invalid_json` and any other content type returns 415 `unsupported_media_type`. A known path called with a method it does not support returns 405 `method_not_allowed` with an Allow header, and an unknown path returns 404 `not_found`. A 4xx response will not succeed if the same request is sent again, with two exceptions that say to wait and repeat it: 429, and 409 with code `completion_in_progress` from complete. The same 409 from abort means the upload is being completed: do not repeat the abort. Retry 5xx with backoff.",
 			"",
-			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
+			`A secret key is limited to ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests per minute across the REST operations, all the keys of one account together to ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE}, and each upload token to ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} requests per minute across the SDK operations. Responses to an accepted key or token carry X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset, and a 429 also carries Retry-After. Remaining and Reset are what the server that answered has counted, so they are a guide and Remaining can read higher than what is left. A 429 is authoritative: wait for its Retry-After seconds, at most ${DEVELOPER_RATE_LIMIT_WINDOW_SECONDS}, then retry.`,
 			"",
 			"The REST operations take a secret key and send no CORS headers, so a page cannot call them. Call them from your server. The SDK operations and the playback URLs can be called from any origin.",
 			"",
@@ -597,6 +620,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			"video.ready",
 			"A video is ready to play",
 			ref("DeveloperVideo"),
+			`Sent once every playback URL is ready, so hlsUrl is set unless HLS failed. An output still encoding ${READY_EVENT_MAX_WAIT_MS / 60_000} minutes after the video could first be played is left out, and Get Video returns it once it is ready. ${videoEventDescription("video.ready")}`,
 		),
 		"video.errored": webhookDelivery(
 			"video.errored",
@@ -697,8 +721,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getDeveloperVideoStatus",
 				summary: "Get video status",
-				description:
-					"Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.",
+				description: `Returns the processing status and, once ready, the playback URLs, with dimensions, duration and transcription state. Poll this every ${DEVELOPER_VIDEO_STATUS_POLL_SECONDS} seconds after completeSdkUpload. A video can be ready while hlsUrl is still null, so a player that wants HLS keeps polling until hlsUrl is set. Send userId to return the status only when the video was created with that userId.`,
 				tags: ["Videos"],
 				security: secretAuth,
 				parameters: [videoIdParam, ...videoUserScopeParams],
@@ -761,8 +784,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			post: {
 				operationId: "createTranscript",
 				summary: "Transcribe a URL",
-				description:
-					"Creates a transcript from a public audio or video URL, or from a video the app already stores, and starts it. Send exactly one of url or videoId. The URL must use http or https on the default port and resolve to a public address, and the file must finish downloading within 15 minutes. With videoId the video must belong to this app, not be deleted and be ready: Cap reads its stored MP4 directly, so nothing is downloaded and the URL size limit does not apply. An unknown or deleted video returns 404 video_not_found, and one that is not ready returns 409 video_not_ready. A video transcript costs the transcript price only, $0.10 per audio hour. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A stored video is held for its known length. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every few seconds until status is complete or error. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header. A field the request does not know returns 400 with code invalid_request.",
+				description: `Creates a transcript from a public audio or video URL, or from a video the app already stores, and starts it. Send exactly one of url or videoId. The URL must use http or https on the default port and resolve to a public address, and the file must finish downloading within 15 minutes. With videoId the video must belong to this app, not be deleted and be ready: Cap reads its stored MP4 directly, so nothing is downloaded and the URL size limit does not apply. An unknown or deleted video returns 404 video_not_found, and one that is not ready returns 409 video_not_ready. A video transcript costs the transcript price only, $0.10 per audio hour. Requires an available credit balance of at least 1,000 micro-credits. Starting holds up to the cost of four hours ($0.40) until the audio is measured, then the hold drops to the real cost. A stored video is held for its known length. A transcript whose hold the available balance cannot cover ends with insufficient_credits before the file is downloaded. Poll getTranscript every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until status is complete or error. An app can have 20 transcripts queued or processing at once: another is refused with 429 too_many_transcripts and a Retry-After header. A field the request does not know returns 400 with code invalid_request.`,
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [idempotencyKeyParam],
@@ -833,8 +855,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			get: {
 				operationId: "getTranscript",
 				summary: "Get a transcript",
-				description:
-					"Returns the transcript with its status and, once complete, its text. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.",
+				description: `Returns the transcript with its status and, once complete, its text. Poll it every ${DEVELOPER_TRANSCRIPT_POLL_SECONDS} seconds until status is complete or error. Audio with no speech is billed for its length and completes with an empty text and a wordCount of 0. A transcript that ends in error is never charged. Add include=words or include=segments for timings in seconds.`,
 				tags: ["Transcripts"],
 				security: secretAuth,
 				parameters: [
@@ -920,7 +941,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createUpload",
 				summary: "Create an upload",
 				description:
-					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. Send an Idempotency-Key so a retried request returns the same video with a new token instead of creating a second one. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
+					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that pays for the first month of storage of every upload still encoding and covers 7 days of storage for the videos past their first month, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. Send an Idempotency-Key so a retried request returns the same video with a new token instead of creating a second one. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
 				tags: ["Uploads"],
 				security: secretAuth,
 				parameters: [uploadIdempotencyKeyParam],
@@ -1133,7 +1154,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB or more than the token's maxBytes: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must pay for the first month of storage of this video and of every other upload still encoding, and cover 7 days of storage for the videos past their first month, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB or more than the token's maxBytes: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
@@ -1150,7 +1171,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "abortSdkUpload",
 				summary: "Abort a multipart upload",
 				description:
-					"Cancels an unfinished upload and discards its parts. Abort is safe to repeat: when no open upload matches the uploadId, for example because it was already aborted, it answers 200 with success true again.",
+					"Cancels an unfinished upload and discards its parts. Abort is safe to repeat: when no open upload matches the uploadId, for example because it was already aborted, it answers 200 with success true again. Returns 409 with code completion_in_progress, and no Retry-After, when the upload is being completed: do not repeat the abort. From your server, wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("AbortUploadRequest"),
@@ -1318,7 +1339,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							words: {
 								type: ["array", "null"],
 								description:
-									"Each word with its start and end in seconds. Timings are in steps of 0.08 seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
+									"Each word with its start and end in seconds. A start is usually within 0.1 seconds, and an end can run up to 0.4 seconds late, often to the start of the next word.",
 								items: {
 									type: "object",
 									required: ["text", "start", "end"],
@@ -1451,7 +1472,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					type: {
 						type: "string",
 						description:
-							"The kind of row: topup, topup_failed, topup_pending, pro_credit, storage_daily, transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
 					},
 					description: {
 						type: "string",
@@ -1605,7 +1626,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a daily storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],
@@ -1641,7 +1662,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							requiredMicroCredits: {
 								type: "integer",
 								description:
-									"Balance needed to upload: 7 days of storage for everything stored.",
+									"Balance needed to upload: the first month of storage of every upload still encoding, plus 7 days of storage for the videos past their first month.",
 							},
 							shortfallMicroCredits: {
 								type: "integer",
@@ -1655,6 +1676,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						type: "object",
 						required: [
 							"minutesByTier",
+							"dailyChargeMinutesByTier",
 							"dailyMicroCredits",
 							"monthlyMicroCredits",
 						],
@@ -1670,10 +1692,21 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 									"2160p": { type: "number" },
 								},
 							},
+							dailyChargeMinutesByTier: {
+								type: "object",
+								description:
+									"The part of minutesByTier the daily charge covers: videos past their first month. A video in its first month is left out, because its month was charged when it became ready.",
+								required: ["1080p", "1440p", "2160p"],
+								properties: {
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
 							dailyMicroCredits: {
 								type: "integer",
 								description:
-									"What one day of storage costs at what is stored now.",
+									"What one day of storage costs for the videos past their first month.",
 							},
 							monthlyMicroCredits: {
 								type: "integer",
@@ -1699,7 +1732,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							storageDollarsPer1000MinutesPerMonth: {
 								type: "object",
 								description:
-									"Dollars to store 1,000 minutes for a 30 day month, by resolution tier. Storage is charged daily.",
+									"Dollars to store 1,000 minutes for a 30 day month, by resolution tier. Each video is charged its first month when it becomes ready, then daily.",
 								required: [...INFRA_RESOLUTION_TIERS],
 								properties: Object.fromEntries(
 									INFRA_RESOLUTION_TIERS.map((tier) => [
@@ -1881,7 +1914,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"video/webm",
 							"video/quicktime",
 							"video/x-matroska",
-							"video/avi",
 							"application/octet-stream",
 						],
 						default: "video/mp4",
@@ -2179,7 +2211,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			UploadPaymentRequired: json(
 				ref("UploadPaymentRequired"),
-				"The app is out of credit or its balance does not cover 7 days of storage. The body says how much is needed.",
+				"The app is out of credit or its balance does not cover the storage the upload needs. The body says how much is needed.",
 			),
 			Forbidden: json(
 				ref("Error"),
@@ -2203,7 +2235,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			CompletionInProgress: json(
 				ref("Error"),
-				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
+				"Another request is completing this upload (code completion_in_progress). On complete it carries a Retry-After header: wait for those seconds, then send the same request again, and repeat while it answers this way, which can last up to 15 minutes if an earlier request was cut off. Do not abort or delete. On abort it carries no Retry-After and means the upload is being completed: do not repeat the abort; wait until GET /api/developer/v1/videos/{id} no longer shows the video as processing, then delete the video if it is not wanted. On complete, code upload_removed means the upload was removed after a day unrecorded: create a new upload and upload again. On abort, code upload_already_completed means the upload completed and the token no longer works.",
 			),
 			UploadCompleted: json(
 				ref("Error"),
@@ -2212,7 +2244,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			RateLimited: {
 				...json(
 					ref("Error"),
-					`More requests in a minute than the credential allows: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token (code rate_limited).`,
+					`More requests in a minute than the credential allows: ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} for a secret key, ${DEVELOPER_OWNER_REQUESTS_PER_MINUTE} for all the keys of one account, ${DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE} for an upload token (code rate_limited).`,
 				),
 				headers: {
 					...rateLimitHeaders,

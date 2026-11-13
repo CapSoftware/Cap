@@ -75,6 +75,14 @@ export function formatCredits(microCredits: number) {
 	return `$${exactDollars(wholeMicroCredits(microCredits, Math.floor), true)}`;
 }
 
+export function formatBalanceCents(microCredits: number) {
+	const whole = wholeMicroCredits(microCredits, Math.floor);
+	const cents = Math.floor(whole / MICRO_CREDITS_PER_CENT);
+	if (whole > 0 && cents === 0) return "<$0.01";
+	const dollars = Math.floor(cents / 100).toLocaleString("en-US");
+	return `$${dollars}.${String(cents % 100).padStart(2, "0")}`;
+}
+
 export function formatNeed(microCredits: number) {
 	return `$${exactDollars(wholeMicroCredits(microCredits, Math.ceil), true)}`;
 }
@@ -123,4 +131,23 @@ export function formatDuration(seconds: number | null | undefined) {
 	return hours > 0
 		? `${hours}:${pad(mins)}:${pad(secs)}`
 		: `${mins}:${pad(secs)}`;
+}
+
+export const NO_DURATION = "–";
+
+export function formatDurationOrDash(seconds: number | null | undefined) {
+	return formatDuration(seconds) ?? NO_DURATION;
+}
+
+export function formatAudioLength(seconds: number) {
+	const total = Math.max(0, Number(seconds) || 0);
+	const plural = (value: number, unit: string) =>
+		`${value.toLocaleString("en-US", { maximumFractionDigits: value < 10 ? 2 : 0 })} audio ${unit}${value === 1 ? "" : "s"}`;
+	if (total === 0) return plural(0, "minute");
+	if (Math.round(total) < 60) return plural(Math.round(total), "second");
+	if (total < 3600) {
+		const minutes = Math.round((total / 60) * 10) / 10;
+		return plural(minutes, "minute");
+	}
+	return plural(total / 3600, "hour");
 }

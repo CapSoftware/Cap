@@ -18,8 +18,72 @@ export const CONTENT_TYPES: Record<string, string> = {
 	".webm": "video/webm",
 	".mov": "video/quicktime",
 	".mkv": "video/x-matroska",
-	".avi": "video/avi",
 };
+
+export const SUPPORTED_VIDEO_FORMATS =
+	"MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video";
+
+const UNSUPPORTED_VIDEO_EXTENSIONS = new Set([".avi"]);
+
+export const UNREADABLE_VIDEO_REASON = `This file could not be read as a video. Upload ${SUPPORTED_VIDEO_FORMATS}.`;
+
+const NON_VIDEO_CONTENT_TYPE =
+	/^(text|image|audio)\/|^application\/(json|pdf)$/;
+
+// Only names that are never a video container. Browsers send an empty type or
+// application/octet-stream for real MKV and MOV files, and an unknown
+// extension may still be a video, so none of those is refused.
+const NON_VIDEO_EXTENSIONS = new Set([
+	".txt",
+	".md",
+	".csv",
+	".json",
+	".xml",
+	".html",
+	".htm",
+	".pdf",
+	".doc",
+	".docx",
+	".zip",
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".heic",
+	".svg",
+	".bmp",
+	".tif",
+	".tiff",
+	".mp3",
+	".wav",
+	".m4a",
+	".aac",
+	".flac",
+	".opus",
+	".srt",
+	".vtt",
+]);
+
+export function isNonVideoContentType(contentType: string | undefined) {
+	const essence = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+	return NON_VIDEO_CONTENT_TYPE.test(essence);
+}
+
+export const isNonVideoFileName = (fileName: string | undefined) =>
+	fileName !== undefined &&
+	NON_VIDEO_EXTENSIONS.has(extname(fileName).toLowerCase());
+
+export function refuseUnsupportedVideo(file: LocalFile) {
+	if (!UNSUPPORTED_VIDEO_EXTENSIONS.has(extname(file.fileName).toLowerCase())) {
+		return;
+	}
+	throw new LocalError(
+		"unsupported_format",
+		`${file.fileName} is not a format Cap Infra can play`,
+		`Cap Infra accepts ${SUPPORTED_VIDEO_FORMATS}. Export it as an MP4 and upload that.`,
+	);
+}
 
 const GIGABYTE = 1e9;
 

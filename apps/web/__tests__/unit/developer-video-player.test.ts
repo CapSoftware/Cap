@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	standing: vi.fn(),
 	redrive: vi.fn(),
+	captions: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -27,6 +28,9 @@ vi.mock("@/lib/infra-standing", () => ({
 }));
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
+}));
+vi.mock("@/lib/developer-video-captions", () => ({
+	developerVideoCaptionTracks: mocks.captions,
 }));
 
 const { loadDeveloperVideoPlayer } = await import(
@@ -54,6 +58,7 @@ beforeEach(() => {
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
 	mocks.redrive.mockResolvedValue(false);
+	mocks.captions.mockResolvedValue([]);
 });
 
 const MINUTE = 60_000;
@@ -123,8 +128,38 @@ describe("developer video player data", () => {
 			height: 1080,
 			source: { hls: `${BASE}/master.m3u8`, mp4: `${BASE}/video.mp4` },
 			poster: `${BASE}/poster.jpg`,
+			captions: null,
 		});
 		expect(mocks.standing).toHaveBeenCalledWith("app-1");
+	});
+
+	it("lists the captions of a video that has them", async () => {
+		const english = {
+			language: "en",
+			label: "English",
+			url: `${BASE}/captions-en.vtt`,
+		};
+		mocks.captions.mockResolvedValue([english]);
+
+		const player = await loadDeveloperVideoPlayer(PLAYBACK_ID);
+
+		expect(player).toMatchObject({ kind: "playing", captions: [english] });
+		expect(mocks.captions).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: "video-1",
+				appId: "app-1",
+				playbackId: PLAYBACK_ID,
+			}),
+		);
+	});
+
+	it("looks up no captions for a video that cannot play yet", async () => {
+		mocks.store.video = ready({ status: "processing", processing: null });
+
+		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+			kind: "processing",
+		});
+		expect(mocks.captions).not.toHaveBeenCalled();
 	});
 
 	it("plays the MP4 while the adaptive stream is still encoding", async () => {

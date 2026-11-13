@@ -42,6 +42,7 @@ export function developerVideo(
 		storedBytes: null,
 		errorReason: null,
 		processing: processingState(),
+		storagePaidUntil: null,
 		deletedAt: null,
 		filesDeletedAt: null,
 		createdAt: new Date("2026-11-01T00:00:00Z"),
@@ -55,6 +56,7 @@ export interface DeveloperVideoStore {
 	more?: DeveloperVideoFixture[];
 	appDeleted: boolean;
 	updates: Partial<DeveloperVideoFixture>[];
+	captionRows?: { videoId: string; language: string | null }[];
 }
 
 // MySQL compares the externalUserId column with utf8mb4_0900_ai_ci, which
@@ -157,8 +159,20 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 		return chain;
 	};
 
+	const selectDistinct = () => ({
+		from: () => ({
+			where: async (condition: Condition) => {
+				const { params } = dialect.sqlToQuery(condition);
+				return (store.captionRows ?? []).filter((row) =>
+					params.includes(row.videoId),
+				);
+			},
+		}),
+	});
+
 	const database = {
 		select,
+		selectDistinct,
 		update: () => ({
 			set: (updates: Partial<DeveloperVideoFixture>) => ({
 				where: async () => {
