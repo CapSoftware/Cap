@@ -6,12 +6,12 @@ vi.mock("@/lib/infra-access", () => ({
 
 const firstMonth = vi.hoisted(() => ({
 	atDelete: vi.fn(),
-	forDeletedVideos: vi.fn(),
+	forDeletedApp: vi.fn(),
 }));
 
 vi.mock("@/lib/infra-storage-minimum", () => ({
 	settleFirstMonthAtDelete: firstMonth.atDelete,
-	settleFirstMonthsForDeletedVideos: firstMonth.forDeletedVideos,
+	settleFirstMonthsForDeletedApp: firstMonth.forDeletedApp,
 }));
 
 vi.mock("@cap/database", () => {
@@ -266,9 +266,6 @@ describe("createDeveloperApp", () => {
 	});
 });
 
-const encodingVideos = (rows: { id: string }[]) =>
-	mockDb.where.mockReturnValueOnce(mockDb).mockResolvedValueOnce(rows as never);
-
 describe("deleteDeveloperApp", () => {
 	let deleteDeveloperApp: typeof import("@/actions/developers/delete-app").deleteDeveloperApp;
 
@@ -295,7 +292,6 @@ describe("deleteDeveloperApp", () => {
 	it("soft deletes by setting deletedAt", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		encodingVideos([]);
 		await deleteDeveloperApp("app-456");
 
 		expect(mockDb.update).toHaveBeenCalled();
@@ -307,19 +303,21 @@ describe("deleteDeveloperApp", () => {
 	it("returns success true", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		encodingVideos([]);
 		const result = await deleteDeveloperApp("app-456");
 		expect(result).toEqual({ success: true });
 	});
 
-	it("settles the first month of only the videos it deleted mid-encode, after the delete", async () => {
+	it("settles the first month of the videos this delete stamped, after the delete", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		encodingVideos([{ id: "video-encoding" }]);
 		await deleteDeveloperApp("app-456");
-		expect(firstMonth.forDeletedVideos).toHaveBeenCalledWith([
-			"video-encoding",
-		]);
+		const stamps = mockDb.set.mock.calls
+			.map(([values]) => (values as { deletedAt?: Date }).deletedAt)
+			.filter(Boolean);
+		expect(stamps).toHaveLength(2);
+		expect(stamps[0]?.getMilliseconds()).toBe(0);
+		expect(firstMonth.forDeletedApp).toHaveBeenCalledWith("app-456", stamps[0]);
+		expect(stamps[1]).toBe(stamps[0]);
 	});
 });
 

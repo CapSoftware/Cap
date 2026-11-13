@@ -313,10 +313,29 @@ export async function settleFirstMonthAtDelete(
 	}
 }
 
-export async function settleFirstMonthsForDeletedVideos(
-	videoIds: readonly string[],
+export async function settleFirstMonthsForDeletedApp(
+	appId: string,
+	deletedAt: Date,
 ) {
-	for (const videoId of videoIds) await settleFirstMonthAtDelete(videoId);
+	try {
+		const videos = await db()
+			.select({ id: developerVideos.id })
+			.from(developerVideos)
+			.where(
+				and(
+					eq(developerVideos.appId, appId),
+					eq(developerVideos.deletedAt, deletedAt),
+					eq(developerVideos.status, "processing"),
+					isNull(developerVideos.storagePaidUntil),
+				),
+			);
+		for (const video of videos) await settleFirstMonthAtDelete(video.id);
+	} catch (error) {
+		console.error("[infra-storage] First month charges failed at app delete", {
+			appId,
+			error,
+		});
+	}
 }
 
 export async function settleFirstMonthAtReady(

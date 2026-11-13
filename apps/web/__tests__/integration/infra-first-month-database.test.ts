@@ -63,7 +63,6 @@ const {
 	chargeMissedFirstMonths,
 	settleFirstMonthAtDelete,
 	settleFirstMonthAtReady,
-	settleFirstMonthsForDeletedVideos,
 	firstMonthShortfallsSince,
 	markFirstMonthShortfallsNotified,
 } = await import("@/lib/infra-storage-minimum");
@@ -828,7 +827,7 @@ describe.runIf(Boolean(databaseUrl))(
 				});
 
 				await deleteDeveloperApp(appId);
-				await settleFirstMonthsForDeletedVideos([encodingNow]);
+				await settleFirstMonthAtDelete(encodingNow);
 
 				const rows = await firstMonthRows(accountId);
 				expect(rows.map((row) => row.referenceId)).toEqual([encodingNow]);
