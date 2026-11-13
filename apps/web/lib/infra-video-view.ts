@@ -1,3 +1,5 @@
+import { embedAccentColor } from "./developer-video-params";
+
 export type InfraVideoState =
 	| "uploading"
 	| "processing"
@@ -186,9 +188,44 @@ const escapeAttribute = (value: string) =>
 		.replaceAll("<", "&lt;")
 		.replaceAll(">", "&gt;");
 
+export interface InfraEmbedOptions {
+	color: string | null;
+	controls: boolean;
+	autoplay: boolean;
+	captions: boolean;
+	qualityMenu: boolean;
+}
+
+export const DEFAULT_EMBED_OPTIONS: InfraEmbedOptions = {
+	color: null,
+	controls: true,
+	autoplay: false,
+	captions: false,
+	qualityMenu: true,
+};
+
+export function infraVideoEmbedUrl(
+	embedUrl: string,
+	options: InfraEmbedOptions = DEFAULT_EMBED_OPTIONS,
+): string {
+	const query = new URLSearchParams();
+	const color = embedAccentColor(options.color ?? undefined);
+	if (color) query.set("color", color.slice(1));
+	if (!options.controls) query.set("controls", "0");
+	if (options.autoplay) {
+		query.set("autoplay", "1");
+		query.set("muted", "1");
+	}
+	if (options.captions) query.set("captions", "1");
+	if (!options.qualityMenu) query.set("quality_menu", "0");
+	const search = query.toString();
+	return search ? `${embedUrl}?${search}` : embedUrl;
+}
+
 export function infraVideoEmbedCode(
 	embedUrl: string,
 	video: { name: string; width: number | null; height: number | null },
+	options: InfraEmbedOptions = DEFAULT_EMBED_OPTIONS,
 ): string {
 	const measured =
 		video.width !== null &&
@@ -196,7 +233,10 @@ export function infraVideoEmbedCode(
 		video.width > 0 &&
 		video.height > 0;
 	const shape = measured ? `${video.width} / ${video.height}` : "16 / 9";
-	return `<iframe src="${escapeAttribute(embedUrl)}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`;
+	const allow = options.autoplay
+		? "autoplay; fullscreen; picture-in-picture"
+		: "fullscreen; picture-in-picture";
+	return `<iframe src="${escapeAttribute(infraVideoEmbedUrl(embedUrl, options))}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="${allow}" allowfullscreen loading="lazy"></iframe>`;
 }
 
 export function toInfraVideoDetail(

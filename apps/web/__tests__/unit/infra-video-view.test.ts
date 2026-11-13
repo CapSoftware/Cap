@@ -13,6 +13,7 @@ import {
 	developerVideoPlaybackUrls,
 } from "@/lib/developer-video-api";
 import {
+	DEFAULT_EMBED_OPTIONS,
 	INFRA_VIDEO_DISPLAY_LABELS,
 	INFRA_VIDEO_FAILURE_FALLBACK,
 	INFRA_VIDEO_PAGE_MAX,
@@ -20,6 +21,7 @@ import {
 	infraRefreshDelayMs,
 	infraVideoDisplayState,
 	infraVideoEmbedCode,
+	infraVideoEmbedUrl,
 	infraVideoFailure,
 	infraVideoIsChanging,
 	infraVideoListLimit,
@@ -272,6 +274,65 @@ describe("console video payload", () => {
 			expect(
 				toInfraVideoDetail(ready, developerVideoPlaybackUrls(ready)),
 			).toMatchObject({ shareUrl: null, embedCode: null });
+		});
+
+		it("builds the snippet from the console's embed options", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+			const base = { ...DEFAULT_EMBED_OPTIONS };
+
+			expect(infraVideoEmbedCode(`${PAGE}/embed`, video, base)).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, video),
+			);
+			expect(infraVideoEmbedUrl(`${PAGE}/embed`, base)).toBe(`${PAGE}/embed`);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, {
+					color: "#F97316",
+					controls: false,
+					autoplay: true,
+					captions: true,
+					qualityMenu: false,
+				}),
+			).toBe(
+				`${PAGE}/embed?color=f97316&controls=0&autoplay=1&muted=1&captions=1&quality_menu=0`,
+			);
+			expect(
+				infraVideoEmbedUrl(`${PAGE}/embed`, { ...base, captions: true }),
+			).toBe(`${PAGE}/embed?captions=1`);
+		});
+
+		it("lets autoplay through the iframe only when the snippet autoplays", () => {
+			const video = { name: "Demo", width: 1920, height: 1080 };
+
+			expect(
+				infraVideoEmbedCode(`${PAGE}/embed`, video, {
+					...DEFAULT_EMBED_OPTIONS,
+					autoplay: true,
+				}),
+			).toContain('allow="autoplay; fullscreen; picture-in-picture"');
+			expect(infraVideoEmbedCode(`${PAGE}/embed`, video)).toContain(
+				'allow="fullscreen; picture-in-picture"',
+			);
+		});
+
+		it.each([
+			'red" onload="alert(1)',
+			"#12345g",
+			"3b82f6&autoplay=1",
+			"</iframe><script>alert(1)</script>",
+		])("leaves the hostile colour %j out of the snippet", (color) => {
+			const code = infraVideoEmbedCode(
+				`${PAGE}/embed`,
+				{ name: "Demo", width: 1920, height: 1080 },
+				{ ...DEFAULT_EMBED_OPTIONS, color },
+			);
+
+			expect(code).toBe(
+				infraVideoEmbedCode(`${PAGE}/embed`, {
+					name: "Demo",
+					width: 1920,
+					height: 1080,
+				}),
+			);
 		});
 
 		it("keeps a video name from breaking out of the title attribute", () => {
