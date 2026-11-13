@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeVideoFile } from "../../lib/media-probe";
+import { probeTrackSpans, probeVideoFile } from "../../lib/media-probe";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
 const PLAIN = readFileSync(join(FIXTURES_DIR, "test-bframes-64.mp4"));
@@ -127,6 +127,32 @@ describe.skipIf(!patched)("sample counts a file only declares", () => {
 		expect(result.metadata?.width).toBe(64);
 		expect(result.grownMb).toBeLessThan(80);
 		expect(result.ms).toBeLessThan(2000);
+	});
+
+	test("chunks of a shared-size track share what the file can hold", async () => {
+		const source = readFileSync(join(FIXTURES_DIR, "test-bframes-64-pcm.mov"));
+		const honest = await probeTrackSpans(
+			join(FIXTURES_DIR, "test-bframes-64-pcm.mov"),
+		);
+		expect(honest.audio).toBeCloseTo(1, 1);
+
+		// The audio track's tables come last in the file. Both chunk runs and
+		// the time table claim the largest possible count.
+		const data = Buffer.from(source);
+		const chunkTable = data.lastIndexOf("stsc", undefined, "latin1");
+		data.writeUInt32BE(MAX, chunkTable + 16);
+		data.writeUInt32BE(MAX, chunkTable + 28);
+		data.writeUInt32BE(MAX, data.lastIndexOf("stts", undefined, "latin1") + 12);
+		const path = join(dir, "pcm-max.mov");
+		writeFileSync(path, data);
+
+		const started = performance.now();
+		const spans = await probeTrackSpans(path);
+		expect(performance.now() - started).toBeLessThan(2000);
+		// 16-bit mono at 8 kHz: the whole file could not hold two seconds.
+		expect(spans.audio).not.toBeNull();
+		expect(spans.audio as number).toBeLessThan(2);
+		expect(spans.video).toBeCloseTo(1, 1);
 	});
 
 	test("a fragment run claiming more samples than a fragment can hold is refused at once", async () => {
