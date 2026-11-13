@@ -122,6 +122,17 @@ export async function createOrganization(formData: FormData) {
 		return true;
 	});
 	if (!created) {
+		const iconKey = orgValues.iconUrl;
+		if (iconKey) {
+			await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				yield* bucket.deleteObject(iconKey);
+			})
+				.pipe(runPromise)
+				.catch((error: unknown) => {
+					console.error("Error removing refused organization icon:", error);
+				});
+		}
 		return { success: false as const, error: ORGANIZATION_LIMIT_MESSAGE };
 	}
 
