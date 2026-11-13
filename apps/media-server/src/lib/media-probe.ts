@@ -119,8 +119,13 @@ async function assertSupportedCodecs(
 		throw new Error("Could not read the video codec of the source in time");
 	}
 	if (result.exitCode !== 0) {
-		if (unnamedVideo || isDecoderRejectedMessage(result.stderr)) {
+		if (isDecoderRejectedMessage(result.stderr)) {
 			throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+		}
+		// Anything else (a source that failed to fetch, a probe stopped at its
+		// deadline) says nothing about the format, so it can be asked again.
+		if (unnamedVideo) {
+			throw new Error("Could not read the video codec of the source");
 		}
 		return;
 	}

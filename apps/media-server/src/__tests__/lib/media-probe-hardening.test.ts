@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { maxEncodeSeconds } from "../../lib/media-common";
@@ -141,6 +141,29 @@ describe("probe input checks", () => {
 	test("an allowed codec the parser does not name is still accepted", async () => {
 		const metadata = await probeVideoFile(join(dir, "prores.mov"));
 		expect(metadata.width).toBe(128);
+	}, 30_000);
+});
+
+describe("a codec check that cannot run", () => {
+	test("leaves an allowed codec retryable instead of refusing it", async () => {
+		const savedPath = process.env.PATH;
+		const real = Bun.which("ffprobe");
+		const shim = join(dir, "failing-bin");
+		// An ffprobe that cannot read the stream list, as when the source
+		// fails to fetch.
+		await Bun.write(
+			join(shim, "ffprobe"),
+			`#!/bin/sh\ncase "$*" in *codec_type,codec_name*) echo "Server returned 5XX Server Error reply" >&2; exit 1 ;; esac\nexec "${real}" "$@"\n`,
+		);
+		await chmod(join(shim, "ffprobe"), 0o755);
+		process.env.PATH = `${shim}:${savedPath}`;
+		try {
+			const error = await probeError("prores.mov");
+			expect(error).toBeInstanceOf(Error);
+			expect(isUnreadableMediaInput(error)).toBe(false);
+		} finally {
+			process.env.PATH = savedPath;
+		}
 	}, 30_000);
 });
 
