@@ -701,6 +701,41 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((rows as { id: string }[]).map((row) => row.id)).toEqual([fresh]);
 		});
 
+		it("counts an unresolved payment of any age against the owner's ceiling until it resolves", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const first = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const second = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const processing = `pi_processing_${first.accountId}`;
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata, createdAt)
+				 VALUES (?, ?, 'topup_pending', 0, 30000, ?, 'auto_top_up_pending', '{"amountCents":60000}', UTC_TIMESTAMP() - INTERVAL 25 HOUR)`,
+				[id(), first.accountId, processing],
+			);
+			const before = fixture.created.length;
+
+			expect(await runAutoTopUp(second.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+			expect(fixture.created.length).toBe(before);
+
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup_failed', 0, 30000, ?, 'auto_top_up_failed', '{}')`,
+				[id(), first.accountId, processing],
+			);
+			expect((await runAutoTopUp(second.accountId)).state).toBe("succeeded");
+			expect(fixture.created.length - before).toBe(1);
+			warn.mockRestore();
+		});
+
 		it("keeps counting a charge whose answer was lost against the owner's ceiling", async () => {
 			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
 			const errors = vi.spyOn(console, "error").mockImplementation(() => {});
