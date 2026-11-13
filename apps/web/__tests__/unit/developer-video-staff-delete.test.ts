@@ -195,6 +195,21 @@ describe("staff delete", () => {
 		expect(mocks.store.video?.filesDeletedAt).toBeNull();
 	});
 
+	it("clears an earlier purge mark when the purge fails, so the cron retries soon", async () => {
+		mocks.store.video = {
+			...ready(),
+			deletedAt: new Date(),
+			filesDeletedAt: new Date(),
+		};
+		mocks.deleteObjects.mockRejectedValueOnce(new Error("storage down"));
+
+		const response = await admin({ video: PLAYBACK_ID, delete: true });
+
+		expect((await response.json()).data.filesPurged).toBe(false);
+		expect(mocks.store.video?.filesDeletedAt).toBeNull();
+		expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+	});
+
 	it.each([
 		["signed out", null, {}],
 		[

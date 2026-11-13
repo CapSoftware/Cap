@@ -108,7 +108,8 @@ export function developerVideoPurgePrefix(row: PurgeRow): string {
 // Purges one deleted video at once instead of waiting for the cron. It marks
 // the row the same way the cron does, so the late write pass above still
 // picks the video up again once the window has closed. A failure or a
-// deletion that outlasts the timeout leaves the row for the cron.
+// deletion that outlasts the timeout clears the mark an earlier purge left,
+// so the cron retries within minutes instead of at the late write pass.
 export async function purgeDeletedDeveloperVideoNow(
 	row: PurgeRow,
 ): Promise<boolean> {
@@ -121,7 +122,12 @@ export async function purgeDeletedDeveloperVideoNow(
 			perVideoMs: PURGE_NOW_TIMEOUT_MS,
 		},
 	);
-	return purged === 1;
+	if (purged === 1) return true;
+	await db()
+		.update(developerVideos)
+		.set({ filesDeletedAt: null })
+		.where(eq(developerVideos.id, row.id));
+	return false;
 }
 
 // A failed video is not billed, so its files are kept for a day and then
