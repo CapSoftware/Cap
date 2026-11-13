@@ -444,6 +444,50 @@ describe("developer transcripts API", () => {
 			expect(await response.json()).toMatchObject({ code });
 		});
 
+		it.each([
+			["creating from a URL", "/", { url: "https://media.example.com/a.mp3" }],
+			["starting an upload", "/tr-1/start", {}],
+		])(
+			"answers 429 with Retry-After when %s at the ceiling",
+			async (_label, path, body) => {
+				const atCeiling = {
+					ok: false,
+					status: 429,
+					code: "too_many_transcripts",
+					message: "This app already has 20 transcripts queued or processing",
+					hint: "Wait for one to finish, then send the request again.",
+				};
+				mocks.store.createTranscriptFromUrl.mockResolvedValue(atCeiling);
+				mocks.store.startTranscriptUpload.mockResolvedValue(atCeiling);
+
+				const response = await post(path, body, SECRET);
+
+				expect(response.status).toBe(429);
+				expect(response.headers.get("Retry-After")).toBe("15");
+				expect(await response.json()).toMatchObject({
+					error: "This app already has 20 transcripts queued or processing",
+					code: "too_many_transcripts",
+					hint: "Wait for one to finish, then send the request again.",
+				});
+			},
+		);
+
+		it("sets no Retry-After on other refusals", async () => {
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: false,
+				status: 402,
+				code: "insufficient_credits",
+				message: "Insufficient credits",
+				hint: "Add credits",
+			});
+			const response = await post(
+				"/",
+				{ url: "https://media.example.com/a.mp3" },
+				SECRET,
+			);
+			expect(response.headers.get("Retry-After")).toBeNull();
+		});
+
 		it("rejects a malformed idempotency key", async () => {
 			const response = await post(
 				"/",

@@ -215,6 +215,10 @@ export const RATE_LIMIT_IDS = {
 	MOBILE_EVENTS: "rl_mobile_events",
 	/** Code attempts on Cap Infra credit checkout (guessing guard). Suggested: 10 / 10m per key (user). */
 	INFRA_CREDIT_CODE: "rl_infra_credit_code",
+	/** Developer apps created from the console and the agent API. Suggested: 10 / 1h per key (user). */
+	DEVELOPER_APP_CREATE: "rl_developer_app_create",
+	/** Developer key rotations from the console and the agent API. Suggested: 10 / 1h per key (user). */
+	DEVELOPER_KEY_ROTATE: "rl_developer_key_rotate",
 	/** Developer REST API requests per secret key. 60 / 1m per key (hash of the credential). */
 	DEVELOPER_API_KEY: "rl_developer_api_key",
 	/** Developer SDK upload requests per upload token. 1200 / 1m per key (hash of the credential). */
@@ -269,6 +273,14 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.INFRA_CREDIT_CODE]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DEVELOPER_APP_CREATE]: {
+		limit: 10,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DEVELOPER_KEY_ROTATE]: {
+		limit: 10,
+		windowMs: 60 * MINUTE_MS,
+	},
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

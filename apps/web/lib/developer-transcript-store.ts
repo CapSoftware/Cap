@@ -36,6 +36,7 @@ import {
 } from "@/lib/developer-transcript-storage";
 import {
 	publicTranscriptWords,
+	TRANSCRIPT_MAX_CONCURRENT,
 	TRANSCRIPT_MAX_METADATA_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_LENGTH,
@@ -51,6 +52,8 @@ import {
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
+import { lockInfraAccount } from "@/lib/infra-balance";
+import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	assertPublicMediaUrl,
 	PublicMediaFetchError,
@@ -59,7 +62,7 @@ import { developerTranscribeWorkflow } from "@/workflows/developer-transcribe";
 
 export type TranscriptFailure = {
 	ok: false;
-	status: 400 | 402 | 403 | 404 | 409 | 503;
+	status: 400 | 402 | 403 | 404 | 409 | 429 | 503;
 	code: string;
 	message: string;
 	hint: string;
@@ -156,6 +159,13 @@ const SPEECH_UNAVAILABLE = fail(
 	"speech_unavailable",
 	"Transcription is not available right now",
 	"Retry later. If the error persists, contact hello@cap.so.",
+);
+
+const TOO_MANY_TRANSCRIPTS = fail(
+	429,
+	"too_many_transcripts",
+	`This app already has ${TRANSCRIPT_MAX_CONCURRENT} transcripts queued or processing`,
+	"Wait for one to finish, then send the request again. Poll Get Transcript until its status is complete or error.",
 );
 
 const affectedRows = (result: unknown) => {
@@ -279,35 +289,100 @@ async function findTranscript(appId: string, transcriptId: string) {
 
 const DISPATCH_RETRY_AFTER_MS = 2 * 60 * 1000;
 
+async function runningTranscripts(
+	executor: Pick<InfraDbExecutor, "select">,
+	appId: string,
+) {
+	const [row] = await executor
+		.select({ running: count() })
+		.from(developerTranscripts)
+		.where(
+			and(
+				eq(developerTranscripts.appId, appId),
+				or(
+					eq(developerTranscripts.status, "processing"),
+					and(
+						eq(developerTranscripts.status, "queued"),
+						isNull(developerTranscripts.deletedAt),
+					),
+				),
+			),
+		);
+	return Number(row?.running ?? 0) || 0;
+}
+
+async function withTranscriptSlot<T>(
+	appId: string,
+	transcriptId: string,
+	holdsSlot: (row: { status: DeveloperTranscriptStatus } | null) => boolean,
+	enqueue: (executor: InfraDbExecutor) => Promise<T>,
+): Promise<{ admitted: true; value: T } | { admitted: false }> {
+	return db().transaction(async (tx) => {
+		await lockInfraAccount(tx, appId);
+		const [row] = await tx
+			.select({ status: developerTranscripts.status })
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.id, transcriptId),
+					eq(developerTranscripts.appId, appId),
+				),
+			)
+			.limit(1);
+		if (
+			!holdsSlot(row ?? null) &&
+			(await runningTranscripts(tx, appId)) >= TRANSCRIPT_MAX_CONCURRENT
+		) {
+			return { admitted: false as const };
+		}
+		return { admitted: true as const, value: await enqueue(tx) };
+	});
+}
+
 async function dispatchTranscript(
 	transcriptId: string,
 	from: "uploading" | "queued",
 	sourceBytes?: number,
+	slotForAppId?: string,
 ) {
 	const now = new Date();
 	const runId = nanoId();
-	const claim = await db()
-		.update(developerTranscripts)
-		.set({
-			status: "queued",
-			runId,
-			startedAt: now,
-			...(sourceBytes !== undefined ? { sourceBytes } : {}),
-		})
-		.where(
-			and(
-				eq(developerTranscripts.id, transcriptId),
-				eq(developerTranscripts.status, from),
-				or(
-					isNull(developerTranscripts.startedAt),
-					lt(
-						developerTranscripts.startedAt,
-						new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+	const claimWith = (executor: InfraDbExecutor) =>
+		executor
+			.update(developerTranscripts)
+			.set({
+				status: "queued",
+				runId,
+				startedAt: now,
+				...(sourceBytes !== undefined ? { sourceBytes } : {}),
+			})
+			.where(
+				and(
+					eq(developerTranscripts.id, transcriptId),
+					eq(developerTranscripts.status, from),
+					or(
+						isNull(developerTranscripts.startedAt),
+						lt(
+							developerTranscripts.startedAt,
+							new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+						),
 					),
+					isNull(developerTranscripts.deletedAt),
 				),
-				isNull(developerTranscripts.deletedAt),
-			),
+			);
+	let claim: unknown;
+	if (slotForAppId) {
+		const slot = await withTranscriptSlot(
+			slotForAppId,
+			transcriptId,
+			(row) => row !== null && row.status !== from,
+			claimWith,
 		);
+		if (!slot.admitted) return "at_capacity" as const;
+		claim = slot.value;
+	} else {
+		claim = await claimWith(db());
+	}
 	if (affectedRows(claim) === 0) return "already_dispatched" as const;
 
 	const firstQueue = await db()
@@ -436,22 +511,29 @@ export async function createTranscriptFromUrl(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	await db()
-		.insert(developerTranscripts)
-		.values({
-			id,
-			appId,
-			externalUserId: options.externalUserId,
-			name: options.name ?? transcriptNameFromUrl(url),
-			status: "queued",
-			queuedAt: new Date(),
-			sourceType: "url",
-			sourceUrl: url,
-			s3Key: transcriptObjectKeys(appId, id).source,
-			requestedLanguage: options.requestedLanguage,
-			metadata: options.metadata,
-		})
-		.onDuplicateKeyUpdate({ set: { id } });
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId,
+					name: options.name ?? transcriptNameFromUrl(url),
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "url",
+					sourceUrl: url,
+					s3Key: transcriptObjectKeys(appId, id).source,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
+	);
+	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
 
 	const stored = await findTranscriptAnyState(appId, id);
 	if (!stored) return NOT_FOUND;
@@ -557,23 +639,30 @@ export async function createTranscriptFromVideo(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	await db()
-		.insert(developerTranscripts)
-		.values({
-			id,
-			appId,
-			externalUserId: options.externalUserId,
-			name: options.name ?? video.name,
-			status: "queued",
-			queuedAt: new Date(),
-			sourceType: "video",
-			videoId,
-			requestedAt: new Date(),
-			s3Key: video.sourceKey,
-			requestedLanguage: options.requestedLanguage,
-			metadata: options.metadata,
-		})
-		.onDuplicateKeyUpdate({ set: { id } });
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId,
+					name: options.name ?? video.name,
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "video",
+					videoId,
+					requestedAt: new Date(),
+					s3Key: video.sourceKey,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
+	);
+	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
 
 	const stored = await findTranscriptAnyState(appId, id);
 	if (!stored) return NOT_FOUND;
@@ -771,7 +860,13 @@ export async function startTranscriptUpload(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	const dispatched = await dispatchTranscript(transcript.id, "uploading", size);
+	const dispatched = await dispatchTranscript(
+		transcript.id,
+		"uploading",
+		size,
+		appId,
+	);
+	if (dispatched === "at_capacity") return TOO_MANY_TRANSCRIPTS;
 	if (dispatched === "failed") return SPEECH_UNAVAILABLE;
 
 	return {

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
@@ -17,6 +17,7 @@ import {
 import {
 	isTranscriptStatus,
 	serializeTranscript,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	TRANSCRIPT_STATUSES,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
@@ -32,6 +33,13 @@ export const app = new Hono<{
 
 const failureBody = (failure: TranscriptFailure) =>
 	apiErrorBody(failure.code, failure.message, failure.hint);
+
+const refuse = (c: Context, failure: TranscriptFailure) => {
+	if (failure.status === 429) {
+		c.header("Retry-After", String(TRANSCRIPT_BUSY_RETRY_SECONDS));
+	}
+	return c.json(failureBody(failure), failure.status);
+};
 
 const optionsSchema = {
 	name: z.string().max(255).optional(),
@@ -88,7 +96,7 @@ app.post(
 						url: url ?? "",
 						idempotencyKey: idempotency.key,
 					});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		if (!result.ok) return refuse(c, result);
 		return c.json({ data: serializeTranscript(result.transcript) });
 	},
 );
@@ -111,7 +119,7 @@ app.post(
 			...c.req.valid("json"),
 			idempotencyKey: idempotency.key,
 		});
-		if (!result.ok) return c.json(failureBody(result), result.status);
+		if (!result.ok) return refuse(c, result);
 		return c.json(
 			{
 				data: {
@@ -129,7 +137,7 @@ app.post("/:id/start", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ data: serializeTranscript(result.transcript) });
 });
 
@@ -246,6 +254,6 @@ app.delete("/:id", async (c) => {
 		c.get("developerAppId"),
 		c.req.param("id"),
 	);
-	if (!result.ok) return c.json(failureBody(result), result.status);
+	if (!result.ok) return refuse(c, result);
 	return c.json({ success: true });
 });

@@ -10,6 +10,7 @@ const createReference = () =>
 			NEXT_PUBLIC_OPENPANEL_API_URL: z.string().optional(),
 			NEXT_PUBLIC_WEB_URL: z.string(),
 			NEXT_PUBLIC_DOCKER_BUILD: z.string().optional(),
+			NEXT_PUBLIC_INFRA_FILM_URL: z.string().optional(),
 		},
 		runtimeEnv: {
 			NEXT_PUBLIC_IS_CAP: process.env.NEXT_PUBLIC_IS_CAP,
@@ -19,6 +20,7 @@ const createReference = () =>
 			NEXT_PUBLIC_WEB_URL:
 				process.env.WEB_URL ?? process.env.NEXT_PUBLIC_WEB_URL,
 			NEXT_PUBLIC_DOCKER_BUILD: process.env.NEXT_PUBLIC_DOCKER_BUILD,
+			NEXT_PUBLIC_INFRA_FILM_URL: process.env.NEXT_PUBLIC_INFRA_FILM_URL,
 		},
 	});
 
@@ -34,6 +36,7 @@ const ENV_KEYS = [
 	"NEXT_PUBLIC_OPENPANEL_CLIENT_ID",
 	"NEXT_PUBLIC_OPENPANEL_API_URL",
 	"NEXT_PUBLIC_DOCKER_BUILD",
+	"NEXT_PUBLIC_INFRA_FILM_URL",
 ] as const;
 
 type Scenario = Partial<Record<(typeof ENV_KEYS)[number], string>>;
@@ -83,6 +86,7 @@ const PROPERTIES: Array<string | symbol> = [
 	"NEXT_PUBLIC_OPENPANEL_API_URL",
 	"NEXT_PUBLIC_WEB_URL",
 	"NEXT_PUBLIC_DOCKER_BUILD",
+	"NEXT_PUBLIC_INFRA_FILM_URL",
 	"NEXT_PUBLIC_UNKNOWN",
 	"WEB_URL",
 	"DATABASE_URL",
