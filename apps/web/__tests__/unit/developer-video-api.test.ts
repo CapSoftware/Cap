@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	appId: "app-1",
 	playbackUrl: undefined as string | undefined,
 	redrive: vi.fn(),
+	settleAtDelete: vi.fn(),
 	cancelJob: vi.fn(),
 }));
 
@@ -32,6 +33,10 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
 }));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtDelete: mocks.settleAtDelete,
+}));
+
 vi.mock("@/lib/media-client", () => ({
 	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
@@ -783,6 +788,8 @@ describe("developer video API", () => {
 			expect(response.status).toBe(200);
 			expect(await response.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
 		});
 
 		it("cancels the encode jobs of a video deleted mid-encode", async () => {
@@ -885,6 +892,7 @@ describe("developer video API", () => {
 			expect(await second.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toHaveLength(1);
 			expect(mocks.store.video?.deletedAt).toBe(deletedAt);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
 		});
 
 		it("still answers 404 for a video of another app, deleted or not", async () => {

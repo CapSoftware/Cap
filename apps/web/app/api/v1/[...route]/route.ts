@@ -170,6 +170,10 @@ import {
 } from "@/lib/infra-credit-checkout";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import {
+	settleFirstMonthAtDelete,
+	settleFirstMonthsForDeletedApp,
+} from "@/lib/infra-storage-minimum";
+import {
 	TOP_UP_MAX_CENTS,
 	TOP_UP_MIN_CENTS,
 	TOP_UP_RANGE_TEXT,
@@ -4179,6 +4183,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (deletedAt) {
 							const appDeletedAt = deletedAt;
 							yield* Effect.promise(() =>
+								settleFirstMonthsForDeletedApp(path.appId, appDeletedAt),
+							);
+							yield* Effect.promise(() =>
 								cancelDeveloperVideoEncodes({
 									appId: path.appId,
 									deletedAt: appDeletedAt,
@@ -4688,6 +4695,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						yield* Effect.promise(() => settleFirstMonthAtDelete(path.videoId));
 						if (deleted) {
 							yield* Effect.promise(() =>
 								cancelDeveloperVideoEncodes({

@@ -922,7 +922,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "createUpload",
 				summary: "Create an upload",
 				description:
-					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that covers 7 days of storage for everything it stores, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. Send an Idempotency-Key so a retried request returns the same video with a new token instead of creating a second one. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
+					"Creates a video record and returns an upload token for that one video, with the video's ID and its share and embed URLs. Call this from your server, then give the token to the browser that uploads the file. The token is the only credential the upload operations accept. It works until expiresAt, and stops working once the upload completes, the video is deleted or the secret key that created it is revoked. When corsOrigin is set, the upload operations also refuse a request whose Origin header differs: this is a convenience for browsers, and the token is the security boundary. Creating and uploading are free. The app must be in good standing with a balance that pays for the first month of storage of every upload still encoding and covers 7 days of storage for the videos past their first month, otherwise this returns 402 with the amount needed. Set maxBytes to refuse a file larger than that many bytes. Send an Idempotency-Key so a retried request returns the same video with a new token instead of creating a second one. A field the request does not know returns 400 with code invalid_request and names the field, so a misspelt userId never creates a video with no user.",
 				tags: ["Uploads"],
 				security: secretAuth,
 				parameters: [uploadIdempotencyKeyParam],
@@ -1135,7 +1135,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				operationId: "completeSdkUpload",
 				summary: "Complete a multipart upload",
 				description:
-					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must cover 7 days of storage for everything the app stores including this video, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB or more than the token's maxBytes: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
+					"Finishes the upload and records duration and dimensions (at most 4 hours). Nothing is charged. The balance must pay for the first month of storage of this video and of every other upload still encoding, and cover 7 days of storage for the videos past their first month, otherwise this returns 402 with the amount needed. A 402 whose body has fileRemoved true means the file was already assembled and has been removed, so upload it again after a top-up; any other 402 leaves the upload open. Returns 409 with code completion_in_progress while another request is completing the same upload: wait and send the same request again, and do not abort or delete. Stored video is billed daily by resolution tier. Repeating the call after the upload completed returns success. Mistakes in the request return 400 with code parts_required (parts is empty), parts_mismatch (a listed part is missing, repeated or has a different ETag), part_too_small (a part other than the last is under 5 MB) or file_too_large (the parts add up to more than 36 GB or more than the token's maxBytes: the upload has been aborted and the video can take a new, smaller one), and 404 with code upload_not_found when the uploadId is wrong or was aborted: call initiateSdkUpload again and upload the parts again.",
 				tags: ["SDK"],
 				security: uploadTokenAuth,
 				requestBody: jsonBody("CompleteUploadRequest"),
@@ -1453,7 +1453,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					type: {
 						type: "string",
 						description:
-							"The kind of row: topup, topup_failed, pro_credit, storage_daily, transcription or adjustment. Treat a value you do not know as a row to show as it is.",
+							"The kind of row: topup, topup_failed, pro_credit, storage_daily, video_create (a video's first month of storage), transcription or adjustment. Treat a value you do not know as a row to show as it is.",
 					},
 					description: {
 						type: "string",
@@ -1607,7 +1607,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "string",
 								enum: ["active", "grace", "paused"],
 								description:
-									"active: in good standing. grace: a daily storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
+									"active: in good standing. grace: a storage charge was more than the balance, uploads are blocked and playback continues until pausesAt. paused: playback is paused until credits are added.",
 							},
 							pausesAt: {
 								type: ["string", "null"],
@@ -1643,7 +1643,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							requiredMicroCredits: {
 								type: "integer",
 								description:
-									"Balance needed to upload: 7 days of storage for everything stored.",
+									"Balance needed to upload: the first month of storage of every upload still encoding, plus 7 days of storage for the videos past their first month.",
 							},
 							shortfallMicroCredits: {
 								type: "integer",
@@ -1657,6 +1657,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						type: "object",
 						required: [
 							"minutesByTier",
+							"dailyChargeMinutesByTier",
 							"dailyMicroCredits",
 							"monthlyMicroCredits",
 						],
@@ -1672,10 +1673,21 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 									"2160p": { type: "number" },
 								},
 							},
+							dailyChargeMinutesByTier: {
+								type: "object",
+								description:
+									"The part of minutesByTier the daily charge covers: videos past their first month. A video in its first month is left out, because its month was charged when it became ready.",
+								required: ["1080p", "1440p", "2160p"],
+								properties: {
+									"1080p": { type: "number" },
+									"1440p": { type: "number" },
+									"2160p": { type: "number" },
+								},
+							},
 							dailyMicroCredits: {
 								type: "integer",
 								description:
-									"What one day of storage costs at what is stored now.",
+									"What one day of storage costs for the videos past their first month.",
 							},
 							monthlyMicroCredits: {
 								type: "integer",
@@ -1701,7 +1713,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							storageDollarsPer1000MinutesPerMonth: {
 								type: "object",
 								description:
-									"Dollars to store 1,000 minutes for a 30 day month, by resolution tier. Storage is charged daily.",
+									"Dollars to store 1,000 minutes for a 30 day month, by resolution tier. Each video is charged its first month when it becomes ready, then daily.",
 								required: [...INFRA_RESOLUTION_TIERS],
 								properties: Object.fromEntries(
 									INFRA_RESOLUTION_TIERS.map((tier) => [
@@ -2181,7 +2193,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			UploadPaymentRequired: json(
 				ref("UploadPaymentRequired"),
-				"The app is out of credit or its balance does not cover 7 days of storage. The body says how much is needed.",
+				"The app is out of credit or its balance does not cover the storage the upload needs. The body says how much is needed.",
 			),
 			Forbidden: json(
 				ref("Error"),

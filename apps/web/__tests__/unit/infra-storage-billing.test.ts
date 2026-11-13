@@ -20,8 +20,8 @@ import {
 holder.db = fakeDb;
 
 import {
+	firstMonthStorageMicroCredits,
 	storageUsage,
-	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
 import { availableBalance } from "@/lib/infra-balance";
@@ -32,7 +32,7 @@ import {
 	latestStorageCharge,
 	latestStorageCharges,
 } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
+import { getAppStorage } from "@/lib/infra-storage";
 import { chargeStorageDay } from "@/lib/infra-storage-billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -49,7 +49,7 @@ const charge = async () =>
 	chargeStorageDay({
 		appId: "app-1",
 		accountId: "account-1",
-		usage: await getAppStorageUsage("app-1"),
+		usage: (await getAppStorage("app-1")).dailyCharge,
 		dateKey: dateKey(),
 		now: new Date(ledger.now),
 	});
@@ -58,7 +58,7 @@ const finish = async (day: string) =>
 	chargeStorageDay({
 		appId: "app-1",
 		accountId: "account-1",
-		usage: await getAppStorageUsage("app-1"),
+		usage: (await getAppStorage("app-1")).dailyCharge,
 		dateKey: day,
 		now: new Date(ledger.now),
 		retryUnpaid: false,
@@ -383,6 +383,7 @@ describe("daily storage charge", () => {
 		);
 
 		expect(await latestStorageCharge(fakeDb as never, "account-1")).toEqual({
+			id: "row-a",
 			createdAt: new Date(ledger.now),
 			owedMicroCredits: 144,
 			shortSince,
@@ -392,6 +393,7 @@ describe("daily storage charge", () => {
 				"account-1",
 			),
 		).toEqual({
+			id: "row-a",
 			createdAt: new Date(ledger.now),
 			owedMicroCredits: 144,
 			shortSince,
@@ -506,7 +508,7 @@ describe("admission prices a video the way the storage job will", () => {
 		ledger.videos = [];
 	});
 
-	it("requires exactly 7 days of what the job charges for the same row", async () => {
+	it("requires exactly the first month the charge at ready takes for the same row", async () => {
 		ledger.account.balanceMicroCredits = 1_000_000;
 		ledger.videos = [
 			{
@@ -519,7 +521,7 @@ describe("admission prices a video the way the storage job will", () => {
 				maxResolutionTier: capped.maxResolutionTier,
 			},
 		];
-		const jobUsage = await getAppStorageUsage("app-1");
+		const jobUsage = (await getAppStorage("app-1")).dailyCharge;
 		ledger.videos = [];
 
 		const admission = await admitDeveloperVideoUpload(capped);
@@ -530,16 +532,20 @@ describe("admission prices a video the way the storage job will", () => {
 			"2160p": 0,
 		});
 		expect(admission.requiredMicroCredits).toBe(
-			uploadAdmissionMicroCredits(jobUsage.monthlyMicroCredits),
+			firstMonthStorageMicroCredits({
+				durationSeconds: capped.durationSeconds,
+				tier: "1080p",
+			}),
 		);
-		expect(admission.requiredMicroCredits).toBe(1190);
+		expect(admission.requiredMicroCredits).toBe(jobUsage.monthlyMicroCredits);
+		expect(admission.requiredMicroCredits).toBe(5100);
 	});
 
 	it("admits a 4K source capped at 1080p on a balance that covers 1080p storage, and refuses one that does not", async () => {
-		ledger.account.balanceMicroCredits = 1190;
+		ledger.account.balanceMicroCredits = 5100;
 		expect((await admitDeveloperVideoUpload(capped)).allowed).toBe(true);
 
-		ledger.account.balanceMicroCredits = 1189;
+		ledger.account.balanceMicroCredits = 5099;
 		expect(await admitDeveloperVideoUpload(capped)).toMatchObject({
 			allowed: false,
 			reason: "insufficient_credits",
@@ -548,14 +554,238 @@ describe("admission prices a video the way the storage job will", () => {
 	});
 
 	it("needs 4K credit when the video is allowed to be stored at 4K", async () => {
-		ledger.account.balanceMicroCredits = 1190;
+		ledger.account.balanceMicroCredits = 5100;
 
 		expect(
 			await admitDeveloperVideoUpload({
 				...capped,
 				maxResolutionTier: "2160p",
 			}),
-		).toMatchObject({ allowed: false, requiredMicroCredits: 3920 });
+		).toMatchObject({ allowed: false, requiredMicroCredits: 16_800 });
+	});
+});
+
+describe("first months charged in the same second", () => {
+	const firstMonth = (amount: number, shortSince: Date | null) => ({
+		id: `first-${ledger.rows.length}`,
+		accountId: "account-1",
+		type: "video_create",
+		amountMicroCredits: -amount,
+		balanceAfterMicroCredits: 0,
+		referenceId: `video-${ledger.rows.length}`,
+		referenceType: "developer_video",
+		metadata: {
+			owedMicroCredits: 850,
+			chargedMicroCredits: amount,
+			shortSince: shortSince?.toISOString() ?? null,
+		},
+		createdAt: new Date(ledger.now),
+	});
+
+	it("keeps the app out of credit whichever of the two rows comes first", async () => {
+		for (const order of ["paid first", "short first"]) {
+			resetLedger();
+			ledger.videos = [];
+			const paid = firstMonth(850, null);
+			const short = firstMonth(0, new Date(ledger.now));
+			ledger.rows = order === "paid first" ? [paid, short] : [short, paid];
+
+			expect(await standing(), order).toMatchObject({ state: "grace" });
+		}
+	});
+});
+
+describe("a first month the balance could not pay", () => {
+	it("stays in effect through later paid days until credit covers what it owed", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = new Date(ledger.now);
+		ledger.rows.push({
+			id: "first-month",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 16_800,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			},
+			createdAt: new Date(ledger.now),
+		});
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		advanceDays(1);
+		credit(1_000);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+		});
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
+		expect((await admission()).reason).toBe("out_of_credit");
+
+		credit(16_800);
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+	});
+});
+
+describe("a shortfall the available balance comes to cover without new credit", () => {
+	it("is latched as resolved once, stays resolved through later paid days, and a new shortfall starts its own grace", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		ledger.account.balanceMicroCredits = 900;
+		ledger.heldMicroCredits = 900;
+		const shortSince = new Date(ledger.now);
+		const month = {
+			id: "first-month-held",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 900,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 850,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			} as Record<string, unknown>,
+			createdAt: new Date(ledger.now),
+		};
+		ledger.rows.push(month);
+		expect(await standing()).toMatchObject({ state: "grace" });
+
+		ledger.heldMicroCredits = 0;
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+			shortSince: null,
+		});
+		const latched = month.metadata.resolvedAt;
+		expect(latched).toBe(new Date(ledger.now).toISOString());
+
+		advanceDays(1);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+		});
+		expect(ledger.account.balanceMicroCredits).toBe(844);
+		expect(month.metadata.resolvedAt).toBe(latched);
+
+		advanceDays(8);
+		expect(await standing()).toEqual({ state: "active", pausesAt: null });
+
+		ledger.account.balanceMicroCredits = 0;
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 0,
+			fellShort: true,
+		});
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(ledger.now.getTime() + 7 * DAY_MS),
+		});
+		expect(month.metadata.resolvedAt).toBe(latched);
+	});
+});
+
+describe("an unpaid first month is not masked by daily rows", () => {
+	const unpaidMonth = () => {
+		const shortSince = new Date(ledger.now);
+		ledger.rows.push({
+			id: "first-month-unpaid",
+			accountId: "account-1",
+			type: "video_create",
+			amountMicroCredits: 0,
+			balanceAfterMicroCredits: 0,
+			referenceId: "video-1",
+			referenceType: "developer_video",
+			metadata: {
+				owedMicroCredits: 16_800,
+				chargedMicroCredits: 0,
+				shortSince: shortSince.toISOString(),
+			},
+			createdAt: new Date(ledger.now),
+		});
+		return shortSince;
+	};
+
+	it("keeps a first month that settled short in effect over a newer fully paid storage_daily row", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = unpaidMonth();
+		advanceDays(1);
+		credit(1_000);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 28,
+			shortSince: null,
+		});
+
+		expect(
+			await latestStorageCharge(fakeDb as never, "account-1"),
+		).toMatchObject({ firstMonth: true, owedMicroCredits: 16_800, shortSince });
+		expect((await standing()).state).not.toBe("active");
+	});
+
+	it("gives grace, not active, when a paid storage_day row lands in the same second as a short first month", async () => {
+		const shortSince = unpaidMonth();
+		ledger.account.balanceMicroCredits = 500;
+		ledger.rows.push({
+			id: "storage-day-paid",
+			accountId: "account-1",
+			type: "storage_daily",
+			amountMicroCredits: -28,
+			balanceAfterMicroCredits: 500,
+			referenceId: dateKey(),
+			referenceType: "storage_day",
+			metadata: {
+				snapshotDate: dateKey(),
+				owedMicroCredits: 28,
+				chargedMicroCredits: 28,
+				shortSince: null,
+			},
+			createdAt: new Date(ledger.now),
+		});
+
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
+	});
+
+	it("keeps the shortfall when a partly paid daily row is followed by a day with nothing charged daily", async () => {
+		ledger.videos = [
+			{ appId: "app-1", width: 1920, height: 1080, seconds: 600, count: 1 },
+		];
+		const shortSince = unpaidMonth();
+		advanceDays(1);
+		credit(10);
+		expect(await charge()).toMatchObject({
+			state: "billed",
+			chargedMicroCredits: 10,
+			shortSince,
+		});
+
+		advanceDays(1);
+		ledger.videos = [];
+		const rowsBefore = ledger.rows.length;
+		expect(await charge()).toEqual({ state: "skipped" });
+		expect(ledger.rows).toHaveLength(rowsBefore);
+		expect(await standing()).toEqual({
+			state: "grace",
+			pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+		});
 	});
 });
 
@@ -720,7 +950,7 @@ describe("which videos are billed after the pipeline measures them", () => {
 	it("charges storage for ready videos only, at the lower of the measured tier and the max tier", async () => {
 		ledger.account.balanceMicroCredits = 1_000_000;
 
-		const usage = await getAppStorageUsage("app-1");
+		const usage = (await getAppStorage("app-1")).stored;
 		const result = await charge();
 
 		expect(usage.minutesByTier).toEqual({
@@ -732,17 +962,17 @@ describe("which videos are billed after the pipeline measures them", () => {
 		expect(result).toMatchObject({ state: "billed", chargedMicroCredits: 31 });
 	});
 
-	it("counts a still-processing video toward upload admission but not the storage charge", async () => {
+	it("counts a still-processing video toward upload admission at its first month, but not as stored or charged daily", async () => {
 		ledger.account.balanceMicroCredits = 1_000_000;
 
-		const { usage } = await billing();
+		const { storage, admission } = await billing();
 
-		expect(usage.minutesByTier).toEqual({
-			"1080p": 11,
-			"1440p": 0,
-			"2160p": 10,
-		});
-		expect((await getAppStorageUsage("app-1")).minutesByTier["2160p"]).toBe(0);
+		expect(storage.firstMonthMicroCredits).toBe(10 * 280);
+		expect(storage.stored.minutesByTier["2160p"]).toBe(0);
+		expect(storage.dailyCharge.minutesByTier["2160p"]).toBe(0);
+		expect(admission.requiredMicroCredits).toBe(
+			Math.ceil(10 * 280 + (11 * 85 * 7) / 30),
+		);
 	});
 
 	it("leaves a video out of its own check when its measured length is admitted", async () => {
@@ -760,10 +990,10 @@ describe("which videos are billed after the pipeline measures them", () => {
 		const doubled = await getInfraUploadAdmission("app-1", measured);
 
 		expect(own.requiredMicroCredits).toBe(
-			Math.ceil(((11 * 85 + 11 * 280) * 7) / 30),
+			Math.ceil(11 * 280 + (11 * 85 * 7) / 30),
 		);
 		expect(doubled.requiredMicroCredits).toBe(
-			Math.ceil(((11 * 85 + 21 * 280) * 7) / 30),
+			Math.ceil(21 * 280 + (11 * 85 * 7) / 30),
 		);
 	});
 });
@@ -783,17 +1013,19 @@ describe("available balance", () => {
 
 describe("upload admission against what is stored", () => {
 	it("counts the video being admitted on top of what is stored", async () => {
-		const stored = await getAppStorageUsage("app-1");
-		const withNew = await getAppStorageUsage("app-1", {
+		const stored = await getAppStorage("app-1");
+		const withNew = await getAppStorage("app-1", {
 			durationSeconds: 6000,
 			width: 3840,
 			height: 2160,
 			tier: "2160p",
 		});
 
-		expect(stored.monthlyMicroCredits).toBe(4335);
-		expect(withNew.monthlyMicroCredits).toBe(4335 + 28_000);
-		expect(withNew.videoCount).toBe(4);
+		expect(stored.dailyCharge.monthlyMicroCredits).toBe(4335);
+		expect(stored.firstMonthMicroCredits).toBe(0);
+		expect(withNew.dailyCharge.monthlyMicroCredits).toBe(4335);
+		expect(withNew.firstMonthMicroCredits).toBe(28_000);
+		expect(withNew.stored.videoCount).toBe(3);
 
 		ledger.account.balanceMicroCredits = 1012;
 		expect((await getInfraUploadAdmission("app-1")).allowed).toBe(true);
@@ -806,13 +1038,13 @@ describe("upload admission against what is stored", () => {
 		expect(refused).toMatchObject({
 			allowed: false,
 			reason: "insufficient_credits",
-			requiredMicroCredits: 7545,
-			shortfallMicroCredits: 6533,
+			requiredMicroCredits: 29_012,
+			shortfallMicroCredits: 28_000,
 		});
 	});
 
 	it("matches the pure storage math", async () => {
-		expect(await getAppStorageUsage("app-1")).toEqual(
+		expect((await getAppStorage("app-1")).stored).toEqual(
 			storageUsage([
 				{
 					video: {
