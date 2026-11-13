@@ -33,7 +33,7 @@ export function Modal({
 			}}
 		>
 			<DialogPrimitive.Portal>
-				<DialogPrimitive.Overlay className="fixed inset-0 z-[600] bg-[rgba(2,2,3,0.72)] backdrop-blur-[2px]" />
+				<DialogPrimitive.Overlay className="fixed inset-0 z-[600] bg-[rgba(4,5,6,0.66)] backdrop-blur-[3px]" />
 				<DialogPrimitive.Content
 					onOpenAutoFocus={() => {
 						opener.current = document.activeElement;
@@ -45,7 +45,7 @@ export function Modal({
 							target.focus();
 						}
 					}}
-					className={`${infraSans.variable} ${infraMono.variable} fixed left-1/2 top-1/2 z-[601] w-[calc(100%-32px)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-[14px] bg-[#0B0C0E] p-6 text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_24px_80px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif] focus:outline-none`}
+					className={`${infraSans.variable} ${infraMono.variable} fixed left-1/2 top-1/2 z-[601] w-[calc(100%-32px)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-[16px] bg-[#111216] p-6 text-[#E8ECF4] shadow-[inset_0_0_0_1px_rgba(222,230,246,0.12),0_24px_80px_rgba(0,0,0,0.6)] [font-family:var(--font-infra-sans),system-ui,sans-serif] focus:outline-none`}
 				>
 					<DialogPrimitive.Title className="m-0 text-[17px] font-medium leading-[1.3] tracking-[-0.02em] text-[#E8ECF4]">
 						{title}
