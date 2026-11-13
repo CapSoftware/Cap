@@ -15,6 +15,17 @@ type GenerateAiResult = {
 const LEGACY_AI_SUMMARY_FALLBACK =
 	"The AI was unable to generate a proper summary for this content.";
 
+export function isAiGenerationRerun(metadata: VideoMetadata) {
+	const status = metadata.aiGenerationStatus;
+	if (!status || status === "PROCESSING" || status === "QUEUED") return false;
+	return !(
+		status === "COMPLETE" &&
+		metadata.summary &&
+		metadata.summary !== LEGACY_AI_SUMMARY_FALLBACK &&
+		metadata.chapters
+	);
+}
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
