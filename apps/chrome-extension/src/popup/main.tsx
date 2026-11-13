@@ -496,6 +496,16 @@ function App() {
 				// Dismissing the capture picker or the mic warning is a deliberate
 				// action, not a failure worth surfacing.
 				if (response.canceled) return;
+				// A start rejected for its sign-in signs the worker out; show the
+				// Sign in button instead of a panel that still looks signed in.
+				const state = await sendServiceWorkerMessage({
+					target: "service-worker",
+					type: "bootstrap",
+				}).catch(() => null);
+				if (state?.ok && !state.auth) {
+					setAuth(null);
+					setBootstrap(null);
+				}
 				throw new Error(response.error);
 			}
 			if (response.status) setStatus(response.status);

@@ -1,6 +1,6 @@
 import type { VideoId } from "@cap/recorder-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_KEY } from "../shared/storage";
+import { AUTH_KEY, defaultSettings } from "../shared/storage";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 import type {
 	BootstrapData,
@@ -151,7 +151,7 @@ describe("bootstrap account ownership", () => {
 			...auth,
 		});
 		call[1](`https://test.chromiumapp.org/#${fragment}`);
-		await vi.waitFor(() => expect(stored[AUTH_KEY]).toEqual(auth));
+		await vi.waitFor(() => expect(stored[AUTH_KEY]).toMatchObject(auth));
 	};
 
 	beforeEach(() => {
@@ -256,6 +256,91 @@ describe("bootstrap account ownership", () => {
 
 		expect(await loading).toMatchObject({ ok: false });
 		expect(stored[cacheKey]).toBeUndefined();
+	});
+
+	describe("server the sign-in belongs to", () => {
+		const defaultOrigin = new URL(defaultSettings.apiBaseUrl).origin;
+		const otherServer = "https://cap.example.invalid";
+
+		const updateSettings = (apiBaseUrl: string) =>
+			new Promise<ServiceWorkerResponse>((resolve) => {
+				onMessage(
+					{
+						target: "service-worker",
+						type: "settings-updated",
+						settings: { ...defaultSettings, apiBaseUrl },
+					},
+					{},
+					resolve,
+				);
+			});
+
+		it("records the server a new sign-in came from", async () => {
+			const newAuth = { authApiKey: "new-fixture-key", userId: "new-account" };
+			await signIn(newAuth);
+			expect(stored[AUTH_KEY]).toEqual({
+				...newAuth,
+				apiBaseUrl: defaultOrigin,
+			});
+		});
+
+		it("records the server on an older sign-in once the server accepts it", async () => {
+			delete stored[cacheKey];
+			requests.mockImplementation(async () => Response.json(oldBootstrap));
+			await send("bootstrap");
+			expect(stored[AUTH_KEY]).toEqual({
+				...oldAuth,
+				apiBaseUrl: defaultOrigin,
+			});
+		});
+
+		it("signs out when the Cap URL moves to another server", async () => {
+			stored[AUTH_KEY] = { ...oldAuth, apiBaseUrl: defaultOrigin };
+			await updateSettings(otherServer);
+
+			expect(stored[AUTH_KEY]).toBeUndefined();
+			expect(stored[cacheKey]).toBeUndefined();
+			expect(requests).toHaveBeenCalledWith(
+				`${defaultOrigin}/api/extension/auth/revoke`,
+				expect.objectContaining({ method: "POST" }),
+			);
+			const state = await send("bootstrap");
+			expect(state).toMatchObject({ ok: true, auth: null });
+			expect(state.ok && state.authError).toContain("cap.example.invalid");
+		});
+
+		it("keeps the sign-in when the Cap URL still points at the same server", async () => {
+			stored[AUTH_KEY] = { ...oldAuth, apiBaseUrl: defaultOrigin };
+			await updateSettings(`${defaultOrigin}/`);
+
+			expect(stored[AUTH_KEY]).toEqual({
+				...oldAuth,
+				apiBaseUrl: defaultOrigin,
+			});
+		});
+
+		it("signs out when the server rejects the key", async () => {
+			requests.mockImplementation(
+				async () => new Response("", { status: 401 }),
+			);
+			expect(await send("bootstrap")).toMatchObject({ ok: true });
+			await vi.waitFor(() => expect(stored[AUTH_KEY]).toBeUndefined());
+
+			const state = await send("bootstrap");
+			expect(state).toMatchObject({ ok: true, auth: null });
+			expect(state.ok && state.authError).toBe(
+				"Your Cap sign-in is no longer valid. Sign in again to keep recording.",
+			);
+		});
+
+		it("keeps the sign-in when the server is unreachable", async () => {
+			requests.mockImplementation(
+				async () => new Response("", { status: 503 }),
+			);
+			await send("bootstrap");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(stored[AUTH_KEY]).toEqual(oldAuth);
+		});
 	});
 
 	it("ignores another account's persisted cache after a worker restart", async () => {
