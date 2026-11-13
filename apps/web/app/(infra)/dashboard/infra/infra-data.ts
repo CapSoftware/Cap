@@ -6,6 +6,7 @@ import {
 import { developerVideoTakenDownSql } from "@cap/database/developer-video-takedown";
 import {
 	developerApiKeys,
+	developerAppDomains,
 	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
@@ -97,6 +98,23 @@ const getInfraCreditAccount = cache(
 			.limit(1);
 		return account ?? null;
 	},
+);
+
+export type InfraAppDomain = Pick<
+	typeof developerAppDomains.$inferSelect,
+	"id" | "domain"
+>;
+
+export const getInfraAppDomains = cache(
+	(appId: string): Promise<InfraAppDomain[]> =>
+		db()
+			.select({
+				id: developerAppDomains.id,
+				domain: developerAppDomains.domain,
+			})
+			.from(developerAppDomains)
+			.where(eq(developerAppDomains.appId, appId))
+			.orderBy(developerAppDomains.domain),
 );
 
 export const getInfraApiKeys = cache(
