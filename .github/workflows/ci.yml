@@ -22,7 +22,9 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' }}
+      # apps/cli is in the root workspace only; the GPUI app is its own
+      # workspace and never builds it, so CLI-only changes skip the app jobs.
+      gpui: ${{ steps.filter.outputs.rust-without-cli == 'true' || steps.filter.outputs.gpui == 'true' }}
       gpui-patches: ${{ steps.filter.outputs.gpui-patches }}
       ios: ${{ steps.filter.outputs.ios }}
     steps:
@@ -40,6 +42,17 @@ jobs:
               - '.github/actions/setup-rust-cache/**'
               - '.github/workflows/ci.yml'
               - 'apps/cli/**'
+              - 'crates/**'
+              - 'vendor/**'
+              - 'scripts/diagnostic-build.rs'
+              - 'scripts/setup*'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            rust-without-cli:
+              - '.cargo/**'
+              - '.github/actions/install-desktop-deps/**'
+              - '.github/actions/setup-rust-cache/**'
+              - '.github/workflows/ci.yml'
               - 'crates/**'
               - 'vendor/**'
               - 'scripts/diagnostic-build.rs'
@@ -380,6 +393,12 @@ jobs:
             runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu
             runner: blacksmith-8vcpu-ubuntu-2404
+        # The Intel build is not a merge gate and takes over an hour on a
+        # GitHub-hosted runner, so it runs on main and by hand, not on PRs.
+        exclude:
+          - settings:
+              target: x86_64-apple-darwin
+              runner: ${{ github.event_name == 'pull_request' && 'macos-26-intel' || 'none' }}
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
