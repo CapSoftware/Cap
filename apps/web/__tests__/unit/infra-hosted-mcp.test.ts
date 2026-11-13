@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEVELOPER_KEY_REQUESTS_PER_MINUTE } from "@/lib/developer-rate-limits";
 
 const ORIGIN = "https://cap.test";
 const ENDPOINT = `${ORIGIN}/api/developer/mcp`;
@@ -541,10 +542,10 @@ describe("hosted Cap Infra MCP limits", () => {
 		expect(response.headers.get("allow")).toBe("POST");
 	});
 
-	it("applies the per-key limit of 60 requests a minute", async () => {
+	it("applies the REST API's per-key limit to MCP requests", async () => {
 		const key = newKey();
 		const list = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
-		for (let index = 0; index < 60; index++) {
+		for (let index = 0; index < DEVELOPER_KEY_REQUESTS_PER_MINUTE; index++) {
 			expect((await mcp(key, list)).status).toBe(200);
 		}
 		const limited = await mcp(key, list);
