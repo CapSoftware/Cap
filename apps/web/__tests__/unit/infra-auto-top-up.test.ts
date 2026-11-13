@@ -298,6 +298,13 @@ describe("auto top-up charge", () => {
 		]);
 	});
 
+	it("asks Stripe to email the receipt to the account owner", async () => {
+		await runAutoTopUp("account-1", now());
+
+		const [params] = mocks.createPaymentIntent.mock.calls[0] ?? [];
+		expect(params.receipt_email).toBe(ledger.account.email);
+	});
+
 	it("grants once when the webhook also reports the same payment", async () => {
 		await runAutoTopUp("account-1", now());
 

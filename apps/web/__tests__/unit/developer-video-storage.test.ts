@@ -4,14 +4,20 @@ vi.mock("@cap/web-backend/src/S3Buckets/index", async () => {
 	const { Effect, Layer, Option } = await import("effect");
 	const HttpServerRequest = await import("@effect/platform/HttpServerRequest");
 	const access = {
-		getSignedObjectUrl: (key: string, args: { expiresIn: number }) =>
+		getSignedObjectUrl: (
+			key: string,
+			args: { signingDate: Date; expiresIn: number },
+		) =>
 			Effect.serviceOption(HttpServerRequest.HttpServerRequest).pipe(
 				Effect.map(
 					(request) =>
-						`signed:${key}:${args.expiresIn}:${Option.match(request, {
-							onNone: () => "no-request",
-							onSome: (value) => value.originalUrl,
-						})}`,
+						`signed:${key}:${args.signingDate.toISOString()}+${args.expiresIn}:${Option.match(
+							request,
+							{
+								onNone: () => "no-request",
+								onSome: (value) => value.originalUrl,
+							},
+						)}`,
 				),
 			),
 	};
@@ -36,12 +42,12 @@ describe("developer video storage signing", () => {
 	it("signs with the address the viewer used, so a local storage endpoint can follow it", async () => {
 		const url = await signedDeveloperVideoUrl(
 			"developer/app/video/file.m4s",
-			600,
+			{ signingDate: new Date("2026-11-12T12:00:00.000Z"), expiresIn: 600 },
 			playback({ host: "192.168.1.20:3000" }),
 		);
 
 		expect(url).toBe(
-			"signed:developer/app/video/file.m4s:600:http://192.168.1.20:3000/api/developer/playback/id/video.mp4",
+			"signed:developer/app/video/file.m4s:2026-11-12T12:00:00.000Z+600:http://192.168.1.20:3000/api/developer/playback/id/video.mp4",
 		);
 	});
 

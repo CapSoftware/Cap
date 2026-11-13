@@ -137,7 +137,6 @@ import {
 	developerKeyRotationLimited,
 	reserveDeveloperAppSlot,
 } from "@/lib/developer-app-limits";
-import { developerCreditsProductId } from "@/lib/developer-credits-product";
 import { developerIdFromKey } from "@/lib/developer-ids";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
@@ -151,6 +150,7 @@ import {
 } from "@/lib/developer-transcript-store";
 import {
 	isTranscriptStatus,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
@@ -163,6 +163,10 @@ import {
 import { startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
+import {
+	CREDIT_CHECKOUT_METADATA_TYPE,
+	creditCheckoutSessionParams,
+} from "@/lib/infra-credit-checkout";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
@@ -466,6 +470,15 @@ const developerMediaFailure = (
 					...commonError(requestId, failure.message),
 					code: "CONFLICT",
 				});
+	}
+	if (failure.status === 429) {
+		return new Agent.AgentRateLimitedError({
+			message: `${failure.message}. Wait for one to finish, then retry.`,
+			code: "RATE_LIMITED",
+			retryable: true,
+			retryAfterMs: TRANSCRIPT_BUSY_RETRY_SECONDS * 1000,
+			requestId,
+		});
 	}
 	if (failure.status === 503) {
 		return temporarilyUnavailable(requestId, failure.message, 5_000);
@@ -4554,22 +4567,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									const session = yield* Effect.tryPromise(() =>
 										stripe().checkout.sessions.create(
 											{
-												customer: customerId,
-												line_items: [
-													{
-														price_data: {
-															currency: "usd",
-															product: developerCreditsProductId(),
-															unit_amount: payload.amountCents,
-														},
-														quantity: 1,
-													},
-												],
-												mode: "payment",
+												...creditCheckoutSessionParams({
+													customerId,
+													accountId: account.id,
+													amountCents: payload.amountCents,
+													receiptEmail: principal.email,
+												}),
 												success_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=success`,
 												cancel_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=cancelled`,
 												metadata: {
-													type: "developer_credits",
+													type: CREDIT_CHECKOUT_METADATA_TYPE,
 													appId: path.appId,
 													accountId: account.id,
 													amountCents: String(payload.amountCents),
