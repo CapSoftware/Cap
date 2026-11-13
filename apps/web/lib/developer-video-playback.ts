@@ -10,6 +10,7 @@ import {
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
 import {
+	developerVideoUrlAnswersAnyOrigin,
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,
 } from "./developer-video-storage";
@@ -93,9 +94,53 @@ async function redirectTo(key: string, request: Request): Promise<Response> {
 	});
 }
 
+const SHORT_SEGMENTS_QUERY = "segments=short";
+const PLAYLIST_FILE_PATTERN = /^[A-Za-z0-9_-]+\.m3u8$/;
+
+// A rendition is one file read by byte range, so a playlist that signs every
+// segment repeats one long signed URL per segment: about 250 KB for a 21 minute
+// video, fetched for video and for audio before playback starts. The short
+// form signs only the init section and first segment of a playlist longer than
+// this, which is all a player needs for the first frame, and lists the later
+// segments by file name. A player resolves those to this route and follows its
+// redirect to the same signed URL.
+//
+// It is only served on request. In players built on hls.js it left the first
+// frame and seeking as they were when measured. Apple's own players ask this
+// route again for every segment, which made each seek slower.
+const FULLY_SIGNED_SEGMENTS = 15;
+
+export function wantsShortSegments(request: Request): boolean {
+	const values = new URL(request.url).searchParams.getAll("segments");
+	return values.length === 1 && values[0] === "short";
+}
+
+// Carries the choice from the master playlist to the playlists it lists, so a
+// player only has to ask for the short form once.
+export function listShortSegmentPlaylists(master: string): string {
+	return master
+		.split(/\r?\n/)
+		.map((raw) => {
+			const line = raw.trim();
+			if (line.startsWith("#")) {
+				return line.replace(
+					/URI="([A-Za-z0-9_-]+\.m3u8)"/,
+					(_, name: string) => `URI="${name}?${SHORT_SEGMENTS_QUERY}"`,
+				);
+			}
+			return PLAYLIST_FILE_PATTERN.test(line)
+				? `${line}?${SHORT_SEGMENTS_QUERY}`
+				: raw;
+		})
+		.join("\n");
+}
+
+// `listedByName` says whether a segment at this signed URL may be listed by
+// file name instead. Every segment it refuses stays signed.
 export async function signMediaPlaylist(
 	playlist: string,
 	sign: (name: string) => Promise<string>,
+	listedByName: (signedUrl: string) => boolean = () => false,
 ): Promise<string> {
 	const signed = new Map<string, string>();
 	const resolve = async (name: string) => {
@@ -109,16 +154,24 @@ export async function signMediaPlaylist(
 		return url;
 	};
 
+	const source = playlist.split(/\r?\n/).map((line) => line.trim());
+	const segments = source.filter(
+		(line) => line.length > 0 && !line.startsWith("#"),
+	).length;
+	const long = segments > FULLY_SIGNED_SEGMENTS;
+	let segment = 0;
+
 	const lines: string[] = [];
-	for (const raw of playlist.split(/\r?\n/)) {
-		const line = raw.trim();
+	for (const line of source) {
 		if (line.startsWith("#EXT-X-MAP:")) {
 			const uri = line.match(/URI="([^"]*)"/);
 			if (!uri?.[1]) throw new Error("Playlist has no init segment");
 			const url = await resolve(uri[1]);
 			lines.push(line.replace(uri[0], () => `URI="${url}"`));
 		} else if (line.length > 0 && !line.startsWith("#")) {
-			lines.push(await resolve(line));
+			const url = await resolve(line);
+			lines.push(long && segment > 0 && listedByName(url) ? line : url);
+			segment++;
 		} else {
 			lines.push(line);
 		}
@@ -262,16 +315,21 @@ export async function developerPlaybackResponse(
 
 	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
 	if (!playlist) return notFound();
-	const validity = signedUrlValidity();
+	const short = wantsShortSegments(request);
+	if (file === DEVELOPER_VIDEO_MASTER_PLAYLIST) {
+		const master = leadWithStartRendition(playlist);
+		return playlistResponse(short ? listShortSegmentPlaylists(master) : master);
+	}
 	return playlistResponse(
-		file === DEVELOPER_VIDEO_MASTER_PLAYLIST
-			? leadWithStartRendition(playlist)
-			: await signMediaPlaylist(playlist, (name) =>
-					signedDeveloperVideoUrl(
-						`${keys.hlsPrefix}${name}`,
-						validity,
-						request,
-					),
+		await signMediaPlaylist(
+			playlist,
+			(name) =>
+				signedDeveloperVideoUrl(
+					`${keys.hlsPrefix}${name}`,
+					signedUrlValidity(),
+					request,
 				),
+			short ? developerVideoUrlAnswersAnyOrigin : undefined,
+		),
 	);
 }
