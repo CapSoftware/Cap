@@ -55,14 +55,22 @@ vi.mock("@cap/database", async () => {
 						b.createdAt.getTime() - a.createdAt.getTime() ||
 						(a.id < b.id ? 1 : -1),
 				);
-			if (cursor.length > 0) {
-				const time = asTime(cursor[0]);
+			const at = (index: number) => asTime(cursor[index]);
+			if (cursor.length === 3) {
 				const id = String(cursor.at(-1));
 				rows = rows.filter(
 					(row) =>
-						row.createdAt.getTime() < time ||
-						(row.createdAt.getTime() === time && row.id < id),
+						row.createdAt.getTime() < at(0) ||
+						(row.createdAt.getTime() === at(0) && row.id < id),
 				);
+			} else if (rendered.sql.includes(">= ?")) {
+				rows = rows.filter(
+					(row) =>
+						row.createdAt.getTime() >= at(0) &&
+						row.createdAt.getTime() <= at(1),
+				);
+			} else if (cursor.length === 1) {
+				rows = rows.filter((row) => row.createdAt.getTime() === at(0));
 			}
 			if (fields && "total" in fields) return [{ total: rows.length }];
 			return rows.slice(offset, offset + limit);
@@ -186,10 +194,14 @@ describe("GET /transactions", () => {
 		const publicKey = await get("/transactions", "cpk_public_key");
 		const unknown = await get("/transactions", "csk_not_a_key");
 
-		for (const response of [missing, publicKey, unknown]) {
-			expect(response.status).toBe(401);
+		for (const [response, status, code] of [
+			[missing, 401, "invalid_secret_key"],
+			[publicKey, 403, "public_key_not_allowed"],
+			[unknown, 401, "invalid_secret_key"],
+		] as const) {
+			expect(response.status).toBe(status);
 			expect(await response.json()).toMatchObject({
-				code: "invalid_secret_key",
+				code,
 				hint: expect.any(String),
 				docs: expect.any(String),
 			});

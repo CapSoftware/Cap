@@ -100,6 +100,7 @@ describe("console video list", () => {
 			"legacy",
 			"name",
 			"status",
+			"takenDown",
 			"width",
 		]);
 		expect(query(selection?.legacy).sql).toMatch(

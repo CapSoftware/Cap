@@ -80,6 +80,25 @@ vi.mock("@/lib/developer-transcripts", async (importOriginal) => ({
 	TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS: 2_000,
 }));
 
+// requestPublicOnly refuses a loopback address, by name or as a literal, so
+// the local server is reached through a name this lookup pins to it.
+vi.mock("@/lib/s3-endpoint-policy", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/lib/s3-endpoint-policy")>();
+	const publicOnlyLookup: typeof actual.publicOnlyLookup = (
+		_hostname,
+		options,
+		callback,
+	) => {
+		if (typeof options === "object" && options.all) {
+			callback(null, [{ address: "127.0.0.1", family: 4 }]);
+			return;
+		}
+		callback(null, "127.0.0.1", 4);
+	};
+	return { ...actual, publicOnlyLookup };
+});
+
 vi.mock("@/lib/public-media-fetch", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@/lib/public-media-fetch")>();
@@ -263,7 +282,7 @@ const serve = async (options: {
 	await new Promise<void>((resolve) =>
 		state.server.listen(0, "127.0.0.1", resolve),
 	);
-	context.origin = `http://127.0.0.1:${(state.server.address() as AddressInfo).port}`;
+	context.origin = `http://media.test:${(state.server.address() as AddressInfo).port}`;
 	origin = state;
 	return state;
 };
@@ -431,25 +450,33 @@ describe("downloading a URL source from a slow server", () => {
 				head,
 			});
 
+		const WEB_PAGE = "The URL returned a web page, not a media file";
+		const NOT_MEDIA = "The file is not a supported audio or video format";
+		const bytes = (text: string) => new TextEncoder().encode(text);
+
 		it.each([
-			["an HTML page", new TextEncoder().encode("<!doctype html><html>")],
-			["a playlist", new TextEncoder().encode("#EXTM3U\n#EXT-X-VERSION:3\n")],
-			["random bytes", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])],
+			["an HTML page", bytes("<!doctype html><html>"), WEB_PAGE],
+			[
+				"an HTML page after a BOM and blank lines",
+				new Uint8Array([0xef, 0xbb, 0xbf, ...bytes("\r\n\t <!DOCTYPE HTML>")]),
+				WEB_PAGE,
+			],
+			["an HTML page with no doctype", bytes("\n<HTML lang=en>"), WEB_PAGE],
+			["an XML document", bytes('<?xml version="1.0"?><a/>'), NOT_MEDIA],
+			["a playlist", bytes("#EXTM3U\n#EXT-X-VERSION:3\n"), NOT_MEDIA],
+			["random bytes", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]), NOT_MEDIA],
 		])(
 			"is refused from its first bytes when it is %s, with nothing stored",
-			async (_label, head) => {
+			async (_label, head, message) => {
 				const server = await notMedia(head);
 
 				const result = await run();
 
-				expect(result).toEqual({
-					success: false,
-					message: "The file is not a supported audio or video format",
-				});
+				expect(result).toEqual({ success: false, message });
 				expect(transcript()).toMatchObject({
 					status: "error",
 					errorCode: "unsupported_format",
-					errorMessage: "The file is not a supported audio or video format",
+					errorMessage: message,
 					billedMicroCredits: 0,
 					reservedMicroCredits: 0,
 				});

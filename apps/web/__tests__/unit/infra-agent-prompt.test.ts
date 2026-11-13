@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CAP_INFRA_AGENT_PROMPT } from "@/data/infra-agent-prompt";
+import {
+	CAP_INFRA_AGENT_PROMPT,
+	CAP_INFRA_MCP_URL,
+} from "@/data/infra-agent-prompt";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
 
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
@@ -30,7 +33,9 @@ describe("Cap Infra agent prompt", () => {
 			);
 		}
 		const pathMentions =
-			CAP_INFRA_AGENT_PROMPT.match(/\/api\/developer\//g) ?? [];
+			CAP_INFRA_AGENT_PROMPT.replaceAll(CAP_INFRA_MCP_URL, "").match(
+				/\/api\/developer\//g,
+			) ?? [];
 		expect(pathMentions).toHaveLength(calls.length);
 	});
 
@@ -60,17 +65,22 @@ describe("Cap Infra agent prompt", () => {
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("60 requests a minute");
 	});
 
-	it("links only to the API reference", () => {
+	it("links only to the API reference and the hosted MCP server", () => {
 		const links = CAP_INFRA_AGENT_PROMPT.match(/https?:\/\/[^\s)]+/g) ?? [];
 		expect([...new Set(links)].sort()).toEqual([
+			"https://cap.so/api/developer/mcp",
 			"https://cap.so/docs/api/rest-api",
 			"https://cap.so/openapi.json",
 		]);
 	});
 
-	it("never asks for the Cap CLI, an MCP server or a pasted key", () => {
+	it("never asks for the Cap CLI, a local MCP server or a pasted key", () => {
 		expect(CAP_INFRA_AGENT_PROMPT).not.toMatch(/\bcap [a-z]/);
-		expect(CAP_INFRA_AGENT_PROMPT).not.toMatch(/\bCLI\b|\bMCP\b|curl|install/i);
+		expect(CAP_INFRA_AGENT_PROMPT).not.toMatch(/\bCLI\b|curl|install|npx/i);
+		expect(CAP_INFRA_AGENT_PROMPT.match(/\bMCP\b/g)).toEqual(["MCP", "MCP"]);
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			"hosted MCP server at https://cap.so/api/developer/mcp",
+		);
 		expect(CAP_INFRA_AGENT_PROMPT).not.toContain("cpk_");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain(
 			"Never ask me to paste the key into the chat",
@@ -85,7 +95,7 @@ describe("Cap Infra agent prompt", () => {
 		);
 	});
 
-	it("is introduced in the console without the Cap CLI or an MCP server", () => {
+	it("is introduced in the console without the Cap CLI", () => {
 		const source = readFileSync(
 			join(
 				process.cwd(),
@@ -93,7 +103,7 @@ describe("Cap Infra agent prompt", () => {
 			),
 			"utf8",
 		);
-		expect(source).not.toMatch(/\bCLI\b|\bMCP\b/);
+		expect(source).not.toMatch(/\bCLI\b/);
 		expect(source).toContain("secret key");
 	});
 });
