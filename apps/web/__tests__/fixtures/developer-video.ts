@@ -157,6 +157,7 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 		return chain;
 	};
 
+	let queue: Promise<unknown> = Promise.resolve();
 	const database = {
 		select,
 		update: () => ({
@@ -167,8 +168,13 @@ export async function createDeveloperVideoDatabase(store: DeveloperVideoStore) {
 				},
 			}),
 		}),
-		transaction: async (run: (tx: unknown) => Promise<unknown>) =>
-			run(database),
+		// A transaction that reads the video for update holds its row lock, so
+		// two of them never overlap. The fake runs them one after the other.
+		transaction: (run: (tx: unknown) => Promise<unknown>) => {
+			const result = queue.then(() => run(database));
+			queue = result.catch(() => undefined);
+			return result;
+		},
 	};
 	return database;
 }
