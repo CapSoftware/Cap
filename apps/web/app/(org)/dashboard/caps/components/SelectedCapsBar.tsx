@@ -45,7 +45,7 @@ export const SelectedCapsBar = ({
 			{selectedCaps.length > 0 && (
 				<>
 					<motion.div
-						className="flex fixed right-0 left-0 bottom-12 z-50 justify-between items-center p-3 mx-auto w-full max-w-xl rounded-xl border shadow-lg border-gray-2 bg-gray-1"
+						className="flex fixed inset-x-3 bottom-24 z-50 gap-3 justify-between items-center p-3 mx-auto max-w-xl rounded-xl border shadow-lg sm:inset-x-0 sm:bottom-12 border-gray-2 bg-gray-1"
 						initial={{ opacity: 0, y: 10, scale: 0.9 }}
 						animate={{ opacity: 1, y: 0, scale: 1 }}
 						exit={{
@@ -61,12 +61,15 @@ export const SelectedCapsBar = ({
 						}}
 					>
 						<div className="flex flex-col min-w-0">
-							<div className="flex gap-1 text-sm font-medium text-gray-10">
+							<div className="flex gap-1 text-sm font-medium whitespace-nowrap text-gray-10">
 								<NumberFlow
 									value={selectedCaps.length}
 									className="tabular-nums text-md text-gray-12"
 								/>
-								cap{selectedCaps.length !== 1 ? "s" : ""} selected
+								<span className="hidden sm:inline">
+									cap{selectedCaps.length !== 1 ? "s" : ""}
+								</span>
+								selected
 							</div>
 							{moveLocation && moveRootLabel && (
 								<p className="hidden text-xs truncate sm:block text-gray-9">
@@ -74,7 +77,7 @@ export const SelectedCapsBar = ({
 								</p>
 							)}
 						</div>
-						<div className="flex gap-2 ml-4">
+						<div className="flex gap-2 shrink-0">
 							{moveLocation && moveRootLabel && (
 								<Button
 									variant="gray"
