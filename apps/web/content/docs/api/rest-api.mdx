@@ -673,7 +673,7 @@ POST /api/developer/v1/transcripts
 | `videoId` | string | One of `url` or `videoId` | ID of a ready video of this app. See [Transcribe a video you already uploaded](/docs/api/rest-api#transcribe-a-video-you-already-uploaded) |
 | `name` | string | No | Display name (defaults to the file name, or to the video's name) |
 | `language` | string | No | The language of the audio if you know it, or `auto` (default). See [Languages](/docs/api/rest-api#languages) |
-| `userId` | string | No | Your own user identifier, used to filter lists |
+| `userId` | string | No | Your own user identifier, used to filter lists. With `videoId`, leave it out to use the video's `userId` |
 | `metadata` | object | No | Your own JSON object, under 8KB |
 
 Send exactly one of `url` or `videoId`. Both, or neither, returns `400` with the code `invalid_request`. Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
@@ -717,7 +717,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 
 Send an `Idempotency-Key` header so a retried request returns the same transcript instead of creating and billing a second one. The key is 8 to 128 characters from letters, digits, dot, dash and underscore. Any other character, such as a colon, slash or space, is refused with `400 invalid_idempotency_key`.
 
-A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
+A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs. A repeat with `videoId` may leave out `userId` when the first request left it out or sent the video's own `userId`.
 
 #### Languages
 

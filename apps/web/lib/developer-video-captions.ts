@@ -274,6 +274,7 @@ export type VideoForTranscript =
 	| {
 			state: "ok";
 			name: string;
+			externalUserId: string | null;
 			sourceKey: string;
 			durationSeconds: number | null;
 	  }
@@ -289,6 +290,7 @@ export async function findVideoForTranscript(
 			id: developerVideos.id,
 			appId: developerVideos.appId,
 			name: developerVideos.name,
+			externalUserId: developerVideos.externalUserId,
 			status: developerVideos.status,
 			duration: developerVideos.duration,
 			processing: developerVideos.processing,
@@ -319,6 +321,7 @@ export async function findVideoForTranscript(
 	return {
 		state: "ok",
 		name: video.name,
+		externalUserId: video.externalUserId ?? null,
 		sourceKey: developerVideoKeys(video, processing.encodeId, mp4.output).mp4,
 		durationSeconds:
 			typeof video.duration === "number" && video.duration > 0

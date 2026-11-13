@@ -4,6 +4,7 @@ import {
 	type DeveloperTranscriptStatus,
 	developerApps,
 	developerTranscripts,
+	developerVideos,
 	users,
 } from "@cap/database/schema";
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
@@ -570,6 +571,17 @@ const VIDEO_NOT_FOUND = fail(
 
 const TRANSCRIPT_MAX_VIDEO_ID_LENGTH = 64;
 
+async function findVideoUserId(appId: string, videoId: string) {
+	const [video] = await db()
+		.select({ externalUserId: developerVideos.externalUserId })
+		.from(developerVideos)
+		.where(
+			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
+		)
+		.limit(1);
+	return video?.externalUserId ?? null;
+}
+
 export async function createTranscriptFromVideo(
 	appId: string,
 	input: TranscriptOptionsInput & { videoId: string; idempotencyKey?: string },
@@ -591,12 +603,24 @@ export async function createTranscriptFromVideo(
 		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
 		: nanoId();
 
-	const differsFromRequest = (existing: TranscriptRow) => {
+	// A request without userId takes the video's. Transcripts made before that
+	// stored none, so a repeat without userId matches either.
+	const differsFromRequest = (
+		existing: TranscriptRow,
+		videoUserId: string | null,
+	) => {
 		if (existing.sourceType !== "video") return IDEMPOTENCY_CONFLICT;
 		if (existing.videoId !== videoId) return idempotencyMismatch("videoId");
+		const omittedUserIdMatches =
+			options.externalUserId === null &&
+			(existing.externalUserId === null ||
+				existing.externalUserId === videoUserId);
 		const different = replayedWithDifferent(existing, {
 			...options,
 			name: options.name ?? existing.name,
+			externalUserId: omittedUserIdMatches
+				? (existing.externalUserId ?? null)
+				: options.externalUserId,
 		});
 		if (different) return idempotencyMismatch(different);
 		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
@@ -605,7 +629,13 @@ export async function createTranscriptFromVideo(
 	if (input.idempotencyKey) {
 		const existing = await findTranscriptAnyState(appId, id);
 		if (existing) {
-			const conflict = differsFromRequest(existing);
+			const videoUserId =
+				options.externalUserId === null &&
+				existing.externalUserId !== null &&
+				existing.videoId === videoId
+					? await findVideoUserId(appId, videoId)
+					: null;
+			const conflict = differsFromRequest(existing, videoUserId);
 			if (conflict) return conflict;
 			if (existing.status === "queued") {
 				await dispatchTranscript(id, "queued");
@@ -650,7 +680,7 @@ export async function createTranscriptFromVideo(
 				.values({
 					id,
 					appId,
-					externalUserId: options.externalUserId,
+					externalUserId: options.externalUserId ?? video.externalUserId,
 					name: options.name ?? video.name,
 					status: "queued",
 					queuedAt: new Date(),
@@ -667,7 +697,7 @@ export async function createTranscriptFromVideo(
 
 	const stored = await findTranscriptAnyState(appId, id);
 	if (!stored) return NOT_FOUND;
-	const conflict = differsFromRequest(stored);
+	const conflict = differsFromRequest(stored, video.externalUserId);
 	if (conflict) return conflict;
 
 	const dispatched = await dispatchTranscript(id, "queued");

@@ -548,7 +548,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					.max(255)
 					.optional()
 					.describe(
-						"Your own user id for this transcript, used to filter lists",
+						"Your own user id for this transcript, used to filter lists. With videoId, leave it out to use the video's userId",
 					),
 				metadata,
 				idempotencyKey: z

@@ -1413,6 +1413,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"ID of a ready video of this app. Cap transcribes its stored MP4 directly. Leave it out when you send url.",
 					},
 					...transcriptOptionProperties,
+					userId: {
+						...transcriptOptionProperties.userId,
+						description:
+							"Your own identifier for the end user, used to filter lists. With videoId, leaving it out uses the video's userId, and a repeat with the same Idempotency-Key may leave it out too.",
+					},
 				},
 			},
 			CreateTranscriptUploadRequest: {
