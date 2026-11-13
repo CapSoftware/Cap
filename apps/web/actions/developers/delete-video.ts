@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { canUseInfra } from "@/lib/infra-access";
 import { settleFirstMonthAtDelete } from "@/lib/infra-storage-minimum";
 
@@ -37,6 +38,7 @@ export async function deleteDeveloperVideo(appId: string, videoId: string) {
 			),
 		);
 	if (deleted.affectedRows > 0) await settleFirstMonthAtDelete(videoId);
+	await cancelDeveloperVideoEncodes({ appId, videoId });
 
 	revalidatePath("/dashboard/infra", "layout");
 	return { success: true };

@@ -230,7 +230,7 @@ export const RATE_LIMIT_IDS = {
 	DEVELOPER_UPLOAD_TOKEN: "rl_developer_upload_token",
 	/** Developer REST API requests per account, across all of its keys. 1200 / 1m per key (owner id). */
 	DEVELOPER_API_OWNER: "rl_developer_api_owner",
-	/** Developer API requests whose key or upload token was not accepted. 30 / 1m per IP. */
+	/** Developer API requests whose key or upload token was not accepted. 300 / 1m per IP. */
 	DEVELOPER_AUTH_FAILURE: "rl_developer_auth_failure",
 } as const;
 

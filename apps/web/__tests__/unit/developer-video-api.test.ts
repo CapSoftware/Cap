@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	playbackUrl: undefined as string | undefined,
 	redrive: vi.fn(),
 	settleAtDelete: vi.fn(),
+	cancelJob: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -34,6 +35,10 @@ vi.mock("@/lib/developer-video-start", () => ({
 }));
 vi.mock("@/lib/infra-storage-minimum", () => ({
 	settleFirstMonthAtDelete: mocks.settleAtDelete,
+}));
+
+vi.mock("@/lib/media-client", () => ({
+	cancelMediaServerVideoJob: mocks.cancelJob,
 }));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
@@ -114,6 +119,7 @@ beforeEach(() => {
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
 	mocks.redrive.mockResolvedValue(false);
+	mocks.cancelJob.mockResolvedValue("cancelled");
 });
 
 describe("developer video API", () => {
@@ -784,6 +790,96 @@ describe("developer video API", () => {
 			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
 			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
 			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+		});
+
+		it("cancels the encode jobs of a video deleted mid-encode", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: "job-hls",
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+				return "cancelled";
+			});
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob.mock.calls.flat().sort()).toEqual([
+				"job-hls",
+				"job-mp4",
+			]);
+
+			await remove();
+			expect(mocks.cancelJob).toHaveBeenCalledTimes(2);
+		});
+
+		it("cancels only the part that is still running and has a job", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: null,
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+
+			await remove();
+
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-mp4"]]);
+		});
+
+		it("cancels nothing for a video that finished encoding", async () => {
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob).not.toHaveBeenCalled();
+		});
+
+		it("still deletes when the media server cannot cancel the job", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockResolvedValue("failed");
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(warn).toHaveBeenCalledWith(
+				"[developer-video] Could not cancel encode job",
+				{ videoId: "video-1", jobId: "job-mp4" },
+			);
+			warn.mockRestore();
 		});
 
 		it("answers a repeated delete with success and leaves the row alone", async () => {

@@ -103,6 +103,10 @@ vi.mock("next/cache", () => ({
 	revalidatePath: vi.fn(),
 }));
 
+vi.mock("@/lib/developer-video-cancel", () => ({
+	cancelDeveloperVideoEncodes: vi.fn(async () => undefined),
+}));
+
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
@@ -112,7 +116,11 @@ vi.mock("drizzle-orm", () => ({
 
 import * as capDatabase from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 
+const mockCancelEncodes = cancelDeveloperVideoEncodes as ReturnType<
+	typeof vi.fn
+>;
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -318,6 +326,40 @@ describe("deleteDeveloperApp", () => {
 		expect(stamps[0]?.getMilliseconds()).toBe(0);
 		expect(firstMonth.forDeletedApp).toHaveBeenCalledWith("app-456", stamps[0]);
 		expect(stamps[1]).toBe(stamps[0]);
+	});
+
+	it("cancels the app's encode jobs once the delete has committed", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		let committed = false;
+		mockDb.transaction.mockImplementationOnce(async (fn) => {
+			await fn(mockDb);
+			committed = true;
+		});
+		mockCancelEncodes.mockImplementationOnce(async () => {
+			expect(committed).toBe(true);
+		});
+
+		await deleteDeveloperApp("app-456");
+
+		const stamps = mockDb.set.mock.calls.map(
+			([values]) => values.deletedAt ?? values.revokedAt,
+		);
+		const deletedAt = stamps[0];
+		expect(deletedAt).toBeInstanceOf(Date);
+		expect(deletedAt.getTime() % 1000).toBe(0);
+		expect(stamps).toEqual([deletedAt, deletedAt, deletedAt]);
+		expect(mockCancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-456",
+			deletedAt,
+		});
+	});
+
+	it("cancels nothing for an app it could not find", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValue([]);
+		await expect(deleteDeveloperApp("app-456")).rejects.toThrow();
+		expect(mockCancelEncodes).not.toHaveBeenCalled();
 	});
 });
 
@@ -822,5 +864,32 @@ describe("deleteDeveloperVideo", () => {
 			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 		const result = await deleteDeveloperVideo("app-456", "video-001");
 		expect(result).toEqual({ success: true });
+	});
+
+	it("cancels the video's encode jobs after the delete is written", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
+
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(mockCancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-456",
+			videoId: "video-001",
+		});
+		const [deleteWrite] = mockDb.set.mock.invocationCallOrder;
+		const [cancel] = mockCancelEncodes.mock.invocationCallOrder;
+		expect(cancel).toBeGreaterThan(deleteWrite ?? Infinity);
+	});
+
+	it("cancels nothing when the caller does not own the app", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValue([]);
+		await expect(deleteDeveloperVideo("app-456", "video-001")).rejects.toThrow(
+			"App not found",
+		);
+		expect(mockCancelEncodes).not.toHaveBeenCalled();
 	});
 });

@@ -22,6 +22,13 @@ const state = vi.hoisted(() => ({
 	redrive: vi.fn(async (_videoId: string) => false),
 	users: [] as Record<string, unknown>[],
 	createCheckoutSession: vi.fn(),
+	cancelEncodes: vi.fn(async () => undefined),
+	videoUpdates: [] as Record<string, unknown>[],
+	appStamps: [] as unknown[],
+}));
+
+vi.mock("@/lib/developer-video-cancel", () => ({
+	cancelDeveloperVideoEncodes: state.cancelEncodes,
 }));
 
 vi.mock("@cap/utils", async (original) => ({
@@ -86,7 +93,18 @@ vi.mock("@cap/database", () => {
 	};
 	const writer = (table: unknown) => {
 		const chain = Object.assign(Promise.resolve([{ affectedRows: 1 }]), {
-			set: () => chain,
+			set: (values: Record<string, unknown>) => {
+				if (table === state.tables.developerVideos) {
+					state.videoUpdates.push(values);
+				}
+				if (table === state.tables.developerApps) {
+					state.appStamps.push(values.deletedAt);
+				}
+				if (table === state.tables.developerApiKeys) {
+					state.appStamps.push(values.revokedAt);
+				}
+				return chain;
+			},
 			where: () => chain,
 			onDuplicateKeyUpdate: () => chain,
 			values: (values: Record<string, unknown>) => {
@@ -144,6 +162,7 @@ describe("developer routes of the agent API", () => {
 		state.tables = {
 			agentApiKeys: schema.agentApiKeys,
 			developerApps: schema.developerApps,
+			developerApiKeys: schema.developerApiKeys,
 			developerVideos: schema.developerVideos,
 			developerCreditTransactions: schema.developerCreditTransactions,
 			agentApiIdempotency: schema.agentApiIdempotency,
@@ -166,6 +185,9 @@ describe("developer routes of the agent API", () => {
 		state.idempotency = null;
 		state.users = [];
 		state.createCheckoutSession.mockReset();
+		state.cancelEncodes.mockClear();
+		state.videoUpdates = [];
+		state.appStamps = [];
 	});
 
 	const call = async (method: string, path: string, body?: unknown) => {
@@ -246,6 +268,56 @@ describe("developer routes of the agent API", () => {
 		});
 		expect(declared.length).toBeGreaterThan(0);
 		expect([...tested].sort()).toEqual([...declared].sort());
+	});
+
+	it("cancels a deleted video's encode jobs once the delete has committed", async () => {
+		state.apps = [{ id: APP }];
+		state.videos = [{ id: "video0000000001" }];
+
+		const result = await call(
+			"DELETE",
+			`/developer/apps/${APP}/videos/video0000000001`,
+		);
+
+		expect(result.status).toBe(200);
+		expect(state.videoUpdates).toEqual([
+			{ deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+		]);
+		expect(state.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: APP,
+			videoId: "video0000000001",
+		});
+	});
+
+	it("cancels nothing for a video it could not find", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call(
+			"DELETE",
+			`/developer/apps/${APP}/videos/video0000000001`,
+		);
+
+		expect(result.status).toBe(404);
+		expect(state.cancelEncodes).not.toHaveBeenCalled();
+	});
+
+	it("deletes an app's videos with it and cancels their encode jobs", async () => {
+		state.apps = [{ id: APP }];
+
+		const result = await call("DELETE", `/developer/apps/${APP}`);
+
+		expect(result.status).toBe(200);
+		expect(state.videoUpdates).toEqual([
+			{ deletedAt: expect.any(Date), updatedAt: expect.any(Date) },
+		]);
+		const deletedAt = state.videoUpdates[0]?.deletedAt;
+		expect(deletedAt).toBeInstanceOf(Date);
+		expect((deletedAt as Date).getTime() % 1000).toBe(0);
+		expect(state.appStamps).toEqual([deletedAt, deletedAt]);
+		expect(state.cancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: APP,
+			deletedAt,
+		});
 	});
 
 	it("opens a credit checkout with the console's receipt, tax and payment tag", async () => {

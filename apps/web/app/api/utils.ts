@@ -181,12 +181,47 @@ const UPLOAD_TOKEN_RATE_LIMIT: DeveloperRateLimit = {
 	subject: "upload token",
 };
 
-// Once an address has sent too many credentials that were not accepted, this
-// instance stops looking up what it sends until the window is over. A key it
-// accepted within the last minute is still let through, so a customer who
-// shares an address with such a caller keeps working.
+// A credential that was refused is remembered with the address that sent it,
+// so sending it again is refused at once: no lookup, and it does not count
+// again. A different credential from the same address is still looked up, so a
+// customer whose stale worker keeps sending a rotated key, from the same server
+// as their live traffic, keeps working. Only an address sending many different
+// refused credentials (an attacker trying keys) is stopped outright, which
+// bounds the lookups it can cause. A key this instance accepted within the
+// last minute is let through even then.
 const blockedAddresses = new Map<string, number>();
+const refusedCredentials = new Map<string, number>();
+const pendingLookups = new Map<string, Promise<DeveloperSecretKey | null>>();
 const acceptedAt = new Map<string, number>();
+
+function refusedKey(address: string, digest: string) {
+	return `${address}|${digest}`;
+}
+
+function refusedRecently(address: string, digest: string): boolean {
+	const key = refusedKey(address, digest);
+	const until = refusedCredentials.get(key);
+	if (until === undefined) return false;
+	if (until > Date.now()) return true;
+	refusedCredentials.delete(key);
+	return false;
+}
+
+function rememberRefused(address: string, digest: string) {
+	const now = Date.now();
+	if (refusedCredentials.size >= RATE_LIMIT_MAX_ENTRIES) {
+		for (const [key, until] of refusedCredentials) {
+			if (until <= now) refusedCredentials.delete(key);
+		}
+		if (refusedCredentials.size >= RATE_LIMIT_MAX_ENTRIES) {
+			refusedCredentials.clear();
+		}
+	}
+	refusedCredentials.set(
+		refusedKey(address, digest),
+		now + RATE_LIMIT_WINDOW_MS,
+	);
+}
 
 function recentlyAccepted(credential: string): boolean {
 	const at = acceptedAt.get(credential);
@@ -329,9 +364,32 @@ export const developerRateLimiter = createMiddleware<{
 	if (authFailuresBlocked(c) && !recentlyAccepted(credential)) {
 		return authFailuresLimited(c);
 	}
+	const address = rateLimitClientAddress(c.req.raw.headers);
+	const digest = await credentialDigest(credential);
+	if (address && refusedRecently(address, digest)) {
+		return c.json(unknownSecretKey(), 401);
+	}
 
-	const key = await findDeveloperSecretKey(credential);
+	// Requests with the same credential from the same address share one lookup,
+	// and only that lookup counts a refusal, so a burst of retries with a
+	// rotated key counts once however many arrive before it finishes.
+	const pairKey = address ? refusedKey(address, digest) : null;
+	let pending = pairKey ? pendingLookups.get(pairKey) : undefined;
+	const leads = pending === undefined;
+	if (!pending) {
+		pending = findDeveloperSecretKey(credential);
+		if (pairKey) {
+			pendingLookups.set(pairKey, pending);
+			void pending.then(
+				() => pendingLookups.delete(pairKey),
+				() => pendingLookups.delete(pairKey),
+			);
+		}
+	}
+	const key = await pending;
 	if (!key) {
+		if (!leads) return c.json(unknownSecretKey(), 401);
+		if (address) rememberRefused(address, digest);
 		if (await tooManyAuthFailures(c)) return authFailuresLimited(c);
 		return c.json(unknownSecretKey(), 401);
 	}
@@ -339,9 +397,7 @@ export const developerRateLimiter = createMiddleware<{
 	rememberAccepted(credential);
 
 	const [byKey, byOwner] = await Promise.all([
-		credentialDigest(credential).then((digest) =>
-			countDeveloperRequest(c, KEY_RATE_LIMIT, credential, digest),
-		),
+		countDeveloperRequest(c, KEY_RATE_LIMIT, credential, digest),
 		countDeveloperRequest(c, OWNER_RATE_LIMIT, key.ownerId, key.ownerId),
 	]);
 	setRateLimitHeaders(c, KEY_RATE_LIMIT, byKey);

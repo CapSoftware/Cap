@@ -144,7 +144,7 @@ Past the limit the API answers `429` with the code `rate_limited` and a `Retry-A
 
 `X-RateLimit-Remaining` and `X-RateLimit-Reset` are a guide. Requests can be answered by more than one server and each reports what it has counted itself, so `X-RateLimit-Remaining` can read higher than what is left and can differ from one response to the next. Use it to slow down early, not to decide that the next request will succeed.
 
-A request whose key or upload token is not accepted is answered `401` and spends none of a key's budget. Too many of those from one address in a minute are answered `429` until the minute is over.
+A request whose key or upload token is not accepted is answered `401` and spends none of a key's budget. Sending the same refused key again is answered `401` at once, and a valid key from the same address keeps working. An address that sends many different refused keys or tokens in a minute is answered `429` until the minute is over.
 
 Each upload token has its own count, separate from your secret key's and from every other upload. Each uploaded part spends one presign request from it, so one upload can sign twenty parts a second.
 
@@ -1080,7 +1080,6 @@ curl "https://cap.so/api/developer/v1/transactions?limit=2" \
 | `topup` | Code redeemed | `stripe_checkout_session` | The checkout a code covered in full |
 | `topup` | Auto top-up | `auto_top_up` | The payment |
 | `topup_failed` | Auto top-up declined | `auto_top_up_failed` | The payment, or `declined-` and the UTC day when there was none |
-| `topup_pending` | Auto top-up pending | `auto_top_up_pending` | The payment |
 | `pro_credit` | Cap Pro credit | `pro_monthly_credit` | The month, as `YYYY-MM` |
 | `storage_daily` | Storage | `storage_day` | The UTC day, as `YYYY-MM-DD` |
 | `video_create` | Storage, first month | `developer_video` | The video ID |
