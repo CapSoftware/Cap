@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	ids: 0,
 	emailsEnabled: false,
 	createPaymentIntent: vi.fn(),
+	retrievePaymentIntent: vi.fn(),
 	retrieveSetupIntent: vi.fn(),
 	retrievePaymentMethod: vi.fn(),
 	detachPaymentMethod: vi.fn(),
@@ -28,7 +29,10 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
-		paymentIntents: { create: mocks.createPaymentIntent },
+		paymentIntents: {
+			create: mocks.createPaymentIntent,
+			retrieve: mocks.retrievePaymentIntent,
+		},
 		setupIntents: { retrieve: mocks.retrieveSetupIntent },
 		paymentMethods: {
 			detach: mocks.detachPaymentMethod,
@@ -125,6 +129,7 @@ beforeEach(() => {
 	mocks.emailsEnabled = false;
 	mocks.createPaymentIntent.mockReset();
 	mocks.createPaymentIntent.mockResolvedValue(intent("pi_1", "succeeded"));
+	mocks.retrievePaymentIntent.mockReset();
 	mocks.sendEmail.mockReset();
 	mocks.sendEmail.mockResolvedValue({ data: { id: "email-1" }, error: null });
 	mocks.retrieveSetupIntent.mockReset();
@@ -505,6 +510,101 @@ describe("auto top-up charge", () => {
 
 		expect(topUps()).toHaveLength(1);
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
+
+		ledger.account.balanceMicroCredits = 10;
+		mocks.createPaymentIntent.mockResolvedValue(intent("pi_2", "succeeded"));
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			state: "succeeded",
+			paymentIntentId: "pi_2",
+		});
+	});
+
+	describe("a payment still pending after 72 hours", () => {
+		const leavePending = async () => {
+			mocks.createPaymentIntent.mockResolvedValue(intent("pi_1", "processing"));
+			await runAutoTopUp("account-1", now());
+			mocks.createPaymentIntent.mockReset();
+		};
+
+		it("asks Stripe once and records a payment that succeeded", async () => {
+			await leavePending();
+			later(71.9);
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				reason: "awaiting_payment",
+			});
+			expect(mocks.retrievePaymentIntent).not.toHaveBeenCalled();
+
+			later(0.2);
+			mocks.retrievePaymentIntent.mockResolvedValue(
+				intent("pi_1", "succeeded"),
+			);
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+			expect(mocks.retrievePaymentIntent).toHaveBeenCalledTimes(1);
+			expect(mocks.retrievePaymentIntent.mock.calls[0]?.[0]).toBe("pi_1");
+			expect(topUps()).toEqual([
+				expect.objectContaining({ referenceId: "pi_1" }),
+			]);
+			expect(ledger.account.balanceMicroCredits).toBe(530_000);
+			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+
+			ledger.account.balanceMicroCredits = 10;
+			mocks.createPaymentIntent.mockResolvedValue(intent("pi_2", "succeeded"));
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				state: "succeeded",
+				paymentIntentId: "pi_2",
+			});
+			expect(mocks.retrievePaymentIntent).toHaveBeenCalledTimes(1);
+		});
+
+		it("records a payment that failed and switches auto top-up off", async () => {
+			await leavePending();
+			later(72.1);
+			mocks.retrievePaymentIntent.mockResolvedValue(
+				intent("pi_1", "requires_payment_method", {
+					last_payment_error: {
+						decline_code: "insufficient_funds",
+					} as Stripe.PaymentIntent.LastPaymentError,
+				}),
+			);
+
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+			expect(failures()).toEqual([
+				expect.objectContaining({
+					referenceId: "pi_1",
+					metadata: expect.objectContaining({ reason: "insufficient_funds" }),
+				}),
+			]);
+			expect(topUps()).toHaveLength(0);
+			expect(ledger.account.autoTopUpEnabled).toBe(false);
+			expect(ledger.account.balanceMicroCredits).toBe(30_000);
+		});
+
+		it("leaves a payment Stripe still reports as processing", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			await leavePending();
+			later(80);
+			mocks.retrievePaymentIntent.mockResolvedValue(
+				intent("pi_1", "processing"),
+			);
+
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "reconciled",
+			});
+			expect(topUps()).toHaveLength(0);
+			expect(failures()).toHaveLength(0);
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				reason: "reconciled",
+			});
+			expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
+			warn.mockRestore();
+		});
 	});
 
 	it("does not start a second payment while one is still processing, however long it takes", async () => {
@@ -523,10 +623,15 @@ describe("auto top-up charge", () => {
 		expect(await runAutoTopUp("account-1", now())).toMatchObject({
 			reason: "awaiting_payment",
 		});
-		later(48);
+		later(1.5);
 		expect(await runAutoTopUp("account-1", now())).toMatchObject({
 			reason: "awaiting_payment",
 		});
+		later(46.5);
+		expect(await runAutoTopUp("account-1", now())).toMatchObject({
+			reason: "awaiting_payment",
+		});
+		expect(mocks.retrievePaymentIntent).not.toHaveBeenCalled();
 
 		expect(mocks.createPaymentIntent).toHaveBeenCalledTimes(1);
 		expect(ledger.rows).toHaveLength(1);

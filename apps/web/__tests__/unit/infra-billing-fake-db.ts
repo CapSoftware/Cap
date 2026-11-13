@@ -175,14 +175,17 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					types.includes(row.referenceType) && row.createdAt.getTime() >= since,
 			);
 		}
-		if (keys === "pendingId") {
+		if (keys === "pendingId,pendingSince") {
 			return ledger.rows
 				.filter(
 					(row) =>
 						row.type === "topup_pending" &&
 						row.referenceType === "auto_top_up_pending",
 				)
-				.map((row) => ({ pendingId: row.referenceId }));
+				.map((row) => ({
+					pendingId: row.referenceId,
+					pendingSince: row.createdAt,
+				}));
 		}
 		if (keys === "settledId") {
 			const ids = rendered.params.slice(3);

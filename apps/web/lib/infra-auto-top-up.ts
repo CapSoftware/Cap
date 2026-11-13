@@ -41,6 +41,7 @@ export const AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS =
 
 export const AUTO_TOP_UP_DAILY_LIMIT = 10;
 export const AUTO_TOP_UP_STRIPE_TIMEOUT_MS = 20_000;
+export const AUTO_TOP_UP_PENDING_RECONCILE_MS = 72 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type AutoTopUpResult =
@@ -55,6 +56,7 @@ export type AutoTopUpResult =
 				| "above_threshold"
 				| "disputed"
 				| "awaiting_payment"
+				| "reconciled"
 				| "recent_decline"
 				| "daily_limit"
 				| "in_progress";
@@ -221,7 +223,10 @@ async function attemptHistory(
 			),
 		);
 	const pending = await executor
-		.select({ pendingId: developerCreditTransactions.referenceId })
+		.select({
+			pendingId: developerCreditTransactions.referenceId,
+			pendingSince: developerCreditTransactions.createdAt,
+		})
 		.from(developerCreditTransactions)
 		.where(
 			and(
@@ -263,7 +268,16 @@ async function attemptHistory(
 	const lastDecline = latest("topup_failed");
 	return {
 		sequence: Number(settled?.settledAttempts ?? 0),
-		awaitingPayment: pendingIds.some((id) => !resolvedIds.has(id)),
+		unresolved: pending.flatMap((row) =>
+			row.pendingId && !resolvedIds.has(row.pendingId)
+				? [
+						{
+							paymentIntentId: row.pendingId,
+							since: new Date(row.pendingSince),
+						},
+					]
+				: [],
+		),
 		declinedRecently: lastDecline > 0 && lastDecline >= latest("topup"),
 		recentTopUps: recent.filter((row) => row.type === "topup").length,
 	};
@@ -418,6 +432,29 @@ function grantAutoTopUp({
 	});
 }
 
+async function reconcilePendingAutoTopUp(
+	accountId: string,
+	paymentIntentId: string,
+) {
+	const paymentIntent = await stripe().paymentIntents.retrieve(
+		paymentIntentId,
+		{},
+		{ timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS },
+	);
+	if (paymentIntent.metadata?.accountId !== accountId) return;
+	if (paymentIntent.status === "processing") {
+		console.warn("[infra-billing] Auto top-up payment still processing", {
+			accountId,
+			paymentIntentId,
+		});
+		return;
+	}
+	await settleAutoTopUpPaymentIntent(
+		paymentIntent,
+		paymentIntent.status === "succeeded" ? "succeeded" : "failed",
+	);
+}
+
 export async function runAutoTopUp(
 	accountId: string,
 	now: Date = new Date(),
@@ -487,8 +524,19 @@ export async function runAutoTopUp(
 		return { state: "skipped", reason: "above_threshold" };
 	}
 	if (snapshot.disputed) return { state: "skipped", reason: "disputed" };
-	if (snapshot.awaitingPayment) {
-		return { state: "skipped", reason: "awaiting_payment" };
+	if (snapshot.unresolved.length > 0) {
+		const stale = snapshot.unresolved.filter(
+			(payment) =>
+				now.getTime() - payment.since.getTime() >=
+				AUTO_TOP_UP_PENDING_RECONCILE_MS,
+		);
+		if (stale.length === 0) {
+			return { state: "skipped", reason: "awaiting_payment" };
+		}
+		for (const payment of stale) {
+			await reconcilePendingAutoTopUp(accountId, payment.paymentIntentId);
+		}
+		return { state: "skipped", reason: "reconciled" };
 	}
 	if (snapshot.declinedRecently) {
 		return { state: "skipped", reason: "recent_decline" };
