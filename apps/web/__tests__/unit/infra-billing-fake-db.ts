@@ -514,6 +514,8 @@ function runSelect(query: Query): Record<string, unknown>[] {
 		}));
 	}
 
+	if (keys === "storagePaidUntil" || keys === "createdAt") return [];
+
 	throw new Error(`Unexpected select: ${keys}`);
 }
 

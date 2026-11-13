@@ -38,6 +38,7 @@ vi.mock("@cap/database", async () => {
 				Object.assign(Promise.resolve(rowsFor(table)), {
 					limit: async () => rowsFor(table),
 					groupBy: async () => rowsFor(table),
+					orderBy: () => ({ limit: async () => rowsFor(table) }),
 				});
 			const query = {
 				innerJoin: () => query,
@@ -103,7 +104,10 @@ vi.mock("@/lib/infra-video-upload", () => ({
 import { Hono } from "hono";
 import * as sdk from "@/app/api/developer/sdk/v1/[...route]/route";
 import * as rest from "@/app/api/developer/v1/[...route]/route";
-import { withDeveloperSecretAuth } from "@/app/api/utils";
+import {
+	developerOwnerRequestLimited,
+	withDeveloperSecretAuth,
+} from "@/app/api/utils";
 import { developerOpenApiSpec } from "@/lib/developer-openapi";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -622,6 +626,49 @@ describe("one account's keys share a budget", () => {
 			retryAfter: "60",
 		});
 		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+});
+
+describe("the console's webhook actions share the account budget", () => {
+	it("counts console requests and REST requests in one account budget", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+		mocks.keyRows = [{ appId: "app-1", ownerId: "owner-console" }];
+		const fromConsole = (owner = "owner-console") =>
+			developerOwnerRequestLimited(owner, new Headers());
+
+		for (let request = 1; request < OWNER_LIMIT; request++) {
+			expect(await fromConsole()).toBe(false);
+		}
+		expect((await getUsage(freshKey("csk"))).status).toBe(200);
+		expect(await fromConsole()).toBe(true);
+		expect((await getUsage(freshKey("csk"))).status).toBe(429);
+		expect(await fromConsole("owner-other")).toBe(false);
+
+		vi.advanceTimersByTime(60_001);
+		expect(await fromConsole()).toBe(false);
+	});
+
+	it("asks the shared rule about the account by its id", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+
+		await developerOwnerRequestLimited("owner-console-asked", new Headers());
+
+		expect(
+			mocks.firewall.mock.calls.map(([ruleId, options]) => [
+				ruleId,
+				options.rateLimitKey,
+			]),
+		).toEqual([["rl_developer_api_owner", "owner-console-asked"]]);
+	});
+
+	it("is refused when the shared rule for the account says so", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.firewall.mockResolvedValue({ rateLimited: true });
+
+		expect(
+			await developerOwnerRequestLimited("owner-console-shared", new Headers()),
+		).toBe(true);
 	});
 });
 

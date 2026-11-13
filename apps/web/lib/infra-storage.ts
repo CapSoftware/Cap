@@ -3,8 +3,8 @@ import { developerVideos } from "@cap/database/schema";
 import {
 	and,
 	gt,
+	gte,
 	inArray,
-	isNotNull,
 	isNull,
 	lt,
 	ne,
@@ -15,11 +15,11 @@ import {
 	type BillableVideo,
 	billableVideo,
 	firstMonthStorageMicroCredits,
-	STORAGE_BILLING_DAYS_PER_MONTH,
 	type StorageUsage,
 	storageMicroCreditsPerMinutePerMonth,
 	storageUsage,
 } from "@/lib/developer-pricing";
+import { firstMonthChargesBegan } from "@/lib/infra-first-month-start";
 import type { InfraResolutionTier } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
@@ -54,26 +54,6 @@ const owedFirstMonthSum = (tier: InfraResolutionTier, owesMonth: SQL) =>
 
 const APP_ID_CHUNK = 500;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-async function firstMonthsOwedSince(executor: Pick<InfraDbExecutor, "select">) {
-	const [earliest] = await executor
-		.select({
-			storagePaidUntil:
-				sql<Date | null>`MIN(${developerVideos.storagePaidUntil})`.mapWith(
-					developerVideos.storagePaidUntil,
-				),
-		})
-		.from(developerVideos)
-		.where(isNotNull(developerVideos.storagePaidUntil));
-	const paidUntil = earliest?.storagePaidUntil;
-	return paidUntil instanceof Date && !Number.isNaN(paidUntil.getTime())
-		? new Date(
-				paidUntil.getTime() - (STORAGE_BILLING_DAYS_PER_MONTH - 1) * DAY_MS,
-			)
-		: null;
-}
-
 export type StorageUsageOptions = {
 	includeProcessing?: boolean;
 	excludeVideoId?: string;
@@ -90,7 +70,7 @@ export function storedVideoGroupsQuery(
 	firstMonthsOwedSince?: Date | null,
 ) {
 	const owesMonth = firstMonthsOwedSince
-		? sql`(${developerVideos.status} = 'ready' AND ${developerVideos.storagePaidUntil} IS NULL AND ${developerVideos.createdAt} >= ${firstMonthsOwedSince})`
+		? sql`(${developerVideos.status} = 'ready' AND ${developerVideos.storagePaidUntil} IS NULL AND ${gte(developerVideos.createdAt, firstMonthsOwedSince)})`
 		: sql`FALSE`;
 	const inFirstMonth = sql`(${gt(developerVideos.storagePaidUntil, now)} OR ${owesMonth})`;
 	return executor
@@ -239,7 +219,7 @@ export async function getAppStorage(
 		options.excludeVideoId,
 		options.now,
 		undefined,
-		await firstMonthsOwedSince(executor),
+		await firstMonthChargesBegan(executor),
 	);
 	const videoOf = (group: StoredVideoGroup, daily: boolean) =>
 		billableVideo({

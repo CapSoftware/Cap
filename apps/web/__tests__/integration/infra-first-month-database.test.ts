@@ -11,7 +11,15 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 const fixture = vi.hoisted(() => ({ database: undefined as unknown }));
 
@@ -60,6 +68,9 @@ const { getAppStorage, getStorageUsageByApp } = await import(
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const { chargeDeliveryDay } = await import("@/lib/infra-delivery-billing");
 const { deliveryMicroCredits } = await import("@/lib/infra-delivery-rollup");
+const { firstMonthChargesBegan } = await import(
+	"@/lib/infra-first-month-start"
+);
 const {
 	chargeDeveloperVideoFirstMonth,
 	chargeMissedFirstMonths,
@@ -2270,13 +2281,29 @@ describe.runIf(Boolean(databaseUrl))(
 			let sentinel: string;
 
 			beforeAll(async () => {
-				const { appId } = await makeApp(0);
+				const { appId, accountId } = await makeApp(0);
 				sentinel = await makeVideo(appId, {
 					storagePaidUntil: new Date("2026-10-31T00:00:00Z"),
 				});
+				await database()
+					.insert(developerCreditTransactions)
+					.values({
+						id: id(),
+						accountId,
+						type: "video_create",
+						amountMicroCredits: -100,
+						balanceAfterMicroCredits: 0,
+						referenceId: sentinel,
+						referenceType: "developer_video",
+						metadata: { paidUntil: "2026-10-31T00:00:00.000Z" },
+						createdAt: new Date("2026-10-01T12:00:00Z"),
+					});
 			});
 
 			afterAll(async () => {
+				await database()
+					.delete(developerCreditTransactions)
+					.where(eq(developerCreditTransactions.referenceId, sentinel));
 				await database()
 					.delete(developerVideos)
 					.where(eq(developerVideos.id, sentinel));
@@ -2397,6 +2424,186 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(billing.admission.requiredMicroCredits).toBe(
 				Math.ceil(5 * 85 + (30 * 85 * 7) / 30),
 			);
+		});
+
+		describe("when first month charging began", () => {
+			const FIRST_CHARGE = new Date("2020-01-10T10:39:54.000Z");
+			const before = new Date(FIRST_CHARGE.getTime() - 1000);
+			const after = new Date(FIRST_CHARGE.getTime() + 1000);
+			const created: string[] = [];
+
+			const track = async (
+				appId: string,
+				overrides: Partial<typeof developerVideos.$inferInsert>,
+			) => {
+				const videoId = await makeVideo(appId, overrides);
+				created.push(videoId);
+				return videoId;
+			};
+
+			const charged = async (
+				paidUntil: Date | null,
+				chargedAt: Date,
+				{ uploadFee = false }: { uploadFee?: boolean } = {},
+			) => {
+				const { appId, accountId } = await makeApp(0);
+				const videoId = await track(appId, {
+					createdAt: new Date(chargedAt.getTime() - 60_000),
+					storagePaidUntil: paidUntil,
+				});
+				await database()
+					.insert(developerCreditTransactions)
+					.values({
+						id: id(),
+						accountId,
+						type: "video_create",
+						amountMicroCredits: -850,
+						balanceAfterMicroCredits: 0,
+						referenceId: videoId,
+						referenceType: "developer_video",
+						metadata:
+							uploadFee || !paidUntil
+								? { durationSeconds: 600 }
+								: { paidUntil: paidUntil.toISOString() },
+						createdAt: chargedAt,
+					});
+				return videoId;
+			};
+
+			const encoding = (): DeveloperVideoProcessingState => ({
+				...processing(),
+				probe: null,
+				mp4: {
+					state: "running",
+					token: "t-mp4",
+					jobId: "job-1",
+					startedAt: Date.now(),
+				},
+				attempts: { hls: 0, mp4: 1 },
+			});
+
+			afterEach(async () => {
+				if (created.length === 0) return;
+				await database()
+					.delete(developerCreditTransactions)
+					.where(inArray(developerCreditTransactions.referenceId, created));
+				await database()
+					.delete(developerVideos)
+					.where(inArray(developerVideos.id, created));
+				created.length = 0;
+			});
+
+			it("starts at the exact time of the first real charge, not at a day boundary", async () => {
+				await charged(new Date("2020-02-09T00:00:00Z"), FIRST_CHARGE);
+				await charged(
+					new Date("2020-02-09T00:00:00Z"),
+					new Date("2020-01-10T15:00:00Z"),
+				);
+				await charged(
+					new Date("2020-02-10T00:00:00Z"),
+					new Date("2020-01-11T09:00:00Z"),
+				);
+
+				expect(await firstMonthChargesBegan()).toEqual(FIRST_CHARGE);
+			});
+
+			it("starts at the same moment when the first charge came after that day was billed", async () => {
+				await charged(new Date("2020-02-10T00:00:00Z"), FIRST_CHARGE);
+				await charged(
+					new Date("2020-02-09T00:00:00Z"),
+					new Date("2020-01-10T12:00:00Z"),
+				);
+				await charged(
+					new Date("2020-02-10T00:00:00Z"),
+					new Date("2020-01-11T03:00:00Z"),
+				);
+
+				expect(await firstMonthChargesBegan()).toEqual(FIRST_CHARGE);
+			});
+
+			it("is not moved by older charge rows of unsettled videos, upload fee rows of settled videos, or videos settled without a charge", async () => {
+				await charged(new Date("2020-02-09T00:00:00Z"), FIRST_CHARGE);
+				await charged(null, new Date("2019-12-01T04:23:00Z"));
+				await charged(
+					new Date("2020-02-09T00:00:00Z"),
+					new Date("2019-12-01T04:58:00Z"),
+					{ uploadFee: true },
+				);
+				const { appId } = await makeApp(0);
+				await track(appId, {
+					createdAt: new Date("2019-12-01T00:00:00Z"),
+					storagePaidUntil: new Date("2019-12-31T00:00:00Z"),
+				});
+
+				expect(await firstMonthChargesBegan()).toEqual(FIRST_CHARGE);
+			});
+
+			it("never charges a video created a second before the first charge, and charges one created at or after it exactly once", async () => {
+				await charged(new Date("2020-02-09T00:00:00Z"), FIRST_CHARGE);
+				const appBefore = await makeApp(1_000_000);
+				const videoBefore = await track(appBefore.appId, {
+					createdAt: before,
+				});
+				const appAt = await makeApp(1_000_000);
+				const videoAt = await track(appAt.appId, { createdAt: FIRST_CHARGE });
+
+				expect(
+					(await getAppStorage(appBefore.appId)).firstMonthMicroCredits,
+				).toBe(0);
+				expect((await getAppStorage(appAt.appId)).firstMonthMicroCredits).toBe(
+					850,
+				);
+
+				await chargeMissedFirstMonths(new Date(), 1);
+				await chargeMissedFirstMonths(new Date(), 1);
+
+				expect(await firstMonthRows(appBefore.accountId)).toHaveLength(0);
+				expect((await videoRow(videoBefore))?.storagePaidUntil).toBeNull();
+				expect(await balanceOf(appBefore.accountId)).toBe(1_000_000);
+				const rows = await firstMonthRows(appAt.accountId);
+				expect(rows).toHaveLength(1);
+				expect(rows[0]).toMatchObject({ referenceId: videoAt });
+				expect((await videoRow(videoAt))?.storagePaidUntil).not.toBeNull();
+				expect((await getAppStorage(appAt.appId)).firstMonthMicroCredits).toBe(
+					0,
+				);
+			});
+
+			it("never charges a video deleted mid-encode that was created a second before the first charge, and charges one created at or after it once", async () => {
+				await charged(new Date("2020-02-09T00:00:00Z"), FIRST_CHARGE);
+				const encodeAt = async (createdAt: Date) => {
+					const app = await makeApp(1_000_000);
+					const videoId = await track(app.appId, {
+						createdAt,
+						status: "processing",
+						duration: 600,
+						processing: encoding(),
+					});
+					await database()
+						.update(developerVideos)
+						.set({ deletedAt: new Date() })
+						.where(eq(developerVideos.id, videoId));
+					return { ...app, videoId };
+				};
+				const early = await encodeAt(before);
+				const atStart = await encodeAt(FIRST_CHARGE);
+				const later = await encodeAt(after);
+
+				expect(await settleFirstMonthAtDelete(early.videoId)).toMatchObject({
+					state: "exempt",
+				});
+				expect(await firstMonthRows(early.accountId)).toHaveLength(0);
+				for (const video of [atStart, later]) {
+					expect(await settleFirstMonthAtDelete(video.videoId)).toMatchObject({
+						state: "charged",
+					});
+					expect(await settleFirstMonthAtDelete(video.videoId)).toEqual({
+						state: "skipped",
+						reason: "already_settled",
+					});
+					expect(await firstMonthRows(video.accountId)).toHaveLength(1);
+				}
+			});
 		});
 	},
 );

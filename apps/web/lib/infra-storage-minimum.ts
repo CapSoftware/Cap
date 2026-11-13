@@ -6,24 +6,15 @@ import {
 	developerVideos,
 } from "@cap/database/schema";
 import type { DeveloperVideoProcessingState } from "@cap/database/types";
-import {
-	and,
-	asc,
-	eq,
-	gte,
-	inArray,
-	isNotNull,
-	isNull,
-	sql,
-} from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import {
 	firstMonthStorageMicroCredits,
 	firstMonthStoragePaidUntil,
-	STORAGE_BILLING_DAYS_PER_MONTH,
 	videoStorageTier,
 } from "@/lib/developer-pricing";
 import { DEVELOPER_VIDEO_MAX_DURATION_SECONDS } from "@/lib/developer-video-charge";
 import { availableBalance } from "@/lib/infra-balance";
+import { firstMonthChargesBegan } from "@/lib/infra-first-month-start";
 import {
 	INFRA_RESOLUTION_TIERS,
 	type InfraResolutionTier,
@@ -84,8 +75,6 @@ const encodeDispatched = (processing: DeveloperVideoProcessingState) =>
 			(processing.lostJobs?.[name] ?? 0) > 0
 		);
 	});
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const skipped = (
 	reason: Extract<FirstMonthCharge, { state: "skipped" }>["reason"],
@@ -397,23 +386,6 @@ export async function settleFirstMonthAtReady(
 }
 
 const BACKSTOP_BATCH = 200;
-
-export async function firstMonthChargesBegan(
-	executor: Pick<InfraDbExecutor, "select"> = db(),
-): Promise<Date | null> {
-	const [earliest] = await executor
-		.select({ storagePaidUntil: developerVideos.storagePaidUntil })
-		.from(developerVideos)
-		.where(isNotNull(developerVideos.storagePaidUntil))
-		.orderBy(asc(developerVideos.storagePaidUntil))
-		.limit(1);
-	return earliest?.storagePaidUntil
-		? new Date(
-				earliest.storagePaidUntil.getTime() -
-					(STORAGE_BILLING_DAYS_PER_MONTH - 1) * DAY_MS,
-			)
-		: null;
-}
 
 export function unsettledFirstMonthsQuery(
 	createdSince: Date,
