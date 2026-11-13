@@ -16,6 +16,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -238,6 +239,7 @@ export const Comments = Object.assign(
 					setComments((prev) => prev.filter((c) => c.id !== commentId));
 				} catch (error) {
 					console.error("Failed to delete comment:", error);
+					toast.error("Couldn't delete the comment. Please try again.");
 				}
 			},
 			[videoId, setComments],
