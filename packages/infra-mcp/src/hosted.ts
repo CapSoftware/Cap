@@ -1,4 +1,4 @@
-import { z } from "zod";
+import type { z } from "zod";
 import { CONSOLE_PATH } from "./config";
 import { type ClientTuning, InfraClient } from "./http";
 import { createRedactor } from "./redact";
@@ -9,6 +9,7 @@ import {
 	type ToolAnnotations,
 	type ToolResult,
 } from "./runner";
+import { toolInputSchema } from "./tool";
 import { createTools } from "./tools";
 import { DEFAULT_UPLOAD_TUNING } from "./upload";
 import { SERVER_NAME, SERVER_VERSION } from "./version";
@@ -38,7 +39,7 @@ export const HOSTED_INSTRUCTIONS = [
 	"Video: videos_create_upload with the file size, upload the parts to the signed links it returns from the machine that holds the file, videos_complete_upload, then videos_wait until it is ready and use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
 	"Speech: transcripts_create from a public url or a ready videoId, transcripts_wait, then transcripts_text.",
 	`Wait tools return within ${HOSTED_MAX_WAIT_SECONDS} seconds; when a result has timedOut, call the same tool again.`,
-	"Stored video is billed daily until deleted and transcripts are billed per audio hour. Check account_usage before large jobs.",
+	"Stored video is billed one month when it becomes ready, then daily until deleted, and transcripts are billed per audio hour. Check account_usage before large jobs.",
 	"Credit can only be added in the console by a signed-in person. When a tool reports out of credit, give them the addCreditAt link.",
 ].join(" ");
 
@@ -46,7 +47,7 @@ export type HostedTool = {
 	name: string;
 	title: string;
 	description: string;
-	inputSchema: z.ZodObject<z.ZodRawShape>;
+	inputSchema: z.ZodObject<z.ZodRawShape, z.core.$strict>;
 	annotations: ToolAnnotations & { title: string };
 	run: (args: unknown, hooks: RunHooks) => Promise<ToolResult>;
 };
@@ -92,7 +93,7 @@ export function createHostedTools(options: HostedOptions): HostedTool[] {
 		name: tool.name,
 		title: tool.title,
 		description: tool.description,
-		inputSchema: z.object(tool.input),
+		inputSchema: toolInputSchema(tool.input),
 		annotations: { title: tool.title, ...ANNOTATIONS[tool.kind] },
 		run: (args, hooks) => run(tool, args, hooks),
 	}));
