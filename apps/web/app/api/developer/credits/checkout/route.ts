@@ -130,6 +130,14 @@ app.post(
 					},
 				],
 				mode: "payment",
+				invoice_creation: {
+					enabled: true,
+					invoice_data: { description: "Cap Infra credits" },
+				},
+				payment_intent_data: { receipt_email: user.email },
+				tax_id_collection: { enabled: true },
+				billing_address_collection: "auto",
+				customer_update: { name: "auto", address: "auto" },
 				success_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}?purchase=success`,
 				cancel_url: `${serverEnv().WEB_URL}${infraAppPath(appId, "billing")}`,
 				metadata: {
