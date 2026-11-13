@@ -1,9 +1,12 @@
 import type { Readable } from "node:stream";
 import {
+	addMethodTotals,
 	cachedDeliveryResolver,
+	type DeliveryMethodTotals,
 	type DeliveryPart,
 	type DeliveryResolver,
 	type DeliveryTier,
+	emptyMethodTotals,
 	meterDeliveryLog,
 } from "./infra-delivery-log";
 
@@ -131,6 +134,7 @@ export interface DeliveryMeteringResult {
 	processed: number;
 	failed: number;
 	remaining: number;
+	methods: DeliveryMethodTotals;
 }
 
 export async function runDeliveryMetering({
@@ -189,6 +193,7 @@ export async function runDeliveryMetering({
 
 	const cached = cachedDeliveryResolver(resolver);
 	const unsettled = new Set<string>();
+	const methods = emptyMethodTotals();
 	let next = 0;
 	let processed = 0;
 	let failed = 0;
@@ -197,11 +202,12 @@ export async function runDeliveryMetering({
 			const file = due[next++];
 			if (!file) return;
 			try {
-				const { parts } = await meterDeliveryLog(
+				const metered = await meterDeliveryLog(
 					await source.open(file.file),
 					cached,
 				);
-				await store.saveFile(file, parts);
+				await store.saveFile(file, metered.parts);
+				addMethodTotals(methods, metered.methods);
 				processed++;
 			} catch (error) {
 				failed++;
@@ -255,6 +261,19 @@ export async function runDeliveryMetering({
 		finalized.push(day);
 	}
 
+	if (processed > 0) {
+		console.info("[developer-delivery] Seconds by method", {
+			seconds: Object.fromEntries(
+				Object.entries(methods.seconds).map(([method, seconds]) => [
+					method,
+					Math.round(seconds),
+				]),
+			),
+			requests: methods.requests,
+			unlabelled: methods.unlabelled,
+		});
+	}
+
 	await store.pruneFiles(
 		new Date(now.getTime() - (DELIVERY_LOG_RETENTION_DAYS + 2) * DAY_MS),
 	);
@@ -267,5 +286,6 @@ export async function runDeliveryMetering({
 		processed,
 		failed,
 		remaining: due.length - processed - failed,
+		methods,
 	};
 }

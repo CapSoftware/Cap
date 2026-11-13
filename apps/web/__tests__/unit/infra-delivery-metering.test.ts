@@ -5,13 +5,15 @@ import {
 	cachedDeliveryResolver,
 	type DeliveryPart,
 	type DeliveryResolver,
+	type DeliveryVideo,
 	deliveredSeconds,
-	deliveryMp4Rate,
+	deliveryMp4Tier,
 	hlsSecondsDelivered,
 	meterDeliveryLog,
 	parseDeliveryLine,
 	parseHlsByteRanges,
 	readDeliveryParts,
+	readDeliveryVideo,
 } from "@/lib/infra-delivery-log";
 import {
 	type DeliveryDayState,
@@ -73,20 +75,29 @@ function gz(lines: string[]) {
 	return Readable.from([gzipSync(`${lines.join("\n")}\n`)]);
 }
 
+const VIDEO_ROW: DeliveryVideo = {
+	appId: APP,
+	duration: 10.5,
+	renditions: [
+		{ name: "1080p", width: 1920, height: 1080, bytes: 1_050_000 },
+		{ name: "720p", width: 1280, height: 720, bytes: 351_000 },
+		{ name: "360p", width: 640, height: 360, bytes: 105_000 },
+	],
+	mp4Bytes: 10_500_000,
+};
+
 class FakeResolver implements DeliveryResolver {
 	hlsCalls: string[] = [];
-	mp4Calls: string[] = [];
+	videoCalls: string[] = [];
 	async hls(key: string) {
 		this.hlsCalls.push(key);
 		return key.endsWith("/hls/720p.m3u8")
 			? parseHlsByteRanges(PLAYLIST, "720p.m4s")
 			: null;
 	}
-	async mp4({ videoId }: { videoId: string }) {
-		this.mp4Calls.push(videoId);
-		return videoId === VIDEO
-			? { appId: APP, tier: "1080p" as const, bytesPerSecond: 1_000_000 }
-			: null;
+	async video({ videoId }: { videoId: string }) {
+		this.videoCalls.push(videoId);
+		return videoId === VIDEO ? VIDEO_ROW : null;
 	}
 }
 
@@ -229,79 +240,109 @@ describe("HLS segment seconds", () => {
 });
 
 describe("deliveredSeconds", () => {
+	const parsed = (overrides: Record<string, unknown> = {}) => {
+		const request = parseDeliveryLine(line(overrides));
+		if (!request) throw new Error("not parsed");
+		return request;
+	};
+
 	it("maps a segment request to exact segment seconds", async () => {
-		const request = parseDeliveryLine(line(SEGMENT_0));
-		expect(request).not.toBeNull();
-		if (!request) return;
-		expect(await deliveredSeconds(request, new FakeResolver())).toEqual({
+		expect(
+			await deliveredSeconds(parsed(SEGMENT_0), new FakeResolver()),
+		).toEqual({
 			tier: "720p",
 			seconds: 4,
+			method: "playlist",
 		});
 	});
 
 	it("counts an aborted segment pro rata", async () => {
-		const request = parseDeliveryLine(line({ "sc-bytes": "25000" }));
-		if (!request) throw new Error("not parsed");
 		expect(
-			(await deliveredSeconds(request, new FakeResolver()))?.seconds,
+			(
+				await deliveredSeconds(
+					parsed({ "sc-bytes": "25000" }),
+					new FakeResolver(),
+				)
+			)?.seconds,
 		).toBeCloseTo(1, 9);
 	});
 
 	it("estimates MP4 seconds from the file's average rate under its top rendition", async () => {
-		const request = parseDeliveryLine(
-			line({
-				"cs-uri-stem": `${base}/video.mp4`,
-				"sc-bytes": "3000400",
-				"sc-content-len": "3000000",
-				"sc-range-start": "0",
-				"sc-range-end": "2999999",
-			}),
-		);
-		if (!request) throw new Error("not parsed");
-		expect(await deliveredSeconds(request, new FakeResolver())).toEqual({
-			tier: "1080p",
-			seconds: 3,
-		});
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `${base}/video.mp4`,
+					"sc-bytes": "3000400",
+					"sc-content-len": "3000000",
+					"sc-range-start": "0",
+					"sc-range-end": "2999999",
+				}),
+				new FakeResolver(),
+			),
+		).toEqual({ tier: "1080p", seconds: 3, method: "mp4-estimate" });
 	});
 
 	it("drops an MP4 whose video is unknown or belongs to another app", async () => {
-		const unknown = parseDeliveryLine(
-			line({
-				"cs-uri-stem": `/developer/${APP}/vidzzzzzzzzzzz9/e/o/video.mp4`,
-			}),
-		);
-		const foreign = parseDeliveryLine(
-			line({
-				"cs-uri-stem": `/developer/${OTHER_APP}/${VIDEO}/e/o/video.mp4`,
-			}),
-		);
-		if (!unknown || !foreign) throw new Error("not parsed");
-		expect(await deliveredSeconds(unknown, new FakeResolver())).toBeNull();
-		expect(await deliveredSeconds(foreign, new FakeResolver())).toBeNull();
+		const resolver = new FakeResolver();
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `/developer/${APP}/vidzzzzzzzzzzz9/e/o/video.mp4`,
+				}),
+				resolver,
+			),
+		).toBeNull();
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `/developer/${OTHER_APP}/${VIDEO}/e/o/video.mp4`,
+				}),
+				resolver,
+			),
+		).toBeNull();
 	});
 
 	it("gives audio no seconds and looks nothing up", async () => {
 		const resolver = new FakeResolver();
-		const request = parseDeliveryLine(
-			line({ "cs-uri-stem": `${base}/hls/audio.m4s` }),
-		);
-		if (!request) throw new Error("not parsed");
-		expect(await deliveredSeconds(request, resolver)).toEqual({
-			tier: "audio",
-			seconds: 0,
-		});
+		expect(
+			await deliveredSeconds(
+				parsed({ "cs-uri-stem": `${base}/hls/audio.m4s` }),
+				resolver,
+			),
+		).toEqual({ tier: "audio", seconds: 0, method: "audio" });
 		expect(resolver.hlsCalls).toEqual([]);
+		expect(resolver.videoCalls).toEqual([]);
 	});
 
-	it("keeps bytes but no seconds when the playlist is gone", async () => {
-		const request = parseDeliveryLine(
-			line({ "cs-uri-stem": `${base}/hls/360p.m4s` }),
-		);
-		if (!request) throw new Error("not parsed");
-		expect(await deliveredSeconds(request, new FakeResolver())).toEqual({
-			tier: "360p",
-			seconds: 0,
-		});
+	it("estimates from the video row's rendition rate when the playlist is gone", async () => {
+		expect(
+			await deliveredSeconds(
+				parsed({ "cs-uri-stem": `${base}/hls/360p.m4s` }),
+				new FakeResolver(),
+			),
+		).toEqual({ tier: "360p", seconds: 10, method: "rendition-estimate" });
+	});
+
+	it("keeps bytes but no seconds when the playlist and the video row are both gone", async () => {
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `/developer/${APP}/vidzzzzzzzzzzz9/e/o/hls/360p.m4s`,
+				}),
+				new FakeResolver(),
+			),
+		).toEqual({ tier: "360p", seconds: 0, method: "no-rate" });
+	});
+
+	it("never estimates from another app's video row", async () => {
+		expect(
+			await deliveredSeconds(
+				parsed({
+					"cs-uri-stem": `/developer/${OTHER_APP}/${VIDEO}/e/o/hls/360p.m4s`,
+				}),
+				new FakeResolver(),
+			),
+		).toEqual({ tier: "360p", seconds: 0, method: "no-rate" });
 	});
 });
 
@@ -317,47 +358,51 @@ describe("cachedDeliveryResolver", () => {
 				}
 				return inner.hls(key);
 			},
-			mp4: (request) => inner.mp4(request),
+			video: (request) => inner.video(request),
 		};
 		const cached = cachedDeliveryResolver(flaky);
 		await expect(cached.hls("a/hls/720p.m3u8")).rejects.toThrow();
 		await cached.hls("a/hls/720p.m3u8");
 		await cached.hls("a/hls/720p.m3u8");
-		await cached.mp4({ videoId: VIDEO, key: "a" });
-		await cached.mp4({ videoId: VIDEO, key: "a" });
+		await cached.video({ videoId: VIDEO, key: "a" });
+		await cached.video({ videoId: VIDEO, key: "a" });
 		expect(inner.hlsCalls).toHaveLength(1);
-		expect(inner.mp4Calls).toHaveLength(1);
+		expect(inner.videoCalls).toHaveLength(1);
 	});
 });
 
-describe("deliveryMp4Rate", () => {
-	it("labels the MP4 with the encode's top rendition and its average rate", () => {
+describe("readDeliveryVideo", () => {
+	it("keeps known renditions and the MP4 size, and labels the MP4 with the top one", () => {
+		const video = readDeliveryVideo({
+			appId: APP,
+			duration: 100,
+			renditions: [
+				{ name: "720p", width: 1280, height: 720, bytes: 5 },
+				{ name: "1080p", width: 1920, height: 1080, bytes: 9 },
+				{ name: "480p", width: 854, height: 480, bytes: 3 },
+				"junk",
+			],
+			processing: { bytes: { mp4: 120_000_000 } },
+		});
+		expect(video).toEqual({
+			appId: APP,
+			duration: 100,
+			renditions: [
+				{ name: "720p", width: 1280, height: 720, bytes: 5 },
+				{ name: "1080p", width: 1920, height: 1080, bytes: 9 },
+			],
+			mp4Bytes: 120_000_000,
+		});
+		expect(deliveryMp4Tier(video)).toBe("1080p");
 		expect(
-			deliveryMp4Rate({
-				appId: APP,
-				duration: 100,
-				renditions: [
-					{ name: "720p", width: 1280, height: 720 },
-					{ name: "1080p", width: 1920, height: 1080 },
-				],
-				processing: { bytes: { mp4: 120_000_000 } },
-			}),
-		).toEqual({ appId: APP, tier: "1080p", bytesPerSecond: 1_200_000 });
-		expect(
-			deliveryMp4Rate({
-				appId: APP,
-				duration: null,
-				renditions: [{ name: "720p", width: 1280, height: 720 }],
-				processing: null,
-			}),
-		).toEqual({ appId: APP, tier: "720p", bytesPerSecond: null });
-		expect(
-			deliveryMp4Rate({
-				appId: APP,
-				duration: 10,
-				renditions: null,
-				processing: null,
-			}),
+			deliveryMp4Tier(
+				readDeliveryVideo({
+					appId: APP,
+					duration: 1,
+					renditions: null,
+					processing: null,
+				}),
+			),
 		).toBeNull();
 	});
 });
@@ -383,6 +428,8 @@ describe("meterDeliveryLog", () => {
 		);
 		expect(result.lines).toBe(6);
 		expect(result.delivered).toBe(4);
+		expect(result.methods.seconds.playlist).toBe(12);
+		expect(result.methods.requests).toMatchObject({ playlist: 3, audio: 1 });
 		expect(result.parts).toEqual([
 			["2026-11-12", APP, VIDEO, "720p", 2, 300800, 8000],
 			["2026-11-12", APP, VIDEO, "audio", 1, 50, 0],
@@ -602,6 +649,8 @@ describe("runDeliveryMetering", () => {
 			processed: 2,
 			recomputed: ["2026-11-12", "2026-11-13"],
 		});
+		expect(first.methods.requests.playlist).toBe(2);
+		expect(first.methods.seconds.playlist).toBe(8);
 		const counts = store.rows.map(({ updatedAt: _, ...row }) => row);
 
 		const second = await run(logs, store, at("2026-11-13T10:23:00Z"));

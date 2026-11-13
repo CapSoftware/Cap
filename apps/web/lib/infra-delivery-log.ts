@@ -184,62 +184,79 @@ export function hlsSecondsDelivered(
 	return seconds;
 }
 
-export interface DeliveryMp4 {
+export interface DeliveryVideo {
 	appId: string;
-	tier: DeliveryRenditionTier;
-	bytesPerSecond: number | null;
+	duration: number | null;
+	renditions: { name: string; width: number; height: number; bytes: number }[];
+	mp4Bytes: number | null;
 }
 
-export function deliveryMp4Rate(row: {
+export function readDeliveryVideo(row: {
 	appId: string;
 	duration: number | null;
 	renditions: unknown;
 	processing: unknown;
-}): DeliveryMp4 | null {
-	let tier: DeliveryRenditionTier | null = null;
-	let pixels = 0;
-	for (const rendition of Array.isArray(row.renditions) ? row.renditions : []) {
-		if (!rendition || typeof rendition !== "object") continue;
-		const { name, width, height } = rendition as Record<string, unknown>;
-		if (
-			typeof name !== "string" ||
-			!TIERS.has(name) ||
-			typeof width !== "number" ||
-			typeof height !== "number"
-		) {
-			continue;
-		}
-		if (width * height > pixels) {
-			pixels = width * height;
-			tier = name as DeliveryRenditionTier;
-		}
-	}
-	if (!tier) return null;
+}): DeliveryVideo {
+	const renditions = (
+		Array.isArray(row.renditions) ? row.renditions : []
+	).flatMap((rendition: unknown) => {
+		if (!rendition || typeof rendition !== "object") return [];
+		const { name, width, height, bytes } = rendition as Record<string, unknown>;
+		return typeof name === "string" &&
+			TIERS.has(name) &&
+			typeof width === "number" &&
+			typeof height === "number"
+			? [{ name, width, height, bytes: typeof bytes === "number" ? bytes : 0 }]
+			: [];
+	});
 	const mp4Bytes =
 		row.processing && typeof row.processing === "object"
 			? (row.processing as { bytes?: { mp4?: unknown } }).bytes?.mp4
 			: null;
-	const duration = row.duration ?? 0;
 	return {
 		appId: row.appId,
-		tier,
-		bytesPerSecond:
-			typeof mp4Bytes === "number" && mp4Bytes > 0 && duration > 0
-				? mp4Bytes / duration
-				: null,
+		duration: row.duration,
+		renditions,
+		mp4Bytes: typeof mp4Bytes === "number" ? mp4Bytes : null,
 	};
+}
+
+function bytesPerSecond(
+	bytes: number | null | undefined,
+	duration: number | null,
+) {
+	return bytes && bytes > 0 && duration && duration > 0
+		? bytes / duration
+		: null;
+}
+
+export function deliveryMp4Tier(
+	video: DeliveryVideo,
+): DeliveryRenditionTier | null {
+	let tier: DeliveryRenditionTier | null = null;
+	let pixels = 0;
+	for (const rendition of video.renditions) {
+		if (rendition.width * rendition.height > pixels) {
+			pixels = rendition.width * rendition.height;
+			tier = rendition.name as DeliveryRenditionTier;
+		}
+	}
+	return tier;
 }
 
 export interface DeliveryResolver {
 	hls(playlistKey: string): Promise<HlsSegment[] | null>;
-	mp4(request: { videoId: string; key: string }): Promise<DeliveryMp4 | null>;
+	video(request: {
+		videoId: string;
+		key: string;
+	}): Promise<DeliveryVideo | null>;
 }
 
 export function cachedDeliveryResolver(
 	resolver: DeliveryResolver,
 ): DeliveryResolver {
 	const playlists = new Map<string, Promise<HlsSegment[] | null>>();
-	const videos = new Map<string, Promise<DeliveryMp4 | null>>();
+	const videos = new Map<string, Promise<DeliveryVideo | null>>();
 	const remember = <T>(
 		cache: Map<string, Promise<T>>,
 		key: string,
@@ -255,40 +272,104 @@ export function cachedDeliveryResolver(
 	};
 	return {
 		hls: (key) => remember(playlists, key, () => resolver.hls(key)),
-		mp4: (request) =>
-			remember(videos, request.videoId, () => resolver.mp4(request)),
+		video: (request) =>
+			remember(videos, request.videoId, () => resolver.video(request)),
 	};
+}
+
+export type DeliveryMethod =
+	| "playlist"
+	| "rendition-estimate"
+	| "mp4-estimate"
+	| "audio"
+	| "no-rate";
+
+export interface DeliveredSeconds {
+	tier: DeliveryTier;
+	seconds: number;
+	method: DeliveryMethod;
+}
+
+async function ownedVideo(
+	request: DeliveryRequest,
+	resolver: DeliveryResolver,
+) {
+	const video = await resolver.video(request);
+	return video && video.appId === request.appId ? video : null;
 }
 
 export async function deliveredSeconds(
 	request: DeliveryRequest,
 	resolver: DeliveryResolver,
-): Promise<{ tier: DeliveryTier; seconds: number } | null> {
-	if (request.kind === "audio") return { tier: "audio", seconds: 0 };
+): Promise<DeliveredSeconds | null> {
+	if (request.kind === "audio") {
+		return { tier: "audio", seconds: 0, method: "audio" };
+	}
 	if (request.kind === "mp4") {
-		const mp4 = await resolver.mp4(request);
-		if (!mp4 || mp4.appId !== request.appId) return null;
-		return {
-			tier: mp4.tier,
-			seconds: mp4.bytesPerSecond ? request.bodyBytes / mp4.bytesPerSecond : 0,
-		};
+		const video = await ownedVideo(request, resolver);
+		const tier = video ? deliveryMp4Tier(video) : null;
+		if (!video || !tier) return null;
+		const rate = bytesPerSecond(video.mp4Bytes, video.duration);
+		return rate
+			? { tier, seconds: request.bodyBytes / rate, method: "mp4-estimate" }
+			: { tier, seconds: 0, method: "no-rate" };
 	}
 	const segments = await resolver.hls(request.key.replace(/\.m4s$/, ".m3u8"));
-	return {
-		tier: request.kind,
-		seconds: segments
-			? hlsSecondsDelivered(segments, request.rangeStart, request.bodyBytes)
-			: 0,
-	};
+	if (segments) {
+		return {
+			tier: request.kind,
+			seconds: hlsSecondsDelivered(
+				segments,
+				request.rangeStart,
+				request.bodyBytes,
+			),
+			method: "playlist",
+		};
+	}
+	const video = await ownedVideo(request, resolver);
+	const rendition = video?.renditions.find((r) => r.name === request.kind);
+	const rate = bytesPerSecond(rendition?.bytes, video?.duration ?? null);
+	return rate
+		? {
+				tier: request.kind,
+				seconds: request.bodyBytes / rate,
+				method: "rendition-estimate",
+			}
+		: { tier: request.kind, seconds: 0, method: "no-rate" };
+}
+
+export interface DeliveryMethodTotals {
+	seconds: Record<DeliveryMethod, number>;
+	requests: Record<DeliveryMethod, number>;
+	unlabelled: number;
+}
+
+export function emptyMethodTotals(): DeliveryMethodTotals {
+	const zero = () => ({
+		playlist: 0,
+		"rendition-estimate": 0,
+		"mp4-estimate": 0,
+		audio: 0,
+		"no-rate": 0,
+	});
+	return { seconds: zero(), requests: zero(), unlabelled: 0 };
+}
+
+export function addMethodTotals(
+	into: DeliveryMethodTotals,
+	from: DeliveryMethodTotals,
+) {
+	for (const method of Object.keys(from.seconds) as DeliveryMethod[]) {
+		into.seconds[method] += from.seconds[method];
+		into.requests[method] += from.requests[method];
+	}
+	into.unlabelled += from.unlabelled;
 }
 
 export class DeliveryTally {
 	private readonly parts = new Map<string, DeliveryPart>();
 
-	add(
-		request: DeliveryRequest,
-		delivered: { tier: DeliveryTier; seconds: number },
-	) {
+	add(request: DeliveryRequest, delivered: DeliveredSeconds) {
 		const key = `${request.day}\0${request.appId}\0${request.videoId}\0${delivered.tier}`;
 		const part = this.parts.get(key);
 		if (part) {
@@ -321,6 +402,7 @@ export interface MeteredLogFile {
 	parts: DeliveryPart[];
 	lines: number;
 	delivered: number;
+	methods: DeliveryMethodTotals;
 }
 
 export async function meterDeliveryLog(
@@ -328,6 +410,7 @@ export async function meterDeliveryLog(
 	resolver: DeliveryResolver,
 ): Promise<MeteredLogFile> {
 	const tally = new DeliveryTally();
+	const methods = emptyMethodTotals();
 	let lines = 0;
 	let delivered = 0;
 	const take = async (line: string) => {
@@ -336,8 +419,13 @@ export async function meterDeliveryLog(
 		const request = parseDeliveryLine(line);
 		if (!request) return;
 		const seconds = await deliveredSeconds(request, resolver);
-		if (!seconds) return;
+		if (!seconds) {
+			methods.unlabelled += 1;
+			return;
+		}
 		delivered += 1;
+		methods.seconds[seconds.method] += seconds.seconds;
+		methods.requests[seconds.method] += 1;
 		tally.add(request, seconds);
 	};
 	const unzipped = pipeline(gzipped, createGunzip(), () => {});
@@ -356,7 +444,7 @@ export async function meterDeliveryLog(
 	}
 	pending += decoder.end();
 	await take(pending.trim());
-	return { parts: tally.toParts(), lines, delivered };
+	return { parts: tally.toParts(), lines, delivered, methods };
 }
 
 const PART_TIERS = new Set<string>([...DELIVERY_RENDITION_TIERS, "audio"]);

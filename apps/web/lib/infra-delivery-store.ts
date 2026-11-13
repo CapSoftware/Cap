@@ -16,9 +16,9 @@ import { and, eq, gte, inArray, lt, lte, max, sql } from "drizzle-orm";
 import { readDeveloperVideoText } from "./developer-video-storage";
 import {
 	type DeliveryResolver,
-	deliveryMp4Rate,
 	parseHlsByteRanges,
 	readDeliveryParts,
+	readDeliveryVideo,
 } from "./infra-delivery-log";
 import {
 	type DeliveryDayState,
@@ -93,7 +93,7 @@ export const storageDeliveryResolver: DeliveryResolver = {
 			? parseHlsByteRanges(text, name.replace(/\.m3u8$/, ".m4s"))
 			: null;
 	},
-	async mp4({ videoId }) {
+	async video({ videoId }) {
 		const [row] = await db()
 			.select({
 				appId: developerVideos.appId,
@@ -104,7 +104,7 @@ export const storageDeliveryResolver: DeliveryResolver = {
 			.from(developerVideos)
 			.where(eq(developerVideos.id, videoId))
 			.limit(1);
-		return row ? deliveryMp4Rate(row) : null;
+		return row ? readDeliveryVideo(row) : null;
 	},
 };
 
