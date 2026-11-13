@@ -157,7 +157,7 @@ export function TopUp({
 					>
 						Add your EIN
 					</button>{" "}
-					before you pay so it is on your receipt.
+					before you pay so it is on your invoice.
 				</p>
 			)}
 			{amount.error && (
@@ -250,11 +250,6 @@ export function TopUp({
 				{!codeOpen && (
 					<Button variant="quiet" onClick={() => setCodeOpen(true)}>
 						Have a code?
-					</Button>
-				)}
-				{!einOpen && (
-					<Button variant="quiet" onClick={() => setEinOpen(true)}>
-						Add a US EIN
 					</Button>
 				)}
 			</div>

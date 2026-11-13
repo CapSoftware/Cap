@@ -42,7 +42,7 @@ const einInput = () =>
 describe("US EIN hint on the top-up form", () => {
 	it("tells a US business to add its EIN before paying", () => {
 		expect(container.textContent).toContain(
-			"US business? Add your EIN before you pay so it is on your receipt.",
+			"US business? Add your EIN before you pay so it is on your invoice.",
 		);
 		expect(einInput()).toBeNull();
 	});
@@ -57,5 +57,41 @@ describe("US EIN hint on the top-up form", () => {
 
 		expect(einInput()).not.toBeNull();
 		expect(container.textContent).not.toContain("US business?");
+	});
+
+	it("offers the EIN field only from the hint, not a second button", () => {
+		const buttons = Array.from(container.querySelectorAll("button")).map(
+			(button) => button.textContent,
+		);
+		expect(buttons.filter((text) => text?.includes("EIN"))).toEqual([
+			"Add your EIN",
+		]);
+	});
+
+	it("lets the buyer clear the EIN and still pay", () => {
+		const link = Array.from(container.querySelectorAll("button")).find(
+			(button) => button.textContent === "Add your EIN",
+		);
+		act(() => link?.click());
+		const input = einInput();
+		if (!input) throw new Error("no EIN field");
+		const type = (value: string) => {
+			const setter = Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set;
+			act(() => {
+				setter?.call(input, value);
+				input.dispatchEvent(new Event("input", { bubbles: true }));
+			});
+		};
+		const submit = () =>
+			container.querySelector<HTMLButtonElement>('button[type="submit"]');
+
+		type("12-34");
+		expect(submit()?.disabled).toBe(true);
+		type("");
+		expect(submit()?.disabled).toBe(false);
+		expect(container.querySelector('[role="alert"]')).toBeNull();
 	});
 });
