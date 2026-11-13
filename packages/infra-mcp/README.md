@@ -50,7 +50,7 @@ Keep the key in the client's own configuration. A secret key can create and dele
 
 | Tool | What it does | Cost |
 |------|--------------|------|
-| `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed daily until deleted. |
+| `videos_upload` | Uploads a local file and starts encoding. Returns the video id with its share and embed links. Pass `videoId` to retry a failed upload into the same video. | Uploading and encoding are free. Stored video is billed one month when it becomes ready, then daily until deleted. |
 | `videos_wait` | Waits until a video has its playback links or has failed, then returns status, length, playback id and the HLS, MP4, poster, share and embed links. Waits for both HLS and MP4 unless `output` asks for one. | Free |
 | `videos_get` | Returns one video. | Free |
 | `videos_list` | Lists videos, newest first, optionally for one `userId`, with `limit` and `offset`. | Free |
