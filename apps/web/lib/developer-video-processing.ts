@@ -61,7 +61,11 @@ import {
 	internalDeveloperVideoUrl,
 	readDeveloperVideoText,
 } from "./developer-video-storage";
-import { announceDeveloperVideoStatus } from "./developer-webhook-dispatch";
+import { announceDeveloperVideoEvent } from "./developer-webhook-dispatch";
+import {
+	developerVideoEventStep,
+	developerVideoReadyEventDue,
+} from "./developer-webhook-events";
 import {
 	MEDIA_SERVER_SHUTDOWN_MESSAGE,
 	readMediaServerVideoJob,
@@ -123,14 +127,28 @@ async function mutateDeveloperVideo(
 			.where(eq(developerVideos.id, videoId))
 			.for("update");
 		if (!video) return null;
-		const updates = mutate(video);
-		if (!updates) return null;
-		becameReady = video.status !== "ready" && updates.status === "ready";
+		const changes = mutate(video);
+		if (!changes) return null;
+		becameReady = video.status !== "ready" && changes.status === "ready";
+		const event = developerVideoEventStep(
+			video,
+			{
+				status: changes.status ?? video.status,
+				processing:
+					"processing" in changes
+						? (changes.processing ?? null)
+						: video.processing,
+			},
+			Date.now(),
+		);
+		const updates = event.processing
+			? { ...changes, processing: event.processing }
+			: changes;
 		await tx
 			.update(developerVideos)
 			.set(updates)
 			.where(eq(developerVideos.id, videoId));
-		announceDeveloperVideoStatus(video, updates);
+		announceDeveloperVideoEvent(video, event);
 		return { ...video, ...updates } as DeveloperVideoRow;
 	};
 	const updated = await (executor ? run(executor) : db().transaction(run));
@@ -591,6 +609,22 @@ export async function prepareDeveloperVideoProcessing(
 	}
 }
 
+// The processing workflow polls a ready video until its outputs settle, and
+// each poll sends a due video.ready. A stuck output holds it back for at most
+// READY_EVENT_MAX_WAIT_MS and one poll, and a marked video whose last output
+// was settled by a write that did not send still gets it on the final poll.
+export async function sendDueDeveloperVideoReady(
+	videoId: string,
+): Promise<void> {
+	await mutateDeveloperVideo(videoId, (video) =>
+		!video.deletedAt &&
+		video.processing &&
+		developerVideoReadyEventDue(video, Date.now())
+			? { processing: video.processing }
+			: null,
+	);
+}
+
 export async function readDeveloperVideoParts(
 	videoId: string,
 	encodeId: string,
@@ -598,10 +632,26 @@ export async function readDeveloperVideoParts(
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode) return null;
 	const now = Date.now();
-	return {
+	const parts: DeveloperVideoPartSnapshot = {
 		hls: developerVideoPartAction(encode.processing.hls, now),
 		mp4: developerVideoPartAction(encode.processing.mp4, now),
 	};
+	if (!developerVideoReadyEventDue(encode.video, now)) return parts;
+	// Thrown out of this step, a failure here would fail the video's
+	// processing. Finished parts are reported as waiting instead, so the
+	// workflow polls again rather than ending with the event unsent.
+	try {
+		await sendDueDeveloperVideoReady(videoId);
+		return parts;
+	} catch (error) {
+		console.error("[developer-webhook] Failed to send a due event", {
+			videoId,
+			message: error instanceof Error ? error.message : String(error),
+		});
+		const waiting = (action: DeveloperVideoPartAction) =>
+			action === "done" ? "wait" : action;
+		return { hls: waiting(parts.hls), mp4: waiting(parts.mp4) };
+	}
 }
 
 function webhookUrl(part: DeveloperVideoPart, token: string): string {

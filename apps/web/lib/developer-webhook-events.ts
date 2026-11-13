@@ -1,3 +1,9 @@
+import type {
+	DeveloperVideoPartState,
+	DeveloperVideoProcessingState,
+} from "@cap/database/types";
+import { DEVELOPER_VIDEO_PARTS } from "@/lib/developer-video-state";
+
 export const WEBHOOK_EVENT_TYPES = ["video.ready", "video.errored"] as const;
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 
@@ -40,12 +46,67 @@ export function isWebhookEventType(value: string): value is WebhookEventType {
 	return WEBHOOK_EVENT_TYPES.some((type) => type === value);
 }
 
-export function developerVideoEventType(
-	previous: string,
-	next: string | undefined,
-): WebhookEventType | null {
-	if (next === undefined || next === previous) return null;
-	if (next === "ready") return "video.ready";
-	if (next === "errored") return "video.errored";
-	return null;
+// video.ready waits for every output so it carries every playback URL. An
+// output still encoding this long after the video became ready is treated as
+// stuck, and the event goes out with the URLs that exist.
+export const READY_EVENT_MAX_WAIT_MS = 30 * 60 * 1000;
+
+const SETTLED_PART_STATES: ReadonlySet<DeveloperVideoPartState["state"]> =
+	new Set(["complete", "failed", "unavailable"]);
+
+interface EventVideo {
+	status: string;
+	processing: DeveloperVideoProcessingState | null;
+}
+
+export interface DeveloperVideoEventStep {
+	type: WebhookEventType | null;
+	processing?: DeveloperVideoProcessingState;
+}
+
+export function developerVideoOutputsSettled(
+	processing: DeveloperVideoProcessingState,
+): boolean {
+	return DEVELOPER_VIDEO_PARTS.every((part) =>
+		SETTLED_PART_STATES.has(processing[part].state),
+	);
+}
+
+// Due once every output has settled or the wait has run out. Also true for a
+// marked video whose last output was settled by a write that did not send,
+// such as one from the previous deployment while this one rolls out.
+export function developerVideoReadyEventDue(
+	video: EventVideo,
+	now: number,
+): boolean {
+	const processing = video.processing;
+	const dueAt = processing?.readyEventDueAt;
+	if (video.status !== "ready" || !processing || dueAt == null) return false;
+	return (
+		developerVideoOutputsSettled(processing) ||
+		now - dueAt >= READY_EVENT_MAX_WAIT_MS
+	);
+}
+
+// Runs inside the transaction that writes `next`, under the video's row lock,
+// so concurrent writers see each other's marker and only one of them sends.
+export function developerVideoEventStep(
+	previous: EventVideo,
+	next: EventVideo,
+	now: number,
+): DeveloperVideoEventStep {
+	const processing = next.processing;
+	if (next.status !== previous.status) {
+		if (next.status === "errored") return { type: "video.errored" };
+		if (next.status !== "ready") return { type: null };
+		if (!processing || developerVideoOutputsSettled(processing)) {
+			return { type: "video.ready" };
+		}
+		return { type: null, processing: { ...processing, readyEventDueAt: now } };
+	}
+	if (!processing || !developerVideoReadyEventDue(next, now)) {
+		return { type: null };
+	}
+	const { readyEventDueAt: _readyEventDueAt, ...announced } = processing;
+	return { type: "video.ready", processing: announced };
 }
