@@ -17,6 +17,7 @@ import {
 	bigint,
 	boolean,
 	customType,
+	date,
 	datetime,
 	float,
 	foreignKey,
@@ -2082,6 +2083,7 @@ export type DeveloperCreditTransactionType =
 	| "topup"
 	| "video_create"
 	| "storage_daily"
+	| "delivery_daily"
 	| "transcription"
 	| "refund"
 	| "adjustment"
@@ -2097,6 +2099,7 @@ export type DeveloperCreditReferenceType =
 	| "manual"
 	| "pro_monthly_credit"
 	| "storage_day"
+	| "delivery_day"
 	| "auto_top_up"
 	| "auto_top_up_failed"
 	| "auto_top_up_pending"
@@ -2114,6 +2117,7 @@ export const developerCreditTransactions = mysqlTable(
 				"topup",
 				"video_create",
 				"storage_daily",
+				"delivery_daily",
 				"transcription",
 				"refund",
 				"adjustment",
@@ -2142,6 +2146,7 @@ export const developerCreditTransactions = mysqlTable(
 				"manual",
 				"pro_monthly_credit",
 				"storage_day",
+				"delivery_day",
 				"auto_top_up",
 				"auto_top_up_failed",
 				"auto_top_up_pending",
@@ -2193,6 +2198,56 @@ export const developerDailyStorageSnapshots = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 	},
 	(table) => [unique("app_date_unique").on(table.appId, table.snapshotDate)],
+);
+
+export const DEVELOPER_DELIVERY_TIERS = [
+	"360p",
+	"720p",
+	"1080p",
+	"1440p",
+	"2160p",
+	"audio",
+] as const;
+
+export type DeveloperDeliveryTier = (typeof DEVELOPER_DELIVERY_TIERS)[number];
+
+export const developerDeliveryDaily = mysqlTable(
+	"developer_delivery_daily",
+	{
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		day: date("day", { mode: "string" }).notNull(),
+		tier: varchar("tier", {
+			length: 8,
+			enum: DEVELOPER_DELIVERY_TIERS,
+		}).notNull(),
+		seconds: bigint("seconds", { mode: "number" }).notNull().default(0),
+		bytes: bigint("bytes", { mode: "number" }).notNull().default(0),
+		requests: int("requests").notNull().default(0),
+		abandonedBytes: bigint("abandonedBytes", { mode: "number" })
+			.notNull()
+			.default(0),
+		final: boolean("final").notNull().default(false),
+		finalizedAt: timestamp("finalizedAt"),
+		updatedAt: timestamp("updatedAt").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.appId, table.day, table.tier] }),
+		index("day_idx").on(table.day),
+	],
+);
+
+export const developerDeliveryLogFiles = mysqlTable(
+	"developer_delivery_log_files",
+	{
+		logFile: varchar("logFile", { length: 191 }).notNull().primaryKey(),
+		etag: varchar("etag", { length: 128 }).notNull(),
+		logHour: datetime("logHour").notNull(),
+		parts: json("parts").notNull().$type<unknown[]>(),
+		processedAt: timestamp("processedAt").notNull(),
+	},
+	(table) => [index("log_hour_idx").on(table.logHour)],
 );
 
 export const developerWebhookEndpoints = mysqlTable(

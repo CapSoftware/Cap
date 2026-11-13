@@ -12,6 +12,11 @@ import type { StorageUsage } from "@/lib/developer-pricing";
 import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
 import { sendInfraOutOfCreditEmail } from "@/lib/infra-billing-emails";
 import {
+	deliveryBillingStart,
+	markDeliveryDayNotified,
+	settleDeliveryDays,
+} from "@/lib/infra-delivery-billing";
+import {
 	INFRA_GRACE_DAYS,
 	latestStorageCharge,
 	latestStorageCharges,
@@ -41,6 +46,7 @@ const SHORTFALL_NOTICE_LOOKBACK_MS = GRACE_MS;
 
 const TOP_UPS_BEFORE_UNTIL_MS = 60_000;
 const STORAGE_UNTIL_MS = 200_000;
+const DELIVERY_UNTIL_MS = 225_000;
 const TOP_UPS_AFTER_UNTIL_MS = 240_000;
 
 export const MAX_STORAGE_HOPS = 24;
@@ -442,6 +448,22 @@ export async function GET(request: Request) {
 		}
 	}
 
+	const delivery = continued
+		? null
+		: await settleDeliveryDays({
+				now,
+				startDay: deliveryBillingStart(),
+				outOfTime: () => Date.now() - startedAt >= DELIVERY_UNTIL_MS,
+				onFellShort: async ({ accountId, dateKey, shortSince }) => {
+					const sent = await sendInfraOutOfCreditEmail({
+						accountId,
+						shortSince,
+						pausesAt: new Date(shortSince.getTime() + GRACE_MS),
+					});
+					if (sent) await markDeliveryDayNotified(accountId, dateKey, now);
+				},
+			});
+
 	const topUpsAfter = continued
 		? null
 		: await runDueAutoTopUps(now, {
@@ -462,6 +484,7 @@ export async function GET(request: Request) {
 		appsProcessed: processed,
 		appsShort: short,
 		firstMonths,
+		delivery,
 		autoTopUps,
 	});
 }

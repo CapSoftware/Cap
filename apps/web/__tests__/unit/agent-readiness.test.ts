@@ -313,6 +313,8 @@ describe("developer OpenAPI spec", () => {
 				"error",
 				"code",
 				"message",
+				"hint",
+				"docs",
 				"standing",
 				"pausesAt",
 				"balanceMicroCredits",
@@ -326,15 +328,21 @@ describe("developer OpenAPI spec", () => {
 
 	it("matches the 402 schema to the body the upload routes send", async () => {
 		const { uploadAdmissionError } = await import("@/lib/infra-standing");
-		const body = uploadAdmissionError({
-			allowed: false,
-			reason: "insufficient_credits",
-			standing: { state: "grace", pausesAt: new Date("2026-11-19T00:00:00Z") },
-			balanceMicroCredits: 10,
-			requiredMicroCredits: 30,
-			shortfallMicroCredits: 20,
-			message: "Add credit.",
-		});
+		const body = uploadAdmissionError(
+			{
+				allowed: false,
+				reason: "insufficient_credits",
+				standing: {
+					state: "grace",
+					pausesAt: new Date("2026-11-19T00:00:00Z"),
+				},
+				balanceMicroCredits: 10,
+				requiredMicroCredits: 30,
+				shortfallMicroCredits: 20,
+				message: "Add credit.",
+			},
+			"app_1",
+		);
 		const schema = spec.components.schemas.UploadPaymentRequired;
 
 		expect(Object.keys(body).sort()).toEqual([...schema.required].sort());
@@ -441,6 +449,30 @@ describe("proxy content negotiation", () => {
 			expect(response.headers.get("content-type")).toBeNull();
 		},
 	);
+
+	it.each([
+		["/infra", "text/markdown"],
+		["/infra/", "text/markdown, text/html;q=0.5"],
+		["/infra.md", "text/html,*/*;q=0.8"],
+	])(
+		"rewrites %s with Accept %s to the Infra Markdown",
+		async (path, accept) => {
+			const response = await send(path, accept);
+			expect(response.headers.get("x-middleware-rewrite")).toBe(
+				"https://cap.so/infra-markdown",
+			);
+		},
+	);
+
+	it.each([
+		["/infra", "text/html,*/*;q=0.8"],
+		["/infra", "text/html, text/markdown;q=0.5"],
+		["/infra/pricing", "text/markdown"],
+		["/infrastructure", "text/markdown"],
+	])("leaves %s with Accept %s alone", async (path, accept) => {
+		const response = await send(path, accept);
+		expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+	});
 
 	it("serves the homepage as Markdown", async () => {
 		const fetch = vi

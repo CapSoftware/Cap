@@ -123,6 +123,7 @@ import {
 } from "@/lib/developer-rate-limits";
 import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
 import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
@@ -1342,6 +1343,47 @@ describe("wrong method and unknown path", () => {
 		},
 	);
 
+	it("lists the 405 on every operation of a path that answers it, with the methods the path takes", async () => {
+		const spec = developerOpenApiSpec("https://cap.so") as unknown as {
+			paths: Record<
+				string,
+				Record<string, { responses?: Record<string, unknown> }>
+			>;
+		};
+		const methods = ["PUT", "PATCH", "DELETE", "POST", "GET"] as const;
+		const paths = Object.entries(spec.paths).filter(([path]) =>
+			path.startsWith("/api/developer/"),
+		);
+		expect(paths.length).toBeGreaterThan(15);
+
+		for (const [path, item] of paths) {
+			const listed = Object.keys(item).map((method) => method.toUpperCase());
+			for (const method of listed) {
+				expect(
+					item[method.toLowerCase()]?.responses?.["405"],
+					`${method} ${path}`,
+				).toEqual({ $ref: "#/components/responses/MethodNotAllowed" });
+			}
+
+			const sdkPath = path.startsWith("/api/developer/sdk/");
+			const concrete = path.replace("{id}", "video-1");
+			const unlisted = methods.find((method) => !listed.includes(method));
+			if (!unlisted) throw new Error(`${path} takes every method`);
+			const response = await call(sdkPath ? sdk : rest, unlisted, concrete, {
+				key: freshKey(sdkPath ? "cut" : "csk"),
+			});
+
+			expect(response.status, `${unlisted} ${path}`).toBe(405);
+			expect(
+				response.headers.get("Allow")?.split(", "),
+				`${unlisted} ${path}`,
+			).toEqual(expect.arrayContaining(listed));
+			expect(await response.json()).toMatchObject({
+				code: "method_not_allowed",
+			});
+		}
+	});
+
 	it.each([
 		[rest, "GET", "/api/developer/v1/nope", "csk"],
 		[rest, "POST", "/api/developer/v1/videos/a/b/c", "csk"],
@@ -1544,6 +1586,7 @@ describe("usage", () => {
 			microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 			storageDollarsPer1000MinutesPerMonth:
 				INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+			deliveryDollarsPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 			speechDollarsPerHour: SPEECH_DOLLARS_PER_HOUR,
 			uploadAdmissionDays: UPLOAD_ADMISSION_DAYS,
 		});

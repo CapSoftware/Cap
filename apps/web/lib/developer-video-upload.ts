@@ -17,6 +17,7 @@ import {
 	transcriptNameFromFile,
 } from "@/lib/developer-transcripts";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
+import { keyedDeveloperVideoId } from "@/lib/developer-video-ids";
 import {
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_DEFAULT_TIER,
@@ -224,7 +225,7 @@ export async function createDeveloperVideoUpload(
 	if (!admission.allowed) return refused(admission);
 
 	const id = input.idempotencyKey
-		? developerVideoIdForIdempotencyKey(appId, input.idempotencyKey)
+		? await keyedDeveloperVideoId(appId, input.idempotencyKey)
 		: nanoId();
 	const s3Key = `developer/${appId}/${id}/video`;
 

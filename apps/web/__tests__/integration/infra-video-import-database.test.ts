@@ -54,10 +54,14 @@ vi.mock("@/lib/developer-video-charge", () => ({
 	admitDeveloperVideoUpload: mocks.admit,
 }));
 vi.mock("@/lib/infra-standing", () => ({
-	uploadAdmissionError: (admission: Record<string, unknown>) => ({
+	uploadAdmissionError: (
+		admission: Record<string, unknown>,
+		appId: string,
+	) => ({
 		error: "Insufficient credits",
 		code: "insufficient_credits",
 		message: admission.message ?? "Insufficient credits",
+		hint: `billing for ${appId}`,
 	}),
 }));
 vi.mock("@/lib/infra-auto-top-up", () => ({ scheduleAutoTopUp: mocks.topUp }));
@@ -468,6 +472,9 @@ describe.runIf(Boolean(databaseUrl))(
 					guards: serving(mp4Bytes(5_000_000)),
 				});
 				expect(result.status).toBe(402);
+				expect(result).toMatchObject({
+					body: { hint: `billing for ${appId}` },
+				});
 				expect(mocks.admit).toHaveBeenCalledWith({
 					appId,
 					videoId: input.videoId,

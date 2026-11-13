@@ -18,6 +18,8 @@ export interface Attachment {
 	warm: () => void;
 	setLevel: (index: number) => void;
 	seekDuringSwitch: (time: number) => boolean;
+	heldTime: () => number | null;
+	takeSwitchPlay: () => boolean;
 }
 
 export interface AttachOptions {
@@ -134,9 +136,11 @@ const HLS_MIME = "application/vnd.apple.mpegurl";
 // The line assumed before anything is measured. Chrome's connection hint
 // reads about 1.6 Mbps on a fast line as on a slow one, so it starts low, and
 // the first segment's measured speed then swaps a fast line up. Safari and
-// Firefox give no hint and assume enough for the rendition that fits a
-// desktop player.
+// Firefox give no hint at all. Assuming a fast line there held a slow-line
+// viewer on a whole 720p segment before the first frame (5 to 11 s on 3G),
+// so they start as low as Chrome does and are swapped up the same way.
 const DEFAULT_BITS_PER_SECOND = 5_000_000;
+const UNHINTED_BITS_PER_SECOND = 1_200_000;
 const SLOW_LINE_BITS_PER_SECOND = 500_000;
 const SLOW_LINE_TYPES = ["slow-2g", "2g", "3g"];
 
@@ -147,6 +151,12 @@ export const SECONDS_AHEAD_BEFORE_PLAY = 1;
 // Seconds the segment that fits the player may take to arrive, at the speed
 // measured on the segment held first, for it to replace that one before play.
 export const SECONDS_TO_SHARPEN = 0.5;
+
+// A manual pick sharper than the picture switches at once only when the
+// measured line brings a segment of it in about this share of its length.
+// On a slower line the flush froze the picture for longer than waiting for
+// the next segment does (5 s further behind after 15 s on 3G).
+export const PICK_AT_ONCE_SHARE = 0.25;
 
 type ConnectionHint = {
 	downlink?: number;
@@ -189,10 +199,13 @@ export const warmSource = (source: CapPlayerSource) => {
 	if (mode === "mse") void loadHls().catch(() => undefined);
 };
 
+const connectionHint = () =>
+	(navigator as Navigator & { connection?: ConnectionHint }).connection;
+
 export const startingEstimate = () => {
-	const connection = (navigator as Navigator & { connection?: ConnectionHint })
-		.connection;
-	if (connection?.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
+	const connection = connectionHint();
+	if (!connection) return UNHINTED_BITS_PER_SECOND;
+	if (connection.saveData === true) return SLOW_LINE_BITS_PER_SECOND;
 	const megabits = connection?.downlink ?? 0;
 	if (megabits > 0) {
 		return Math.min(megabits * 800_000, DEFAULT_BITS_PER_SECOND);
@@ -244,6 +257,19 @@ export const withShortPlaylists = (hls: string) => {
 	}
 };
 
+// The player draws the captions it is given. Subtitles listed in the master
+// as well would show twice in Safari's own captions menu, and could be drawn
+// over the player's own.
+export const withoutPlaylistSubtitles = (hls: string) => {
+	try {
+		const url = new URL(hls, document.baseURI);
+		url.searchParams.set("subtitles", "none");
+		return url.toString();
+	} catch {
+		return hls;
+	}
+};
+
 export const startWithin = (startAt: number, duration: number) =>
 	Number.isFinite(duration) && startAt > 0 && startAt < duration ? startAt : 0;
 
@@ -282,9 +308,12 @@ const afterDocumentLoad = (run: () => void) => {
 
 export const attachSource = (
 	video: HTMLVideoElement,
-	source: CapPlayerSource,
+	given: CapPlayerSource,
 	options: AttachOptions,
 ): Attachment => {
+	const source: CapPlayerSource = given.hls
+		? { ...given, hls: withoutPlaylistSubtitles(given.hls) }
+		: given;
 	const { autoPlay, onFatal, onLevels } = options;
 	const startAt = options.startAt ?? 0;
 	const mode = pickPlaybackMode(video, source);
@@ -309,16 +338,38 @@ export const attachSource = (
 	// the MP4. Whether it plays is read from the element each time: a pause in
 	// that window must hold.
 	let switchingFrom: number | null = null;
+	// A seek made as a new source loads can read zero until it lands. Its
+	// place is held for the events the page is sent and for a switch or
+	// fallback made meanwhile, but only while the element still reads zero:
+	// any other time it reports is newer, such as the viewer's own seek.
+	let held: number | null = null;
+	const releaseHeld = () => {
+		held = null;
+	};
+	const now = () =>
+		held !== null && video.currentTime === 0 ? held : video.currentTime;
 	const position = () => ({
-		resumeAt: switchingFrom ?? video.currentTime,
+		resumeAt: switchingFrom ?? now(),
 		wasPlaying: !video.paused,
 	});
+
+	const seekHolding = (time: number) => {
+		held = time;
+		video.removeEventListener("seeked", releaseHeld);
+		video.addEventListener("seeked", releaseHeld, { once: true });
+		video.currentTime = time;
+	};
+	const heldTime = () => {
+		if (switchingFrom !== null) return switchingFrom;
+		if (held !== null && video.currentTime === 0) return held;
+		return startPending && !hlsSeeks && startAt > 0 ? startAt : null;
+	};
 
 	const seekToStart = () => {
 		if (!startPending || hlsSeeks) return;
 		startPending = false;
 		const at = startWithin(startAt, video.duration);
-		if (at > 0) video.currentTime = at;
+		if (at > 0) seekHolding(at);
 	};
 
 	// WebKit holds the document's load event, and with it the load event of a
@@ -340,6 +391,9 @@ export const attachSource = (
 	let nativeSrc = "";
 	let listing: AbortController | null = null;
 	let resumeAfterSwitch: (() => void) | null = null;
+	// A source swapped while playing is played again at once, which the
+	// element reports as a new play. That one is not the viewer's.
+	let switchPlay = false;
 
 	function onNativeError() {
 		playFile();
@@ -366,6 +420,7 @@ export const attachSource = (
 		}
 		resumeAfterSwitch = null;
 		switchingFrom = null;
+		switchPlay = false;
 	}
 
 	function pickNativeLevel(index: number) {
@@ -376,7 +431,7 @@ export const attachSource = (
 				? hls
 				: renditionSource(hls, nativeLevels[index]?.uri);
 		if (!next || next === nativeSrc) return;
-		const resumeAt = switchingFrom ?? video.currentTime;
+		const resumeAt = switchingFrom ?? now();
 		const wasPlaying = !video.paused;
 		const speed = video.playbackRate;
 		dropResume();
@@ -388,12 +443,16 @@ export const attachSource = (
 			const at = switchingFrom ?? resumeAt;
 			resumeAfterSwitch = null;
 			switchingFrom = null;
+			switchPlay = false;
 			video.playbackRate = speed;
-			if (at > 0) video.currentTime = at;
+			if (at > 0) seekHolding(at);
 		};
 		resumeAfterSwitch = resume;
 		video.addEventListener("loadedmetadata", resume, { once: true });
-		if (wasPlaying) void video.play().catch(() => undefined);
+		if (wasPlaying) {
+			switchPlay = true;
+			void video.play().catch(() => undefined);
+		}
 	}
 
 	// When hls.js fails, the browser's own HLS is tried before the MP4. Only
@@ -416,7 +475,7 @@ export const attachSource = (
 		video.src = source.hls;
 		if (resumeAt > 0) {
 			startPending = false;
-			video.currentTime = resumeAt;
+			seekHolding(resumeAt);
 		}
 		if (wasPlaying) void video.play().catch(() => undefined);
 		else warmAfterLoad(resumeAt === 0);
@@ -442,7 +501,7 @@ export const attachSource = (
 		video.src = source.mp4;
 		if (resumeAt > 0) {
 			startPending = false;
-			video.currentTime = resumeAt;
+			seekHolding(resumeAt);
 		}
 		if (wasPlaying) void video.play().catch(() => undefined);
 		else warmAfterLoad(resumeAt === 0);
@@ -456,6 +515,8 @@ export const attachSource = (
 		video.removeEventListener("error", onNativeError);
 		video.removeEventListener("loadedmetadata", listNativeLevels);
 		video.removeEventListener("loadedmetadata", seekToStart);
+		video.removeEventListener("seeked", releaseHeld);
+		held = null;
 		detach();
 	};
 
@@ -477,11 +538,19 @@ export const attachSource = (
 		return true;
 	};
 
+	const takeSwitchPlay = () => {
+		const taken = switchPlay;
+		switchPlay = false;
+		return taken;
+	};
+
 	const attachment: Attachment = {
 		stop,
 		warm,
 		setLevel: (index) => setLevel(index),
 		seekDuringSwitch,
+		heldTime,
+		takeSwitchPlay,
 	};
 
 	if (mode === "none") {
@@ -491,6 +560,8 @@ export const attachSource = (
 			warm: () => undefined,
 			setLevel: () => undefined,
 			seekDuringSwitch: () => false,
+			heldTime: () => null,
+			takeSwitchPlay: () => false,
 		};
 	}
 
@@ -542,19 +613,55 @@ export const attachSource = (
 			// when playback starts, and after hls.js's own seek to a start time.
 			let sharper = AUTO_LEVEL;
 			let swappedTo = AUTO_LEVEL;
+			// Without a connection hint every line starts low, and the step up is
+			// made at the next segment boundary once a frame is on screen. A
+			// switch at play flushed the held segment: Safari's first frame then
+			// waited for the sharper one (about 200 ms on a fast line), and the
+			// flush paused playback once in Safari and Firefox, which start on
+			// the fitting rendition on main.
+			const hinted = connectionHint() !== undefined;
+			let framed = hinted;
+			let steppedTo = AUTO_LEVEL;
+			let watchingFrame = false;
+			let destroyed = false;
+			const onFirstFrame = () => {
+				video.removeEventListener("timeupdate", onFirstFrame);
+				if (destroyed || framed) return;
+				framed = true;
+				switchWhenPlaying();
+			};
+			const watchFirstFrame = () => {
+				if (framed || watchingFrame) return;
+				watchingFrame = true;
+				const frames = video as {
+					requestVideoFrameCallback?: HTMLVideoElement["requestVideoFrameCallback"];
+				};
+				if (frames.requestVideoFrameCallback) {
+					frames.requestVideoFrameCallback.call(video, onFirstFrame);
+				} else {
+					video.addEventListener("timeupdate", onFirstFrame);
+				}
+			};
 			const switchWhenPlaying = () => {
 				if (sharper === AUTO_LEVEL || !playRequested || startPending) return;
+				if (!framed) return;
 				const level = sharper;
 				sharper = AUTO_LEVEL;
 				if (picked !== AUTO_LEVEL) return;
-				swappedTo = level;
-				hls.currentLevel = level;
+				if (hinted) {
+					swappedTo = level;
+					hls.currentLevel = level;
+				} else {
+					steppedTo = level;
+					hls.nextLevel = level;
+				}
 			};
 			const bufferFreely = () => {
 				playRequested = true;
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
 				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
 				else hls.nextLevel = picked;
+				watchFirstFrame();
 				switchWhenPlaying();
 			};
 			// hls.js seeks to the start time itself. The time stays pending
@@ -565,6 +672,8 @@ export const attachSource = (
 				switchWhenPlaying();
 			};
 			const destroy = () => {
+				destroyed = true;
+				video.removeEventListener("timeupdate", onFirstFrame);
 				hlsSeeks = false;
 				video.removeEventListener("play", bufferFreely);
 				video.removeEventListener("seeked", reachedStart);
@@ -591,6 +700,13 @@ export const attachSource = (
 			let measured = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
+				if (data.frag.level === steppedTo) {
+					steppedTo = AUTO_LEVEL;
+					if (playRequested && picked === AUTO_LEVEL) {
+						hls.loadLevel = AUTO_LEVEL;
+					}
+					return;
+				}
 				if (data.frag.level === swappedTo) {
 					swappedTo = AUTO_LEVEL;
 					// Chrome keeps showing frames it decoded from the old segment
@@ -634,12 +750,29 @@ export const attachSource = (
 				destroy();
 				playNative(reached);
 			});
-			// A pick changes rendition at the next segment. Switching at once
-			// flushes the whole buffer and freezes the picture on a slow line.
-			// Before play a pick is only remembered, so it downloads nothing.
+			// A pick changes at the next segment: switching at once flushes the
+			// buffer and freezes the picture on a slow line. A pick sharper than
+			// the picture switches at once on a line fast enough to refill it
+			// quickly, or the old rendition plays out everything already
+			// buffered. Before play a pick is only remembered, so it downloads
+			// nothing.
 			setLevel = (index) => {
 				picked = index;
-				if (playRequested) hls.nextLevel = index;
+				if (!playRequested) return;
+				const level = hls.levels[index];
+				const fast =
+					!!level &&
+					hls.bandwidthEstimate * PICK_AT_ONCE_SHARE >= level.bitrate;
+				if (
+					index !== AUTO_LEVEL &&
+					fast &&
+					isSharper(hls.levels, index, hls.currentLevel)
+				) {
+					swappedTo = index;
+					hls.currentLevel = index;
+				} else {
+					hls.nextLevel = index;
+				}
 			};
 			video.preload = "auto";
 			hls.loadSource(withShortPlaylists(source.hls));

@@ -842,7 +842,7 @@ A file that is already at a public URL needs no upload. Send it as `url` to `POS
 
 ## 9. What it costs
 
-Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free. A 10 minute 1080p video costs $0.00850 when it becomes ready, then $0.00028 a day after its first month. Stored video and transcription are paid for from the app's prepaid credit. [Billing](/docs/api/billing) has the prices and the rules.
+Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free. A 10 minute 1080p video costs $0.00850 when it becomes ready, then $0.00028 a day after its first month. Delivery is billed per delivered minute, one flat rate at every resolution, priced in [Billing](/docs/api/billing). A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. The player has no separate fee, but the video it streams counts as delivery. Stored video, delivered video and transcription are paid for from the app's prepaid credit. [Billing](/docs/api/billing) has the prices and the rules.
 
 - The app's Billing page in the console shows the balance and every charge.
 - [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
@@ -886,10 +886,11 @@ bearer_token_env_var = "CAP_SECRET_KEY"
 The tools:
 
 - `videos_import`: create a video from a public https link to the file. Cap downloads it, so nothing is uploaded.
-- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding. A result signs up to 10 parts. For a larger file, `nextFromPart` says where to continue: call `videos_create_upload` again with the `videoId`, the same `contentLength` and `fromPart`.
 - `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
 - `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
 - `account_usage` and `account_transactions`: the balance, prices and every charge.
+- `docs_read`: read a section of these docs, such as the embed options, webhook signatures or billing rules, by heading or by search.
 
 Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
 
