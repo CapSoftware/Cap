@@ -1905,6 +1905,7 @@ export const developerVideos = mysqlTable(
 		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
 		errorReason: varchar("errorReason", { length: 512 }),
 		processing: json("processing").$type<DeveloperVideoProcessingState>(),
+		storagePaidUntil: timestamp("storagePaidUntil"),
 		deletedAt: timestamp("deletedAt"),
 		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1916,6 +1917,21 @@ export const developerVideos = mysqlTable(
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
 		uniqueIndex("playback_id_idx").on(table.playbackId),
 		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
+		index("app_storage_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.status,
+			table.maxResolutionTier,
+			table.width,
+			table.height,
+			table.storagePaidUntil,
+			table.duration,
+		),
+		index("first_month_due_idx").on(
+			table.storagePaidUntil,
+			table.status,
+			table.createdAt,
+		),
 	],
 );
 

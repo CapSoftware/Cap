@@ -393,6 +393,13 @@
 			"when": 1794461929204,
 			"tag": "0055_developer_transcripts",
 			"breakpoints": true
+		},
+		{
+			"idx": 59,
+			"version": "5",
+			"when": 1794534248505,
+			"tag": "0059_developer_video_first_month",
+			"breakpoints": true
 		}
 	]
 }
