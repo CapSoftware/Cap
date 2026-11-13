@@ -22,6 +22,7 @@ import {
 	developerVideoReportHref,
 } from "@/lib/developer-video-takedown";
 import { INFRA_VIDEO_PUBLIC_FAILURE } from "@/lib/infra-video-view";
+import { EmbedError } from "./EmbedError";
 import { RefreshUntilReady } from "./RefreshUntilReady";
 
 export type DeveloperVideoPageVariant = "share" | "embed";
@@ -133,17 +134,30 @@ function Stage({
 	}
 	if (player.kind === "paused") {
 		return (
-			<Notice
-				title="Playback is paused"
-				detail="This video will play again when its owner resumes playback."
-			/>
+			<>
+				<Notice
+					title="Playback is paused"
+					detail="This video will play again when its owner resumes playback."
+				/>
+				{playback.events && <EmbedError code="paused" />}
+			</>
 		);
 	}
 	if (player.kind === "failed") {
-		return <Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />;
+		return (
+			<>
+				<Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />
+				{playback.events && <EmbedError code="unavailable" />}
+			</>
+		);
 	}
 	if (player.kind === "taken_down") {
-		return <Notice title={DEVELOPER_VIDEO_UNAVAILABLE} />;
+		return (
+			<>
+				<Notice title={DEVELOPER_VIDEO_UNAVAILABLE} />
+				{playback.events && <EmbedError code="unavailable" />}
+			</>
+		);
 	}
 	return (
 		<>
@@ -188,6 +202,7 @@ export function DeveloperVideoView({
 				<h1 className="m-0 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
 					{DEVELOPER_VIDEO_UNAVAILABLE}
 				</h1>
+				{variant === "embed" && <EmbedError code="unavailable" />}
 			</div>
 		);
 	}

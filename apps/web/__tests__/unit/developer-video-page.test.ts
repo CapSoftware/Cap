@@ -268,6 +268,43 @@ describe("a taken down video page", () => {
 		},
 	);
 
+	it("ignores every embed parameter", async () => {
+		mocks.load.mockResolvedValue(takenDownFromLoader);
+		const plain = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: {},
+			}),
+		);
+		const styled = renderToStaticMarkup(
+			await DeveloperVideoPage({
+				playbackId: PLAYBACK_ID,
+				variant: "embed",
+				query: {
+					autoplay: "1",
+					muted: "1",
+					controls: "0",
+					t: "30",
+					captions: "1",
+					color: "f97316",
+					radius: "16",
+					quality: "720",
+					quality_menu: "0",
+					speed_menu: "0",
+					pip: "0",
+					fullscreen: "0",
+					poster: "0",
+					keyboard: "0",
+				},
+			}),
+		);
+
+		expect(styled).toBe(plain);
+		expect(styled).not.toContain("f97316");
+		expect(styled).not.toContain("border-radius");
+	});
+
 	it("never renders the video's own name or size even if the loader passed them", () => {
 		const html = render(takenDown, "share");
 
