@@ -14,7 +14,7 @@ vi.mock("@/lib/rate-limit", () => ({
 
 const state = vi.hoisted(() => ({
 	scopes: [] as string[],
-	apps: [] as { id: string }[],
+	apps: [] as { id: string; appName?: string }[],
 	videos: [] as Record<string, unknown>[],
 	transactions: [] as Record<string, unknown>[],
 	idempotency: null as Record<string, unknown> | null,
