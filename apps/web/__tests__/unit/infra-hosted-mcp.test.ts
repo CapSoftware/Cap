@@ -269,6 +269,26 @@ describe("hosted Cap Infra MCP auth", () => {
 		expect(state.rest).toHaveLength(0);
 	});
 
+	it("sends the REST API's response headers on refusals and answers", async () => {
+		const refused = await mcp(null, initialize, {
+			"x-vercel-id": "iad1::req-1",
+		});
+		expect(refused.status).toBe(401);
+		expect(refused.headers.get("cache-control")).toBe("private, no-store");
+		expect(refused.headers.get("x-request-id")).toBe("iad1::req-1");
+		expect(refused.headers.get("www-authenticate")).toBe(
+			'Bearer realm="cap-infra"',
+		);
+
+		const answered = await mcp(newKey(), initialize, {
+			"x-vercel-id": "iad1::req-2",
+		});
+		expect(answered.status).toBe(200);
+		expect(answered.headers.get("cache-control")).toBe("private, no-store");
+		expect(answered.headers.get("x-request-id")).toBe("iad1::req-2");
+		expect(answered.headers.get("www-authenticate")).toBeNull();
+	});
+
 	it("refuses a revoked secret key", async () => {
 		const response = await mcp(newKey("app1", true), initialize);
 		expect(response.status).toBe(401);

@@ -3,6 +3,7 @@ import {
 	developerApiError,
 	developerApiNotFound,
 	developerRateLimiter,
+	developerResponseHeaders,
 	withDeveloperSecretAuth,
 } from "@/app/api/utils";
 import { apiErrorBody } from "@/lib/api-errors";
@@ -17,9 +18,9 @@ const app = new Hono<{
 	Variables: { developerAppId: string; developerKeyType: "secret" };
 }>()
 	.basePath(INFRA_MCP_PATH)
+	.use(developerResponseHeaders)
 	.use(async (c, next) => {
 		await next();
-		c.header("Cache-Control", "no-store");
 		if (c.res.status === 401) {
 			c.header("WWW-Authenticate", 'Bearer realm="cap-infra"');
 		}
