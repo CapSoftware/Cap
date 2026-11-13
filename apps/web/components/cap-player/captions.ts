@@ -4,6 +4,11 @@ export interface CapPlayerCaption {
 	url: string;
 }
 
+export const sameCaptionsKey = (captions: readonly CapPlayerCaption[]) =>
+	JSON.stringify(
+		captions.map((caption) => [caption.language, caption.label, caption.url]),
+	);
+
 export const initialCaptions = (
 	captions: readonly CapPlayerCaption[],
 	on: boolean,

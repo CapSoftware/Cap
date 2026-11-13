@@ -15,6 +15,7 @@ import {
 	initialCaptions,
 	loadCaptionsFile,
 	releaseCaptionsFiles,
+	sameCaptionsKey,
 	toggledCaptions,
 } from "./captions";
 import styles from "./player.module.css";
@@ -283,7 +284,7 @@ export const CapPlayer = ({
 	loop = false,
 	controls = true,
 	startAt = 0,
-	captions = NO_CAPTIONS,
+	captions: givenCaptions = NO_CAPTIONS,
 	showCaptions = false,
 	focusOnMount = false,
 	accentColor,
@@ -312,6 +313,14 @@ export const CapPlayer = ({
 	const levelsRef = useRef<readonly CapPlayerLevel[]>([]);
 	const captionTracks = useRef(new Map<string, HTMLTrackElement>());
 	const captionFiles = useRef(new Map<string, Promise<string>>());
+	// A page that refreshes its data hands over a new list with the same
+	// captions. Keeping the old list then leaves the captions on screen alone.
+	const captionsKey = sameCaptionsKey(givenCaptions);
+	const keptCaptions = useRef({ key: captionsKey, list: givenCaptions });
+	if (keptCaptions.current.key !== captionsKey) {
+		keptCaptions.current = { key: captionsKey, list: givenCaptions };
+	}
+	const captions = keptCaptions.current.list;
 
 	const [unavailable, setUnavailable] = useState<readonly string[]>([]);
 	const [captionsOn, setCaptionsOn] = useState(() =>

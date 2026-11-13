@@ -72,7 +72,6 @@ function Player({ video }: { video: InfraVideoDetail }) {
 		hls: video.hlsUrl ?? undefined,
 		mp4: video.mp4Url ?? undefined,
 	}));
-	const [captions] = useState(video.captions);
 	const portrait =
 		video.width !== null && video.height !== null && video.height > video.width;
 	return (
@@ -86,7 +85,7 @@ function Player({ video }: { video: InfraVideoDetail }) {
 				source={source}
 				title={video.name}
 				poster={video.posterUrl ?? undefined}
-				captions={captions}
+				captions={video.captions}
 				aspectRatio={
 					video.width && video.height
 						? `${video.width} / ${video.height}`

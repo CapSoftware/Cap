@@ -194,6 +194,28 @@ describe("the captions button", () => {
 		expect(button()?.getAttribute("aria-pressed")).toBe("false");
 	});
 
+	it("keeps captions on through a refresh that hands over the same list", async () => {
+		await mount({ captions: [english], showCaptions: true });
+		const track = container.querySelector("track[src]");
+
+		await mount({ captions: [{ ...english }], showCaptions: true });
+
+		expect(button()?.getAttribute("aria-pressed")).toBe("true");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(container.querySelector("track[src]")).toBe(track);
+	});
+
+	it("offers captions that arrive after the player mounted", async () => {
+		await mount({});
+		expect(button()).toBeNull();
+
+		await mount({ captions: [english] });
+		expect(button()?.getAttribute("aria-pressed")).toBe("false");
+
+		await mount({ captions: [english, german] });
+		expect(button()?.getAttribute("aria-label")).toBe("Captions, off");
+	});
+
 	it("toggles with the c key", async () => {
 		await mount({ captions: [english] });
 
