@@ -1,0 +1,118 @@
+diff --git a/dist/modules/src/isobmff/isobmff-demuxer.js b/dist/modules/src/isobmff/isobmff-demuxer.js
+index b5cce3d36e7385dc2c925ef0743383ca58150df6..052a4812671f2f50e9fe66ffacd384451209740c 100644
+--- a/dist/modules/src/isobmff/isobmff-demuxer.js
++++ b/dist/modules/src/isobmff/isobmff-demuxer.js
+@@ -18,6 +18,8 @@ import { DEFAULT_TRACK_DISPOSITION, RichImageData } from '../metadata.js';
+ import { AC3_SAMPLE_RATES } from '../../shared/ac3-misc.js';
+ import { Bitstream } from '../../shared/bitstream.js';
+ import { Aes128CbcContext } from '../aes.js';
++// About 18 hours of 60 fps video. Building the presentation order costs memory per sample.
++const MAX_DECLARED_SAMPLES = 4_000_000;
+ export class IsobmffDemuxer extends Demuxer {
+     constructor(input) {
+         super(input);
+@@ -218,6 +220,79 @@ export class IsobmffDemuxer extends Demuxer {
+         this.currentTrack = internalTrack;
+         this.traverseBox(stblContainerSlice);
+         this.currentTrack = null;
++        // Counts in a sample table are declared by the file, not stored in it: a few bytes can claim
++        // billions of samples. No count is honored past what the file can hold. With a size entry per
++        // sample, that is the number of entries. With one size shared by all samples, each chunk can hold
++        // only as many samples of that size as fit in the file, and so can the track as a whole.
++        {
++            const sizes = sampleTable.sampleSizes;
++            let maxSamples = 0;
++            let perChunkLimit = 0;
++            if (sizes.length > 1) {
++                maxSamples = sizes.length;
++                perChunkLimit = sizes.length;
++                for (const entry of sampleTable.sampleToChunk) {
++                    if (entry.samplesPerChunk > perChunkLimit) {
++                        entry.samplesPerChunk = perChunkLimit;
++                    }
++                }
++            }
++            else if (sizes.length === 1) {
++                const fileSize = this.reader.fileSize;
++                perChunkLimit = sizes[0] > 0
++                    ? (fileSize !== null ? Math.max(1, Math.floor(fileSize / sizes[0])) : MAX_DECLARED_SAMPLES)
++                    : 1;
++                const chunkEntries = sampleTable.sampleToChunk;
++                const chunkCounts = chunkEntries.map((entry, i) => Math.max(0, (chunkEntries[i + 1]
++                    ? chunkEntries[i + 1].startChunkIndex
++                    : sampleTable.chunkOffsets.length) - entry.startChunkIndex));
++                for (let i = 0; i < chunkEntries.length; i++) {
++                    maxSamples += chunkCounts[i] * Math.min(chunkEntries[i].samplesPerChunk, perChunkLimit);
++                }
++                // Chunks may point at the same bytes, so the sum can pass what the file holds. The total is
++                // held to the samples that fit in the file, or to one per listed chunk if that is more, and
++                // the chunks share that total between them.
++                maxSamples = Math.min(maxSamples, Math.max(perChunkLimit, sampleTable.chunkOffsets.length));
++                let placed = 0;
++                for (let i = 0; i < chunkEntries.length; i++) {
++                    let perChunk = Math.min(chunkEntries[i].samplesPerChunk, perChunkLimit);
++                    if (chunkCounts[i] > 0) {
++                        perChunk = Math.min(perChunk, Math.floor((maxSamples - placed) / chunkCounts[i]));
++                    }
++                    chunkEntries[i].samplesPerChunk = Math.max(1, perChunk);
++                    placed += chunkCounts[i] * chunkEntries[i].samplesPerChunk;
++                }
++            }
++            {
++                // Where each chunk run starts depends on the counts just held, so it is worked out again
++                // the way the table itself does it.
++                const chunkEntries = sampleTable.sampleToChunk;
++                let startSampleIndex = 0;
++                for (let i = 0; i < chunkEntries.length; i++) {
++                    chunkEntries[i].startSampleIndex = startSampleIndex;
++                    if (i < chunkEntries.length - 1) {
++                        startSampleIndex += (chunkEntries[i + 1].startChunkIndex - chunkEntries[i].startChunkIndex)
++                            * chunkEntries[i].samplesPerChunk;
++                    }
++                }
++            }
++            let remaining = maxSamples;
++            let timedSamples = 0;
++            for (const entry of sampleTable.sampleTimingEntries) {
++                if (entry.count > remaining) {
++                    entry.count = remaining;
++                }
++                remaining -= entry.count;
++                timedSamples += entry.count;
++            }
++            remaining = timedSamples;
++            for (const entry of sampleTable.sampleCompositionTimeOffsets) {
++                if (entry.count > remaining) {
++                    entry.count = remaining;
++                }
++                remaining -= entry.count;
++            }
++        }
+         const isPcmCodec = internalTrack.info?.type === 'audio'
+             && internalTrack.info.codec
+             && PCM_AUDIO_CODECS.includes(internalTrack.info.codec);
+@@ -281,6 +356,13 @@ export class IsobmffDemuxer extends Demuxer {
+         if (sampleTable.sampleCompositionTimeOffsets.length > 0) {
+             // If composition time offsets are defined, we must build a list of all presentation timestamps and then
+             // sort them
++            let timedSamples = 0;
++            for (const entry of sampleTable.sampleTimingEntries) {
++                timedSamples += entry.count;
++            }
++            if (timedSamples > MAX_DECLARED_SAMPLES) {
++                throw new Error('Too many samples in track.');
++            }
+             sampleTable.presentationTimestamps = [];
+             for (const entry of sampleTable.sampleTimingEntries) {
+                 for (let i = 0; i < entry.count; i++) {
+@@ -1813,6 +1895,10 @@ export class IsobmffDemuxer extends Demuxer {
+                         };
+                         this.currentFragment.trackData.set(track.id, trackData);
+                     }
++                    if (trackData.samples.length + sampleCount > 2 ** 20) {
++                        // Safety measure, as in later versions of this library
++                        throw new Error('Too many (> 2^20) samples in fragment.');
++                    }
+                     if (sampleCount === 0) {
+                         // Don't associate the fragment with the track if it has no samples, this simplifies other code
+                         this.currentFragment.implicitBaseDataOffset = trackData.currentOffset;
