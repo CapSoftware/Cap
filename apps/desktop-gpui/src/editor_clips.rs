@@ -420,8 +420,52 @@ pub(crate) fn move_clip(
         drop_clip_transition(timeline, transition.segment_index as usize);
     }
 
+    let old_offsets = clip_timeline_offsets(timeline);
+    let old_holds = timeline.hold_windows();
+    let anchors: Vec<(usize, f64, f64)> = timeline
+        .keyboard_segments
+        .iter()
+        .map(|segment| {
+            let output = segment.keys.first().map_or(segment.start, |key| {
+                segment.start + key.time_offset / 1000.0
+            });
+            let effective = output
+                - old_holds
+                    .iter()
+                    .map(|(start, end)| (output - start).clamp(0.0, end - start))
+                    .sum::<f64>();
+            let held = old_holds
+                .iter()
+                .any(|(start, end)| output >= *start && output < *end);
+            let owner = old_offsets
+                .iter()
+                .rposition(|offset| *offset < effective || (!held && *offset == effective))
+                .unwrap_or(0);
+            (owner, output, effective)
+        })
+        .collect();
+
     timeline.segments = proposed;
     timeline.transitions = kept;
+
+    let new_offsets = clip_timeline_offsets(timeline);
+    let new_holds = timeline.hold_windows();
+    let new_index = |old: usize| match old.cmp(&from) {
+        std::cmp::Ordering::Equal => to,
+        _ if from < to && old > from && old <= to => old - 1,
+        _ if to < from && old >= to && old < from => old + 1,
+        _ => old,
+    };
+    for (segment, (owner, output, effective)) in timeline.keyboard_segments.iter_mut().zip(anchors)
+    {
+        let moved = new_offsets[new_index(owner)] + effective - old_offsets[owner];
+        let shift = edits::effective_to_output(&new_holds, moved) - output;
+        segment.start += shift;
+        segment.end += shift;
+    }
+    timeline
+        .keyboard_segments
+        .sort_by(|a, b| a.start.total_cmp(&b.start));
     true
 }
 
@@ -4103,6 +4147,78 @@ mod tests {
         assert!(!move_clip(&mut config, 9, 0));
     }
 
+    fn keypress(id: &str, start: f64, offset_ms: f64) -> cap_project::KeyboardTrackSegment {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "start": start, "end": start + 1.0, "displayText": id,
+            "keys": [{ "key": id, "timeOffset": offset_ms }]
+        }))
+        .unwrap()
+    }
+
+    fn keypress_starts(timeline: &TimelineConfiguration) -> Vec<(String, f64)> {
+        timeline
+            .keyboard_segments
+            .iter()
+            .map(|segment| (segment.id.clone(), segment.start))
+            .collect()
+    }
+
+    #[test]
+    fn keypresses_travel_with_their_clip_when_it_is_reordered() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 10.0),
+            segment(0, 20.0, 30.0),
+            segment(0, 40.0, 50.0),
+        ]);
+        config.keyboard_segments = vec![
+            keypress("a", 2.0, 0.0),
+            keypress("b", 10.0, 300.0),
+            keypress("d", 20.0, 0.0),
+            keypress("c", 25.0, 0.0),
+        ];
+        assert!(move_clip(&mut config, 0, 3));
+        assert_eq!(
+            keypress_starts(&config),
+            vec![
+                ("b".into(), 0.0),
+                ("d".into(), 10.0),
+                ("c".into(), 15.0),
+                ("a".into(), 22.0)
+            ]
+        );
+        assert!(move_clip(&mut config, 2, 0));
+        assert_eq!(
+            keypress_starts(&config),
+            vec![
+                ("a".into(), 2.0),
+                ("b".into(), 10.0),
+                ("d".into(), 20.0),
+                ("c".into(), 25.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn keypresses_keep_their_clip_offset_when_a_reorder_drops_a_transition() {
+        let mut config = timeline(vec![
+            segment(0, 0.0, 10.0),
+            segment(0, 20.0, 30.0),
+            segment(0, 40.0, 50.0),
+        ]);
+        config.transitions = vec![transition(1, 1.0)];
+        config.keyboard_segments = vec![
+            keypress("a", 2.0, 0.0),
+            keypress("b", 12.0, 0.0),
+            keypress("c", 25.0, 0.0),
+        ];
+        assert!(move_clip(&mut config, 0, 3));
+        assert!(config.transitions.is_empty());
+        assert_eq!(
+            keypress_starts(&config),
+            vec![("b".into(), 3.0), ("c".into(), 16.0), ("a".into(), 22.0)]
+        );
+    }
+
     #[test]
     fn move_clip_to_the_front_and_the_back() {
         let mut config = timeline(vec![
@@ -4495,14 +4611,14 @@ mod tests {
                 config.keyboard_segments[0].end,
                 config.keyboard_segments[0].keys[0].time_offset,
             ),
-            (11.0, 12.0, 500.0)
+            (31.5, 32.5, 500.0)
         );
         assert_eq!(
             (
                 config.keyboard_segments[1].start,
                 config.keyboard_segments[1].end,
             ),
-            (11.0, 14.0)
+            (31.5, 34.5)
         );
         assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
         assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
