@@ -30,6 +30,7 @@ import {
 import {
 	claimTranscriptRun,
 	failTranscriptRun,
+	transcriptAwaitsSpeech,
 } from "@/lib/developer-transcript-run";
 import {
 	parseTranscriptLanguage,
@@ -56,7 +57,11 @@ import {
 	transcriptObjectKeys,
 	transcriptWordCount,
 } from "@/lib/developer-transcripts";
-import { urlIsSelfContainedMedia } from "@/lib/media-container";
+import {
+	MEDIA_CONTAINER_SNIFF_BYTES,
+	sniffMedia,
+	urlIsSelfContainedMedia,
+} from "@/lib/media-container";
 import { measureMp3DurationSeconds } from "@/lib/mp3-duration";
 import {
 	fetchPublicMedia,
@@ -163,6 +168,7 @@ const asFailure = (result: StepFailure | HoldWait | HoldRaise): StepFailure => {
 
 const FAILURE_MESSAGES = {
 	source_missing: "The source file was not found",
+	deleted: "The transcript was deleted before its audio was transcribed",
 	source_too_large: "The source file is larger than the 2 GB limit",
 	source_unreachable: "The file at the URL could not be downloaded",
 	source_incomplete: "The file at the URL ended before its declared length",
@@ -266,6 +272,11 @@ export async function developerTranscribeWorkflow(
 }
 
 async function loadTranscript(transcriptId: string) {
+	const row = await loadTranscriptRow(transcriptId);
+	return row && !row.deletedAt ? row : null;
+}
+
+async function loadTranscriptRow(transcriptId: string) {
 	const [row] = await db()
 		.select({
 			id: developerTranscripts.id,
@@ -281,7 +292,7 @@ async function loadTranscript(transcriptId: string) {
 		.from(developerTranscripts)
 		.where(eq(developerTranscripts.id, transcriptId))
 		.limit(1);
-	return row && !row.deletedAt ? row : null;
+	return row ?? null;
 }
 
 async function claimTranscript(
@@ -308,6 +319,47 @@ async function spoolToFile(
 	);
 	const { size } = await fs.stat(path);
 	return size;
+}
+
+async function readSourceHead(body: ReadableStream<Uint8Array>) {
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	let finished = false;
+	for (; length < MEDIA_CONTAINER_SNIFF_BYTES; ) {
+		const { done, value } = await reader.read();
+		if (done) {
+			finished = true;
+			break;
+		}
+		chunks.push(value);
+		length += value.length;
+	}
+	const read = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		read.set(chunk, offset);
+		offset += chunk.length;
+	}
+	let sentHead = false;
+	return {
+		head: read.subarray(0, MEDIA_CONTAINER_SNIFF_BYTES),
+		cancel: () => reader.cancel().catch(() => {}),
+		body: new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				if (!sentHead) {
+					sentHead = true;
+					if (read.length > 0) controller.enqueue(read);
+					if (finished) controller.close();
+					return;
+				}
+				const { done, value } = await reader.read();
+				if (done) controller.close();
+				else controller.enqueue(value);
+			},
+			cancel: (reason) => reader.cancel(reason),
+		}),
+	};
 }
 
 async function holdForSource(
@@ -393,12 +445,19 @@ async function prepareTranscriptSource(
 				await response.body.cancel().catch(() => {});
 				return stop(refused);
 			}
+			const source = await readSourceHead(response.body);
+			if (source.head.length > 0 && sniffMedia(source.head) !== "media") {
+				await source.cancel();
+				return stop(
+					failure("unsupported_format", FAILURE_MESSAGES.unsupported_format),
+				);
+			}
 			const contentType =
 				response.headers.get("content-type") ?? "application/octet-stream";
 			if (declared !== null && declared > TRANSCRIPT_MAX_SPOOLED_URL_BYTES) {
 				await putDeveloperObjectStream(
 					keys.source,
-					limitStreamBytes(response.body, declared),
+					limitStreamBytes(source.body, declared),
 					declared,
 					contentType,
 				);
@@ -406,7 +465,7 @@ async function prepareTranscriptSource(
 			} else {
 				const bytes = await spoolToFile(
 					spoolPath,
-					response.body,
+					source.body,
 					declared ?? TRANSCRIPT_MAX_SPOOLED_URL_BYTES,
 				);
 				if (bytes === 0 || (declared !== null && bytes < declared)) {
@@ -567,7 +626,7 @@ async function transcribeTranscriptAudio(
 ): Promise<TranscriptionSummary | StepFailure> {
 	"use step";
 
-	const transcript = await loadTranscript(transcriptId);
+	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) {
 		return failure("source_missing", FAILURE_MESSAGES.source_missing);
 	}
@@ -582,6 +641,9 @@ async function transcribeTranscriptAudio(
 			language: stored.language,
 			wordCount: transcriptWordCount(stored),
 		};
+	}
+	if (transcript.deletedAt) {
+		return failure("source_missing", FAILURE_MESSAGES.deleted);
 	}
 
 	const audioResponse = await fetchStorageUrl(
@@ -603,6 +665,9 @@ async function transcribeTranscriptAudio(
 		throw error;
 	}
 
+	if (!(await transcriptAwaitsSpeech(transcript.id))) {
+		return failure("source_missing", FAILURE_MESSAGES.deleted);
+	}
 	const speech = await transcribeSpeech(
 		audio,
 		parseTranscriptLanguage(transcript.requestedLanguage) ?? "auto",
@@ -641,20 +706,24 @@ async function settleTranscriptStep(
 ): Promise<"complete" | "insufficient_credits" | "skipped"> {
 	"use step";
 
-	const transcript = await loadTranscript(transcriptId);
+	const transcript = await loadTranscriptRow(transcriptId);
 	if (!transcript) return "skipped";
 	const keys = transcriptObjectKeys(transcript.appId, transcript.id);
 	const stored = await getDeveloperObjectText(keys.result);
-	if (stored === null) {
-		throw new Error(`Transcript result is missing for ${transcript.id}`);
+	if (stored === null && !transcript.deletedAt) {
+		const latest = await loadTranscriptRow(transcriptId);
+		if (!latest?.deletedAt) {
+			throw new Error(`Transcript result is missing for ${transcript.id}`);
+		}
 	}
-	const result = JSON.parse(stored) as TranscriptResultObject;
+	const result =
+		stored === null ? null : (JSON.parse(stored) as TranscriptResultObject);
 
 	const settlement = await settleTranscript({
 		transcriptId: transcript.id,
 		durationSeconds: summary.durationSeconds,
 		language: summary.language,
-		text: result.text,
+		text: result?.text ?? "",
 		wordCount: summary.wordCount,
 		resultKey: keys.result,
 	});
@@ -666,13 +735,14 @@ async function transcriptStorage(transcriptId: string) {
 		.select({
 			appId: developerTranscripts.appId,
 			status: developerTranscripts.status,
+			deletedAt: developerTranscripts.deletedAt,
 		})
 		.from(developerTranscripts)
 		.where(eq(developerTranscripts.id, transcriptId))
 		.limit(1);
 	if (!row) return null;
 	return {
-		status: row.status,
+		status: row.deletedAt ? "deleted" : row.status,
 		keys: transcriptObjectKeys(row.appId, transcriptId),
 	};
 }
