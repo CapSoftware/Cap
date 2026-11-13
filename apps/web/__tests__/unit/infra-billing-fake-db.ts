@@ -320,7 +320,12 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			const [, type, at] = rendered.params;
 			if (at === "delivery_day") {
 				return ledger.rows
-					.filter((row) => row.type === type && row.referenceType === at)
+					.filter(
+						(row) =>
+							row.type === type &&
+							row.referenceType === at &&
+							row.metadata?.unpaid === undefined,
+					)
 					.sort(
 						(a, b) =>
 							b.createdAt.getTime() - a.createdAt.getTime() ||

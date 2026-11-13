@@ -165,6 +165,7 @@ async function latestDeliveryCharge(
 					developerCreditTransactions.referenceType,
 					DELIVERY_DAY_REFERENCE_TYPE,
 				),
+				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.unpaid') IS NULL`,
 			),
 		)
 		.orderBy(
@@ -180,7 +181,10 @@ async function latestDeliveryCharge(
 // after it ends, so it is ordered against storage days by when it was posted
 // rather than by its day key. createdAt has whole-second precision and ids are
 // random, so delivery days posted in the same second, which a sweep settles
-// oldest first, are ordered by their day. The later posted daily charge carries the standing,
+// oldest first, are ordered by their day. A day settled while the account was
+// already short with nothing available is marked unpaid and never carries the
+// standing, as a storage day in that state writes no row at all; otherwise its
+// small amount would replace what the open shortfall needs to recover. The later posted daily charge carries the standing,
 // exactly as the latest storage day does on its own. While delivery billing
 // is off, no delivery row is read, so standing is exactly as before.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {

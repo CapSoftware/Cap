@@ -1240,10 +1240,12 @@ describe.runIf(Boolean(databaseUrl))(
 						if (charged < owed) {
 							delivered.short++;
 							if (period) delivered.carried++;
-							const since: string =
-								(period as Period | null)?.since ?? (await rowSince(dateKey));
-							lastDaily = { since, owed };
-							period = period ?? { since, monthMax: 0 };
+							if (!(period && charged === 0)) {
+								const since: string =
+									(period as Period | null)?.since ?? (await rowSince(dateKey));
+								lastDaily = { since, owed };
+								period = period ?? { since, monthMax: 0 };
+							}
 						} else {
 							lastDaily = { since: null, owed: 0 };
 							if (period?.monthMax === 0) period = null;

@@ -641,6 +641,103 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 		});
 
+		describe("an unpaid delivery day inside an open shortfall", () => {
+			const UNPAID_SECONDS = 60;
+			const SHORT_OWED = 100_000;
+			const topUp = (accountId: string, amountCents: number) =>
+				addCreditsToAccount({
+					accountId,
+					amountCents,
+					referenceId: id(),
+					referenceType: "stripe_payment_intent",
+				});
+
+			const expectRecoveryNeedsTheWholeShortfall = async (
+				appId: string,
+				accountId: string,
+				shortSince: Date,
+			) => {
+				const grace = {
+					state: "grace",
+					pausesAt: new Date(shortSince.getTime() + 7 * DAY_MS),
+				};
+				const [unpaid] = (await deliveryRows(accountId)).filter(
+					(row) => row.referenceId === dayKey(2, NOW),
+				);
+				expect(unpaid).toMatchObject({ amountMicroCredits: 0 });
+				expect(unpaid?.metadata).toMatchObject({
+					owedMicroCredits: 95,
+					chargedMicroCredits: 0,
+					shortSince: shortSince.toISOString(),
+					fellShort: false,
+					unpaid: true,
+				});
+				expect((await getInfraBilling(appId)).standing).toEqual(grace);
+
+				await topUp(accountId, 1);
+				expect((await getInfraBilling(appId)).standing).toEqual(grace);
+
+				await topUp(accountId, 100);
+				expect((await getInfraBilling(appId)).standing).toEqual({
+					state: "active",
+					pausesAt: null,
+				});
+
+				const balance = await balanceOf(accountId);
+				expect(await settle(NOW)).toMatchObject({ billed: 0 });
+				expect(
+					await settle(new Date(NOW.getTime() + 3 * DAY_MS)),
+				).toMatchObject({ billed: 0 });
+				expect(await balanceOf(accountId)).toBe(balance);
+			};
+
+			it("keeps the storage shortfall as the amount to recover", async () => {
+				const { appId, accountId } = await makeApp(0);
+				const storage = await chargeStorageDay({
+					appId,
+					accountId,
+					usage: {
+						videoCount: 1,
+						totalMinutes: 1,
+						minutesByTier: emptyStorageMinutes(),
+						monthlyMicroCredits: SHORT_OWED * 30,
+						dailyMicroCredits: SHORT_OWED,
+					},
+					dateKey: storageDay(0),
+					now: NOW,
+				});
+				expect(storage).toMatchObject({ state: "billed", fellShort: true });
+				await writeDay(appId, dayKey(2, NOW), [
+					{ tier: "1080p", seconds: UNPAID_SECONDS },
+				]);
+				await settle(NOW);
+
+				await expectRecoveryNeedsTheWholeShortfall(appId, accountId, NOW);
+			});
+
+			it("keeps an earlier delivery shortfall as the amount to recover", async () => {
+				const { appId, accountId } = await makeApp(0);
+				await writeDay(appId, dayKey(3, NOW), [
+					{ tier: "1080p", seconds: Math.ceil((SHORT_OWED * 60) / 95) },
+				]);
+				await writeDay(appId, dayKey(2, NOW), [
+					{ tier: "1080p", seconds: UNPAID_SECONDS },
+				]);
+				await settle(NOW);
+
+				const [first] = (await deliveryRows(accountId)).filter(
+					(row) => row.referenceId === dayKey(3, NOW),
+				);
+				expect(first?.metadata).toMatchObject({
+					owedMicroCredits: SHORT_OWED,
+					chargedMicroCredits: 0,
+					fellShort: true,
+				});
+				expect(first?.metadata).not.toHaveProperty("unpaid");
+				await expectRecoveryNeedsTheWholeShortfall(appId, accountId, NOW);
+			});
+		});
+
 		it("charges a day that goes final late, on the first run after it does, and only once", async () => {
 			const now = NOW;
 			const day = dayKey(5, now);
