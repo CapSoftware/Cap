@@ -17,12 +17,14 @@ const firstMonthChargeOf = (
 		type: AnyMySqlColumn;
 		referenceType: AnyMySqlColumn;
 		referenceId: AnyMySqlColumn;
+		metadata: AnyMySqlColumn;
 	},
 ) =>
 	and(
 		eq(row.type, FIRST_MONTH_TRANSACTION_TYPE),
 		eq(row.referenceType, FIRST_MONTH_REFERENCE_TYPE),
 		eq(row.referenceId, video.id),
+		sql`JSON_EXTRACT(${row.metadata}, '$.paidUntil') IS NOT NULL`,
 	);
 
 export async function firstMonthChargesBegan(
