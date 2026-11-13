@@ -19,10 +19,12 @@ import { CopyButton } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
 import {
 	Button,
+	CARD_ROWS,
 	Empty,
 	FOCUS,
 	Input,
 	MONO,
+	PANEL,
 	PageHeader,
 	TD,
 	TH,
@@ -154,8 +156,14 @@ export function VideosClient({
 					</Empty>
 				</div>
 			) : (
-				<div className="relative -mx-1 overflow-x-auto px-1">
-					<table className="w-full border-collapse border-t border-[rgba(222,230,246,0.08)]">
+				<div
+					className={clsx(
+						PANEL,
+						CARD_ROWS,
+						"relative overflow-x-auto px-5 py-1",
+					)}
+				>
+					<table className="w-full border-collapse">
 						<thead>
 							<tr className={TR}>
 								<th className={TH}>Name</th>
