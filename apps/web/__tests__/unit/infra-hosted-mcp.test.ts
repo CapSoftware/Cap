@@ -97,7 +97,16 @@ async function restAnswer(request: Request): Promise<Response> {
 				);
 			}
 			return Response.json({
-				parts: [{ partNumber: 1, presignedUrl: SIGNED_PART }],
+				parts: (
+					((await request.clone().json()) as { partNumbers?: number[] })
+						.partNumbers ?? [1]
+				).map((partNumber) => ({
+					partNumber,
+					presignedUrl: SIGNED_PART.replace(
+						"partNumber=1",
+						`partNumber=${partNumber}`,
+					),
+				})),
 			});
 		case "POST /api/developer/sdk/v1/upload/multipart/complete":
 			if (state.completeStatus !== 200) {
@@ -385,7 +394,10 @@ describe("hosted Cap Infra MCP tools", () => {
 				tools: {
 					name: string;
 					inputSchema: {
-						properties: Record<string, { maximum?: number }>;
+						properties: Record<
+							string,
+							{ maximum?: number; description?: string }
+						>;
 						additionalProperties?: boolean;
 					};
 				}[];
@@ -422,6 +434,9 @@ describe("hosted Cap Infra MCP tools", () => {
 		for (const name of ["videos_wait", "transcripts_wait"]) {
 			const wait = tools.find((tool) => tool.name === name);
 			expect(wait?.inputSchema.properties.timeoutSeconds?.maximum).toBe(45);
+			expect(wait?.inputSchema.properties.timeoutSeconds?.description).toBe(
+				"Longest time to wait, in seconds (default and maximum 45). Checks are at least 3 seconds apart, so a timeout below 4 makes one check and returns at once",
+			);
 		}
 	});
 
@@ -618,11 +633,124 @@ describe("hosted Cap Infra MCP tools", () => {
 			expect(result.isError).toBe(true);
 			expect(result.body.text).toContain(`Unrecognized key: "${key}"`);
 			expect(result.body.text).toContain(
-				"This tool accepts contentLength, fileName, contentType, name, userId, maxResolutionTier, metadata and videoId.",
+				"This tool accepts contentLength, fileName, contentType, name, userId, maxResolutionTier, metadata, videoId and fromPart.",
 			);
 			expect(state.rest).toHaveLength(0);
 		},
 	);
+
+	describe("part links for a large file", () => {
+		const TWO_GB = 2 * 1024 ** 3;
+		const MAX_BYTES = 36_000_000_000;
+		const signed = () =>
+			state.rest.filter((request) =>
+				request.url.endsWith("/multipart/presign-part"),
+			);
+
+		it("returns the first ten part links, the part count and where to continue", async () => {
+			const created = await callTool(newKey(), "videos_create_upload", {
+				contentLength: TWO_GB,
+				fileName: "launch.mp4",
+			});
+
+			expect(created.isError).toBe(false);
+			expect(created.body).toMatchObject({
+				videoId: "video-1",
+				uploadId: "upload-1",
+				partBytes: 64 * 1024 * 1024,
+				partCount: 32,
+				nextFromPart: 11,
+			});
+			expect(
+				created.body.parts.map(
+					(part: { partNumber: number }) => part.partNumber,
+				),
+			).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+			expect(created.body.steps.join(" ")).toContain("fromPart 11");
+			expect(created.body.next).toContain("fromPart 11");
+			expect(created.raw.length).toBeLessThan(8_000);
+		});
+
+		it("keeps the largest file's result as small as a 2 GB one", async () => {
+			const created = await callTool(newKey(), "videos_create_upload", {
+				contentLength: MAX_BYTES,
+			});
+
+			expect(created.body).toMatchObject({ partCount: 100, nextFromPart: 11 });
+			expect(created.body.parts).toHaveLength(10);
+			expect(created.raw.length).toBeLessThan(8_000);
+		});
+
+		it("signs the next parts of the same upload from fromPart, without a new video", async () => {
+			const next = await callTool(newKey(), "videos_create_upload", {
+				contentLength: TWO_GB,
+				videoId: "video-1",
+				fromPart: 31,
+			});
+
+			expect(next.isError).toBe(false);
+			expect(next.body).toMatchObject({
+				videoId: "video-1",
+				uploadId: "upload-1",
+				partCount: 32,
+				nextFromPart: null,
+			});
+			expect(next.body.parts).toEqual([
+				expect.objectContaining({ partNumber: 31, bytes: 64 * 1024 * 1024 }),
+				expect.objectContaining({ partNumber: 32, bytes: 64 * 1024 * 1024 }),
+			]);
+			expect(await signed()[0]?.json()).toMatchObject({
+				videoId: "video-1",
+				uploadId: "upload-1",
+				partNumbers: [31, 32],
+			});
+			expect(
+				state.rest.some((request) =>
+					request.url.endsWith("/api/developer/v1/uploads"),
+				),
+			).toBe(false);
+		});
+
+		it("refuses fromPart without a videoId before creating anything", async () => {
+			const result = await callTool(newKey(), "videos_create_upload", {
+				contentLength: TWO_GB,
+				fromPart: 11,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.body.error).toMatchObject({
+				code: "invalid_request",
+				status: 400,
+				message: "fromPart needs the videoId of the upload",
+			});
+			expect(state.rest).toHaveLength(0);
+		});
+
+		it("refuses a fromPart past the last part before calling Cap", async () => {
+			const result = await callTool(newKey(), "videos_create_upload", {
+				contentLength: 1_000_000,
+				videoId: "video-1",
+				fromPart: 2,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.body.error).toMatchObject({
+				code: "invalid_request",
+				message:
+					"fromPart is past the last part: a file of 1000000 bytes has 1 part",
+			});
+			expect(state.rest).toHaveLength(0);
+		});
+
+		it("gives a small file one link and nothing to continue", async () => {
+			const created = await callTool(newKey(), "videos_create_upload", {
+				contentLength: 1_000_000,
+			});
+
+			expect(created.body).toMatchObject({ partCount: 1, nextFromPart: null });
+			expect(created.body.steps).toHaveLength(2);
+		});
+	});
 
 	it.each([
 		[{ fileName: "notes.txt", contentType: "text/plain" }],

@@ -363,6 +363,8 @@ class FakeVideo extends EventTarget {
 const HLS = "https://media.example/film/master.m3u8";
 const MP4 = "https://media.example/film/video.mp4";
 const SHORT_HLS = `${HLS}?segments=short`;
+const PLAYED_HLS = `${HLS}?subtitles=none`;
+const PLAYED_SHORT_HLS = `${PLAYED_HLS}&segments=short`;
 const LADDER_DATA = { levels: LADDER };
 
 const page = (options: {
@@ -510,7 +512,7 @@ describe("attachSource before play", () => {
 
 		attach(video, { hls: HLS, mp4: MP4 });
 
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.preload).toBe("none");
 
 		finishLoading();
@@ -534,7 +536,7 @@ describe("attachSource before play", () => {
 
 		attach(video, { hls: HLS, mp4: MP4 });
 
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.preload).toBe("metadata");
 	});
 
@@ -741,7 +743,7 @@ describe("attachSource with hls.js", () => {
 		const hls = await hlsFor();
 
 		expect(video.preload).toBe("auto");
-		expect(hls.source).toBe(SHORT_HLS);
+		expect(hls.source).toBe(PLAYED_SHORT_HLS);
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.startLoads).toEqual([]);
 
@@ -917,7 +919,7 @@ describe("attachSource with hls.js", () => {
 		hls.emit("manifestParsed", LADDER_DATA);
 
 		expect(video.src).toBe("");
-		expect(hls.source).toBe(SHORT_HLS);
+		expect(hls.source).toBe(PLAYED_SHORT_HLS);
 		expect(hls.config).toMatchObject({ preferManagedMediaSource: false });
 		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
 		expect(hls.loadLevel).toBe(hls.startLevel);
@@ -1039,7 +1041,7 @@ describe("attachSource with hls.js", () => {
 		expect(onLevels).toHaveBeenCalledTimes(2);
 		expect(onLevels).toHaveBeenLastCalledWith([]);
 		expect(hls.destroyed).toBe(true);
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.preload).toBe("metadata");
 		expect(video.plays).toBe(0);
 
@@ -1068,7 +1070,7 @@ describe("attachSource with hls.js", () => {
 		video.currentTime = 30;
 		hls.emit("error", { fatal: true, type: "networkError" });
 
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.currentTime).toBe(30);
 		expect(video.plays).toBe(2);
 	});
@@ -1084,7 +1086,7 @@ describe("attachSource with hls.js", () => {
 		hls.emit("error", { fatal: true, type: "networkError" });
 		video.reach(120);
 
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.currentTime).toBe(45);
 	});
 
@@ -1100,7 +1102,7 @@ describe("attachSource with hls.js", () => {
 		hlsMock.FakeHls.isSupported = supported;
 
 		expect(hlsMock.FakeHls.instances).toHaveLength(before);
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 		expect(video.preload).toBe("metadata");
 	});
 
@@ -1146,7 +1148,7 @@ describe("withShortPlaylists", () => {
 		const native = new FakeVideo(true);
 		attach(native, { hls: HLS, mp4: MP4 });
 
-		expect(native.src).toBe(HLS);
+		expect(native.src).toBe(PLAYED_HLS);
 
 		native.dispatchEvent(new Event("error"));
 
@@ -1579,7 +1581,7 @@ describe("native HLS renditions", () => {
 		const { fetchMaster, onLevels } = await nativePlayer();
 
 		expect(fetchMaster).toHaveBeenCalledTimes(1);
-		expect(fetchMaster.mock.calls[0]?.[0]).toBe(HLS);
+		expect(fetchMaster.mock.calls[0]?.[0]).toBe(PLAYED_HLS);
 		expect(
 			(onLevels.mock.calls[1]?.[0] as { label: string }[]).map(
 				(level) => level.label,
@@ -1594,7 +1596,7 @@ describe("native HLS renditions", () => {
 
 		setLevel(index("720p"));
 
-		expect(video.src).toBe(`${HLS}?rendition=720p`);
+		expect(video.src).toBe(`${PLAYED_HLS}&rendition=720p`);
 		expect(video.plays).toBe(2);
 		video.currentTime = 0;
 		video.reach(30);
@@ -1607,7 +1609,7 @@ describe("native HLS renditions", () => {
 
 		setLevel(index("360p"));
 
-		expect(video.src).toBe(`${HLS}?rendition=360p`);
+		expect(video.src).toBe(`${PLAYED_HLS}&rendition=360p`);
 		expect(video.plays).toBe(0);
 	});
 
@@ -1615,16 +1617,16 @@ describe("native HLS renditions", () => {
 		const { video, setLevel, index } = await nativePlayer();
 
 		setLevel(AUTO_LEVEL);
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 
 		setLevel(index("1080p"));
-		expect(video.src).toBe(`${HLS}?rendition=1080p`);
+		expect(video.src).toBe(`${PLAYED_HLS}&rendition=1080p`);
 		video.src = "changed-elsewhere";
 		setLevel(index("1080p"));
 		expect(video.src).toBe("changed-elsewhere");
 
 		setLevel(AUTO_LEVEL);
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 	});
 
 	it("does not carry a switch's time over to a source attached after it stops", async () => {
@@ -1648,7 +1650,7 @@ describe("native HLS renditions", () => {
 		video.currentTime = 0;
 		setLevel(index("1080p"));
 
-		expect(video.src).toBe(`${HLS}?rendition=1080p`);
+		expect(video.src).toBe(`${PLAYED_HLS}&rendition=1080p`);
 		expect(video.plays).toBe(3);
 		video.reach(30);
 		expect(video.currentTime).toBe(12.5);
@@ -1734,7 +1736,7 @@ describe("native HLS renditions", () => {
 
 		setLevel(42);
 
-		expect(video.src).toBe(HLS);
+		expect(video.src).toBe(PLAYED_HLS);
 	});
 
 	it("offers no menu when the master cannot be read", async () => {

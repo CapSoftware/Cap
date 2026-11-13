@@ -9,6 +9,11 @@ import {
 const mocks = vi.hoisted(() => ({
 	store: { video: null, appDeleted: false, updates: [] } as DeveloperVideoStore,
 	user: null as { id: string; email: string } | null,
+	purge: vi.fn(),
+}));
+
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: mocks.purge,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -196,6 +201,30 @@ describe("the takedown switch", () => {
 		});
 		expect(restoredAgain).toMatchObject({ changed: false, takenDown: false });
 		expect(mocks.store.updates).toHaveLength(2);
+	});
+
+	it("drops the video's cached playback on takedown and on restore, and only when it changed", async () => {
+		mocks.purge.mockClear();
+
+		await store.setDeveloperVideoTakedown(PLAYBACK_ID, true, NOW);
+		await store.setDeveloperVideoTakedown(PLAYBACK_ID, true, NOW);
+		await store.setDeveloperVideoTakedown(PLAYBACK_ID, false, NOW);
+		await store.setDeveloperVideoTakedown(PLAYBACK_ID, false, NOW);
+
+		expect(mocks.purge.mock.calls).toEqual([
+			["infra-video-video-1"],
+			["infra-video-video-1"],
+		]);
+	});
+
+	it("still takes a video down when the cache purge fails", async () => {
+		mocks.purge.mockRejectedValueOnce(new Error("429"));
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+		expect(
+			await store.setDeveloperVideoTakedown(PLAYBACK_ID, true, NOW),
+		).toMatchObject({ takenDown: true, changed: true });
+		expect(mocks.store.updates).toHaveLength(1);
 	});
 
 	it("finds no deleted video and nothing for input that is not an id", async () => {

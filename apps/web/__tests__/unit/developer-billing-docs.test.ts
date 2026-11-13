@@ -464,6 +464,7 @@ describe("examples in the REST API reference", () => {
 					firstMonthMicroCredits: body.requiredMicroCredits,
 				},
 			}),
+			"app_789",
 		);
 
 		expect(body).toEqual(refusal);
@@ -486,6 +487,9 @@ describe("examples in the REST API reference", () => {
 
 		expect(data.balanceDollars).toBe(creditDollars(data.balanceMicroCredits));
 		expect(data.storage.monthlyMicroCredits).toBe(Math.round(monthly));
+		expect(data.storage.storedMonthlyMicroCredits).toBe(
+			Math.round(monthlyStorageMicroCredits(data.storage.minutesByTier)),
+		);
 		expect(data.storage.dailyMicroCredits).toBe(
 			dailyStorageMicroCredits(daily),
 		);

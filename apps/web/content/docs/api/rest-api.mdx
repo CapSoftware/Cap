@@ -107,7 +107,7 @@ A request body that fails validation returns `400` with the code `invalid_reques
 }
 ```
 
-A `402` from Create Upload or Complete Upload is the one exception to the shape: it has `error`, `code` and `message`, and carries the balance fields shown under [Create Upload](/docs/api/rest-api#create-upload) in place of `hint` and `docs`.
+A `402` from Create Upload, Complete Upload or Create Transcript has a `hint` that links the app's own Billing page, where credit is added. The upload `402` also carries the balance fields shown under [Create Upload](/docs/api/rest-api#create-upload).
 
 Send request bodies as JSON with the header `Content-Type: application/json`. Malformed JSON returns `400` with the code `invalid_json`, and a body sent with any other content type returns `415` with the code `unsupported_media_type`.
 
@@ -259,6 +259,8 @@ Creating an upload is free. It returns `402` if the app is out of credit, or if 
   "error": "Insufficient credits",
   "code": "insufficient_credits",
   "message": "Not enough credit to upload. Uploading needs $0.16800, enough for the first month of storage for each video being uploaded or encoded. The balance is $0.05, so add at least $0.11800.",
+  "hint": "Add credits to this app at https://cap.so/dashboard/infra/app_789/billing, then retry.",
+  "docs": "https://cap.so/docs/api/rest-api",
   "standing": "active",
   "pausesAt": null,
   "balanceMicroCredits": 5000,
@@ -444,6 +446,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "externalUserId": "user_42",
       "name": "Product Demo",
       "duration": 124.5,
+      "durationSeconds": 124.5,
       "width": 1920,
       "height": 1080,
       "fps": 30,
@@ -476,6 +479,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "externalUserId": "user_42",
       "name": "Untitled",
       "duration": null,
+      "durationSeconds": null,
       "width": null,
       "height": null,
       "fps": null,
@@ -545,6 +549,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "externalUserId": "user_42",
     "name": "Product Demo",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "fps": 30,
@@ -613,6 +618,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     "id": "abc123def456",
     "externalUserId": "user_42",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "transcriptionStatus": null,
@@ -742,7 +748,7 @@ POST /api/developer/v1/transcripts
 | `videoId` | string | One of `url` or `videoId` | ID of a ready video of this app. See [Transcribe a video you already uploaded](/docs/api/rest-api#transcribe-a-video-you-already-uploaded) |
 | `name` | string | No | Display name (defaults to the file name, or to the video's name) |
 | `language` | string | No | The language of the audio if you know it, or `auto` (default). See [Languages](/docs/api/rest-api#languages) |
-| `userId` | string | No | Your own user identifier, used to filter lists |
+| `userId` | string | No | Your own user identifier, used to filter lists. With `videoId`, leave it out to use the video's `userId` |
 | `metadata` | object | No | Your own JSON object, under 8KB |
 
 Send exactly one of `url` or `videoId`. Both, or neither, returns `400` with the code `invalid_request`. Any other field returns `400` with the code `invalid_request` and names the field. Field names are case-sensitive.
@@ -786,7 +792,7 @@ curl -X POST https://cap.so/api/developer/v1/transcripts \
 
 Send an `Idempotency-Key` header so a retried request returns the same transcript instead of creating and billing a second one. The key is 8 to 128 characters from letters, digits, dot, dash and underscore. Any other character, such as a colon, slash or space, is refused with `400 invalid_idempotency_key`.
 
-A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs.
+A repeat must send the same body. The same key with a different `url`, `videoId`, `contentLength`, `name`, `language`, `userId` or `metadata` is refused with `409 idempotency_conflict`, and the message names the field that differs. A repeat with `videoId` may leave out `userId` when the first request left it out or sent the video's own `userId`.
 
 #### Languages
 
@@ -1018,6 +1024,7 @@ curl https://cap.so/api/developer/v1/usage \
 ```json
 {
   "data": {
+    "appId": "app_789",
     "balanceMicroCredits": 500000,
     "balanceDollars": "5.00",
     "availableMicroCredits": 460000,
@@ -1043,7 +1050,8 @@ curl https://cap.so/api/developer/v1/usage \
       "minutesByTier": { "1080p": 87.5, "1440p": 0, "2160p": 0 },
       "dailyChargeMinutesByTier": { "1080p": 60, "1440p": 0, "2160p": 0 },
       "dailyMicroCredits": 170,
-      "monthlyMicroCredits": 5100
+      "monthlyMicroCredits": 5100,
+      "storedMonthlyMicroCredits": 7438
     },
     "rates": {
       "microCreditsPerDollar": 100000,
@@ -1056,6 +1064,8 @@ curl https://cap.so/api/developer/v1/usage \
 ```
 
 Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanceDollars` is the same balance in dollars, exact and never rounded up: two decimals when it is a whole number of cents and five otherwise, so 2,999,901 micro-credits is `"29.99901"`. [Billing](/docs/api/billing) explains every charge.
+
+`appId` is the app the secret key belongs to. Credit is added on that app's Billing page, `https://cap.so/dashboard/infra/{appId}/billing`.
 
 **Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Each transcript is charged on its length rounded to a whole second and then down to a whole micro-credit, so `seconds` times the rate can differ slightly from `microCredits`: for the exact charge use `microCredits`, or each transcript's `costMicroCredits`. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
 
@@ -1073,7 +1083,7 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
-**Storage.** `storage.minutesByTier` is what is stored: the minutes of the videos counted in `totalVideos`, in each tier. `storage.dailyChargeMinutesByTier` is the part of it the daily charge covers, the videos past their first month, and `dailyMicroCredits` and `monthlyMicroCredits` are what those cost per day and per 30 day month. A video in its first month counts in `minutesByTier` and not in the daily figures, because its month was charged when it became ready.
+**Storage.** `storage.minutesByTier` is what is stored: the minutes of the videos counted in `totalVideos`, in each tier. `storage.dailyChargeMinutesByTier` is the part of it the daily charge covers, the videos past their first month, and `dailyMicroCredits` and `monthlyMicroCredits` are what those cost per day and per 30 day month. A video in its first month counts in `minutesByTier` and not in the daily figures, because its month was charged when it became ready. `storedMonthlyMicroCredits` is what a 30 day month costs for everything in `minutesByTier`, first months included: the monthly cost of what is stored now.
 
 **Uploading.** `upload.allowed` is true when the app is in good standing and its balance pays for the first month of every video still encoding and covers 7 days of storage for the videos past their first month. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 
@@ -1415,6 +1425,10 @@ A ready video has three playback URLs, and a hosted player for when you do not w
 
 The playback URLs need no API key and answer any origin, so there is no CORS setup to do.
 
+When a video has captions, `hlsUrl` lists them as WebVTT subtitle tracks, so hls.js, Safari and other HLS players can offer them with no extra setup.
+
+FFmpeg 9.x reads only the first segment of byte-range HLS playlists (a known FFmpeg issue). Use the MP4 URL, FFmpeg 8, or a tool with its own HLS downloader.
+
 ### Play with hls.js
 
 Safari plays HLS by itself. Every other browser needs [hls.js](https://github.com/video-dev/hls.js). This page plays the video everywhere, with the MP4 as the fallback:
@@ -1688,7 +1702,8 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed |
+| `durationSeconds` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed. Transcripts use the same name |
+| `duration` | number \| null | The same value as `durationSeconds`, under its earlier name |
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |
@@ -1707,7 +1722,7 @@ The full video object returned by list and get endpoints:
 | `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
-| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its `url` can briefly answer `404`. Not in webhook payloads |
+| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its `url` answers as soon as it appears. Not in webhook payloads |
 | `import` | object | Only on a video made with [Import from a URL](/docs/api/rest-api#import-from-a-url), and only from Get Video and Get Video Status: `sourceUrl`, `state` (`downloading`, `complete` or `failed`) and `errorCode`. Not in List Videos or webhook payloads |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
