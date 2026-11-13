@@ -220,8 +220,10 @@ vi.mock("@/lib/infra-standing", () => ({
 }));
 vi.mock("@/lib/infra-storage-minimum", () => ({
 	chargeMissedFirstMonths: async () => ({ charged: 0, short: 0, failed: 0 }),
-	firstMonthShortfallsSince: async () => new Map(),
+	shortfallsAwaitingNotice: async () => new Map(),
 	openFirstMonthShortfalls: async () => new Set(),
+	markShortfallsNotified: async () => {},
+	markStorageDayNotified: async () => {},
 }));
 vi.mock("@/lib/infra-auto-top-up", () => ({ runDueAutoTopUps: state.topUps }));
 vi.mock("@/lib/infra-billing-emails", () => ({

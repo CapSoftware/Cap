@@ -63,8 +63,9 @@ const {
 	chargeMissedFirstMonths,
 	settleFirstMonthAtDelete,
 	settleFirstMonthAtReady,
-	firstMonthShortfallsSince,
-	markFirstMonthShortfallsNotified,
+	shortfallsAwaitingNotice,
+	markShortfallsNotified,
+	markStorageDayNotified,
 } = await import("@/lib/infra-storage-minimum");
 const { recordAdmittedInfraUpload } = await import("@/lib/infra-video-upload");
 const { getInfraFirstMonthChargesSince, getInfraStorageChargesSince } =
@@ -934,7 +935,7 @@ describe.runIf(Boolean(databaseUrl))(
 				deletedAt: null,
 			});
 
-			const found = await firstMonthShortfallsSince([accountId], since);
+			const found = await shortfallsAwaitingNotice([accountId], since);
 			expect([...found.keys()]).toEqual([accountId]);
 			const [first] = await firstMonthRows(accountId);
 			expect(first?.metadata).toMatchObject({ fellShort: true });
@@ -949,19 +950,47 @@ describe.runIf(Boolean(databaseUrl))(
 				rows.map((row) => (row.metadata as { fellShort: boolean }).fellShort),
 			).toEqual(expect.arrayContaining([true, false]));
 			expect(
-				(await firstMonthShortfallsSince([accountId], since)).get(accountId)
+				(await shortfallsAwaitingNotice([accountId], since)).get(accountId)
 					?.ids,
 			).toEqual([first?.id]);
 
-			await markFirstMonthShortfallsNotified(
-				found.get(accountId)?.ids ?? [],
-				new Date(),
-			);
-			await markFirstMonthShortfallsNotified(
+			await markShortfallsNotified(found.get(accountId)?.ids ?? [], new Date());
+			await markShortfallsNotified(
 				found.get(accountId)?.ids ?? [],
 				new Date(Date.now() + 60_000),
 			);
-			expect(await firstMonthShortfallsSince([accountId], since)).toEqual(
+			expect(await shortfallsAwaitingNotice([accountId], since)).toEqual(
+				new Map(),
+			);
+		});
+
+		it("keeps a daily shortfall whose email was not sent for the next run, and drops it once sent", async () => {
+			const { appId, accountId } = await makeApp(0);
+			await makeVideo(appId, { createdAt: new Date("2026-10-01T00:00:00Z") });
+			const since = new Date(Date.now() - 60 * 60 * 1000);
+			const today = new Date().toISOString().slice(0, 10);
+			const usage = (
+				await getStorageUsageByApp([appId], undefined, undefined, {
+					dailyChargeAt: new Date(`${today}T00:00:00.000Z`),
+				})
+			).get(appId);
+			if (!usage) throw new Error("no usage");
+
+			expect(
+				await chargeStorageDay({
+					appId,
+					accountId,
+					usage,
+					dateKey: today,
+					now: new Date(),
+				}),
+			).toMatchObject({ state: "billed", fellShort: true });
+
+			const waiting = await shortfallsAwaitingNotice([accountId], since);
+			expect(waiting.get(accountId)?.ids).toHaveLength(1);
+
+			await markStorageDayNotified(accountId, today, new Date());
+			expect(await shortfallsAwaitingNotice([accountId], since)).toEqual(
 				new Map(),
 			);
 		});

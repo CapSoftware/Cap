@@ -425,7 +425,7 @@ export async function chargeMissedFirstMonths(
 	return outcome;
 }
 
-export async function firstMonthShortfallsSince(
+export async function shortfallsAwaitingNotice(
 	accountIds: readonly string[],
 	since: Date,
 	executor: Pick<InfraDbExecutor, "select"> = db(),
@@ -443,7 +443,10 @@ export async function firstMonthShortfallsSince(
 		.where(
 			and(
 				inArray(developerCreditTransactions.accountId, [...accountIds]),
-				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+				inArray(developerCreditTransactions.type, [
+					"storage_daily",
+					FIRST_MONTH_TRANSACTION_TYPE,
+				]),
 				gte(developerCreditTransactions.createdAt, since),
 			),
 		);
@@ -464,7 +467,7 @@ export async function firstMonthShortfallsSince(
 	return shortfalls;
 }
 
-export async function markFirstMonthShortfallsNotified(
+export async function markShortfallsNotified(
 	ids: readonly string[],
 	now: Date,
 	executor: InfraDbExecutor = db(),
@@ -500,4 +503,28 @@ export async function openFirstMonthShortfalls(
 			),
 		);
 	return new Set(rows.map((row) => row.accountId));
+}
+
+export async function markStorageDayNotified(
+	accountId: string,
+	dateKey: string,
+	now: Date,
+	executor: InfraDbExecutor = db(),
+) {
+	await executor
+		.update(developerCreditTransactions)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${developerCreditTransactions.metadata}, JSON_OBJECT()), '$.notifiedAt', ${now.toISOString()})`,
+		})
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.referenceId, dateKey),
+				eq(
+					developerCreditTransactions.referenceType,
+					STORAGE_DAY_REFERENCE_TYPE,
+				),
+				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.notifiedAt') IS NULL`,
+			),
+		);
 }

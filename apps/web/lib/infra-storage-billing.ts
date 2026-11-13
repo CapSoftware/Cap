@@ -245,6 +245,7 @@ export async function chargeStorageDay({
 				owedMicroCredits: settled.owedMicroCredits,
 				chargedMicroCredits: settled.chargedMicroCredits,
 				shortSince: settled.shortSince?.toISOString() ?? null,
+				fellShort: settled.fellShort,
 				totalDurationMinutes: usage.totalMinutes,
 				minutesByTier: usage.minutesByTier,
 				videoCount: usage.videoCount,

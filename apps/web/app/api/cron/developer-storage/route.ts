@@ -26,9 +26,10 @@ import {
 } from "@/lib/infra-storage-billing";
 import {
 	chargeMissedFirstMonths,
-	firstMonthShortfallsSince,
-	markFirstMonthShortfallsNotified,
+	markShortfallsNotified,
+	markStorageDayNotified,
 	openFirstMonthShortfalls,
+	shortfallsAwaitingNotice,
 } from "@/lib/infra-storage-minimum";
 import { utcDateKey } from "@/lib/infra-usage";
 
@@ -36,7 +37,7 @@ const BATCH_SIZE = 10;
 const PAGE_SIZE = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GRACE_MS = INFRA_GRACE_DAYS * DAY_MS;
-const FIRST_MONTH_NOTICE_LOOKBACK_MS = GRACE_MS;
+const SHORTFALL_NOTICE_LOOKBACK_MS = GRACE_MS;
 
 const TOP_UPS_BEFORE_UNTIL_MS = 60_000;
 const STORAGE_UNTIL_MS = 200_000;
@@ -105,13 +106,13 @@ function continueSweep(request: Request, authorization: string, next: Sweep) {
 	);
 }
 
-async function sendFirstMonthNotices(
+async function sendShortfallNotices(
 	accounts: readonly { id: string }[],
 	now: Date,
 ) {
-	const shortfalls = await firstMonthShortfallsSince(
+	const shortfalls = await shortfallsAwaitingNotice(
 		accounts.map((account) => account.id),
-		new Date(now.getTime() - FIRST_MONTH_NOTICE_LOOKBACK_MS),
+		new Date(now.getTime() - SHORTFALL_NOTICE_LOOKBACK_MS),
 	);
 	for (const [accountId, { ids }] of shortfalls) {
 		const charge = await latestStorageCharge(db(), accountId);
@@ -119,7 +120,7 @@ async function sendFirstMonthNotices(
 			!charge?.shortSince ||
 			(await restoredSinceCharge(db(), accountId, charge))
 		) {
-			await markFirstMonthShortfallsNotified(ids, now);
+			await markShortfallsNotified(ids, now);
 			continue;
 		}
 		const sent = await sendInfraOutOfCreditEmail({
@@ -127,7 +128,7 @@ async function sendFirstMonthNotices(
 			shortSince: charge.shortSince,
 			pausesAt: new Date(charge.shortSince.getTime() + GRACE_MS),
 		});
-		if (sent) await markFirstMonthShortfallsNotified(ids, now);
+		if (sent) await markShortfallsNotified(ids, now);
 	}
 }
 
@@ -316,11 +317,12 @@ async function sweepDate({
 						result.fellShort &&
 						result.shortSince
 					) {
-						await sendInfraOutOfCreditEmail({
+						const sent = await sendInfraOutOfCreditEmail({
 							accountId: account.id,
 							shortSince: result.shortSince,
 							pausesAt: new Date(result.shortSince.getTime() + GRACE_MS),
 						});
+						if (sent) await markStorageDayNotified(account.id, date, now);
 					}
 					return result;
 				}),
@@ -349,7 +351,7 @@ async function sweepDate({
 		}
 
 		await recordVisits();
-		if (!finishing) await sendFirstMonthNotices(accounts, now);
+		if (!finishing) await sendShortfallNotices(accounts, now);
 		cursor = lastAccount.id;
 		if (page.length < PAGE_SIZE) {
 			return { complete: true, cursor, processed, short };
