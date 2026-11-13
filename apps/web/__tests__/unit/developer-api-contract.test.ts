@@ -675,24 +675,37 @@ describe("credentials that are not accepted", () => {
 	const from = (address: string) => ({ "x-forwarded-for": address });
 
 	it.each([
-		["no credential", undefined],
-		["a credential with no prefix", "Bearer not-a-key"],
-		["a public key", "Bearer cpk_public_1"],
-		["an oversized key", `Bearer csk_${"a".repeat(200)}`],
-		["a key with characters no key has", "Bearer csk_abc!def"],
+		["no credential", undefined, 401, "invalid_secret_key"],
+		[
+			"a credential with no prefix",
+			"Bearer not-a-key",
+			401,
+			"invalid_secret_key",
+		],
+		["a public key", "Bearer cpk_public_1", 403, "public_key_not_allowed"],
+		[
+			"an oversized key",
+			`Bearer csk_${"a".repeat(200)}`,
+			401,
+			"invalid_secret_key",
+		],
+		[
+			"a key with characters no key has",
+			"Bearer csk_abc!def",
+			401,
+			"invalid_secret_key",
+		],
 	] as const)(
 		"refuses %s without hashing, looking up or counting anything",
-		async (_label, authorization) => {
+		async (_label, authorization, status, code) => {
 			vi.stubEnv("NODE_ENV", "production");
 
 			const response = await call(rest, "GET", "/api/developer/v1/usage", {
 				headers: authorization ? { Authorization: authorization } : {},
 			});
 
-			expect(response.status).toBe(401);
-			expect(await response.json()).toMatchObject({
-				code: "invalid_secret_key",
-			});
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code });
 			expect(rateLimit(response)).toEqual({
 				limit: null,
 				remaining: null,
@@ -1064,10 +1077,31 @@ describe("browser access", () => {
 			"access-control-allow-headers": "Content-Type,Authorization",
 			"access-control-expose-headers":
 				"Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,X-Request-Id",
+			"access-control-max-age": "7200",
 			"cache-control": "private, no-store",
 			vary: "Access-Control-Request-Headers",
 		});
 	});
+
+	it.each([
+		"/api/developer/sdk/v1/upload/multipart/initiate",
+		"/api/developer/sdk/v1/upload/multipart/presign-part",
+		"/api/developer/sdk/v1/upload/multipart/complete",
+		"/api/developer/sdk/v1/upload/multipart/abort",
+	])(
+		"lets a browser cache the preflight for %s for two hours",
+		async (path) => {
+			const preflight = await call(sdk, "OPTIONS", path, {
+				headers: {
+					...PREFLIGHT_HEADERS,
+					"Access-Control-Request-Method": "POST",
+				},
+			});
+
+			expect(preflight.status).toBe(204);
+			expect(preflight.headers.get("Access-Control-Max-Age")).toBe("7200");
+		},
+	);
 
 	it("still lets a page read an upload route's answer", async () => {
 		const response = await call(
@@ -1083,6 +1117,48 @@ describe("browser access", () => {
 
 		expect(response.status).toBe(200);
 		expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+	});
+});
+
+describe("the credential sent to the REST API", () => {
+	it("says the key is missing when no Authorization header is sent", async () => {
+		const response = await getUsage("");
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Missing secret key",
+			hint: expect.stringContaining("No Authorization header was sent"),
+		});
+	});
+
+	it("refuses a public key with its own code", async () => {
+		const response = await getUsage(freshKey("cpk"));
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toMatchObject({
+			code: "public_key_not_allowed",
+			error: "Public keys cannot call the REST API",
+			hint: expect.stringContaining("csk_"),
+		});
+		expect(mocks.billing).not.toHaveBeenCalled();
+	});
+
+	it("keeps the answers for any other credential and for a wrong secret key", async () => {
+		const other = await getUsage("not_a_key");
+		mocks.keyRows = [];
+		const wrong = await getUsage(freshKey("csk"));
+
+		expect(other.status).toBe(401);
+		expect(await other.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Invalid secret key",
+		});
+		expect(wrong.status).toBe(401);
+		expect(await wrong.json()).toMatchObject({
+			code: "invalid_secret_key",
+			error: "Invalid or revoked secret key",
+		});
 	});
 });
 

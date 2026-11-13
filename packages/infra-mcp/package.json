@@ -4,6 +4,9 @@
 	"private": true,
 	"description": "MCP server for Cap Infra, the video and speech API",
 	"type": "module",
+	"exports": {
+		"./hosted": "./src/hosted.ts"
+	},
 	"bin": {
 		"cap-infra-mcp": "./dist/bin.js"
 	},

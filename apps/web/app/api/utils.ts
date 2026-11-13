@@ -472,6 +472,7 @@ export const developerSdkCors = cors({
 	credentials: false,
 	allowMethods: ["GET", "POST", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization"],
+	maxAge: 7200,
 	exposeHeaders: [
 		"Retry-After",
 		"X-RateLimit-Limit",
@@ -593,7 +594,27 @@ export const withDeveloperSecretAuth = createMiddleware<{
 		return next();
 	}
 
+	if (!c.req.header("authorization")?.trim()) {
+		return c.json(
+			apiErrorBody(
+				"invalid_secret_key",
+				"Missing secret key",
+				"No Authorization header was sent. Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
+			),
+			401,
+		);
+	}
 	const credential = bearerCredential(c);
+	if (isDeveloperPublicKey(credential)) {
+		return c.json(
+			apiErrorBody(
+				"public_key_not_allowed",
+				"Public keys cannot call the REST API",
+				"A public key (cpk_) was sent. The REST API takes the app's secret key: send Authorization: Bearer csk_... from your server, with the secret key from https://cap.so/dashboard/infra.",
+			),
+			403,
+		);
+	}
 	if (!credential || !SECRET_KEY_SHAPE.test(credential)) {
 		return c.json(
 			apiErrorBody(

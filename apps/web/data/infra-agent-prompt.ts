@@ -1,7 +1,10 @@
 import { DEVELOPER_KEY_REQUESTS_PER_MINUTE } from "@/lib/developer-rate-limits";
+import { INFRA_MCP_PATH } from "@/lib/infra-mcp-path";
 
 export const CAP_INFRA_POINTER_PROMPT =
 	"Read https://cap.so/infra and set up Cap Infra for this project.";
+
+export const CAP_INFRA_MCP_URL = `https://cap.so${INFRA_MCP_PATH}`;
 
 const api = "/api/developer/v1";
 const sdk = "/api/developer/sdk/v1/upload/multipart";
@@ -34,5 +37,6 @@ Cap Infra is Cap's video and speech API. All you need is the app's secret key an
 7. Transcribe when I ask. Transcripts are billed per audio hour, so confirm with me first. For a public URL call ${calls.transcribeUrl}. For a file call ${calls.transcribeFile}, PUT the file to the signed URL it returns, then call ${calls.startTranscript}. Poll ${calls.transcript} at the same pace until status is complete or error.
 8. Stay inside the limit. A secret key allows ${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests a minute across every endpoint. After a 429, wait for the number of seconds in the Retry-After header before you send the request again.
 9. Watch the credits. ${calls.usage} shows the balance and whether uploads are allowed. A 402 means the app needs credit, so tell me and I will add it in the console.
+10. Use the MCP server if you want tools. Cap Infra has a hosted MCP server at ${CAP_INFRA_MCP_URL} that takes the same secret key as Authorization: Bearer. Its requests count toward the same limit.
 
 Finish by uploading one short test video through the code you wrote. Ask me first, because stored video is billed daily. Then tell me what you changed and give me the video's shareUrl, and ask what I want to build next.`;

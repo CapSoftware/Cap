@@ -101,29 +101,49 @@ describe("developer transcripts API", () => {
 
 	describe("authentication", () => {
 		it.each([
-			["no key", {}],
-			["a public key", { Authorization: "Bearer cpk_public_key" }],
-			["an agent token", { Authorization: "Bearer cap_cli_token" }],
-			["a malformed header", { Authorization: "csk_valid_key" }],
-		])("rejects %s before touching transcripts", async (_label, headers) => {
-			for (const [method, path] of [
-				["GET", "/"],
-				["GET", "/tr-1"],
-				["DELETE", "/tr-1"],
-				["POST", "/tr-1/start"],
-			] as const) {
-				const response = await app.request(path, { method, headers });
-				expect(response.status).toBe(401);
-				expect(await response.json()).toMatchObject({
-					code: "invalid_secret_key",
-				});
-			}
-			const created = await post("/", { url: "https://a.example/a" }, headers);
-			expect(created.status).toBe(401);
-			for (const mock of Object.values(mocks.store)) {
-				expect(mock).not.toHaveBeenCalled();
-			}
-		});
+			["no key", {}, 401, "invalid_secret_key"],
+			[
+				"a public key",
+				{ Authorization: "Bearer cpk_public_key" },
+				403,
+				"public_key_not_allowed",
+			],
+			[
+				"an agent token",
+				{ Authorization: "Bearer cap_cli_token" },
+				401,
+				"invalid_secret_key",
+			],
+			[
+				"a malformed header",
+				{ Authorization: "csk_valid_key" },
+				401,
+				"invalid_secret_key",
+			],
+		])(
+			"rejects %s before touching transcripts",
+			async (_label, headers, status, code) => {
+				for (const [method, path] of [
+					["GET", "/"],
+					["GET", "/tr-1"],
+					["DELETE", "/tr-1"],
+					["POST", "/tr-1/start"],
+				] as const) {
+					const response = await app.request(path, { method, headers });
+					expect(response.status).toBe(status);
+					expect(await response.json()).toMatchObject({ code });
+				}
+				const created = await post(
+					"/",
+					{ url: "https://a.example/a" },
+					headers,
+				);
+				expect(created.status).toBe(status);
+				for (const mock of Object.values(mocks.store)) {
+					expect(mock).not.toHaveBeenCalled();
+				}
+			},
+		);
 
 		it("rejects a revoked or unknown secret key", async () => {
 			mocks.keyRows = [];
