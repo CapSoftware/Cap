@@ -1,102 +1,83 @@
-use cpal::StreamInstant;
 use std::{
     ops::{Add, Sub},
     sync::OnceLock,
     time::Duration,
 };
+
+use serde::{Deserialize, Serialize};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
-#[derive(Clone, Copy, Debug)]
-pub struct PerformanceCounterTimestamp(i128);
+// Raw value of the performance counter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformanceCounterTimestamp(i64);
 
-static PERF_FREQ: OnceLock<i64> = OnceLock::new();
+fn counter_diff_to_nanos(diff: i128, frequency: i64) -> i128 {
+    let freq = i128::from(frequency.max(1));
+    if diff >= 0 {
+        (diff * 1_000_000_000 + freq / 2) / freq
+    } else {
+        -((-diff * 1_000_000_000 + freq / 2) / freq)
+    }
+}
 
-#[inline]
-fn perf_freq() -> i64 {
-    *PERF_FREQ.get_or_init(|| {
-        let mut freq: i64 = 0;
-        // SAFETY: According to the Windows API docs, QueryPerformanceFrequency
-        // will succeed on all Windows XP and later systems.
-        unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
-        freq
-    })
+fn duration_to_counter_ticks(duration: Duration, frequency: i64) -> i128 {
+    let freq = u128::from(frequency.max(1) as u64);
+    let nanos = duration.as_nanos();
+    let ticks = (nanos * freq + 500_000_000) / 1_000_000_000;
+    i128::try_from(ticks).unwrap_or(i128::MAX)
 }
 
 impl PerformanceCounterTimestamp {
-    pub fn new(value: i64) -> Self {
-        Self(i128::from(value))
+    pub fn now() -> Self {
+        let mut value = 0;
+        let _ = unsafe { QueryPerformanceCounter(&mut value) };
+        Self(value)
     }
 
-    pub fn from_100ns(value: i64) -> Self {
-        Self(performance_counter_from_100ns(value, perf_freq()))
+    pub fn new(ticks: i64) -> Self {
+        Self(ticks)
+    }
+
+    pub fn ticks(&self) -> i64 {
+        self.0
+    }
+
+    pub fn duration_since_unix_epoch(&self) -> Duration {
+        let nanos = counter_diff_to_nanos(i128::from(self.0.max(0)), perf_freq()).max(0) as u64;
+        Duration::from_nanos(nanos)
     }
 
     pub fn duration_since(&self, other: Self) -> Duration {
-        let freq = perf_freq() as i128;
-        debug_assert!(freq > 0);
-
-        let diff = self.0 - other.0;
-
-        if diff <= 0 {
-            Duration::ZERO
-        } else {
-            let diff = diff as u128;
-            let freq = freq as u128;
-
-            let secs = diff / freq;
-            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
-
-            Duration::new(secs as u64, nanos as u32)
-        }
+        self.checked_duration_since(other)
+            .expect("supplied instant is later than self")
     }
 
-    pub fn checked_duration_since(&self, other: Self) -> Option<Duration> {
-        let freq = perf_freq() as i128;
-        debug_assert!(freq > 0);
-
-        let diff = self.0 - other.0;
-
+    pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
+        let diff = i128::from(self.0) - i128::from(earlier.0);
         if diff < 0 {
-            None
-        } else {
-            let diff = diff as u128;
-            let freq = freq as u128;
-
-            let secs = diff / freq;
-            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
-
-            Some(Duration::new(secs as u64, nanos as u32))
+            return None;
         }
+        let nanos = u64::try_from(counter_diff_to_nanos(diff, perf_freq())).unwrap_or(u64::MAX);
+        Some(Duration::from_nanos(nanos))
+    }
+
+    pub fn signed_duration_since_nanos(&self, other: Self) -> i128 {
+        let diff = i128::from(self.0) - i128::from(other.0);
+        counter_diff_to_nanos(diff, perf_freq())
     }
 
     pub fn signed_duration_since_secs(&self, other: Self) -> f64 {
-        let freq = perf_freq() as f64;
-        (self.0 - other.0) as f64 / freq
+        self.signed_duration_since_nanos(other) as f64 / 1_000_000_000.0
     }
-
-    pub fn now() -> Self {
-        let mut value = 0;
-        unsafe { QueryPerformanceCounter(&mut value).unwrap() };
-        Self::new(value)
-    }
-
-    pub fn from_cpal(instant: StreamInstant) -> Self {
-        use cpal::host::wasapi::StreamInstantExt;
-
-        Self::from_100ns(instant.as_performance_counter())
-    }
-}
-
-fn performance_counter_from_100ns(timestamp: i64, frequency: i64) -> i128 {
-    (i128::from(timestamp) * i128::from(frequency)) / 10_000_000
 }
 
 impl Add<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i128)
+        let ticks = duration_to_counter_ticks(rhs, perf_freq());
+        let next = (i128::from(self.0) + ticks).clamp(i128::from(i64::MIN), i128::from(i64::MAX));
+        Self(next as i64)
     }
 }
 
@@ -104,9 +85,20 @@ impl Sub<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn sub(self, rhs: Duration) -> Self::Output {
-        let freq = perf_freq();
-        Self(self.0 - (rhs.as_secs_f64() * freq as f64) as i128)
+        let ticks = duration_to_counter_ticks(rhs, perf_freq());
+        let next = (i128::from(self.0) - ticks).clamp(i128::from(i64::MIN), i128::from(i64::MAX));
+        Self(next as i64)
     }
+}
+
+static PERF_FREQ: OnceLock<i64> = OnceLock::new();
+
+fn perf_freq() -> i64 {
+    *PERF_FREQ.get_or_init(|| {
+        let mut freq = 0;
+        let _ = unsafe { QueryPerformanceFrequency(&mut freq) };
+        freq
+    })
 }
 
 #[cfg(test)]
@@ -114,55 +106,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duration_since_returns_zero_when_earlier() {
-        let freq = perf_freq();
-        let base = PerformanceCounterTimestamp::new(10 * freq);
-        let earlier = PerformanceCounterTimestamp::new(9 * freq);
-
-        assert_eq!(earlier.duration_since(base), Duration::ZERO);
+    fn high_uptime_zero_duration_roundtrip_is_exact() {
+        let base = PerformanceCounterTimestamp::new((1i64 << 53) + 1);
+        assert_eq!(base + Duration::ZERO, base);
+        assert_eq!(base - Duration::ZERO, base);
     }
 
     #[test]
-    fn duration_since_handles_positive_diff() {
-        let freq = perf_freq();
-        let base = PerformanceCounterTimestamp::new(10 * freq);
-        let later = PerformanceCounterTimestamp::new(11 * freq);
+    fn high_uptime_fractional_duration_avoids_f64_precision_loss() {
+        let base = PerformanceCounterTimestamp::new((1i64 << 53) + 1);
+        let delta = Duration::from_nanos(16_666_667);
 
-        assert_eq!(later.duration_since(base), Duration::from_secs(1));
+        let advanced = base + delta;
+        let expected_ticks = duration_to_counter_ticks(delta, perf_freq()) as i64;
+        assert_eq!(advanced.ticks() - base.ticks(), expected_ticks);
+        assert_eq!(advanced - delta, base);
     }
 
     #[test]
-    fn wasapi_timestamps_use_the_machine_counter_frequency() {
-        for frequency in [3_000_000, 10_000_000, 24_000_000, 1_000_000_000] {
-            assert_eq!(
-                performance_counter_from_100ns(123_450_000, frequency),
-                i128::from(frequency * 12 + frequency * 345 / 1_000)
-            );
-        }
-    }
+    fn signed_duration_since_nanos_and_secs_are_consistent() {
+        let base = PerformanceCounterTimestamp::new((1i64 << 53) + 1);
+        let delta = Duration::from_millis(500);
+        let later = base + delta;
 
-    #[test]
-    fn invalid_device_epochs_preserve_packet_spacing_at_all_counter_frequencies() {
-        assert_eq!(performance_counter_from_100ns(0, 24_000_000), 0);
-        for frequency in [3_000_000, 10_000_000, 24_000_000, 5_000_000_000] {
-            for epoch in [i64::MIN, -22_236_875_390_000_000, i64::MAX - 100_000] {
-                let first = performance_counter_from_100ns(epoch, frequency);
-                let next = performance_counter_from_100ns(epoch + 100_000, frequency);
-                assert_eq!(next - first, i128::from(frequency / 100));
-            }
-        }
-    }
-
-    #[test]
-    fn screen_audio_and_native_counter_timestamps_share_one_timebase() {
-        let raw_counter = 12 * perf_freq();
-        let native = PerformanceCounterTimestamp::new(raw_counter);
-        let screen_or_audio = PerformanceCounterTimestamp::from_100ns(120_000_000);
-
-        assert_eq!(screen_or_audio.signed_duration_since_secs(native), 0.0);
-        assert_eq!(
-            (screen_or_audio + Duration::from_millis(10)).duration_since(native),
-            Duration::from_millis(10)
-        );
+        let nanos = later.signed_duration_since_nanos(base);
+        assert_eq!(nanos, 500_000_000);
+        assert_eq!(base.signed_duration_since_nanos(later), -500_000_000);
+        assert!((later.signed_duration_since_secs(base) - 0.5).abs() < 1e-6);
     }
 }
