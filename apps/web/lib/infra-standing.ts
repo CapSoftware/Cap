@@ -187,8 +187,10 @@ export async function accountStanding(
 	account: { id: string; balanceMicroCredits: number },
 	now: Date,
 ) {
-	const lastCharge = await latestStorageCharge(executor, account.id);
-	const disputedAt = await disputedSince(executor, account.id);
+	const [lastCharge, disputedAt] = await Promise.all([
+		latestStorageCharge(executor, account.id),
+		disputedSince(executor, account.id),
+	]);
 	if (disputedAt) {
 		const standing: InfraAppStanding = {
 			state: "paused",
