@@ -22,25 +22,54 @@ export function retryAfterMs(header: string | null) {
 	return Math.min(MAX_RETRY_MS, Math.ceil(seconds * 1000));
 }
 
+export const MAX_UPLOAD_DURATION_SECS = 4 * 60 * 60;
+export const STORED_BYTES_PER_SECOND = 2_500_000;
+// A file is billed for at least its size at STORED_BYTES_PER_SECOND, and for
+// at most MAX_UPLOAD_DURATION_SECS. Past this size the two meet, so every
+// further byte would be stored without being billed.
+export const MAX_UPLOAD_BYTES =
+	MAX_UPLOAD_DURATION_SECS * STORED_BYTES_PER_SECOND;
+export const VIDEO_TOO_LONG_MESSAGE = "Video is longer than the 4 hour limit";
+
+export function fileTooLargeMessage(limit: number = MAX_UPLOAD_BYTES) {
+	return limit < MAX_UPLOAD_BYTES
+		? `The file is larger than the ${limit} byte limit set for this upload`
+		: `The file is larger than the ${MAX_UPLOAD_BYTES / 1e9} GB upload limit`;
+}
+
 export const COMPLETION_IN_PROGRESS = "completion_in_progress";
-export const BUSY_COMPLETE_ATTEMPTS = 8;
-const BUSY_RETRY_MS = 3_000;
+// How long the server lets one request hold a completion before another may
+// take it over.
+export const STALE_UPLOAD_CLAIM_MS = 15 * 60 * 1000;
+const BUSY_COMPLETE_WINDOW_MS = STALE_UPLOAD_CLAIM_MS + 60_000;
 
 export function isDefinitiveRejection(status: number, code?: string | null) {
 	if (code === COMPLETION_IN_PROGRESS) return false;
 	return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
-export function completeRetryPlan(
-	attempt: number,
-	code: string | null | undefined,
-	attempts: number,
-) {
-	const busy = code === COMPLETION_IN_PROGRESS;
-	return {
-		retry: attempt < (busy ? BUSY_COMPLETE_ATTEMPTS : attempts),
-		waitMs: busy ? BUSY_RETRY_MS : 1500 * attempt,
-	};
+export function completeRetryPlan({
+	attempt,
+	code,
+	attempts,
+	retryAfter,
+	busyWaitedMs,
+}: {
+	attempt: number;
+	code: string | null | undefined;
+	attempts: number;
+	retryAfter: string | null;
+	busyWaitedMs: number;
+}) {
+	if (code === COMPLETION_IN_PROGRESS) {
+		const waitMs = retryAfterMs(retryAfter);
+		return {
+			retry: busyWaitedMs + waitMs <= BUSY_COMPLETE_WINDOW_MS,
+			waitMs,
+			busy: true,
+		};
+	}
+	return { retry: attempt < attempts, waitMs: 1500 * attempt, busy: false };
 }
 
 export const EMPTY_FILE_MESSAGE = "That file is empty.";

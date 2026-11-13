@@ -13,6 +13,7 @@ import { lockInfraAccount } from "@/lib/infra-balance";
 import { INFRA_RESOLUTION_TIERS } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 import { settleFirstMonthAtReady } from "@/lib/infra-storage-minimum";
+import { VIDEO_TOO_LONG_MESSAGE } from "@/lib/infra-upload";
 import { cancelDeveloperVideoJobs } from "./developer-video-cancel";
 import {
 	chargeDeveloperVideoUpload,
@@ -357,9 +358,7 @@ export async function chargeForProbedDuration(
 ): Promise<void> {
 	if (probedDuration === null) return;
 	if (probedDuration > DEVELOPER_VIDEO_MAX_DURATION_SECONDS) {
-		throw new DeveloperVideoChargeRefused(
-			"Video is longer than the 4 hour limit",
-		);
+		throw new DeveloperVideoChargeRefused(VIDEO_TOO_LONG_MESSAGE);
 	}
 	const billed = video.duration ?? 0;
 	const size = probedSize ?? {
@@ -468,9 +467,12 @@ async function preparationWithoutClaim(
 	return latest.processing.probe ? "ready" : "probing";
 }
 
+type DeveloperVideoSource = { contentType: string | null } | null;
+
 export async function prepareDeveloperVideoProcessing(
 	videoId: string,
 	encodeId: string,
+	seen: { source?: DeveloperVideoSource } = {},
 ): Promise<DeveloperVideoPreparation> {
 	const encode = await findEncode(videoId, encodeId);
 	if (!encode || encode.video.status === "errored") return "stale";
@@ -494,6 +496,7 @@ export async function prepareDeveloperVideoProcessing(
 				"The uploaded file was not found. Upload it again.",
 			);
 		}
+		seen.source = source;
 		if (source.bytes === 0) {
 			throw new DeveloperVideoRejected(
 				"The uploaded file is empty. Upload it again.",
@@ -612,6 +615,7 @@ async function buildJobRequest(
 	processing: DeveloperVideoProcessingState,
 	part: DeveloperVideoPart,
 	token: string,
+	knownSource?: DeveloperVideoSource,
 ): Promise<{
 	path: "/video/ladder" | "/video/process";
 	body: Record<string, unknown>;
@@ -625,17 +629,38 @@ async function buildJobRequest(
 		video.maxResolutionTier,
 	);
 	const expiresIn = MEDIA_SERVER_URL_EXPIRES_SECONDS;
-	const source = await headDeveloperVideoObject(video.s3Key);
+	const [source, videoUrl, thumbnailPresignedUrl, outputPresignedUrl, uploads] =
+		await Promise.all([
+			knownSource === undefined
+				? headDeveloperVideoObject(video.s3Key)
+				: knownSource,
+			internalDeveloperVideoUrl(video.s3Key, expiresIn),
+			developerVideoUploadUrl(keys.poster, "image/jpeg", expiresIn),
+			part === "mp4"
+				? developerVideoUploadUrl(keys.mp4, "video/mp4", expiresIn)
+				: null,
+			part === "hls"
+				? Promise.all(
+						plan.uploads.map(
+							async (upload) =>
+								[
+									upload.name,
+									await developerVideoUploadUrl(
+										`${keys.hlsPrefix}${upload.name}`,
+										upload.contentType,
+										expiresIn,
+									),
+								] as const,
+						),
+					).then(Object.fromEntries)
+				: null,
+		]);
 	const inputExtension = developerVideoSourceExtension(source?.contentType);
 	const common = {
 		videoId: video.id,
 		userId: video.appId,
-		videoUrl: await internalDeveloperVideoUrl(video.s3Key, expiresIn),
-		thumbnailPresignedUrl: await developerVideoUploadUrl(
-			keys.poster,
-			"image/jpeg",
-			expiresIn,
-		),
+		videoUrl,
+		thumbnailPresignedUrl,
 		webhookUrl: webhookUrl(part, token),
 		...(inputExtension ? { inputExtension } : {}),
 		// Lets the media server keep room for Cap's own recordings.
@@ -647,32 +672,13 @@ async function buildJobRequest(
 			path: "/video/process",
 			body: {
 				...common,
-				outputPresignedUrl: await developerVideoUploadUrl(
-					keys.mp4,
-					"video/mp4",
-					expiresIn,
-				),
+				outputPresignedUrl,
 				maxWidth: plan.mp4MaxDimension,
 				maxHeight: plan.mp4MaxDimension,
 			},
 		};
 	}
 
-	const uploads = Object.fromEntries(
-		await Promise.all(
-			plan.uploads.map(
-				async (upload) =>
-					[
-						upload.name,
-						await developerVideoUploadUrl(
-							`${keys.hlsPrefix}${upload.name}`,
-							upload.contentType,
-							expiresIn,
-						),
-					] as const,
-			),
-		),
-	);
 	return {
 		path: "/video/ladder",
 		body: {
@@ -720,8 +726,57 @@ export async function dispatchDeveloperVideoPart(
 		return started ? { processing: started } : null;
 	});
 	if (!video?.processing) return "skipped";
+	return sendDeveloperVideoPart(video, video.processing, part, token);
+}
 
-	const request = await buildJobRequest(video, video.processing, part, token);
+export async function dispatchDeveloperVideoParts(
+	videoId: string,
+	encodeId: string,
+	knownSource?: DeveloperVideoSource,
+): Promise<PromiseSettledResult<DeveloperVideoDispatch>[]> {
+	let tokens: [DeveloperVideoPart, string][] = [];
+	const video = await mutateEncode(videoId, encodeId, (processing) => {
+		const now = Date.now();
+		tokens = [];
+		let next = processing;
+		for (const part of DEVELOPER_VIDEO_PARTS) {
+			const token = newAttemptToken();
+			const started = beginPart(next, part, { token, now });
+			if (!started) continue;
+			next = started;
+			tokens.push([part, token]);
+		}
+		return tokens.length > 0 ? { processing: next } : null;
+	});
+	const processing = video?.processing;
+	if (!video || !processing) return [];
+	const source =
+		knownSource === undefined && tokens.length > 1 && video.s3Key
+			? await headDeveloperVideoObject(video.s3Key)
+			: knownSource;
+	return Promise.allSettled(
+		tokens.map(([part, token]) =>
+			sendDeveloperVideoPart(video, processing, part, token, source),
+		),
+	);
+}
+
+async function sendDeveloperVideoPart(
+	video: DeveloperVideoRow,
+	processing: DeveloperVideoProcessingState,
+	part: DeveloperVideoPart,
+	token: string,
+	knownSource?: DeveloperVideoSource,
+): Promise<DeveloperVideoDispatch> {
+	const videoId = video.id;
+	const { encodeId } = processing;
+	const request = await buildJobRequest(
+		video,
+		processing,
+		part,
+		token,
+		knownSource,
+	);
 	const started = await startMediaServerVideoJob(request.path, request.body);
 
 	if (started.status === "started") {
@@ -892,12 +947,14 @@ async function completedOutcome(
 	renditions?: DeveloperVideoRendition[];
 }> {
 	const keys = developerVideoKeys(video, processing.encodeId, token);
-	const poster = await headDeveloperVideoObject(keys.poster);
-	const posterBytes = poster?.bytes ?? 0;
 	const needsDuration = processing.probe?.duration == null;
 
 	if (part === "mp4") {
-		const output = await headDeveloperVideoObject(keys.mp4);
+		const [poster, output] = await Promise.all([
+			headDeveloperVideoObject(keys.poster),
+			headDeveloperVideoObject(keys.mp4),
+		]);
+		const posterBytes = poster?.bytes ?? 0;
 		if (!output || output.bytes === 0) {
 			return {
 				outcome: { type: "failed", reason: "Encoded MP4 was not stored" },
@@ -921,9 +978,13 @@ async function completedOutcome(
 			outcome: { type: "failed", reason: "Encoder reported no renditions" },
 		};
 	}
-	const master = await readDeveloperVideoText(
-		`${keys.hlsPrefix}${DEVELOPER_VIDEO_MASTER_PLAYLIST}`,
-	);
+	const [poster, master] = await Promise.all([
+		headDeveloperVideoObject(keys.poster),
+		readDeveloperVideoText(
+			`${keys.hlsPrefix}${DEVELOPER_VIDEO_MASTER_PLAYLIST}`,
+		),
+	]);
+	const posterBytes = poster?.bytes ?? 0;
 	if (!master || !ladderMatchesMaster(ladder.renditions, master)) {
 		return {
 			outcome: {
