@@ -23,6 +23,7 @@ import {
 	releaseDeveloperVideoUpload,
 	startDeveloperVideoProcessing,
 } from "@/lib/developer-video-start";
+import { withoutReservedMetadata } from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
@@ -357,7 +358,7 @@ export async function createInfraVideo({
 			externalUserId: userId?.trim() || null,
 			name: name ?? "Untitled",
 			s3Key,
-			metadata,
+			metadata: withoutReservedMetadata(metadata),
 			playbackId,
 			maxResolutionTier: maxResolutionTier ?? DEVELOPER_VIDEO_DEFAULT_TIER,
 		});
