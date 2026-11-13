@@ -853,20 +853,21 @@ Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Co
 - URL: `https://cap.so/api/developer/mcp`
 - Header: `Authorization: Bearer` followed by the secret key
 
-Claude Code, with the key in `CAP_SECRET_KEY`:
+Claude Code, with the key in `CAP_SECRET_KEY`. If the key is in your project's `.env` file, export it to the shell first:
 
 ```bash
+set -a; source .env; set +a
 claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
 ```
 
-Cursor, in `.cursor/mcp.json`:
+Cursor, in `.cursor/mcp.json`, reading the key from `CAP_SECRET_KEY` so the file never holds it:
 
 ```json
 {
   "mcpServers": {
     "cap-infra": {
       "url": "https://cap.so/api/developer/mcp",
-      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+      "headers": { "Authorization": "Bearer ${env:CAP_SECRET_KEY}" }
     }
   }
 }

@@ -43,4 +43,4 @@ Cap Infra is Cap's video and speech API. All you need is the app's secret key an
 9. Watch the credits. ${calls.usage} shows the balance and whether uploads are allowed. A 402 means the app needs credit, so tell me and I will add it in the console.
 10. Use the MCP server if you want tools. Cap Infra has a hosted MCP server at ${CAP_INFRA_MCP_URL} that takes the same secret key as Authorization: Bearer. Its requests count toward the same limit.
 
-Finish by uploading one short test video through the code you wrote. Ask me first, because stored video is billed daily. Then tell me what you changed and give me the video's shareUrl, and ask what I want to build next.`;
+Finish by uploading one short test video through the code you wrote. Ask me first, because stored video is billed one month when it becomes ready, then daily. Then tell me what you changed and give me the video's shareUrl, and ask what I want to build next.`;

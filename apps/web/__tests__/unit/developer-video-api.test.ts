@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEVELOPER_VIDEO_TAKEDOWN_KEY } from "@cap/database/types";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -119,6 +120,7 @@ beforeEach(() => {
 	mocks.store.video = ready();
 	mocks.store.more = [];
 	mocks.store.updates = [];
+	mocks.store.captionRows = [];
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
 	mocks.redrive.mockResolvedValue(false);
@@ -166,7 +168,39 @@ describe("developer video API", () => {
 			outputs: { hls: "ready", mp4: "ready" },
 			shareUrl: PAGE,
 			embedUrl: `${PAGE}/embed`,
+			captions: [],
 		});
+	});
+
+	it("lists the captions made from the video's transcripts on get and list", async () => {
+		mocks.store.captionRows = [
+			{ videoId: "video-1", language: "fr" },
+			{ videoId: "video-1", language: "en" },
+			{ videoId: "video-1", language: null },
+			{ videoId: "video-other", language: "de" },
+		];
+		const captions = [
+			{ language: "en", url: `${BASE}/captions-en.vtt` },
+			{ language: "fr", url: `${BASE}/captions-fr.vtt` },
+			{ language: "und", url: `${BASE}/captions-und.vtt` },
+		];
+
+		expect((await get("/video-1")).body.data.captions).toEqual(captions);
+		expect((await get("/")).body.data[0].captions).toEqual(captions);
+	});
+
+	it("lists no captions for a video that was taken down", async () => {
+		mocks.store.captionRows = [{ videoId: "video-1", language: "en" }];
+		const video = ready();
+		video.metadata = {
+			[DEVELOPER_VIDEO_TAKEDOWN_KEY]: { at: "2026-11-01", metadata: null },
+		};
+		mocks.store.video = video;
+
+		const { body } = await get("/video-1");
+
+		expect(body.data.takenDown).toBe(true);
+		expect(body.data.captions).toEqual([]);
 	});
 
 	describe("output states", () => {
