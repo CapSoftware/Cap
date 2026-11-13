@@ -272,6 +272,36 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 		});
 
+		it("charges the month on the duration stored at first ready, not on what the client first claimed or the probe state", async () => {
+			const { appId, accountId } = await makeApp(1_000_000);
+			const videoId = await makeVideo(appId, {
+				status: "processing",
+				duration: 4 * 60 * 60,
+				processing: {
+					...processing(),
+					probe: { duration: 4 * 60 * 60, width: 1920, height: 1080, fps: 30 },
+				},
+			});
+			await database()
+				.update(developerVideos)
+				.set({ duration: 60 })
+				.where(eq(developerVideos.id, videoId));
+			await database()
+				.update(developerVideos)
+				.set({ status: "ready" })
+				.where(eq(developerVideos.id, videoId));
+
+			await settleFirstMonthAtReady({ id: videoId, deletedAt: null });
+
+			const [row] = await firstMonthRows(accountId);
+			expect(row).toMatchObject({ amountMicroCredits: -85 });
+			expect(row?.metadata).toMatchObject({
+				owedMicroCredits: 85,
+				durationSeconds: 60,
+			});
+			expect(await balanceOf(accountId)).toBe(1_000_000 - 85);
+		});
+
 		it("charges once when the ready transition and the backstop race for the same video", async () => {
 			const { appId, accountId } = await makeApp(1_000_000);
 			const videoId = await makeVideo(appId);
