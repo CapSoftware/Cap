@@ -2,7 +2,7 @@
 
 import {
 	createContext,
-	type ReactNode,
+	type PropsWithChildren,
 	useCallback,
 	useContext,
 	useSyncExternalStore,
@@ -15,10 +15,7 @@ const ServerNowContext = createContext<number | null>(null);
 export function ShareNowProvider({
 	now,
 	children,
-}: {
-	now: number;
-	children: ReactNode;
-}) {
+}: PropsWithChildren<{ now: number }>) {
 	return (
 		<ServerNowContext.Provider value={now}>
 			{children}
