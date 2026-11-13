@@ -5,6 +5,7 @@ import {
 	pickStartingLevel,
 	playAllowingMuted,
 	SECONDS_AHEAD_BEFORE_PLAY,
+	SECONDS_TO_SHARPEN,
 	startWithin,
 } from "@/components/cap-player/source";
 
@@ -17,6 +18,7 @@ const hlsMock = vi.hoisted(() => {
 		static Events = {
 			MANIFEST_PARSED: "manifestParsed",
 			LEVEL_LOADED: "levelLoaded",
+			FRAG_BUFFERED: "fragBuffered",
 			ERROR: "error",
 		};
 		static ErrorTypes = { MEDIA_ERROR: "mediaError" };
@@ -28,6 +30,9 @@ const hlsMock = vi.hoisted(() => {
 		};
 		startLevel = -1;
 		loadLevel = -1;
+		currentLevel = -1;
+		levels: unknown[] = [];
+		bandwidthEstimate = Number.NaN;
 		startLoads: number[] = [];
 		source = "";
 		destroyed = false;
@@ -57,6 +62,9 @@ const hlsMock = vi.hoisted(() => {
 		}
 
 		emit(name: string, data: unknown) {
+			if (name === "manifestParsed") {
+				this.levels = (data as { levels: unknown[] }).levels;
+			}
 			for (const listener of this.listeners.get(name) ?? []) {
 				listener(name, data);
 			}
@@ -898,5 +906,178 @@ describe("attachSource with hls.js", () => {
 		stop();
 
 		expect(hls.destroyed).toBe(true);
+	});
+});
+
+describe("attachSource sharpening while the pointer rests on play", () => {
+	type Hls = InstanceType<typeof hlsMock.FakeHls>;
+
+	// A line whose browser estimate starts the player on the lowest rendition.
+	const lowEstimate = () =>
+		page({
+			vendor: "Google Inc.",
+			mediaSource: true,
+			loaded: true,
+			megabits: 1,
+		});
+
+	const countSeeks = (video: FakeVideo) => {
+		let seeks = 0;
+		let time = 0;
+		Object.defineProperty(video, "currentTime", {
+			get: () => time,
+			set: (value: number) => {
+				seeks++;
+				time = value;
+			},
+		});
+		return () => seeks;
+	};
+
+	const held = (hls: Hls, level = 0) =>
+		hls.emit("fragBuffered", { frag: { type: "main", level, duration: 4 } });
+
+	// The bandwidth at which the 1280 wide rendition's 4 second segment
+	// arrives in exactly the time allowed.
+	const JUST_FAST_ENOUGH = (LADDER[1]?.bitrate ?? 0) * (4 / SECONDS_TO_SHARPEN);
+
+	const started = async (
+		video: FakeVideo,
+		options: { startAt?: number } = {},
+	) => {
+		const attached = attach(video, { hls: HLS }, options);
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		return { ...attached, hls };
+	};
+
+	it("swaps the held segment for the rendition that fits the player", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const seeks = countSeeks(video);
+		const { hls, sharpen } = await started(video);
+
+		expect(hls.loadLevel).toBe(0);
+
+		hls.bandwidthEstimate = JUST_FAST_ENOUGH;
+		held(hls);
+		sharpen();
+
+		expect(hls.currentLevel).toBe(1);
+		expect(seeks()).toBe(0);
+
+		held(hls, 1);
+
+		expect(seeks()).toBe(1);
+		expect(video.currentTime).toBe(0);
+
+		held(hls, 1);
+
+		expect(seeks()).toBe(1);
+	});
+
+	it("never swaps above the rendition that fits the player", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		sharpen();
+
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("keeps the held segment when a sharper one would arrive too late", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
+		held(hls);
+		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("waits until a held segment has measured the line", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("leaves a playing video alone", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		void video.play();
+		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("leaves a quality the viewer picked alone", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, setLevel, sharpen } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		setLevel(3);
+		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("leaves the seek to a start time to hls.js", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls, sharpen } = await started(video, { startAt: 45 });
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("does nothing once stopped or after a fall back to the MP4", async () => {
+		lowEstimate();
+		const stopped = await started(new FakeVideo(false));
+		stopped.hls.bandwidthEstimate = 1_000_000_000;
+		held(stopped.hls);
+		stopped.stop();
+		stopped.sharpen();
+
+		expect(stopped.hls.currentLevel).toBe(-1);
+
+		const failed = attach(new FakeVideo(false), { hls: HLS, mp4: MP4 });
+		const hls = await hlsFor();
+		hls.emit("manifestParsed", LADDER_DATA);
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		hls.emit("error", { fatal: true, type: "networkError" });
+		failed.sharpen();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("does nothing in Safari's own player", () => {
+		iphone(true);
+		const video = new FakeVideo(true);
+
+		const { sharpen } = attach(video, { hls: HLS });
+		sharpen();
+
+		expect(video.src).toBe(HLS);
+		expect(video.preload).toBe("metadata");
 	});
 });
