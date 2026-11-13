@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	},
 	snapshotsTable: { appId: "appId", snapshotDate: "snapshotDate" },
 	yesterdayBilled: null as Record<string, unknown>[] | null,
+	markers: [] as unknown[],
 	getStorageUsageByApp: vi.fn(),
 	chargeStorageDay: vi.fn(),
 	latestStorageCharges: vi.fn(),
@@ -83,6 +84,9 @@ vi.mock("@/lib/infra-storage", () => ({
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
 	chargeStorageDay: mocks.chargeStorageDay,
+	recordStorageDayVisits: async ({ appIds }: { appIds: string[] }) => {
+		mocks.markers.push(...appIds);
+	},
 }));
 vi.mock("@/lib/infra-standing", () => ({
 	INFRA_GRACE_DAYS: 7,
@@ -135,6 +139,7 @@ beforeEach(() => {
 	mocks.selects = [];
 	mocks.page = [];
 	mocks.yesterdayBilled = null;
+	mocks.markers = [];
 	for (const mock of [
 		mocks.getStorageUsageByApp,
 		mocks.chargeStorageDay,
@@ -236,6 +241,7 @@ describe("developer-storage cron job", () => {
 
 		expect(body.appsProcessed).toBe(0);
 		expect(mocks.chargeStorageDay).not.toHaveBeenCalled();
+		expect(mocks.markers).toEqual(["app-1"]);
 	});
 
 	it("looks up the last charge of every idle account in one read", async () => {

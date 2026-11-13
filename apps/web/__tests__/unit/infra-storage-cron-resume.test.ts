@@ -10,7 +10,9 @@ type ChargeCall = {
 const state = vi.hoisted(() => ({
 	accounts: [] as { id: string; appId: string; createdAt: Date }[],
 	appCreatedAt: new Map<string, Date>(),
-	videos: new Map<string, Date[]>(),
+	videos: new Map<string, (Date | { createdAt: Date; readyAt: Date })[]>(),
+	markers: new Map<string, number>(),
+	markerInserts: [] as string[],
 	usageReads: [] as { appIds: string[]; createdBefore: Date | undefined }[],
 	deletedApps: new Set<string>(),
 	unpaid: new Set<string>(),
@@ -88,7 +90,11 @@ vi.mock("@cap/database", async () => {
 			const date = String(params.at(-1));
 			return {
 				rows: appIds
-					.filter((appId) => state.snapshotWrites.has(`${appId}|${date}`))
+					.filter(
+						(appId) =>
+							state.snapshotWrites.has(`${appId}|${date}`) ||
+							state.markers.has(`${appId}|${date}`),
+					)
 					.map((appId) => [appId]),
 			};
 		}
@@ -108,11 +114,18 @@ vi.mock("@/lib/infra-storage", () => ({
 			appIds.map((appId) => {
 				const videos = (
 					state.videos.get(appId) ?? [new Date("2026-11-01T00:00:00Z")]
-				).filter(
-					(createdAt) =>
-						!options.createdBefore ||
-						createdAt.getTime() < options.createdBefore.getTime(),
-				).length;
+				)
+					.map((video) =>
+						video instanceof Date
+							? { createdAt: video, readyAt: video }
+							: video,
+					)
+					.filter(
+						({ createdAt, readyAt }) =>
+							readyAt.getTime() <= Date.now() &&
+							(!options.createdBefore ||
+								createdAt.getTime() < options.createdBefore.getTime()),
+					).length;
 				return [
 					appId,
 					{
@@ -128,6 +141,21 @@ vi.mock("@/lib/infra-storage", () => ({
 	},
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
+	recordStorageDayVisits: async ({
+		appIds,
+		dateKey,
+	}: {
+		appIds: string[];
+		dateKey: string;
+	}) => {
+		for (const appId of appIds) {
+			const key = `${appId}|${dateKey}`;
+			state.markerInserts.push(key);
+			if (!state.snapshotWrites.has(key) && !state.markers.has(key)) {
+				state.markers.set(key, 1);
+			}
+		}
+	},
 	chargeStorageDay: async ({
 		appId,
 		accountId,
@@ -151,18 +179,25 @@ vi.mock("@/lib/infra-storage-billing", () => ({
 		const key = `${accountId}|${dateKey}`;
 		const snapshot = `${appId}|${dateKey}`;
 		if (state.charged.has(key)) return { state: "skipped" };
-		const writeSnapshot = () =>
+		const writeSnapshot = () => {
+			state.markers.delete(snapshot);
 			state.snapshotWrites.set(
 				snapshot,
 				(state.snapshotWrites.get(snapshot) ?? 0) + 1,
 			);
+		};
+		if (
+			retryUnpaid === false &&
+			(state.markers.has(snapshot) ||
+				(state.unpaid.has(accountId) && state.snapshotWrites.has(snapshot)))
+		) {
+			return { state: "skipped" };
+		}
 		if (state.unpaid.has(accountId)) {
-			if (retryUnpaid === false && state.snapshotWrites.has(snapshot)) {
-				return { state: "skipped" };
-			}
 			writeSnapshot();
 			return { state: "unpaid", shortSince: new Date("2026-11-01T00:00:00Z") };
 		}
+		if (usage.dailyMicroCredits <= 0) return { state: "skipped" };
 		state.charged.set(key, 1);
 		writeSnapshot();
 		const short = state.short.has(accountId);
@@ -272,6 +307,8 @@ beforeEach(() => {
 	});
 	state.appCreatedAt = new Map();
 	state.videos = new Map();
+	state.markers = new Map();
+	state.markerInserts = [];
 	state.usageReads = [];
 	state.deletedApps = new Set();
 	state.unpaid = new Set();
@@ -645,6 +682,122 @@ describe("the finishing pass counts only what existed on that day", () => {
 		);
 		expect(bounds.filter(Boolean)).toEqual(["2026-11-13T00:00:00.000Z"]);
 		expect(bounds.filter((bound) => bound === undefined)).toHaveLength(3);
+	});
+});
+
+describe("a visit on a day leaves a marker when nothing is charged", () => {
+	const tick = (at: string) => {
+		vi.setSystemTime(new Date(at));
+		return run();
+	};
+	const insertsFor = (app: string, date: string) =>
+		state.markerInserts.filter((key) => key === `${app}|${date}`).length;
+
+	it("does not charge a day for an app that was empty at every run of it, when its first video becomes ready after midnight", async () => {
+		state.videos.set("app-0300", [
+			{
+				createdAt: new Date("2026-11-12T23:00:00Z"),
+				readyAt: new Date("2026-11-13T00:20:00Z"),
+			},
+		]);
+		for (const at of [
+			"2026-11-12T06:41:00Z",
+			"2026-11-12T12:41:00Z",
+			"2026-11-12T18:41:00Z",
+		]) {
+			await tick(at);
+		}
+		expect(state.markers.has("app-0300|2026-11-12")).toBe(true);
+
+		await tick("2026-11-13T00:41:00Z");
+
+		expect(callsFor("2026-11-12").map((call) => call.accountId)).not.toContain(
+			"account-0300",
+		);
+		expect(chargedFor("2026-11-12")).not.toContain("account-0300");
+		expect(chargedFor("2026-11-13")).toContain("account-0300");
+	});
+
+	it("charges a day for an app the sweep never reached that day, for videos created before midnight", async () => {
+		state.videos.set("app-0300", [
+			new Date("2026-11-12T10:00:00Z"),
+			{
+				createdAt: new Date("2026-11-13T00:05:00Z"),
+				readyAt: new Date("2026-11-13T00:06:00Z"),
+			},
+		]);
+		vi.setSystemTime(new Date("2026-11-12T18:41:00Z"));
+		state.secondsPerCharge = 1.6;
+		state.continuationStatus = "network";
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const lastTick = await run();
+		await Promise.all(state.afters);
+		expect(lastTick.continued).toBe(true);
+		expect(state.markers.has("app-0300|2026-11-12")).toBe(false);
+		state.secondsPerCharge = 0;
+
+		await tick("2026-11-13T00:41:00Z");
+
+		const [finished] = callsFor("2026-11-12").filter(
+			(call) => call.accountId === "account-0300",
+		);
+		expect(finished?.dailyMicroCredits).toBe(28);
+		expect(chargedFor("2026-11-12")).toContain("account-0300");
+		const [today] = callsFor("2026-11-13").filter(
+			(call) => call.accountId === "account-0300",
+		);
+		expect(today?.dailyMicroCredits).toBe(56);
+	});
+
+	it("writes one marker per idle app and day, however often the app is visited", async () => {
+		const idle = ["app-0400", "app-0401", "app-0402", "app-0403", "app-0404"];
+		for (const app of idle) state.videos.set(app, []);
+
+		for (const at of [
+			"2026-11-12T06:41:00Z",
+			"2026-11-12T12:41:00Z",
+			"2026-11-12T18:41:00Z",
+			"2026-11-13T00:41:00Z",
+			"2026-11-13T06:41:00Z",
+		]) {
+			await tick(at);
+		}
+
+		for (const app of idle) {
+			expect(insertsFor(app, "2026-11-12")).toBe(1);
+			expect(insertsFor(app, "2026-11-13")).toBe(1);
+			expect(state.markers.get(`${app}|2026-11-12`)).toBe(1);
+		}
+		expect(state.markerInserts).toHaveLength(idle.length * 2);
+		expect(
+			state.chargeCalls.filter((call) =>
+				idle.includes(call.accountId.replace("account", "app")),
+			),
+		).toEqual([]);
+	});
+
+	it("still charges the same day when storage arrives after an idle marker", async () => {
+		state.videos.set("app-0410", [
+			{
+				createdAt: new Date("2026-11-12T09:00:00Z"),
+				readyAt: new Date("2026-11-12T10:00:00Z"),
+			},
+		]);
+		await tick("2026-11-12T06:41:00Z");
+		expect(state.markers.has("app-0410|2026-11-12")).toBe(true);
+		expect(chargedFor("2026-11-12")).not.toContain("account-0410");
+
+		await tick("2026-11-12T12:41:00Z");
+
+		const charged = callsFor("2026-11-12").filter(
+			(call) => call.accountId === "account-0410",
+		);
+		expect(charged).toEqual([
+			expect.objectContaining({ dailyMicroCredits: 28, retryUnpaid: true }),
+		]);
+		expect(chargedFor("2026-11-12")).toContain("account-0410");
+		expect(state.snapshotWrites.get("app-0410|2026-11-12")).toBe(1);
+		expect(state.markers.has("app-0410|2026-11-12")).toBe(false);
 	});
 });
 

@@ -18,7 +18,10 @@ import {
 	type StorageCharge,
 } from "@/lib/infra-standing";
 import { getStorageUsageByApp } from "@/lib/infra-storage";
-import { chargeStorageDay } from "@/lib/infra-storage-billing";
+import {
+	chargeStorageDay,
+	recordStorageDayVisits,
+} from "@/lib/infra-storage-billing";
 import { utcDateKey } from "@/lib/infra-usage";
 
 const BATCH_SIZE = 10;
@@ -183,7 +186,7 @@ async function sweepDate({
 			(account) => !billedAccounts.has(account.id),
 		);
 		const settledApps =
-			finishing && unbilled.length > 0
+			unbilled.length > 0
 				? await db()
 						.select({ appId: developerDailyStorageSnapshots.appId })
 						.from(developerDailyStorageSnapshots)
@@ -199,9 +202,18 @@ async function sweepDate({
 						)
 				: [];
 		const settledAppIds = new Set(settledApps.map((row) => row.appId));
-		const pending = unbilled.filter(
-			(account) => !settledAppIds.has(account.appId),
-		);
+		const pending = finishing
+			? unbilled.filter((account) => !settledAppIds.has(account.appId))
+			: unbilled;
+		const visitedWithoutSnapshot: string[] = [];
+		const recordVisits = () =>
+			recordStorageDayVisits({
+				appIds: visitedWithoutSnapshot.filter(
+					(appId) => !settledAppIds.has(appId),
+				),
+				dateKey: date,
+				now,
+			});
 		const appIds = pending.map((account) => account.appId);
 		const usageByApp =
 			pending.length === 0
@@ -224,6 +236,7 @@ async function sweepDate({
 
 		for (let i = 0; i < pending.length; i += BATCH_SIZE) {
 			if (outOfTime()) {
+				await recordVisits();
 				const firstUnattempted = pending[i];
 				const position = firstUnattempted ? page.indexOf(firstUnattempted) : -1;
 				return {
@@ -266,6 +279,16 @@ async function sweepDate({
 				}),
 			);
 
+			results.forEach((result, index) => {
+				const appId = pending[i + index]?.appId;
+				if (
+					appId &&
+					result.status === "fulfilled" &&
+					(!result.value || result.value.state === "skipped")
+				) {
+					visitedWithoutSnapshot.push(appId);
+				}
+			});
 			for (const result of results) {
 				if (result.status === "rejected") {
 					console.error("Failed to process app in cron:", result.reason);
@@ -278,6 +301,7 @@ async function sweepDate({
 			}
 		}
 
+		await recordVisits();
 		cursor = lastAccount.id;
 		if (page.length < PAGE_SIZE) {
 			return { complete: true, cursor, processed, short };
