@@ -5,6 +5,7 @@ import {
 } from "./developer-video-playback";
 import { redriveDeveloperVideoProcessing } from "./developer-video-start";
 import { developerVideoRedrive } from "./developer-video-state";
+import { developerVideoIsTakenDown } from "./developer-video-takedown";
 import { getInfraAppStanding } from "./infra-standing";
 
 const DEFAULT_WIDTH = 16;
@@ -26,6 +27,7 @@ export type DeveloperVideoPlayer = DeveloperVideoFrame &
 		| { kind: "processing"; uploading: boolean }
 		| { kind: "failed" }
 		| { kind: "paused" }
+		| { kind: "taken_down" }
 	);
 
 type PlayableVideo = NonNullable<Awaited<ReturnType<typeof findPlayableVideo>>>;
@@ -55,6 +57,9 @@ export async function loadDeveloperVideoPlayer(
 
 	const found = await findPlayableVideo(playbackId);
 	if (!found) return null;
+	if (developerVideoIsTakenDown(found)) {
+		return { ...frameOf(found), kind: "taken_down" };
+	}
 
 	const standing = await getInfraAppStanding(found.appId);
 	if (standing.state === "paused") return { ...frameOf(found), kind: "paused" };

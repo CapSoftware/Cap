@@ -65,6 +65,31 @@ const uploadedLongAgo = () =>
 	});
 
 describe("developer video player data", () => {
+	it.each([
+		["a ready video", () => ready()],
+		["a paused app's video", () => ready()],
+		["a video still uploading", uploadedLongAgo],
+	])(
+		"shows %s that Cap took down as unavailable, without redriving it",
+		async (name, video) => {
+			if (name === "a paused app's video") {
+				mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+			}
+			mocks.store.video = {
+				...video(),
+				metadata: {
+					__capTakedown: { at: "2026-11-13T12:00:00.000Z", metadata: null },
+				},
+			};
+
+			expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toMatchObject({
+				kind: "taken_down",
+			});
+			expect(mocks.standing).not.toHaveBeenCalled();
+			expect(mocks.redrive).not.toHaveBeenCalled();
+		},
+	);
+
 	it("plays the adaptive stream with the MP4 behind it and the poster", async () => {
 		expect(await loadDeveloperVideoPlayer(PLAYBACK_ID)).toEqual({
 			kind: "playing",

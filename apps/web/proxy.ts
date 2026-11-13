@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
 import { agentMarkdownResponse } from "@/lib/agent-markdown";
+import { developerVideoGonePage } from "@/lib/developer-video-takedown-store";
 import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
@@ -143,6 +144,16 @@ export async function proxy(request: NextRequest) {
 
 	if (path.startsWith("/login")) {
 		return rememberReferralClick(request, setFrameHeaders(NextResponse.next()));
+	}
+
+	// Only Cap staff can take a video down, so a self-hosted build skips the
+	// lookup. The playback route and the page still read the flag themselves.
+	if (
+		buildEnv.NEXT_PUBLIC_IS_CAP === "true" &&
+		path.startsWith(DEVELOPER_VIDEO_PREFIX)
+	) {
+		const gone = await developerVideoGonePage(path, request.method);
+		if (gone) return gone;
 	}
 
 	const response = await route(request);
