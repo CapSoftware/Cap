@@ -321,6 +321,11 @@ const playbackProperties = {
 		format: "uri",
 		description: "Poster image. Null until ready.",
 	},
+	takenDown: {
+		type: "boolean",
+		description:
+			"True when Cap has taken the video down after a report. Its playback URLs are null, and its page, embed and playback files answer 410 Gone until Cap restores it. status is unchanged, and the video is stored and billed as before. Email hello@cap.so about a takedown.",
+	},
 };
 
 const developerVideoSchema = {

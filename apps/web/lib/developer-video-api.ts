@@ -5,6 +5,10 @@ import {
 	DEVELOPER_VIDEO_MP4_FILE,
 	DEVELOPER_VIDEO_POSTER_FILE,
 } from "./developer-video-plan";
+import {
+	developerVideoIsTakenDown,
+	developerVideoPublicMetadata,
+} from "./developer-video-takedown";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
 
@@ -14,11 +18,32 @@ export interface DeveloperVideoOutputs {
 	poster: boolean;
 }
 
+// A row read in full carries its metadata. A list that does not load
+// metadata selects the takedown flag on its own instead.
+type TakedownSource = { metadata: unknown } | { takenDown: boolean };
+
+type PlayableFields = Pick<
+	DeveloperVideoRow,
+	"status" | "playbackId" | "processing"
+> &
+	TakedownSource;
+
+export function developerVideoTakenDown(video: TakedownSource): boolean {
+	return "takenDown" in video
+		? video.takenDown
+		: developerVideoIsTakenDown(video);
+}
+
 export function developerVideoOutputs(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
+	video: PlayableFields,
 ): DeveloperVideoOutputs {
 	const processing = video.processing;
-	if (video.status !== "ready" || !video.playbackId || !processing) {
+	if (
+		video.status !== "ready" ||
+		!video.playbackId ||
+		!processing ||
+		developerVideoTakenDown(video)
+	) {
 		return { hls: false, mp4: false, poster: false };
 	}
 	return {
@@ -34,9 +59,11 @@ export function developerPlaybackBaseUrl(): string {
 	return base.replace(/\/+$/, "");
 }
 
-export function developerVideoPlaybackUrls(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
-): { hlsUrl: string | null; mp4Url: string | null; posterUrl: string | null } {
+export function developerVideoPlaybackUrls(video: PlayableFields): {
+	hlsUrl: string | null;
+	mp4Url: string | null;
+	posterUrl: string | null;
+} {
 	const outputs = developerVideoOutputs(video);
 	const base = `${developerPlaybackBaseUrl()}/${video.playbackId}`;
 	return {
@@ -73,7 +100,7 @@ export type AgentDeveloperVideoRow = Pick<
 	| "processing"
 	| "createdAt"
 	| "updatedAt"
->;
+> & { takenDown: boolean };
 
 export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 	const status = developerVideoIsReady(video) ? "ready" : video.status;
@@ -92,6 +119,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		maxResolutionTier: video.maxResolutionTier,
 		renditions: video.renditions ?? [],
 		transcriptionStatus: video.transcriptionStatus,
+		takenDown: video.takenDown,
 		...developerVideoPlaybackUrls(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
@@ -110,7 +138,9 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	} = video;
 	return {
 		...fields,
+		metadata: developerVideoPublicMetadata(video.metadata),
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
@@ -145,6 +175,7 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		errorReason: video.errorReason,
 		playbackId: video.playbackId,
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
 	};
 }

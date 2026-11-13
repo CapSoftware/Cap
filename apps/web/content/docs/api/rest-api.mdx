@@ -387,6 +387,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "deletedAt": null,
       "createdAt": "2025-06-15T10:30:00.000Z",
       "updatedAt": "2025-06-15T10:32:00.000Z",
+      "takenDown": false,
       "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
       "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
       "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
@@ -413,6 +414,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "deletedAt": null,
       "createdAt": "2025-06-15T10:20:00.000Z",
       "updatedAt": "2025-06-15T10:20:00.000Z",
+      "takenDown": false,
       "hlsUrl": null,
       "mp4Url": null,
       "posterUrl": null,
@@ -484,6 +486,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "deletedAt": null,
     "createdAt": "2025-06-15T10:30:00.000Z",
     "updatedAt": "2025-06-15T10:32:00.000Z",
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
@@ -543,6 +546,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
       { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
       { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
     ],
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
     "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
@@ -561,6 +565,8 @@ A video is `ready` as soon as its first output can be played, so playback can st
 On a ready video, one of `hlsUrl` and `mp4Url` can still be `null` while that output finishes encoding. It is filled in later without the video leaving `ready`, and `renditions` is filled in together with `hlsUrl`. Play whichever URL is present. A player that wants HLS should keep polling after `ready` until `hlsUrl` is set, and can play `mp4Url` in the meantime.
 
 `externalUserId` is the `userId` the video was created with, so one call can confirm the owner and read the status.
+
+`takenDown` is `true` when Cap has taken the video down after a report. Its playback URLs are then `null`, and its page, embed and playback files answer `410 Gone`. `status` does not change, and the video is stored and billed as before. Email hello@cap.so about a takedown.
 
 `transcriptionStatus` is `null`. Uploaded videos are not transcribed automatically. To get text, send the file to [Transcripts](/docs/api/rest-api#transcripts).
 
@@ -1496,6 +1502,7 @@ The full video object returned by list and get endpoints:
 | `hlsUrl` | string \| null | Adaptive HLS master playlist (null until it is encoded) |
 | `mp4Url` | string \| null | Progressive MP4 (null until it is encoded) |
 | `posterUrl` | string \| null | Poster image (null until ready) |
+| `takenDown` | boolean | `true` when Cap has taken the video down after a report. The playback URLs are then null, and the page, embed and playback files answer `410 Gone` |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
