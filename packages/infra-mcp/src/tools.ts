@@ -11,6 +11,7 @@ import {
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoDurationSeconds,
 	videoLinks,
 	videoRow,
 } from "./shape";
@@ -461,6 +462,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
+					durationSeconds: videoDurationSeconds(last),
 					...videoLinks({ ...firstLook(), ...last }),
 					...(firstAbsent === undefined
 						? waitOutcome(outcome, "videos_wait")

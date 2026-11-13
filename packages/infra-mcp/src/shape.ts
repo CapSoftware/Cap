@@ -23,22 +23,20 @@ const VIDEO_LINKS = [
 
 export const videoLinks = (video: Fields) => pick(video, VIDEO_LINKS);
 
+export const videoDurationSeconds = (video: Fields) =>
+	video.durationSeconds ?? video.duration ?? null;
+
 export const videoRow = (video: Fields) => ({
 	...pick(video, ["id", "name", "status", "duration"]),
+	durationSeconds: videoDurationSeconds(video),
 	userId: video.externalUserId ?? null,
 	...pick(video, ["createdAt", "shareUrl"]),
 });
 
 export const videoDetail = (video: Fields) => ({
-	...pick(video, [
-		"id",
-		"name",
-		"status",
-		"errorReason",
-		"duration",
-		"width",
-		"height",
-	]),
+	...pick(video, ["id", "name", "status", "errorReason", "duration"]),
+	durationSeconds: videoDurationSeconds(video),
+	...pick(video, ["width", "height"]),
 	userId: video.externalUserId ?? null,
 	...pick(video, ["maxResolutionTier", "metadata", "createdAt"]),
 	...videoLinks(video),

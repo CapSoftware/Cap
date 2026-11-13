@@ -375,6 +375,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "externalUserId": "user_42",
       "name": "Product Demo",
       "duration": 124.5,
+      "durationSeconds": 124.5,
       "width": 1920,
       "height": 1080,
       "fps": 30,
@@ -407,6 +408,7 @@ Each item is the full [video object](/docs/api/rest-api#video-object-reference),
       "externalUserId": "user_42",
       "name": "Untitled",
       "duration": null,
+      "durationSeconds": null,
       "width": null,
       "height": null,
       "fps": null,
@@ -476,6 +478,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456 \
     "externalUserId": "user_42",
     "name": "Product Demo",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "fps": 30,
@@ -544,6 +547,7 @@ curl https://cap.so/api/developer/v1/videos/abc123def456/status \
     "id": "abc123def456",
     "externalUserId": "user_42",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "transcriptionStatus": null,
@@ -1618,7 +1622,8 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed |
+| `durationSeconds` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed. Transcripts use the same name |
+| `duration` | number \| null | The same value as `durationSeconds`, under its earlier name |
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |

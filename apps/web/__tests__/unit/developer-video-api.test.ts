@@ -138,6 +138,7 @@ describe("developer video API", () => {
 			externalUserId: null,
 			name: "Untitled",
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			fps: 30,
@@ -370,6 +371,40 @@ describe("developer video API", () => {
 			const { body } = await get(path);
 			expect(JSON.stringify(body)).not.toContain("s3Key");
 			expect(JSON.stringify(body)).not.toContain("developer/app-1");
+		}
+	});
+
+	it.each([
+		["a measured video", { duration: 95.25 }],
+		["a video with no length yet", { duration: null }],
+	])(
+		"gives durationSeconds the value of duration for %s, on get, list and status",
+		async (_name, row) => {
+			mocks.store.video = { ...ready(), ...row };
+
+			const got = (await get("/video-1")).body.data;
+			const listed = (await get("/")).body.data[0];
+			const status = (await get("/video-1/status")).body.data;
+			for (const video of [got, listed, status]) {
+				expect(video.durationSeconds).toBe(row.duration);
+				expect(video.duration).toBe(row.duration);
+			}
+		},
+	);
+
+	it("marks duration deprecated in favour of durationSeconds in the OpenAPI description only", async () => {
+		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
+
+		for (const schema of [schemas.DeveloperVideo, schemas.VideoStatus]) {
+			expect(schema.properties.duration.description).toMatch(
+				/^Deprecated: use durationSeconds/,
+			);
+			expect(schema.properties.duration).not.toHaveProperty("deprecated");
+			expect(schema.properties.durationSeconds.type).toEqual([
+				"number",
+				"null",
+			]);
 		}
 	});
 
@@ -1032,6 +1067,7 @@ describe("developer video API", () => {
 			id: "video-1",
 			externalUserId: null,
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			transcriptionStatus: null,

@@ -494,10 +494,15 @@ const developerVideoSchema = {
 			description: "Your user ID, as passed to createUpload.",
 		},
 		name: { type: "string", description: "Video name." },
+		durationSeconds: {
+			type: ["number", "null"],
+			description:
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed. The same name transcripts use.",
+		},
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
+				"Deprecated: use durationSeconds, which always holds the same value. duration keeps working.",
 		},
 		width: {
 			type: ["integer", "null"],
@@ -1443,7 +1448,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				properties: {
 					id: { type: "string" },
 					externalUserId: developerVideoSchema.properties.externalUserId,
-					duration: { type: ["number", "null"] },
+					durationSeconds: developerVideoSchema.properties.durationSeconds,
+					duration: developerVideoSchema.properties.duration,
 					width: { type: ["integer", "null"] },
 					height: { type: ["integer", "null"] },
 					transcriptionStatus:

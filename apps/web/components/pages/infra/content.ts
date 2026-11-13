@@ -201,6 +201,7 @@ export const VIDEO_STATUS_RESPONSE = `{
     "id": "abc123def456",
     "externalUserId": "user_42",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "transcriptionStatus": null,
