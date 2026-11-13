@@ -1229,7 +1229,7 @@ export const ShareHeader = ({
 														>
 															<FolderInput className="size-3" />
 															<p className="text-sm text-gray-12">
-																Move to folder
+																Move or add to space
 															</p>
 														</DropdownMenuItem>
 													)}
