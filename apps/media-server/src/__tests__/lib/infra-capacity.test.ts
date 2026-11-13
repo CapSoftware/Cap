@@ -99,6 +99,23 @@ describe("capacity for Cap Infra jobs", () => {
 		expect(allows(0, 0, 0, false)).toBe(false);
 	});
 
+	test("a larger reserve shrinks with the worker but never to nothing", () => {
+		const allowsWithReserve = (effectiveMax: number, active: number) =>
+			jobManager.infraCapacityAllows({
+				effectiveMax,
+				active,
+				activeHeavyLadders: 0,
+				heavyLadder: false,
+				reservedSlots: 2,
+				maxHeavyLadders: 1,
+			});
+		expect(allowsWithReserve(4, 1)).toBe(true);
+		expect(allowsWithReserve(4, 2)).toBe(false);
+		expect(allowsWithReserve(2, 0)).toBe(true);
+		expect(allowsWithReserve(2, 1)).toBe(false);
+		expect(allowsWithReserve(1, 0)).toBe(true);
+	});
+
 	test("counts only heavy ladders that are still running", () => {
 		const before = jobManager.getActiveInfraHeavyLadderCount();
 		const job = addActiveJob(true);

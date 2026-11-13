@@ -390,7 +390,7 @@ export function infraCapacityAllows(input: {
 }): boolean {
 	const reservedSlots = input.reservedSlots ?? INFRA_RESERVED_SLOTS;
 	const maxHeavyLadders = input.maxHeavyLadders ?? MAX_INFRA_HEAVY_LADDERS;
-	const reserved = input.effectiveMax > reservedSlots ? reservedSlots : 0;
+	const reserved = Math.min(reservedSlots, Math.max(0, input.effectiveMax - 1));
 	if (input.active >= input.effectiveMax - reserved) return false;
 	return !input.heavyLadder || input.activeHeavyLadders < maxHeavyLadders;
 }
