@@ -167,7 +167,10 @@ export function serializeTranscript(
 		source:
 			row.sourceType === "url"
 				? { type: "url" as const, url: publicSourceUrl(row.sourceUrl) }
-				: { type: "upload" as const, url: null },
+				: row.sourceType === "video"
+					? { type: "video" as const, url: null }
+					: { type: "upload" as const, url: null },
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -201,6 +204,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		name: row.name,
 		sourceType: row.sourceType,
 		sourceUrl: publicSourceUrl(row.sourceUrl),
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
