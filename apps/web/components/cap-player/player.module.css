@@ -488,7 +488,7 @@
 	box-sizing: border-box;
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-	align-content: center;
+	align-content: start;
 }
 
 @keyframes cap-player-menu {

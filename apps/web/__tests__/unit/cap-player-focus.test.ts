@@ -177,25 +177,55 @@ const box = (left: number, top: number, width: number, height: number) =>
 	}) as DOMRect;
 
 describe("cap player menus in a short player", () => {
-	const openSpeedMenu = (playerHeight: number, listHeight: number) => {
+	let resized: (() => void) | null = null;
+	let size = { width: 342, height: 192 };
+
+	beforeEach(() => {
+		resized = null;
+		size = { width: 342, height: 192 };
 		HTMLElement.prototype.scrollIntoView = () => undefined;
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(callback: () => void) {
+					resized = callback;
+				}
+				observe() {}
+				disconnect() {
+					resized = null;
+				}
+			},
+		);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	// listHeight is the menu's height as a list above the bar, sheetHeight
+	// the height of its rows laid out as a sheet.
+	const openSpeedMenu = (listHeight: number, sheetHeight: number) => {
 		const { player } = render();
-		vi.spyOn(player, "clientHeight", "get").mockReturnValue(playerHeight);
-		vi.spyOn(player, "getBoundingClientRect").mockReturnValue(
-			box(0, 0, 342, playerHeight),
+		vi.spyOn(player, "clientHeight", "get").mockImplementation(
+			() => size.height,
+		);
+		vi.spyOn(player, "getBoundingClientRect").mockImplementation(() =>
+			box(0, 0, size.width, size.height),
 		);
 		const anchor = container.querySelector<HTMLElement>(
 			'[data-menu-anchor="speed"]',
 		);
 		if (!anchor) throw new Error("no speed menu");
-		vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(
-			box(220, playerHeight - 50, 50, 44),
+		vi.spyOn(anchor, "getBoundingClientRect").mockImplementation(() =>
+			box(size.width - 122, size.height - 50, 50, 44),
 		);
 		vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(
 			anchor,
 		);
-		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
-			listHeight,
+		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+			function (this: HTMLElement) {
+				return this.dataset.sheet ? sheetHeight : listHeight;
+			},
 		);
 		const button = anchor.querySelector("button");
 		if (!button) throw new Error("no speed button");
@@ -205,21 +235,60 @@ describe("cap player menus in a short player", () => {
 		return { player, menu };
 	};
 
-	it("covers a 192 px player as a sheet when the list does not fit above the bar", () => {
-		const { player, menu } = openSpeedMenu(192, 274);
+	it("opens a sheet as tall as its rows, centred in a 192 px player", () => {
+		const { player, menu } = openSpeedMenu(274, 142);
 		expect(player.dataset.menu).toBe("speed");
 		expect(menu.dataset.sheet).toBe("true");
 		expect(menu.style.left).toBe("-214px");
-		expect(menu.style.top).toBe("-136px");
 		expect(menu.style.width).toBe("330px");
-		expect(menu.style.height).toBe("180px");
+		expect(menu.style.height).toBe("142px");
+		expect(menu.style.top).toBe("-117px");
 		expect(menu.style.maxHeight).toBe("none");
 	});
 
+	it("fills a 240 by 135 player and scrolls from the top when the rows are taller", () => {
+		size = { width: 240, height: 135 };
+		const { menu } = openSpeedMenu(274, 274);
+		expect(menu.dataset.sheet).toBe("true");
+		expect(menu.style.width).toBe("228px");
+		expect(menu.style.height).toBe("123px");
+		expect(menu.style.top).toBe(`${6 - 85}px`);
+		expect(menu.querySelector("button")?.textContent).toBe("0.5×");
+	});
+
 	it("keeps the list above the bar when it fits", () => {
-		const { menu } = openSpeedMenu(600, 274);
+		size = { width: 1136, height: 600 };
+		const { menu } = openSpeedMenu(274, 142);
 		expect(menu.dataset.sheet).toBeUndefined();
 		expect(menu.style.maxHeight).toBe("536px");
 		expect(menu.style.left).toBe("");
+	});
+
+	it("places an open menu again when the player changes size", () => {
+		const { menu } = openSpeedMenu(274, 142);
+		expect(menu.dataset.sheet).toBe("true");
+		expect(resized).not.toBeNull();
+
+		size = { width: 240, height: 135 };
+		act(() => resized?.());
+		expect(menu.style.width).toBe("228px");
+		expect(menu.style.height).toBe("123px");
+		expect(menu.style.left).toBe("-112px");
+
+		size = { width: 1136, height: 600 };
+		act(() => resized?.());
+		expect(menu.dataset.sheet).toBeUndefined();
+		expect(menu.style.maxHeight).toBe("536px");
+		expect(menu.style.left).toBe("");
+		expect(menu.style.top).toBe("");
+		expect(menu.style.width).toBe("");
+		expect(menu.style.height).toBe("");
+	});
+
+	it("stops watching the player when the menu closes", () => {
+		const { menu } = openSpeedMenu(274, 142);
+		press(menu.querySelector("button") ?? menu, "Escape");
+		expect(container.querySelector('[role="menu"]')).toBeNull();
+		expect(resized).toBeNull();
 	});
 });

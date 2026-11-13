@@ -205,6 +205,33 @@ interface MenuItem {
 	checked: boolean;
 }
 
+// A list taller than the room above the bar becomes a sheet over the player,
+// so a short phone player shows every row instead of a small scroll box. The
+// sheet is only as tall as its rows, centred, and scrolls from the top when
+// even the whole player is too short. It is placed again whenever the player
+// changes size, since it is positioned in pixels from the open player.
+const placeMenu = (menu: HTMLElement) => {
+	const player = menu.closest<HTMLElement>("[data-idle]");
+	if (!player) return;
+	const anchor = menu.offsetParent;
+	delete menu.dataset.sheet;
+	for (const name of ["left", "top", "width", "height"] as const) {
+		menu.style[name] = "";
+	}
+	const room = player.clientHeight - MENU_CLEARANCE;
+	menu.style.maxHeight = `${room}px`;
+	if (menu.scrollHeight <= room || !anchor) return;
+	const box = player.getBoundingClientRect();
+	const from = anchor.getBoundingClientRect();
+	menu.dataset.sheet = "true";
+	menu.style.maxHeight = "none";
+	menu.style.width = `${box.width - SHEET_INSET * 2}px`;
+	const height = Math.min(menu.scrollHeight, box.height - SHEET_INSET * 2);
+	menu.style.height = `${height}px`;
+	menu.style.left = `${box.left - from.left + SHEET_INSET}px`;
+	menu.style.top = `${box.top - from.top + (box.height - height) / 2}px`;
+};
+
 const Menu = ({
 	label,
 	items,
@@ -221,31 +248,17 @@ const Menu = ({
 	useLayoutEffect(() => {
 		const menu = ref.current;
 		if (!menu) return;
-		const player = menu.closest<HTMLElement>("[data-idle]");
-		const anchor = menu.offsetParent;
-		if (player) {
-			const room = player.clientHeight - MENU_CLEARANCE;
-			if (menu.scrollHeight <= room || !anchor) {
-				menu.style.maxHeight = `${room}px`;
-			} else {
-				// A list taller than the room above the bar covers the player as
-				// a sheet instead, so a short phone player shows every row
-				// without scrolling inside a small box.
-				const box = player.getBoundingClientRect();
-				const from = anchor.getBoundingClientRect();
-				menu.dataset.sheet = "true";
-				menu.style.left = `${box.left - from.left + SHEET_INSET}px`;
-				menu.style.top = `${box.top - from.top + SHEET_INSET}px`;
-				menu.style.width = `${box.width - SHEET_INSET * 2}px`;
-				menu.style.height = `${box.height - SHEET_INSET * 2}px`;
-				menu.style.maxHeight = "none";
-			}
-		}
+		placeMenu(menu);
 		const first =
 			menu.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
 			menu.querySelector<HTMLButtonElement>("button");
 		first?.focus({ preventScroll: true });
 		first?.scrollIntoView({ block: "nearest" });
+		const player = menu.closest<HTMLElement>("[data-idle]");
+		if (!player || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => placeMenu(menu));
+		observer.observe(player);
+		return () => observer.disconnect();
 	}, []);
 
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
