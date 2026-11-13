@@ -61,7 +61,12 @@ describe("Cap Infra agent prompt", () => {
 		]) {
 			expect(named(CAP_INFRA_AGENT_PROMPT)).toContain(call);
 		}
-		expect(CAP_INFRA_AGENT_PROMPT).toContain("every 2 seconds");
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			"/videos/{id}/status every 3 seconds",
+		);
+		expect(CAP_INFRA_AGENT_PROMPT).toContain(
+			"/transcripts/{id} every 5 seconds",
+		);
 		expect(CAP_INFRA_AGENT_PROMPT).toContain("Retry-After");
 		expect(CAP_INFRA_AGENT_PROMPT).toContain(
 			`${DEVELOPER_KEY_REQUESTS_PER_MINUTE} requests a minute`,

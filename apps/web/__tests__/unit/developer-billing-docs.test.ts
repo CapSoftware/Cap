@@ -137,9 +137,11 @@ describe("the Billing page", () => {
 			compileMDX({ source: rest, components: {} }),
 		).resolves.toBeDefined();
 
+		const slugsOf = (source: string) =>
+			extractHeadings(source.replace(/^####\s/gm, "### ")).map((h) => h.slug);
 		const anchors = new Map([
-			["/docs/api/rest-api", extractHeadings(rest).map((h) => h.slug)],
-			["/docs/api/billing", extractHeadings(billing).map((h) => h.slug)],
+			["/docs/api/rest-api", slugsOf(rest)],
+			["/docs/api/billing", slugsOf(billing)],
 		]);
 		const links = [
 			...billing.matchAll(/\]\((\/docs\/api\/rest-api)#([\w-]+)\)/g),
