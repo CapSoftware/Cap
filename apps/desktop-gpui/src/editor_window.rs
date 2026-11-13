@@ -245,14 +245,8 @@ fn compact_header_controls(viewport_width: f32, windows: bool, captions: bool) -
     viewport_width < actions_width * 2. + 144. + caption_controls_width
 }
 
-fn editor_player_width(viewport_width: f32) -> f32 {
-    (viewport_width - SIDEBAR_WIDTH - 8. - 16. - 2.).max(0.)
-}
-
-const TRANSCRIPT_GRIP_WIDTH: f32 = 12.;
-
-fn transcript_row_width(viewport_width: f32) -> f32 {
-    (viewport_width - 16. - TRANSCRIPT_GRIP_WIDTH).max(0.)
+fn editor_player_width(viewport_width: f32, panel_width: f32) -> f32 {
+    (viewport_width - panel_width - crate::editor_side_panel::PANEL_GAP - 16. - 2.).max(0.)
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +471,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 })
                 .collect(),
@@ -530,6 +525,12 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             .map(|mic| mic.channels),
         recording_clips: recordings.segments.len(),
     })
+}
+
+/// The amount drawn and generated zooms start at: the Default zoom amount
+/// setting, falling back to what its slider shows.
+fn new_zoom_amount() -> f64 {
+    f64::from(crate::store::GeneralSettings::load().new_zoom_amount())
 }
 
 fn load_recording_clicks(
@@ -795,9 +796,8 @@ impl Render for EditorSectionView {
                     editor.render_player_toolbar(window, cx).into_any_element()
                 }
                 EditorSection::Transport => editor.render_transport(window, cx).into_any_element(),
-                // The Clips layout mode swaps the config sidebar's column for the
-                // clips sidebar; the config sidebar is hidden, not destroyed
-                // (`Editor.tsx:728-747`).
+                // The panel's Clips tab draws in the config sidebar's place; the
+                // config sidebar's state is kept, not destroyed.
                 EditorSection::Sidebar => {
                     if !editor.visual_ready() {
                         return editor.render_preparing_sidebar(!matches!(
@@ -806,7 +806,7 @@ impl Render for EditorSectionView {
                         ));
                     }
                     let sidebar = if editor.clips.open {
-                        editor.render_clips_sidebar(cx).into_any_element()
+                        editor.render_clips_panel(cx).into_any_element()
                     } else {
                         editor.with_style_controls(|editor| {
                             editor.render_sidebar(cx).into_any_element()
@@ -1419,6 +1419,9 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    /// Held from the window opening until it gives up its engine, so the
+    /// library refuses to delete the project from under an open editor.
+    open_project: Option<crate::library::ProjectOpenInEditor>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -1670,11 +1673,13 @@ pub struct EditorWindow {
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     pub(crate) sharing: Option<cap_project::SharingMeta>,
-    /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
-    /// sidebar's column draws the clips sidebar instead.
+    /// The panel's Clips tab (`ClipsSidebar.tsx`): while open, the config
+    /// sidebar's place in the panel draws the clips list instead.
     pub(crate) clips: crate::editor_clips::ClipsState,
     pub(crate) transcript: crate::transcript::TranscriptState,
     transcript_view: Entity<EditorSectionView>,
+    /// The right-hand panel's shared width and its grip drag.
+    pub(crate) panel: crate::editor_side_panel::PanelState,
 }
 
 struct PresetsMenu {
@@ -2187,6 +2192,7 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
+            open_project: None,
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2325,6 +2331,7 @@ impl EditorWindow {
             clips: crate::editor_clips::ClipsState::default(),
             transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
             transcript_view,
+            panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
         }
     }
 
@@ -2332,10 +2339,23 @@ impl EditorWindow {
     /// (`Editor.tsx:515-519`), floored at zero.
     /// Where the playhead stands, for the panels that mark the pose on it.
     fn player_width(&self, viewport_width: f32) -> f32 {
-        if self.transcript.open {
-            transcript_row_width(viewport_width) * self.transcript.player_share
+        editor_player_width(viewport_width, self.panel_width(viewport_width))
+    }
+
+    /// The right-hand panel's body: the sidebar's cached section (Style and
+    /// Clips) or the transcript's own, so a playing transcript repaints alone.
+    pub(crate) fn cached_panel_body(
+        &self,
+        transcript: bool,
+        style: StyleRefinement,
+    ) -> gpui::AnyElement {
+        if transcript {
+            self.transcript_view
+                .clone()
+                .cached(style)
+                .into_any_element()
         } else {
-            editor_player_width(viewport_width)
+            self.sidebar_view.clone().cached(style).into_any_element()
         }
     }
 
@@ -2798,16 +2818,46 @@ impl EditorWindow {
             return;
         }
         let durations = self.clip_display_durations.clone();
-        let changed =
-            crate::transcription::apply_refined_captions(&mut self.project, refined, &durations);
-        self.history.amend_all(|entry| {
-            crate::transcription::apply_refined_captions(entry, refined, &durations);
-        });
-        if !changed {
-            return;
+        let removed_takes = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| self.history.removed_takes(timeline))
+            .unwrap_or_default();
+        let energy = self.transcript.energy.clone();
+        let mut landing = crate::transcript::RefinementLanding::new(
+            refined,
+            &durations,
+            &removed_takes,
+            energy.as_deref(),
+        );
+        let moves_cuts = landing
+            .land(&mut self.project.clone())
+            .is_some_and(|moved| moved > 0);
+        if moves_cuts {
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.dismiss_frame_controls(cx);
+            self.canvas_mouse_up(window, cx);
+            self.end_timeline_gesture(window, cx);
         }
+        let landed = landing.land(&mut self.project);
+        self.history.amend_all(|entry| {
+            landing.land(entry);
+        });
+        let Some(moved_cuts) = landed else {
+            return;
+        };
         self.caption_sync_signature = self.caption_projection_signature();
         self.transcript.dirty = true;
+        if moved_cuts > 0 {
+            self.transcript.selection = None;
+            self.transcript.hovered_cut = None;
+            self.set_selection(None, cx);
+            self.canvas_selection = None;
+            self.rebuild_timeline();
+            self.note_edit("caption-refinement", Some(TrackKind::Clip));
+        }
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
@@ -2965,6 +3015,11 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        // History holds the project, not the row flags, and these two rows
+        // show exactly when their overlay renders.
+        let restored = TrackLanes::from_project(&self.project, self.has_camera);
+        self.tracks.caption = restored.caption;
+        self.tracks.keyboard = restored.keyboard;
         self.synchronize_caption_track(false);
         self.transcript.dirty = true;
         self.transcript.selection = None;
@@ -3300,7 +3355,14 @@ impl EditorWindow {
         self.instance = Some(instance);
     }
 
+    pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
+        self.open_project = Some(project);
+    }
+
+    /// Every way an editor window goes away takes its engine first: closing,
+    /// reloading after an import, and the editor's own Delete.
     pub fn take_instance(&mut self) -> Option<Arc<EditorInstance>> {
+        self.open_project = None;
         self.instance.take()
     }
 
@@ -4282,6 +4344,8 @@ impl EditorWindow {
                 } else if self.selection.is_some() {
                     self.set_selection(None, cx);
                     self.note_edit("deselect", None);
+                } else {
+                    self.panel_escape(window, cx);
                 }
                 window.refresh();
             }
@@ -4667,6 +4731,7 @@ impl EditorWindow {
 
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        self.follow_selection_to_style(selection.as_ref(), cx);
         if self.selection != selection {
             self.text_menu = None;
             self.style_presets.close_menu();
@@ -6291,11 +6356,7 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let amount = f64::from(
-            crate::store::GeneralSettings::load()
-                .default_zoom_amount
-                .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
-        );
+        let amount = new_zoom_amount();
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
@@ -6354,12 +6415,7 @@ impl EditorWindow {
                         timeline,
                         crate::editor_panels::new_camera3d_shot(start, end),
                     ),
-                    _ => edits::insert_zoom_segment(
-                        timeline,
-                        start,
-                        end,
-                        f64::from(crate::store::GeneralSettings::load().new_zoom_amount()),
-                    ),
+                    _ => edits::insert_zoom_segment(timeline, start, end, new_zoom_amount()),
                 };
                 true
             },
@@ -8756,6 +8812,23 @@ impl EditorWindow {
         self.open_clip_menu_at(index, origin, window, cx);
     }
 
+    /// A click on a card in the panel's Clips tab: select that clip on the
+    /// timeline and move the playhead to its first frame, scrolling the strip
+    /// when the clip starts outside the visible window.
+    pub(crate) fn select_clip_from_panel(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(start) = self.timeline.clips.get(index).map(|clip| clip.start) else {
+            return;
+        };
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        let Transform { zoom, position } = self.view.transform;
+        if start < position || start > position + zoom * 0.9 {
+            let total = self.total_duration();
+            self.view.transform.set_position(start - zoom * 0.1, total);
+        }
+        self.seek_to_time(start, cx);
+        cx.notify();
+    }
+
     /// `onContextMenu` on a clip's `SegmentRoot` (`TL/ClipTrack.tsx`): select
     /// the clip unless it is already part of the selection, then open its
     /// menu at the pointer. Split mode keeps every press for the cut.
@@ -9066,6 +9139,19 @@ impl EditorWindow {
         self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
+    fn open_clip_voice_eq(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.clip_speed = None;
+        if self.sidebar.tab != crate::editor_sidebar::SidebarTab::Audio
+            && let Some(position) = crate::editor_sidebar::SidebarTab::ALL
+                .iter()
+                .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Audio)
+        {
+            self.select_sidebar_tab(position, window, cx);
+        }
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        cx.notify();
+    }
+
     fn set_clip_muted(
         &mut self,
         index: usize,
@@ -9279,6 +9365,9 @@ impl EditorWindow {
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
         let cursor_hidden = segment.hides_cursor();
+        let voice_eq_active = segment.active_voice_eq().is_some();
+        let voice_eq_summary = crate::editor_voice_eq::voice_eq_summary(segment);
+        let has_microphone = self.summary().is_some_and(|summary| summary.has_microphone);
         let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
         let title = match self.timeline.clips.get(index).map(|clip| &clip.detail) {
             Some(timeline::SegmentDetail::Clip { name, .. }) => name.clone(),
@@ -9484,6 +9573,64 @@ impl EditorWindow {
                                 ))
                             }))
                             .into_any_element()
+                    })
+                    .when(has_microphone, |section| {
+                        section.child(
+                            div()
+                                .id("clip-menu-voice-eq")
+                                .h(px(40.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .rounded(px(8.))
+                                .px(px(8.))
+                                .cursor_pointer()
+                                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+                                .child(
+                                    svg()
+                                        .path("icons/sliders-horizontal.svg")
+                                        .size(px(14.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(if voice_eq_active {
+                                            theme.editor.accent
+                                        } else {
+                                            theme.editor.text_2
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .text_color(Hsla::from(theme.editor.text_1))
+                                                .child(tr::editor::window::clip_menu::voice_eq()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(Hsla::from(theme.editor.text_3))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(voice_eq_summary),
+                                        ),
+                                )
+                                .child(
+                                    svg()
+                                        .path("icons/chevron-right.svg")
+                                        .size(px(12.))
+                                        .flex_none()
+                                        .text_color(Hsla::from(theme.editor.text_3)),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_clip_voice_eq(index, window, cx);
+                                })),
+                        )
                     }),
             )
             .child(
@@ -10690,8 +10837,6 @@ impl EditorWindow {
                                 this.open_presets_menu(bounds.bottom_left(), window, cx);
                             })),
                     )
-                    .child(self.render_clips_pill(compact, cx))
-                    .child(self.render_transcript_pill(compact, cx))
                     .child(div().w(px(6.)).flex_none())
                     .when(self.sharing.is_some(), |group| {
                         group.child(self.render_reupload_button(cx))
@@ -10728,55 +10873,6 @@ impl EditorWindow {
             .mx(px(6.))
             .flex_none()
             .bg(Hsla::from(self.theme.editor.line_strong))
-    }
-
-    fn render_transcript_pill(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        ui::EditorButton::plain(&theme, "editor-transcript-pill")
-            .left_icon("icons/scan-text.svg")
-            .when(!compact, |button| {
-                button.label(tr::editor::window::header::transcript())
-            })
-            .tooltip(&theme, tr::editor::window::header::transcript_tooltip())
-            .pressed(self.transcript.open)
-            .disabled(!self.project_ready())
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_transcript(window, cx)))
-    }
-
-    fn render_transcript_grip(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        div()
-            .id("transcript-resize-handle")
-            .group("transcript-grip")
-            .flex_none()
-            .w(px(TRANSCRIPT_GRIP_WIDTH))
-            .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor(gpui::CursorStyle::ResizeLeftRight)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                    this.transcript.resize =
-                        Some((f32::from(event.position.x), this.transcript.player_share));
-                    cx.notify();
-                }),
-            )
-            .child(
-                div()
-                    .w(px(4.))
-                    .h(px(40.))
-                    .rounded(px(2.))
-                    .bg(if self.transcript.resize.is_some() {
-                        Hsla::from(theme.editor.text_3)
-                    } else {
-                        Hsla::from(theme.editor.line_strong)
-                    })
-                    .group_hover("transcript-grip", |this| {
-                        this.bg(Hsla::from(theme.editor.text_3))
-                    }),
-            )
     }
 
     /// The Export button: the one primary control in the editor, a vertical
@@ -10930,14 +11026,11 @@ impl EditorWindow {
 
     fn render_preparing_sidebar(&self, animated: bool) -> gpui::AnyElement {
         let theme = self.theme;
+        // The panel card around it is the root's; this is only its body.
         div()
             .size_full()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(self.card_line())
-            .bg(self.panel_bg())
             .overflow_hidden()
             .child(
                 div()
@@ -10946,7 +11039,7 @@ impl EditorWindow {
                     .items_center()
                     .justify_between()
                     .px(px(10.))
-                    .h(px(44.))
+                    .h(px(SIDEBAR_TAB_BAR_HEIGHT))
                     .flex_none()
                     .children(
                         crate::editor_sidebar::SidebarTab::ALL
@@ -12914,14 +13007,7 @@ impl Render for EditorWindow {
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .when(!self.transcript.open, |card| card.flex_1())
-                                            .when(self.transcript.open, |card| {
-                                                card.flex_none().w(px(transcript_row_width(
-                                                    viewport_width,
-                                                ) * self
-                                                    .transcript
-                                                    .player_share))
-                                            })
+                                            .flex_1()
                                             .min_w_0()
                                             .min_h_0()
                                             .rounded(px(12.))
@@ -12932,29 +13018,12 @@ impl Render for EditorWindow {
                                             .overflow_hidden()
                                             .child(self.render_player(cx)),
                                     )
-                                    // The 8px gutter is the wrapper's, not the
-                                    // sidebar view's: a margin inside a cached
-                                    // element is not honoured.
-                                    .when(!self.transcript.open, |row| {
-                                        row.child(
-                                            div().flex_none().h_full().pl(px(8.)).child(
-                                                self.sidebar_view.clone().cached(
-                                                    StyleRefinement::default()
-                                                        .w(px(SIDEBAR_WIDTH))
-                                                        .h_full(),
-                                                ),
-                                            ),
-                                        )
-                                    })
-                                    .when(self.transcript.open, |row| {
-                                        row.child(self.render_transcript_grip(cx)).child(
-                                            div().flex_1().min_w_0().h_full().child(
-                                                self.transcript_view
-                                                    .clone()
-                                                    .cached(StyleRefinement::default().size_full()),
-                                            ),
-                                        )
-                                    }),
+                                    // The gap carries the panel's resize grip;
+                                    // the panel is one card whatever its tab,
+                                    // at one width, so a switch never moves
+                                    // the player.
+                                    .child(self.render_panel_grip(cx))
+                                    .child(self.render_side_panel(viewport_width, window, cx)),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -13064,15 +13133,15 @@ impl Render for EditorWindow {
                 )
                 .cursor(gpui::CursorStyle::ResizeRow)
             }))
-            .children(self.transcript.resize.is_some().then(|| {
+            .children(self.panel.resize.is_some().then(|| {
                 ui::Slider::drag_layer(
-                    "transcript-split-drag",
+                    "editor-panel-resize-drag",
                     cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                        let row = transcript_row_width(f32::from(window.viewport_size().width));
-                        this.transcript_resize_move(f32::from(event.position.x), row, cx);
+                        let viewport_width = f32::from(window.viewport_size().width);
+                        this.panel_resize_move(f32::from(event.position.x), viewport_width, cx);
                     }),
                     cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                        this.transcript_resize_end(cx);
+                        this.panel_resize_end(cx);
                     }),
                 )
                 .cursor(gpui::CursorStyle::ResizeLeftRight)
@@ -13105,6 +13174,18 @@ impl Render for EditorWindow {
             // {mousemove, mouseup})` is exactly what the pad's own press
             // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
             // what closes the pad's undo bracket.
+            .children(self.voice_eq_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "voice-eq-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.voice_eq_mouse_move(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.voice_eq_mouse_up(cx);
+                    }),
+                )
+                .cursor(gpui::CursorStyle::ClosedHand)
+            }))
             .children(self.pad_dragging().then(|| {
                 ui::Slider::drag_layer(
                     "sidebar-pad-drag",
@@ -13396,6 +13477,172 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    mod side_panel {
+        use super::*;
+        use crate::editor_side_panel::PanelTab;
+
+        struct PanelView {
+            editor: Entity<EditorWindow>,
+            _project: tempfile::TempDir,
+        }
+
+        impl Render for PanelView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.editor.update(cx, |editor, cx| {
+                    div()
+                        .size_full()
+                        .track_focus(&editor.focus)
+                        .on_key_down(cx.listener(EditorWindow::on_ready_key))
+                })
+            }
+        }
+
+        fn fixture(
+            cx: &mut gpui::TestAppContext,
+        ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+            cx.update(|cx| {
+                crate::session::RecordingSession::init(cx);
+            });
+            let project = tempfile::tempdir().unwrap();
+            let (view, cx) = cx.add_window_view(move |window, cx| {
+                let editor = cx.new(|cx| EditorWindow::new(project.path().into(), window, cx));
+                editor.update(cx, |editor, cx| window.focus(&editor.focus, cx));
+                PanelView {
+                    editor,
+                    _project: project,
+                }
+            });
+            (view.read_with(cx, |view, _| view.editor.clone()), cx)
+        }
+
+        fn flags(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+        ) -> (PanelTab, bool, bool) {
+            editor.read_with(cx, |editor, _| {
+                (
+                    editor.panel_tab(),
+                    editor.transcript.open,
+                    editor.clips.open,
+                )
+            })
+        }
+
+        fn switch(editor: &Entity<EditorWindow>, tab: PanelTab, cx: &mut gpui::VisualTestContext) {
+            editor.update_in(cx, |editor, window, cx| {
+                editor.switch_panel_tab(tab, window, cx);
+                // The test view tracks the root's focus; the real transcript
+                // panel is a child of it, so keys reach the root either way.
+                window.focus(&editor.focus, cx);
+            });
+        }
+
+        #[gpui::test]
+        fn switching_tabs_keeps_the_mode_flags_on_the_active_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Transcript, true, false));
+            switch(&editor, PanelTab::Clips, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Clips, false, true));
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Transcript, true, false));
+            switch(&editor, PanelTab::Style, cx);
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn an_unready_project_only_opens_on_style(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.set_panel_tab(tab, window, cx)
+                });
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            }
+        }
+
+        #[gpui::test]
+        fn escape_returns_to_style(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                assert_eq!(flags(&editor, cx).0, tab);
+                cx.simulate_keystrokes("escape");
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                cx.simulate_keystrokes("escape");
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+            }
+        }
+
+        #[gpui::test]
+        fn escape_clears_a_timeline_selection_before_leaving_the_tab(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            switch(&editor, PanelTab::Transcript, cx);
+            editor.update(cx, |editor, _| {
+                editor.selection = Some(Selection::single(TrackKind::Zoom, 0));
+            });
+            cx.simulate_keystrokes("escape");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.selection.is_none());
+                assert_eq!(editor.panel_tab(), PanelTab::Transcript);
+            });
+            cx.simulate_keystrokes("escape");
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(shape.clone()), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+                editor.read_with(cx, |editor, _| {
+                    assert_eq!(editor.selection.as_ref(), Some(&shape));
+                });
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+
+        #[gpui::test]
+        fn reselecting_the_selected_segment_brings_style_forward(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            let shape = Selection::single(TrackKind::Shape, 0);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            switch(&editor, PanelTab::Transcript, cx);
+            assert_eq!(flags(&editor, cx).0, PanelTab::Transcript);
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Some(shape.clone()), cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(flags(&editor, cx), (PanelTab::Style, false, false));
+        }
+
+        #[gpui::test]
+        fn selecting_a_clip_keeps_the_tab(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = fixture(cx);
+            for tab in [PanelTab::Transcript, PanelTab::Clips] {
+                switch(&editor, tab, cx);
+                editor.update(cx, |editor, cx| {
+                    editor.set_selection(Some(Selection::single(TrackKind::Clip, 0)), cx);
+                });
+                cx.run_until_parked();
+                assert_eq!(flags(&editor, cx).0, tab);
+                editor.update(cx, |editor, cx| editor.set_selection(None, cx));
+            }
+        }
+    }
 
     #[cfg(target_os = "linux")]
     mod canvas_history {
@@ -13758,6 +14005,70 @@ mod tests {
             });
         }
 
+        fn shows_row(editor: &EditorWindow, kind: TrackKind) -> bool {
+            editor.timeline.rows.iter().any(|row| row.kind == kind)
+        }
+
+        #[gpui::test]
+        fn undo_and_redo_bring_caption_and_keyboard_rows_back_with_their_overlay(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = fixture(cx);
+            editor.update(cx, |editor, _| {
+                editor.project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0}],
+                        "zoomSegments": [],
+                        "captionSegments": [{"id": "c", "start": 1.0, "end": 2.0, "text": "hi"}],
+                        "keyboardSegments": [{"id": "k", "start": 3.0, "end": 4.0, "displayText": "A"}]
+                    }))
+                    .unwrap(),
+                );
+                let mut captions = cap_project::CaptionsData::default();
+                captions.settings.enabled = true;
+                editor.project.captions = Some(captions);
+                let mut keyboard = cap_project::KeyboardData::default();
+                keyboard.settings.enabled = true;
+                editor.project.keyboard = Some(keyboard);
+                editor.tracks = TrackLanes::from_project(&editor.project, editor.has_camera);
+                editor.history.record(&editor.project);
+                editor.rebuild_timeline();
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            for kind in [TrackKind::Caption, TrackKind::Keyboard] {
+                editor.update_in(cx, |editor, window, cx| {
+                    editor.delete_single_track(kind, window, cx);
+                    // `project_changed` records nothing until a recording loads.
+                    editor.history.record(&editor.project);
+                    editor.rebuild_timeline();
+                });
+            }
+            editor.read_with(cx, |editor, _| {
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Keyboard));
+                assert!(!shows_row(editor, TrackKind::Caption));
+            });
+            cx.simulate_keystrokes("ctrl-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.project.captions.as_ref().unwrap().settings.enabled);
+                assert!(shows_row(editor, TrackKind::Caption));
+                assert!(shows_row(editor, TrackKind::Keyboard));
+            });
+            cx.simulate_keystrokes("ctrl-shift-z ctrl-shift-z");
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.project.keyboard.as_ref().unwrap().settings.enabled);
+                assert!(!shows_row(editor, TrackKind::Caption));
+                assert!(!shows_row(editor, TrackKind::Keyboard));
+            });
+        }
+
         #[gpui::test]
         fn undo_during_a_lane_reorder_cancels_it(cx: &mut gpui::TestAppContext) {
             let (editor, cx) = fixture(cx);
@@ -13801,6 +14112,42 @@ mod tests {
         assert_eq!(playhead_past_end(2.0, 4.0), None);
         assert_eq!(playhead_past_end(4.0, 4.0), None);
         assert_eq!(playhead_past_end(3.0, 0.0), None);
+    }
+
+    /// An editor window holds its project against deletion from the library
+    /// for as long as it has it open. Giving up the engine, which closing,
+    /// reloading and the editor's own Delete all do first, lets go.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn an_open_editor_holds_its_project_until_it_gives_up_its_engine(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let library = tempfile::tempdir().unwrap();
+        let dirs = [library.path().to_path_buf()];
+        let project_path = library.path().join("open.cap");
+        std::fs::create_dir(&project_path).unwrap();
+        let meta = project_path.join("recording-meta.json");
+        std::fs::write(&meta, b"{}").unwrap();
+        let opened = project_path.canonicalize().unwrap();
+        let held = crate::library::ProjectOpenInEditor::begin(&opened).unwrap();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            let mut editor = EditorWindow::new(opened.clone(), window, cx);
+            editor.hold_project(held);
+            editor
+        });
+
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Err(tr::dialog::delete_recording::open_in_editor().to_string())
+        );
+        assert!(meta.is_file());
+
+        editor.update_in(cx, |editor, _, _| assert!(editor.take_instance().is_none()));
+        assert_eq!(
+            crate::library::delete_recording_directory_in(&dirs, &project_path),
+            Ok(())
+        );
+        assert!(!project_path.exists());
     }
 
     /// An arrow held in the crop dialog keeps nudging every frame until its
@@ -14323,6 +14670,31 @@ mod tests {
     }
 
     #[test]
+    fn new_zooms_start_at_the_zoom_amount_settings_shows() {
+        let settings = tempfile::tempdir().unwrap();
+        let store = settings.path().join("store");
+        for (contents, expected) in [
+            (r#"{ "general_settings": {} }"#, 1.5),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": null } }"#,
+                1.5,
+            ),
+            (
+                r#"{ "general_settings": { "defaultZoomAmount": 2.5 } }"#,
+                2.5,
+            ),
+        ] {
+            std::fs::write(&store, contents).unwrap();
+            crate::store::set_test_tauri_store_path(Some(store.clone()));
+            let shown = crate::store::GeneralSettings::load().new_zoom_amount();
+            let amount = new_zoom_amount();
+            crate::store::set_test_tauri_store_path(None);
+            assert_eq!(f64::from(shown), expected, "{contents}");
+            assert_eq!(amount, expected, "{contents}");
+        }
+    }
+
+    #[test]
     #[ignore = "set CAP_AUTO_ZOOM_BENCH_PROJECT to a disposable recording bundle"]
     fn auto_zoom_click_loading_benchmark() {
         let path = PathBuf::from(std::env::var_os("CAP_AUTO_ZOOM_BENCH_PROJECT").unwrap());
@@ -14527,6 +14899,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    voice_eq: None,
                     volume: None,
                 }],
                 transitions: Vec::new(),
@@ -14583,6 +14956,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                     cap_project::TimelineSegment {
@@ -14593,6 +14967,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        voice_eq: None,
                         volume: None,
                     },
                 ],
@@ -14680,7 +15055,7 @@ mod tests {
         let layout = EditorVerticalLayout::new(652., DEFAULT_TIMELINE_HEIGHT);
         assert_eq!(layout.player_min_height, MIN_PLAYER_HEIGHT);
         assert_eq!(layout.timeline_height, DEFAULT_TIMELINE_HEIGHT);
-        assert_eq!(editor_player_width(992.), 550.);
+        assert_eq!(editor_player_width(992., SIDEBAR_WIDTH), 550.);
     }
 
     #[test]
@@ -14763,7 +15138,7 @@ mod tests {
         assert!(!compact_header_controls(992., false, true));
         assert!(compact_header_controls(800., true, false));
         assert!(compact_header_controls(800., false, true));
-        assert_eq!(editor_player_width(800.), 358.);
+        assert_eq!(editor_player_width(800., SIDEBAR_WIDTH), 358.);
     }
 
     fn open_sidebar_menu_for_test(

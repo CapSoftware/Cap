@@ -1,4 +1,5 @@
 import CapKit
+import OSLog
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -11,15 +12,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BackgroundUploadCoordinator.shared.start()
         RecordingCoordinator.shared.start()
         UNUserNotificationCenter.current().delegate = self
+        Task { await PushNotifications.shared.registerIfAllowed() }
+        Usage.start()
         return true
     }
 
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushNotifications.shared.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        Logger(subsystem: "so.cap.mobile", category: "push").error("Push registration failed: \(error.localizedDescription, privacy: .public)")
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if await PushNotifications.shared.open(response.notification.request.content.userInfo) { return }
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: false)
         await RecordingCoordinator.shared.showHome()
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        if notification.request.content.userInfo["capId"] != nil { return [.banner, .list, .sound] }
         await RecordingCoordinator.shared.collectFinishedScreenRecording(showHome: true)
         return []
     }
@@ -42,7 +55,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        Self.orientations
+        if let window, Self.isLargeScreen(window.traitCollection) { return .allButUpsideDown }
+        return Self.orientations
+    }
+
+    /// The open iPhone Duo is regular both ways in any orientation, so Cap turns with it like an iPad app.
+    /// A phone is compact in at least one direction and stays portrait outside fullscreen video.
+    static func isLargeScreen(_ traits: UITraitCollection) -> Bool {
+        traits.horizontalSizeClass == .regular && traits.verticalSizeClass == .regular
     }
 
     static func allowLandscape(_ allowed: Bool, in scene: UIWindowScene?) {
@@ -51,7 +71,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         for window in scene.windows {
             window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
-        if !allowed {
+        if !allowed, !isLargeScreen(scene.traitCollection) {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
         }
     }
@@ -84,6 +104,7 @@ struct RootView: View {
             switch model.phase {
             case .signedOut:
                 SignInView()
+                    .usageScreen("sign_in")
                     .transition(.opacity)
             case let .signedIn(session):
                 MainTabView(session: session)
@@ -122,42 +143,35 @@ enum Route: Hashable {
     case capAnalytics(CapID, title: String)
     case profile
     case organization
+    case notifications
     case deleteAccount
 }
 
 struct MainTabView: View {
     let session: SessionModel
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var tab: AppTab = .caps
     @State private var homePath: [Route] = []
     @State private var analyticsPath: [Route] = []
     @State private var settingsPath: [Route] = []
     @State private var recorder: RecorderRequest?
+    @State private var capModels = CapDetailModels()
+    @State private var heldLayout: CapsLayout?
+
+    /// Held while a Cap's editor or fullscreen player is up: swapping layouts under it would rebuild the screen that
+    /// presents it and close it, losing unsaved edits. It changes once the cover closes.
+    private var capsLayout: CapsLayout {
+        heldLayout ?? CapsLayout(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
+    }
+
+    private var openRoutes: [Route] {
+        homePath + analyticsPath + settingsPath
+    }
 
     var body: some View {
-        TabView(selection: $tab) {
-            Tab("Caps", systemImage: "play.rectangle.on.rectangle.fill", value: AppTab.caps) {
-                NavigationStack(path: $homePath) {
-                    HomeView()
-                        .navigationDestination(for: Route.self, destination: destination)
-                }
-            }
-            Tab("Record", systemImage: "record.circle", value: AppTab.record) {
-                Color.clear
-            }
-            Tab("Analytics", systemImage: "chart.xyaxis.line", value: AppTab.analytics) {
-                NavigationStack(path: $analyticsPath) {
-                    AnalyticsScreen(scope: .organization)
-                        .navigationDestination(for: Route.self, destination: destination)
-                }
-            }
-            Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) {
-                NavigationStack(path: $settingsPath) {
-                    SettingsView()
-                        .navigationDestination(for: Route.self, destination: destination)
-                }
-            }
-        }
+        tabs
         .tabBarMinimizeBehavior(.onScrollDown)
         .onChange(of: tab) { previous, selected in
             // The Record tab opens the recorder over whatever was showing; it is never a page itself.
@@ -204,6 +218,13 @@ struct MainTabView: View {
             tab = .caps
             homePath = [.share(link)]
         }
+        .onChange(of: PushNotifications.shared.pendingCapId, initial: true) { _, id in
+            guard let id else { return }
+            PushNotifications.shared.pendingCapId = nil
+            recorder = nil
+            tab = .caps
+            homePath = [.cap(id)]
+        }
     }
 
     #if DEBUG
@@ -238,13 +259,52 @@ struct MainTabView: View {
     }
     #endif
 
+    private var tabs: some View {
+        TabView(selection: $tab) {
+            Tab("Caps", systemImage: "play.rectangle.on.rectangle.fill", value: AppTab.caps) {
+                switch capsLayout {
+                case .stack:
+                    NavigationStack(path: $homePath) {
+                        HomeView()
+                            .usageScreen("caps")
+                            .navigationDestination(for: Route.self, destination: destination)
+                    }
+                case .split:
+                    LibrarySplitView(path: $homePath, destination: destination)
+                        .usageScreen("caps")
+                }
+            }
+            Tab("Record", systemImage: "record.circle", value: AppTab.record) {
+                Color.clear
+            }
+            Tab("Analytics", systemImage: "chart.xyaxis.line", value: AppTab.analytics) {
+                NavigationStack(path: $analyticsPath) {
+                    AnalyticsScreen(scope: .organization)
+                        .usageScreen("analytics")
+                        .navigationDestination(for: Route.self, destination: destination)
+                }
+            }
+            Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) {
+                NavigationStack(path: $settingsPath) {
+                    SettingsView()
+                        .usageScreen("settings")
+                        .navigationDestination(for: Route.self, destination: destination)
+                }
+            }
+        }
+        .environment(capModels)
+        .environment(\.capsLayout, capsLayout)
+        .onChange(of: openRoutes) { _, routes in capModels.keep(routes) }
+        .onChange(of: capModels.isCovered) { _, covered in heldLayout = covered ? capsLayout : nil }
+    }
+
     @ViewBuilder
     private func destination(_ route: Route) -> some View {
         switch route {
         case let .cap(id):
-            CapDetailView(target: ShareTarget(id: id))
+            CapDetailView(model: capModels.model(for: route, target: ShareTarget(id: id)))
         case let .share(target):
-            CapDetailView(target: target)
+            CapDetailView(model: capModels.model(for: route, target: target))
         case let .folder(folder, scope):
             FolderView(folder: folder, scope: scope)
         case let .capAnalytics(id, title):
@@ -253,6 +313,8 @@ struct MainTabView: View {
             ProfileSettingsView()
         case .organization:
             OrganizationSettingsView()
+        case .notifications:
+            NotificationSettingsView()
         case .deleteAccount:
             DeleteAccountView()
         }

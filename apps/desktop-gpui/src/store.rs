@@ -154,6 +154,8 @@ pub struct ExportPrefs {
     pub turbo: bool,
     #[serde(default)]
     pub audio_source: String,
+    #[serde(default)]
+    pub gif_quality: Option<String>,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -980,6 +982,8 @@ pub struct GeneralSettings {
     /// GPUI-only: a cancelled picker leaves the main window hidden unless it
     /// was on screen when the picker opened.
     pub keep_main_hidden_on_cancel: bool,
+    /// GPUI-only: closing the last editor leaves the main window hidden.
+    pub keep_main_hidden_after_editor: bool,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -1420,6 +1424,7 @@ impl GeneralSettings {
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
             post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             keep_main_hidden_on_cancel: bool_at(general, "keepMainHiddenOnCancel", false),
+            keep_main_hidden_after_editor: bool_at(general, "keepMainHiddenAfterEditor", false),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,

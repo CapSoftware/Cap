@@ -18,6 +18,46 @@ public enum MemberRole: String, UnknownCaseDecodable {
     }
 }
 
+public enum PushEnvironment: String, Codable, Sendable {
+    case sandbox, production
+}
+
+/// The same switches as cap.so's notification settings: they cover email and cap.so alerts.
+public struct NotificationPreferences: Codable, Sendable, Hashable {
+    public var comments: Bool
+    public var replies: Bool
+    public var views: Bool
+    public var anonymousViews: Bool
+    public var reactions: Bool
+
+    public init(comments: Bool = true, replies: Bool = true, views: Bool = true, anonymousViews: Bool = true, reactions: Bool = true) {
+        self.comments = comments
+        self.replies = replies
+        self.views = views
+        self.anonymousViews = anonymousViews
+        self.reactions = reactions
+    }
+
+    public enum Kind: String, CaseIterable, Sendable {
+        case comments, replies, views, anonymousViews, reactions
+
+        var keyPath: WritableKeyPath<NotificationPreferences, Bool> {
+            switch self {
+            case .comments: \.comments
+            case .replies: \.replies
+            case .views: \.views
+            case .anonymousViews: \.anonymousViews
+            case .reactions: \.reactions
+            }
+        }
+    }
+
+    public subscript(kind: Kind) -> Bool {
+        get { self[keyPath: kind.keyPath] }
+        set { self[keyPath: kind.keyPath] = newValue }
+    }
+}
+
 public struct CapUser: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let name: String?
@@ -209,6 +249,11 @@ public struct UploadProgress: Codable, Sendable, Hashable {
     }
 }
 
+public enum LinkAccess: String, Codable, Sendable, Hashable {
+    case anyone
+    case restricted
+}
+
 public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let shareUrl: String
@@ -228,6 +273,8 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
     public let reactionCount: Int
     public var upload: UploadProgress?
     public let ownedByCurrentUser: Bool?
+    public var linkAccess: LinkAccess?
+    public var linkRestricted: Bool?
 
     public init(
         id: String,
@@ -247,7 +294,9 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         commentCount: Int,
         reactionCount: Int,
         upload: UploadProgress?,
-        ownedByCurrentUser: Bool?
+        ownedByCurrentUser: Bool?,
+        linkAccess: LinkAccess? = nil,
+        linkRestricted: Bool? = nil
     ) {
         self.id = id
         self.shareUrl = shareUrl
@@ -267,6 +316,8 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         self.reactionCount = reactionCount
         self.upload = upload
         self.ownedByCurrentUser = ownedByCurrentUser
+        self.linkAccess = linkAccess
+        self.linkRestricted = linkRestricted
     }
 
     enum CodingKeys: String, CodingKey {
@@ -274,7 +325,7 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         case thumbnailUrl, thumbnailCacheKey, folderId
         case isPublic = "public"
         case isProtected = "protected"
-        case viewCount, commentCount, reactionCount, upload, ownedByCurrentUser
+        case viewCount, commentCount, reactionCount, upload, ownedByCurrentUser, linkAccess, linkRestricted
     }
 
     public init(from decoder: any Decoder) throws {
@@ -297,6 +348,8 @@ public struct CapSummary: Codable, Sendable, Hashable, Identifiable {
         reactionCount = (try? container.decodeCount(forKey: .reactionCount)) ?? 0
         upload = try? container.decodeIfPresent(UploadProgress.self, forKey: .upload)
         ownedByCurrentUser = try container.decodeIfPresent(Bool.self, forKey: .ownedByCurrentUser)
+        linkAccess = try? container.decodeIfPresent(LinkAccess.self, forKey: .linkAccess)
+        linkRestricted = try? container.decodeIfPresent(Bool.self, forKey: .linkRestricted)
     }
 
     public func isOwned(by userId: String?) -> Bool {

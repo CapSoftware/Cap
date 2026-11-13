@@ -6,7 +6,7 @@ Native iPhone app for Cap, written in Swift and SwiftUI. It targets iOS 26 and u
 
 - `Cap.xcodeproj` is a minimal project that uses synchronized folders, so files added under `Cap/` are picked up automatically.
 - `Cap/` holds the SwiftUI app: `App/` (state, session, library, uploads), `DesignSystem/`, and `Features/` (Auth, Home, Cap, Analytics, Settings).
-- `CapKit/` is a Foundation-only Swift package for the API client, models, link parsing, keychain storage, caches, image coding and uploads. It builds and tests on macOS, so `swift test` covers it without a simulator.
+- `CapKit/` is a Foundation-only Swift package for the API client, models, link parsing, keychain storage, caches, image coding, uploads and usage analytics. It builds and tests on macOS, so `swift test` covers it without a simulator.
 - `CapWidgets/` is the Live Activity shown in the Dynamic Island while uploads, imports and recordings finish.
 - `CapBroadcast/` is the screen recording extension (ReplayKit broadcast upload).
 - `Config/` holds the `Info.plist` files and the entitlements.
@@ -19,6 +19,16 @@ Camera and screen recordings upload while they're being made, so the link works 
 - `RecordingUploads` (CapKit) creates the Cap through `/api/mobile/recordings`, fetches upload links a few segments ahead in batches (one small request every ~10 seconds), uploads segments through a background `URLSession` and completes the recording once the last one lands. Each recording is persisted, so a recording cut short by a crash is finished on the next launch with what reached the disk.
 - Camera mode (`Cap/Features/Record`) runs `AVCaptureSession` at 1080×1920, 30 fps, about 4 Mbps. The camera can switch mid-recording. It stops and keeps the recording if iOS takes the camera away (Cap moves to the background, a call comes in). The free plan stops at 5 minutes.
 - Screen mode starts the system broadcast sheet preset to Cap. The extension reads the app's session from the shared keychain group, records the screen with the microphone (or app audio when the mic is off), uploads as it goes, copies the link when it stops, and leaves a handoff so opening Cap lands on the new recording. Static screens send no frames, so the last one is repeated to keep segments regular.
+
+## Usage analytics
+
+The app records what people do as named events with a few plain values (`recording_started` with `mode: camera`), never titles, links, ids or anything typed. Events go to the Cap server the app is signed in to, at `/api/mobile/events`, which forwards them to its own analytics when that is configured and discards them when it is not. A server that has no such endpoint is asked once per launch.
+
+- `Usage.track` (in `Cap/App/Usage.swift`) is the only call sites need. It stamps the event and returns: about 3.5 microseconds in a debug build.
+- `Analytics` (CapKit) sends one request per batch: 30 seconds after the first unsent event, as soon as 20 are waiting, and when the app leaves the screen. Nothing runs while there is nothing to send.
+- Events that could not be sent are kept in a file, retried with a growing delay, and dropped after a week or once 500 are waiting. A user's unsent events are dropped when they sign out, and are never sent under another user's session.
+- The server only accepts events from a signed-in session and attaches the user from that session, never from what the app claims. A signed-out app sends nothing: events from before sign-in wait on the device and go out with the session of whoever signs in next.
+- Debug builds record nothing unless they point at a local server, so development does not show up as usage.
 
 ## Develop
 

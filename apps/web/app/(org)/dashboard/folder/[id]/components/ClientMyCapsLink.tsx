@@ -1,14 +1,26 @@
 "use client";
 
-import type { Space, Video } from "@cap/web-domain";
+import type { Space } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import {
+	moveFolderToFolder,
+	moveVideosToFolder,
+} from "@/actions/folders/moveVideoToFolder";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import {
+	CAP_DRAG_TYPE,
+	type CapDragPayload,
+	describeDraggedCaps,
+	FOLDER_DRAG_TYPE,
+	parseCapDrag,
+	parseFolderDrag,
+} from "@/lib/move-items";
 import { useDashboardContext } from "../../../Contexts";
+import { notifyCapsMoved } from "../../../caps/components/useCapsMoved";
 import { registerDropTarget } from "./ClientCapCard";
 
 export function ClientMyCapsLink({
@@ -22,72 +34,72 @@ export function ClientMyCapsLink({
 	const router = useRouter();
 	const { activeSpace } = useDashboardContext();
 
+	const rootName = activeSpace ? `"${activeSpace.name}"` : "My Caps";
+
 	const processDrop = useCallback(
-		async (capData: { id: Video.VideoId; name: string }) => {
+		async (capData: CapDragPayload) => {
 			setIsDragOver(false);
 
 			try {
-				if (!capData || !capData.id) {
-					console.error("Invalid cap data");
-					return;
-				}
-
 				setIsMovingVideo(true);
 
-				await moveVideoToFolder({
-					videoId: capData.id,
+				await moveVideosToFolder({
+					videoIds: capData.ids,
 					folderId: null,
 					spaceId: spaceId ?? null,
 				});
+				notifyCapsMoved(capData.ids);
 				router.refresh();
-				if (activeSpace) {
-					toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
-				} else {
-					toast.success(`Moved "${capData.name}" to My Caps`);
-				}
+				toast.success(`Moved ${describeDraggedCaps(capData)} to ${rootName}`);
 			} catch (error) {
 				console.error("Error moving video:", error);
-				toast.error("Failed to move video");
+				toast.error(
+					capData.ids.length > 1
+						? "Failed to move Caps"
+						: "Failed to move video",
+				);
 			} finally {
 				setIsMovingVideo(false);
 			}
 		},
-		[spaceId, router, activeSpace],
+		[spaceId, router, rootName],
 	);
 
-	const handleDrop = useCallback(
-		async (
-			e:
-				| React.DragEvent<HTMLAnchorElement>
-				| { id: Video.VideoId; name: string },
-		) => {
-			if ("preventDefault" in e) {
-				e.preventDefault();
+	const handleDrop = async (e: React.DragEvent<HTMLAnchorElement>) => {
+		e.preventDefault();
+		setIsDragOver(false);
 
-				try {
-					const capData = JSON.parse(e.dataTransfer.getData("application/cap"));
-
-					if (!capData || !capData.id) {
-						console.error("Invalid cap data");
-						return;
-					}
-
-					await processDrop(capData);
-				} catch (error) {
-					console.error("Error processing drop:", error);
-					toast.error("Failed to move video");
-				}
-			} else {
-				await processDrop(e);
+		const folderPayload = parseFolderDrag(
+			e.dataTransfer.getData(FOLDER_DRAG_TYPE),
+		);
+		if (folderPayload) {
+			try {
+				setIsMovingVideo(true);
+				await moveFolderToFolder({
+					folderId: folderPayload.id,
+					parentId: null,
+					spaceId: spaceId ?? null,
+				});
+				router.refresh();
+				toast.success(`Moved "${folderPayload.name}" to ${rootName}`);
+			} catch (error) {
+				console.error("Error moving folder:", error);
+				toast.error("Failed to move folder");
+			} finally {
+				setIsMovingVideo(false);
 			}
-		},
-		[processDrop],
-	);
+			return;
+		}
+
+		const capPayload = parseCapDrag(e.dataTransfer.getData(CAP_DRAG_TYPE));
+		if (capPayload) await processDrop(capPayload);
+	};
 
 	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
 		e.preventDefault();
 
-		if (e.dataTransfer.types.includes("application/cap")) {
+		const types = e.dataTransfer.types;
+		if (types.includes(CAP_DRAG_TYPE) || types.includes(FOLDER_DRAG_TYPE)) {
 			setIsDragOver(true);
 		}
 	};
@@ -100,15 +112,15 @@ export function ClientMyCapsLink({
 		if (!linkRef.current) return;
 
 		const unregister = registerDropTarget(linkRef.current, (data) => {
-			if (data && data.type === "application/cap") {
-				handleDrop({ id: data.id, name: data.name });
+			if (data && data.type === CAP_DRAG_TYPE && data.id) {
+				processDrop({ id: data.id, name: data.name, ids: [data.id] });
 			}
 		});
 
 		return () => {
 			unregister();
 		};
-	}, [handleDrop]);
+	}, [processDrop]);
 
 	return (
 		<Link

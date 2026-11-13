@@ -1,0 +1,454 @@
+import { randomUUID } from "node:crypto";
+import {
+	developerApiKeys,
+	developerApps,
+	developerCreditAccounts,
+	developerCreditTransactions,
+	developerVideos,
+} from "@cap/database/schema";
+import type { User } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
+import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import { Effect } from "effect";
+import { createPool, type Pool, type PoolConnection } from "mysql2/promise";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+
+// Counts the database statements and storage calls one upload completion and
+// one kick start make, against a real MySQL. Storage, the media server and the
+// workflow runtime are stand-ins that count their calls. Opt in with
+// CAP_INFRA_ROUND_TRIPS_DATABASE_URL; rows are created under fresh ids and
+// removed afterwards.
+
+const fixture = vi.hoisted(() => ({
+	database: undefined as unknown,
+	statements: [] as string[],
+	timed: [] as { start: number; end: number }[],
+	statementDelayMs: 0,
+	storage: [] as string[],
+	storageDelayMs: 0,
+	kicks: [] as Promise<unknown>[],
+	kickGate: Promise.resolve() as Promise<void>,
+	releaseKick: () => {},
+	objectBytes: 64 * 1024 * 1024,
+}));
+
+const storageCall = async <T>(name: string, value: T) => {
+	fixture.storage.push(name);
+	if (fixture.storageDelayMs > 0)
+		await new Promise((resolve) => setTimeout(resolve, fixture.storageDelayMs));
+	return value;
+};
+
+vi.mock("@cap/database", () => ({
+	db: () => {
+		if (!fixture.database) throw new Error("Test database is not connected.");
+		return fixture.database;
+	},
+}));
+vi.mock("@cap/env", () => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true", NEXT_PUBLIC_WEB_URL: "https://web" },
+	serverEnv: () => ({
+		WEB_URL: "https://web",
+		NEXTAUTH_SECRET: "round-trips-secret",
+	}),
+}));
+vi.mock("@cap/web-backend", () => ({
+	provideOptionalAuth: <T>(effect: T) => effect,
+	S3Buckets: {
+		getBucketAccess: () =>
+			Effect.succeed([
+				{
+					multipart: {
+						listParts: () =>
+							Effect.promise(() =>
+								storageCall("ListParts", [
+									{ PartNumber: 1, ETag: '"e1"', Size: fixture.objectBytes },
+								]),
+							),
+						complete: () =>
+							Effect.promise(() => storageCall("CompleteMultipartUpload", {})),
+					},
+					headObject: () =>
+						Effect.promise(() =>
+							storageCall("HeadObject", { ContentLength: fixture.objectBytes }),
+						),
+					deleteObject: () =>
+						Effect.promise(() => storageCall("DeleteObject", {})),
+				},
+			]),
+	},
+}));
+vi.mock("@/lib/server", () => ({
+	runPromise: (effect: Effect.Effect<unknown, unknown>) =>
+		Effect.runPromise(effect),
+}));
+vi.mock("@/lib/developer-video-storage", () => ({
+	headDeveloperVideoObject: (key: string) =>
+		storageCall(`HEAD ${key.split("/").slice(3).join("/")}`, {
+			bytes: fixture.objectBytes,
+			contentType: "video/mp4",
+		}),
+	internalDeveloperVideoUrl: async (key: string) => `https://storage/${key}`,
+	developerVideoUploadUrl: async (key: string) => `https://storage/${key}`,
+	readDeveloperVideoText: (key: string) =>
+		storageCall(`GET ${key.split("/").slice(3).join("/")}`, null),
+	deleteDeveloperVideoObjects: async () => 0,
+	developerVideoPrefix: () => "prefix/",
+}));
+vi.mock("@/lib/media-container", () => ({
+	sniffMediaUrl: () => storageCall("ranged GET (sniff)", "media"),
+}));
+vi.mock("@/lib/media-client", () => ({
+	MEDIA_SERVER_SHUTDOWN_MESSAGE: "shutdown",
+	tryProbeVideoViaMediaServer: () =>
+		storageCall("media server probe", {
+			status: "ok",
+			metadata: { width: 1920, height: 1080, duration: 60, fps: 30 },
+		}),
+	startMediaServerVideoJob: (path: string) =>
+		storageCall(`media server ${path}`, {
+			status: "started",
+			jobId: `job-${path}`,
+		}),
+	readMediaServerVideoJob: async () => ({ status: "unreachable" }),
+}));
+vi.mock("next/server", () => ({
+	after: (promise: Promise<unknown>) => {
+		fixture.kicks.push(promise);
+	},
+}));
+// The kick starts while completion is still running, so it waits here until
+// the completion's statements have been counted.
+vi.mock("@/lib/developer-video-processing", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/lib/developer-video-processing")>();
+	return {
+		...actual,
+		prepareDeveloperVideoProcessing: async (
+			...args: Parameters<typeof actual.prepareDeveloperVideoProcessing>
+		) => {
+			await fixture.kickGate;
+			return actual.prepareDeveloperVideoProcessing(...args);
+		},
+	};
+});
+vi.mock("workflow/api", () => ({ start: vi.fn(async () => ({})) }));
+vi.mock("@/workflows/process-developer-video", () => ({
+	processDeveloperVideoWorkflow: "workflow",
+}));
+
+const databaseUrl = process.env.CAP_INFRA_ROUND_TRIPS_DATABASE_URL;
+const id = () => randomUUID().replaceAll("-", "").slice(0, 13);
+const database = () => fixture.database as MySql2Database;
+
+const statementText = (query: unknown) =>
+	(typeof query === "string"
+		? query
+		: String((query as { sql?: string })?.sql ?? query)
+	)
+		.replace(/\s+/g, " ")
+		.trim();
+
+function countStatements<T extends Pool | PoolConnection>(target: T): T {
+	for (const method of ["query", "execute"] as const) {
+		const original = target[method].bind(target) as (
+			...args: unknown[]
+		) => unknown;
+		Object.defineProperty(target, method, {
+			configurable: true,
+			value: async (...args: unknown[]) => {
+				fixture.statements.push(statementText(args[0]));
+				const start = performance.now();
+				if (fixture.statementDelayMs > 0) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, fixture.statementDelayMs),
+					);
+				}
+				try {
+					return await original(...args);
+				} finally {
+					fixture.timed.push({ start, end: performance.now() });
+				}
+			},
+		});
+	}
+	return target;
+}
+
+function summary(statements: readonly string[]) {
+	let lockedFrom = -1;
+	let lockHeld = 0;
+	statements.forEach((statement, index) => {
+		if (
+			/developer_credit_accounts/.test(statement) &&
+			/for update/i.test(statement)
+		) {
+			lockedFrom = index;
+		}
+		if (/^commit/i.test(statement) && lockedFrom >= 0) {
+			lockHeld += index - lockedFrom;
+			lockedFrom = -1;
+		}
+	});
+	return {
+		roundTrips: statements.length,
+		transactions: statements.filter((s) => /^begin/i.test(s)).length,
+		statementsUnderAccountLock: lockHeld,
+	};
+}
+
+// The longest run of statements where each starts after the previous one
+// ended: the round trips a request waits for one after another.
+function sequentialDepth(timed: readonly { start: number; end: number }[]) {
+	let depth = 0;
+	let lastEnd = Number.NEGATIVE_INFINITY;
+	for (const { start, end } of [...timed].sort((a, b) => a.end - b.end)) {
+		if (start >= lastEnd) {
+			depth++;
+			lastEnd = end;
+		}
+	}
+	return depth;
+}
+
+const statementList = () =>
+	process.env.CAP_INFRA_ROUND_TRIPS_STATEMENTS
+		? { statements: fixture.statements.map((s) => s.slice(0, 110)) }
+		: {};
+
+describe.runIf(Boolean(databaseUrl))(
+	"Cap Infra upload round trips against a real database",
+	() => {
+		let pool: Pool;
+		const appId = `rt${id()}`;
+		const ownerId = `rt${id()}` as User.UserId;
+		const videoIds: string[] = [];
+
+		beforeAll(async () => {
+			pool = createPool({ uri: databaseUrl, connectionLimit: 4 });
+			countStatements(pool);
+			const getConnection = pool.getConnection.bind(pool);
+			Object.defineProperty(pool, "getConnection", {
+				configurable: true,
+				value: async () => countStatements(await getConnection()),
+			});
+			fixture.database = drizzle(pool);
+			await database().insert(developerApps).values({
+				id: appId,
+				ownerId,
+				name: "round trips",
+				environment: "development",
+			});
+			await database()
+				.insert(developerCreditAccounts)
+				.values({
+					id: `rt${id()}`,
+					appId,
+					ownerId,
+					balanceMicroCredits: 1_000_000_000,
+				});
+		});
+
+		afterEach(async () => {
+			const { clearFirstMonthChargesBeganCache } = await import(
+				"@/lib/infra-first-month-start"
+			);
+			clearFirstMonthChargesBeganCache();
+		});
+
+		afterAll(async () => {
+			if (!pool) return;
+			for (const videoId of videoIds) {
+				await database()
+					.delete(developerVideos)
+					.where(eq(developerVideos.id, videoId));
+			}
+			await database()
+				.delete(developerApiKeys)
+				.where(eq(developerApiKeys.appId, appId));
+			for (const videoId of videoIds) {
+				await database()
+					.delete(developerCreditTransactions)
+					.where(eq(developerCreditTransactions.referenceId, videoId));
+			}
+			await database()
+				.delete(developerVideos)
+				.where(eq(developerVideos.appId, appId));
+			await database()
+				.delete(developerCreditAccounts)
+				.where(eq(developerCreditAccounts.appId, appId));
+			await database().delete(developerApps).where(eq(developerApps.id, appId));
+			await pool.end();
+		});
+
+		it("counts one completion, its kick start and the webhook settle", async () => {
+			const { completeInfraUpload } = await import("@/lib/infra-video-upload");
+			const { applyDeveloperVideoProgress } = await import(
+				"@/lib/developer-video-processing"
+			);
+			const videoId = `rt${id()}`;
+			videoIds.push(videoId);
+			await database()
+				.insert(developerVideos)
+				.values({
+					id: videoId,
+					appId,
+					s3Key: `developer/${appId}/${videoId}/video`,
+					playbackId: `rt${id()}`,
+				});
+
+			fixture.kickGate = new Promise((resolve) => {
+				fixture.releaseKick = resolve;
+			});
+			fixture.statements.length = 0;
+			fixture.storage.length = 0;
+			const completed = await completeInfraUpload({
+				appId,
+				videoId,
+				uploadId: "upload",
+				parts: [{ partNumber: 1, etag: "e1", size: fixture.objectBytes }],
+				durationInSecs: 60,
+				width: 1920,
+				height: 1080,
+			});
+			expect(completed.status).toBe(200);
+			const complete = {
+				...summary(fixture.statements),
+				storage: [...fixture.storage],
+				...statementList(),
+			};
+
+			fixture.statements.length = 0;
+			fixture.storage.length = 0;
+			expect(fixture.kicks).toHaveLength(1);
+			fixture.releaseKick();
+			await Promise.all(fixture.kicks.splice(0));
+			const kick = {
+				...summary(fixture.statements),
+				storage: [...fixture.storage],
+				...statementList(),
+			};
+
+			const [row] = await database()
+				.select({ processing: developerVideos.processing })
+				.from(developerVideos)
+				.where(eq(developerVideos.id, videoId));
+			const mp4 = row?.processing?.mp4;
+			expect(mp4?.state).toBe("running");
+			expect(row?.processing?.hls.state).toBe("running");
+
+			fixture.statements.length = 0;
+			fixture.storage.length = 0;
+			fixture.storageDelayMs = 50;
+			const settleStarted = performance.now();
+			const settled = await applyDeveloperVideoProgress(
+				{ videoId, jobId: "job", phase: "complete" },
+				"mp4",
+				mp4?.state === "running" ? mp4.token : null,
+			);
+			const settleMs = Math.round(performance.now() - settleStarted);
+			fixture.storageDelayMs = 0;
+			expect(settled.applied).toBe(true);
+			const settle = {
+				...summary(fixture.statements),
+				storage: [...fixture.storage],
+				...statementList(),
+				wallMsWith50msStorage: settleMs,
+			};
+
+			console.log(
+				JSON.stringify({ complete, kick, settleMp4: settle }, null, 2),
+			);
+		});
+		it("creates an upload in 7 statements, 5 of them one after another", async () => {
+			const { hashKey } = await import("@/lib/developer-key-hash");
+			const { POST } = await import("@/app/api/developer/v1/[...route]/route");
+			const secret = `csk_rt${id()}`;
+			await database()
+				.insert(developerApiKeys)
+				.values({
+					id: `rt${id()}`,
+					appId,
+					keyType: "secret",
+					keyHash: await hashKey(secret),
+					keyPrefix: secret.slice(0, 12),
+					encryptedKey: "unused",
+				});
+			const [accountRow] = await database()
+				.select({ id: developerCreditAccounts.id })
+				.from(developerCreditAccounts)
+				.where(eq(developerCreditAccounts.appId, appId));
+			const settledId = `rt${id()}`;
+			videoIds.push(settledId);
+			const chargedAt = new Date("2026-11-13T10:39:54Z");
+			const paidUntil = new Date("2026-12-13T00:00:00Z");
+			await database().insert(developerVideos).values({
+				id: settledId,
+				appId,
+				status: "ready",
+				duration: 60,
+				width: 1920,
+				height: 1080,
+				storagePaidUntil: paidUntil,
+				createdAt: chargedAt,
+			});
+			await database()
+				.insert(developerCreditTransactions)
+				.values({
+					id: `rt${id()}`,
+					accountId: accountRow?.id ?? "",
+					type: "video_create",
+					amountMicroCredits: -85,
+					balanceAfterMicroCredits: 1_000_000_000,
+					referenceId: settledId,
+					referenceType: "developer_video",
+					metadata: { paidUntil: paidUntil.toISOString() },
+					createdAt: chargedAt,
+				});
+
+			const create = async () => {
+				const response = await POST(
+					new Request("https://web/api/developer/v1/uploads", {
+						method: "POST",
+						headers: {
+							authorization: `Bearer ${secret}`,
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ name: "round trips" }),
+					}),
+				);
+				expect(response.status).toBe(200);
+				const { data } = (await response.json()) as {
+					data: { videoId: string };
+				};
+				videoIds.push(data.videoId);
+			};
+			// The first create looks up the key's hash key, the first month start
+			// and the key's last use; none of those repeat.
+			await create();
+			await new Promise((resolve) => setTimeout(resolve, 50));
+
+			fixture.statements.length = 0;
+			fixture.timed.length = 0;
+			fixture.statementDelayMs = 10;
+			await create();
+			fixture.statementDelayMs = 0;
+			const counted = {
+				roundTrips: fixture.statements.length,
+				sequential: sequentialDepth(fixture.timed),
+				...statementList(),
+			};
+			console.log(JSON.stringify({ create: counted }, null, 2));
+			expect(counted.roundTrips).toBe(7);
+			expect(counted.sequential).toBe(5);
+		});
+	},
+);

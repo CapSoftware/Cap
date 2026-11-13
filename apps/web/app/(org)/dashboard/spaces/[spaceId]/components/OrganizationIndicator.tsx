@@ -10,10 +10,11 @@ import {
 	DialogTrigger,
 } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
 import clsx from "clsx";
 import { useState } from "react";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import {
 	compareOrganizationRoles,
@@ -53,7 +54,7 @@ export const OrganizationIndicator = ({
 				<DialogTrigger asChild>
 					<Button variant="gray" size="sm" className="z-10">
 						<FontAwesomeIcon className="mr-1 size-4" icon={faBuilding} />
-						{memberCount} members
+						{memberCount} {memberCount === 1 ? "member" : "members"}
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">

@@ -64,8 +64,12 @@ function setup(parent: Folder.FolderId | null, hasChild = false) {
 	});
 }
 
-function deleteFolder() {
-	return Effect.flatMap(Folders, (folders) => folders.delete(folderId)).pipe(
+type FolderOperation = (
+	folders: Folders,
+) => ReturnType<Folders["delete"]> | ReturnType<Folders["update"]>;
+
+function runFolders(operation: FolderOperation) {
+	return Effect.flatMap(Folders, operation).pipe(
 		Effect.provide(Folders.DefaultWithoutDependencies),
 		Effect.provideService(
 			FoldersPolicy,
@@ -84,6 +88,10 @@ function deleteFolder() {
 		}),
 		Effect.runPromise,
 	);
+}
+
+function deleteFolder() {
+	return runFolders((folders) => folders.delete(folderId));
 }
 
 function mutations() {
@@ -125,6 +133,49 @@ describe("organization folder deletion", () => {
 			{
 				sql: "delete from `folders` where `folders`.`id` = ?",
 				params: [folderId],
+			},
+		]);
+	});
+});
+
+describe("folder rename", () => {
+	it.each(["", "   "])(
+		"keeps the current name for a blank rename %j",
+		async (name) => {
+			setup(null);
+
+			await runFolders((folders) => folders.update({ id: folderId, name }));
+
+			expect(mutations()).toEqual([]);
+		},
+	);
+
+	it("still applies the other fields of a patch with a blank name", async () => {
+		setup(null);
+
+		await runFolders((folders) =>
+			folders.update({ id: folderId, name: " ", color: "red" }),
+		);
+
+		expect(mutations()).toEqual([
+			{
+				sql: "update `folders` set `color` = ? where `folders`.`id` = ?",
+				params: ["red", folderId],
+			},
+		]);
+	});
+
+	it("saves a real name as typed", async () => {
+		setup(null);
+
+		await runFolders((folders) =>
+			folders.update({ id: folderId, name: "Q4 demos" }),
+		);
+
+		expect(mutations()).toEqual([
+			{
+				sql: "update `folders` set `name` = ? where `folders`.`id` = ?",
+				params: ["Q4 demos", folderId],
 			},
 		]);
 	});

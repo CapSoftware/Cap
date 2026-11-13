@@ -1,10 +1,8 @@
-import {
-	faArrowDown,
-	faArrowUp,
-	faCog,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowDown } from "@fortawesome/free-solid-svg-icons/faArrowDown";
+import { faArrowUp } from "@fortawesome/free-solid-svg-icons/faArrowUp";
+import { faCog } from "@fortawesome/free-solid-svg-icons/faCog";
 import Link from "next/link";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 
 export const NotificationFooter = ({ onClose }: { onClose?: () => void }) => {
 	return (

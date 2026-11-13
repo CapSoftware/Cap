@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import {
+	attachmentContentDisposition,
 	provideOptionalAuth,
 	Storage,
 	Videos,
@@ -183,6 +184,7 @@ export async function GET(request: NextRequest) {
 	const videoIdParam = request.nextUrl.searchParams.get("videoId");
 	const key = request.nextUrl.searchParams.get("key");
 	const token = request.nextUrl.searchParams.get("token");
+	const downloadName = request.nextUrl.searchParams.get("download");
 
 	if (!videoIdParam || !key) {
 		return new Response("Missing videoId or key", { status: 400 });
@@ -221,7 +223,9 @@ export async function GET(request: NextRequest) {
 
 		const [storage] = yield* Storage.getAccessForVideo(video);
 		if (!("getObjectResponse" in storage)) {
-			const url = yield* storage.getSignedObjectUrl(key);
+			const url = downloadName
+				? yield* storage.getSignedDownloadUrl(key, downloadName)
+				: yield* storage.getSignedObjectUrl(key);
 			return Response.redirect(url);
 		}
 
@@ -272,6 +276,11 @@ export async function GET(request: NextRequest) {
 			if (head.ContentLength !== undefined)
 				headers.set("Content-Length", String(head.ContentLength));
 			setObjectContentHeaders(headers, head.ContentType);
+			if (downloadName)
+				headers.set(
+					"Content-Disposition",
+					attachmentContentDisposition(downloadName),
+				);
 			return new Response(null, { status: 200, headers });
 		}
 		const upstream = identity
@@ -285,6 +294,11 @@ export async function GET(request: NextRequest) {
 		const headers = new Headers(CACHE_CONTROL_HEADERS);
 		if (identity) headers.set("ETag", identity);
 		setObjectContentHeaders(headers, upstream.headers.get("content-type"));
+		if (downloadName)
+			headers.set(
+				"Content-Disposition",
+				attachmentContentDisposition(downloadName),
+			);
 		copyHeader(upstream.headers, headers, "content-length", "Content-Length");
 		copyHeader(upstream.headers, headers, "content-range", "Content-Range");
 		copyHeader(upstream.headers, headers, "accept-ranges", "Accept-Ranges");

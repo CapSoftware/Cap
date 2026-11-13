@@ -6,8 +6,10 @@ struct CapDetailView: View {
 
     @Environment(SessionModel.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.capsLayout) private var layout
+    @Environment(\.capSelection) private var selection
+    @Environment(CapDetailModels.self) private var capModels: CapDetailModels?
     @State private var model: CapDetailModel
-    @State private var section: DetailSection = .comments
     @State private var showingRename = false
     @State private var renameText = ""
     @State private var showingPassword = false
@@ -20,27 +22,42 @@ struct CapDetailView: View {
     @State private var openingEditor = false
     private let upgrade = WebUpgrade.shared
 
-    init(target: ShareTarget) {
-        self.target = target
-        _model = State(initialValue: CapDetailModel(target: target))
+    init(model: CapDetailModel) {
+        target = ShareTarget(id: model.id)
+        _model = State(initialValue: model)
+        _showingFullscreen = State(initialValue: model.isFullscreen)
     }
 
-    enum DetailSection: Hashable {
-        case comments, summary, transcript
+    typealias DetailSection = CapDetailModel.Section
+
+    private var section: DetailSection {
+        get { model.section }
+        nonmutating set { model.section = newValue }
     }
 
     var body: some View {
         content
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .tabBar)
+            .toolbar(layout == .stack ? .hidden : .automatic, for: .tabBar)
             .task { await model.load(session: session) }
-            .onDisappear { model.pauseForDisappear() }
+            .onAppear { model.presentations += 1 }
+            .onDisappear {
+                model.presentations -= 1
+                // Folding or unfolding rebuilds this screen around the same model; only pause if nothing shows it now.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if model.presentations == 0 { model.pauseForDisappear() }
+                }
+            }
             // Mirrored into view state: a binding straight into the model isn't observed by the presenter.
             .onChange(of: model.isFullscreen) { _, value in
                 if showingFullscreen != value { showingFullscreen = value }
             }
             .onChange(of: showingFullscreen) { _, value in
                 if model.isFullscreen != value { model.isFullscreen = value }
+            }
+            .onChange(of: isCovered) { _, covered in
+                capModels?.setCovered(covered, by: model)
             }
             .fullScreenCover(isPresented: $showingFullscreen) {
                 if let player = model.player {
@@ -65,6 +82,7 @@ struct CapDetailView: View {
             .alert("Editing is part of Cap Pro", isPresented: $showingProRequired) {
                 if upgrade.isAllowed {
                     Button("Upgrade in your Cap dashboard") {
+                        Usage.track("upgrade_clicked", ["source": "editor"])
                         UIApplication.shared.open(session.services.environment.upgradeURL)
                     }
                 }
@@ -113,13 +131,26 @@ struct CapDetailView: View {
             }
             .confirmationDialog("Block \(model.cap?.ownerName.isEmpty == false ? model.cap!.ownerName : "this user")?", isPresented: $showingBlock, titleVisibility: .visible) {
                 Button("Block", role: .destructive) {
-                    Task { if await model.blockOwner() { dismiss() } }
+                    Task { if await model.blockOwner() { close() } }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You won't see their Caps or comments in Cap for iPhone.")
             }
-            .capDeleteConfirmation(pendingDelete: $pendingDelete) { dismiss() }
+            .capDeleteConfirmation(pendingDelete: $pendingDelete) { _ in close() }
+    }
+
+    private var isCovered: Bool {
+        editor != nil || showingFullscreen
+    }
+
+    /// Beside the library the Cap is the detail column's root, which dismiss can't pop.
+    private func close() {
+        if let selection, selection.selected == model.id {
+            selection.deselect(model.id)
+        } else {
+            dismiss()
+        }
     }
 
     @ViewBuilder
@@ -198,6 +229,8 @@ struct CapDetailView: View {
             PlayerStage(model: model, detail: detail)
                 .padding(.horizontal, CapTheme.spacing)
                 .padding(.top, 4)
+                // A wide, short column would otherwise give the height to the scroll view and shrink the video.
+                .layoutPriority(layout == .split ? 1 : 0)
 
             if model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
                 PlayerTimeline(model: model, comments: detail.comments, chapters: detail.viewer.settings.disableChapters ? [] : detail.chapters) { marker in
@@ -287,6 +320,7 @@ struct CapDetailView: View {
     private func copyLink(_ detail: CapDetail, at time: Double?) {
         if let time {
             UIPasteboard.general.url = session.services.environment.shareURL(for: target.id, at: time)
+            Usage.track("cap_link_copied", ["timestamp": true])
             session.toasts.show("Link at \(CapFormat.timestamp(time)) copied", systemImage: "link")
         } else {
             CapActions.copyLink(detail.shareUrl, session: session)
@@ -345,6 +379,16 @@ struct CapDetailView: View {
                 Section {
                     Button(cap.isPublic ? "Make private" : "Make public", systemImage: cap.isPublic ? "lock" : "globe") {
                         Task { await model.setPublic(!cap.isPublic) }
+                    }
+                    .disabled(model.updatingSharing)
+                    if cap.isPublic, let linkAccess = cap.linkAccess {
+                        Button(
+                            linkAccess == .anyone ? "Limit to your organization" : "Open to anyone with the link",
+                            systemImage: linkAccess == .anyone ? "person.2" : "link"
+                        ) {
+                            Task { await model.setLinkAccess(linkAccess == .anyone ? .restricted : .anyone) }
+                        }
+                        .disabled(model.updatingSharing)
                     }
                     Button("Rename", systemImage: "pencil") {
                         renameText = cap.title

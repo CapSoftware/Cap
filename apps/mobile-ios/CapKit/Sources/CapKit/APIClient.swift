@@ -94,6 +94,8 @@ public struct APIRequest: Sendable {
     public var body: Data?
     public var authenticated: Bool
     public var videoAccess: CapID?
+    /// The request is only sent while this user is the one signed in.
+    public var requiredUserId: String?
 
     public init(method: HTTPMethod = .get, path: [String], query: [URLQueryItem] = [], body: Data? = nil, authenticated: Bool = true, videoAccess: CapID? = nil) {
         self.method = method
@@ -210,6 +212,7 @@ public final class CapAPI: Sendable {
         var snapshot: CredentialSnapshot?
         if request.authenticated {
             guard let current = credentials() else { throw CapAPIError.missingSession }
+            if let required = request.requiredUserId, current.userId != required { throw CapAPIError.missingSession }
             snapshot = current
             urlRequest.setValue("Bearer \(current.apiKey)", forHTTPHeaderField: "Authorization")
             if let id = request.videoAccess, let token = videoAccessToken(for: id) {
@@ -278,6 +281,16 @@ public final class CapAPI: Sendable {
 
     public func clearVideoAccess() {
         videoAccessTokens.withLock { $0.removeAll() }
+    }
+
+    struct SharingBody: Encodable {
+        let isPublic: Bool
+        let linkAccess: LinkAccess?
+
+        enum CodingKeys: String, CodingKey {
+            case isPublic = "public"
+            case linkAccess
+        }
     }
 
     static func body(_ value: some Encodable) throws(CapAPIError) -> Data {
@@ -385,6 +398,22 @@ extension CapAPI {
         try await expectSuccess(mobile(.post, "user", "blocks", body: Self.body(["userId": userId])))
     }
 
+    public func notificationPreferences() async throws(CapAPIError) -> NotificationPreferences {
+        try await send(mobile(.get, "user", "notification-preferences"))
+    }
+
+    public func setNotification(_ kind: NotificationPreferences.Kind, enabled: Bool) async throws(CapAPIError) -> NotificationPreferences {
+        try await send(mobile(.patch, "user", "notification-preferences", body: Self.body([kind.rawValue: enabled])))
+    }
+
+    public func registerPushToken(_ token: String, environment: PushEnvironment) async throws(CapAPIError) {
+        try await expectSuccess(mobile(.post, "user", "push-tokens", body: Self.body(["token": token, "environment": environment.rawValue])))
+    }
+
+    public func removePushToken(_ token: String) async throws(CapAPIError) {
+        try await expectSuccess(mobile(.post, "user", "push-tokens", "remove", body: Self.body(["token": token])))
+    }
+
     public func listCaps(folderId: String? = nil, spaceId: String? = nil, page: Int = 1, limit: Int = 30) async throws(CapAPIError) -> CapsPage {
         try await send(mobile(.get, "caps", query: [
             URLQueryItem(name: "folderId", value: folderId),
@@ -433,8 +462,8 @@ extension CapAPI {
         try await expectSuccess(mobile(.post, "caps", id.rawValue, "report", body: Self.body(["reason": reason.rawValue]), access: id))
     }
 
-    public func updateSharing(_ id: CapID, isPublic: Bool) async throws(CapAPIError) -> CapSummary {
-        try await send(mobile(.patch, "caps", id.rawValue, "sharing", body: Self.body(["public": isPublic])))
+    public func updateSharing(_ id: CapID, isPublic: Bool, linkAccess: LinkAccess? = nil) async throws(CapAPIError) -> CapSummary {
+        try await send(mobile(.patch, "caps", id.rawValue, "sharing", body: Self.body(SharingBody(isPublic: isPublic, linkAccess: linkAccess))))
     }
 
     public func updateTitle(_ id: CapID, title: String) async throws(CapAPIError) -> CapSummary {
@@ -554,6 +583,13 @@ extension CapAPI {
 
     public func completeRecording(_ id: CapID, _ completion: RecordingCompletion) async throws(CapAPIError) {
         try await expectSuccess(mobile(.post, "recordings", id.rawValue, "complete", body: Self.body(completion)))
+    }
+
+    /// The batch goes out under that user's session or not at all.
+    public func trackEvents(_ batch: AnalyticsBatch, userId: String) async throws(CapAPIError) {
+        var request = mobile(.post, "events", body: try Self.body(batch))
+        request.requiredUserId = userId
+        try await expectSuccess(request)
     }
 
     public func plan() async throws(CapAPIError) -> PlanStatus {

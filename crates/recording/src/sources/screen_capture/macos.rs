@@ -772,7 +772,8 @@ impl output_pipeline::VideoSource for VideoSource {
                             }
                         };
 
-                        if is_user_stop_error(err.as_ref()) {
+                        let user_stopped = is_user_stop_error(err.as_ref());
+                        if user_stopped || is_capture_source_gone_error(err.as_ref()) {
                             if let Ok(guard) = active_capturer.lock() {
                                 match guard.as_ref() {
                                     Some(c) => c.mark_stopped(),
@@ -782,9 +783,29 @@ impl output_pipeline::VideoSource for VideoSource {
                                 original_capturer.mark_stopped();
                             }
 
-                            info!(
-                                "Screen capture stream stopped from macOS sharing controls"
-                            );
+                            if user_stopped {
+                                info!(
+                                    "Screen capture stream stopped from macOS sharing controls"
+                                );
+                            } else {
+                                // The stream is already dead, so failing here would leave Stop
+                                // and Quit waiting on a capture that can never confirm cleanup.
+                                warn!(
+                                    captures_window = rebuild_params.config.window.is_some(),
+                                    "Screen capture source disappeared (window closed or display unavailable); keeping what was recorded"
+                                );
+                                output_pipeline::emit_health(
+                                    &health_tx,
+                                    output_pipeline::PipelineHealthEvent::CaptureTargetLost {
+                                        target: if rebuild_params.config.window.is_some() {
+                                            "window"
+                                        } else {
+                                            "display"
+                                        }
+                                        .to_string(),
+                                    },
+                                );
+                            }
                             stop_signal.mark_user_stopped();
                             pipeline_cancel.cancel();
                             break Ok(());
@@ -1006,6 +1027,17 @@ fn is_system_stop_error(err: &ns::Error) -> bool {
 fn is_user_stop_error(err: &ns::Error) -> bool {
     err.code() == sc::error::code::USER_STOPPED as ns::Integer
         && err.domain().to_string() == sc::error::domain().to_string()
+}
+
+/// `SCStreamErrorNoCaptureSource`: the recorded window closed, or the display went away or
+/// slept. Nothing can be captured, but everything recorded so far is intact.
+fn is_capture_source_gone_error(err: &ns::Error) -> bool {
+    is_capture_source_gone(err.domain().to_string(), err.code())
+}
+
+fn is_capture_source_gone(domain: String, code: ns::Integer) -> bool {
+    code == sc::error::code::NO_CAPTURE_SOURCE as ns::Integer
+        && domain == sc::error::domain().to_string()
 }
 
 fn system_stop_message() -> &'static str {
@@ -1331,11 +1363,18 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                         result = error_rx.recv() => {
                             match result {
                                 Ok(err) => {
-                                    if is_user_stop_error(err.as_ref()) {
+                                    let user_stopped = is_user_stop_error(err.as_ref());
+                                    if user_stopped || is_capture_source_gone_error(err.as_ref()) {
                                         capturer_for_monitor.mark_stopped();
-                                        info!(
-                                            "Screen capture audio stream stopped from macOS sharing controls"
-                                        );
+                                        if user_stopped {
+                                            info!(
+                                                "Screen capture audio stream stopped from macOS sharing controls"
+                                            );
+                                        } else {
+                                            warn!(
+                                                "Screen capture audio stream ended because its capture source disappeared"
+                                            );
+                                        }
                                         stop_signal.mark_user_stopped();
                                         pipeline_cancel.cancel();
                                         break;
@@ -1490,6 +1529,20 @@ mod tests {
             capturable_window(&restart_config, &restart_excluded, "restart"),
             Some(&window_id("247"))
         );
+    }
+
+    #[test]
+    fn only_no_capture_source_counts_as_the_source_disappearing() {
+        let sc_domain = || sc::error::domain().to_string();
+
+        assert!(is_capture_source_gone(sc_domain(), -3815));
+        assert!(!is_capture_source_gone(sc_domain(), -3817));
+        assert!(!is_capture_source_gone(sc_domain(), -3821));
+        assert!(!is_capture_source_gone(sc_domain(), -3811));
+        assert!(!is_capture_source_gone(
+            "NSCocoaErrorDomain".to_string(),
+            -3815
+        ));
     }
 
     #[test]

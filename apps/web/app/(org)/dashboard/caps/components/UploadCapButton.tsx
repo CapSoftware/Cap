@@ -1,11 +1,11 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faUpload } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	loomImportDestinationFromPathname,

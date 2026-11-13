@@ -522,7 +522,10 @@ impl InstantUpload {
         manifest: SegmentUploadManifest,
     ) -> Result<(), String> {
         let screenshot = self.screenshot_upload(project_path);
-        self.authorize_manifest(manifest)?;
+        if let Err(error) = self.authorize_manifest(manifest) {
+            self.finish_segments().await?;
+            return Err(error);
+        }
         let (screenshot, segments) = tokio::join!(screenshot, self.finish_segments());
         screenshot?;
         segments
@@ -1366,7 +1369,22 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
-    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+    check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
+    let auth_state = crate::store::store_section("auth");
+    let Ok(context) = auth::UploadRequestContext::for_upload(
+        &auth::server_url(),
+        auth_state.get("user_id").and_then(Value::as_str),
+    ) else {
+        return Ok(UploadResult::NotAuthenticated);
+    };
+    context
+        .run(upload_exported_video_inner(
+            project_path,
+            organization_id,
+            progress,
+            cancel,
+            false,
+        ))
         .await
         .map(|(result, _)| result)
 }
@@ -2904,6 +2922,22 @@ mod tests {
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
+    }
+
+    #[tokio::test]
+    async fn lost_completion_authorization_cannot_accept_a_successful_worker() {
+        let authorization = CompletionAuthorization::new();
+        drop(authorization.required);
+        let mut upload =
+            upload_with_task(tokio::spawn(async { Ok(()) }), Some(authorization.control));
+        upload.completion_permit = Some(authorization.permit);
+
+        let error = upload
+            .finish_with_screenshot(Path::new("unused.cap"), SegmentUploadManifest::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error, "Instant completion authorization was lost");
+        upload.abort_segments().await;
     }
 
     #[tokio::test]
