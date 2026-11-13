@@ -4,7 +4,9 @@ const mocks = vi.hoisted(() => ({ after: vi.fn() }));
 
 vi.mock("next/server", () => ({ after: mocks.after }));
 
-const { startFaststartRemux } = await import("@/lib/faststart-remux");
+const { FASTSTART_REMUX_RETRY, startFaststartRemux } = await import(
+	"@/lib/faststart-remux"
+);
 
 const request = {
 	videoId: "video-1",
@@ -49,6 +51,7 @@ describe("faststart remux dispatch", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.unstubAllGlobals();
 		vi.restoreAllMocks();
 	});
@@ -368,5 +371,139 @@ describe("faststart remux dispatch", () => {
 		expect(await start()).toBe("retrying");
 
 		await expect(deferred[0]).resolves.toBeUndefined();
+	});
+	describe("retry budget", () => {
+		const startWithDefaults = () =>
+			startFaststartRemux({
+				mediaServerUrl: "https://media.example",
+				webhookSecret: "secret",
+				request,
+				onRetriesSettled: settled,
+				defer: (work) => {
+					deferred.push(work);
+				},
+			});
+
+		const hangUntilAborted = (_url: string, init: RequestInit) =>
+			new Promise<Response>((_, reject) => {
+				init.signal?.addEventListener("abort", () =>
+					reject(init.signal?.reason),
+				);
+			});
+
+		const busyFor = (seconds: string) => () =>
+			Promise.resolve(answer(503, "SERVER_BUSY", { "Retry-After": seconds }));
+
+		const retryWaits = () =>
+			vi
+				.mocked(console.warn)
+				.mock.calls.filter(([line]) => line === "[faststart-remux] retrying")
+				.map(([, detail]) => detail.waitMs as number);
+
+		let settledAt: number | null;
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			settledAt = null;
+			settled.mockImplementation(async () => {
+				settledAt = Date.now();
+			});
+		});
+
+		it("uses a 10 s attempt timeout, a 20 s Retry-After cap and a 60 s budget", () => {
+			expect(FASTSTART_REMUX_RETRY).toMatchObject({
+				attemptTimeoutMs: 10_000,
+				maxRetryAfterMs: 20_000,
+				budgetMs: 60_000,
+			});
+		});
+
+		it("times a retry out at 10 s and does not send it again", async () => {
+			vi.spyOn(Math, "random").mockReturnValue(0.5);
+			fetchMock
+				.mockResolvedValueOnce(answer(503, "SERVER_BUSY"))
+				.mockImplementation(hangUntilAborted);
+
+			expect(await startWithDefaults()).toBe("retrying");
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			const signal: AbortSignal = fetchMock.mock.calls[1]?.[1].signal;
+
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(signal.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(signal.aborted).toBe(true);
+			expect(signal.reason.name).toBe("TimeoutError");
+
+			await deferred[0];
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(settled.mock.calls).toEqual([[false]]);
+		});
+
+		it("caps a large Retry-After at 20 s", async () => {
+			vi.spyOn(Math, "random").mockReturnValue(0);
+			fetchMock
+				.mockImplementationOnce(busyFor("3600"))
+				.mockResolvedValue(answer(200, "{}"));
+
+			expect(await startWithDefaults()).toBe("retrying");
+			await vi.advanceTimersByTimeAsync(19_999);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+
+			await deferred[0];
+			expect(retryWaits()).toEqual([20_000]);
+			expect(settled.mock.calls).toEqual([[true]]);
+		});
+
+		it.each([
+			["the least jitter", 0],
+			["the most jitter", 0.999_999],
+		])(
+			"gives up inside the budget with a Retry-After of 3600 and %s, so transcription is queued",
+			async (_, random) => {
+				vi.spyOn(Math, "random").mockReturnValue(random);
+				fetchMock.mockImplementation(busyFor("3600"));
+				const firstFailedAt = Date.now();
+
+				expect(await startWithDefaults()).toBe("retrying");
+				await vi.advanceTimersByTimeAsync(FASTSTART_REMUX_RETRY.budgetMs);
+				await deferred[0];
+
+				expect(settled.mock.calls).toEqual([[false]]);
+				expect(settledAt).not.toBeNull();
+				expect((settledAt ?? 0) - firstFailedAt).toBeLessThanOrEqual(
+					FASTSTART_REMUX_RETRY.budgetMs,
+				);
+				for (const wait of retryWaits()) {
+					expect(wait).toBeGreaterThanOrEqual(20_000);
+					expect(wait).toBeLessThanOrEqual(25_000);
+				}
+				expect(console.error).toHaveBeenCalledWith(
+					"[faststart-remux] gave up",
+					expect.objectContaining({ outOfTime: true, reason: "status 503" }),
+				);
+			},
+		);
+
+		it("stays inside the budget when the last allowed retry hangs until its timeout", async () => {
+			vi.spyOn(Math, "random").mockReturnValue(0.999_999);
+			fetchMock
+				.mockImplementationOnce(busyFor("20"))
+				.mockImplementationOnce(busyFor("20"))
+				.mockImplementation(hangUntilAborted);
+			const firstFailedAt = Date.now();
+
+			expect(await startWithDefaults()).toBe("retrying");
+			await vi.advanceTimersByTimeAsync(FASTSTART_REMUX_RETRY.budgetMs);
+			await deferred[0];
+
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(settled.mock.calls).toEqual([[false]]);
+			expect((settledAt ?? 0) - firstFailedAt).toBeLessThanOrEqual(
+				FASTSTART_REMUX_RETRY.budgetMs,
+			);
+		});
 	});
 });

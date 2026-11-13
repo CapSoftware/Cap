@@ -10,10 +10,17 @@ export interface FaststartRemuxRequest {
 	previewGifPresignedUrl: string;
 }
 
-const RETRY_DELAYS_MS = [2_000, 6_000, 15_000];
-const RETRY_ATTEMPT_TIMEOUT_MS = 30_000;
-
-const MAX_RETRY_AFTER_MS = 60_000;
+// Retries run after the response, and transcription waits until they settle
+// (the remux writes back to the file transcription reads), so the whole retry
+// budget stays far inside the function's time limit. The media server
+// answers busy in milliseconds, so an attempt that takes 10 s is not coming
+// back.
+export const FASTSTART_REMUX_RETRY = {
+	delaysMs: [2_000, 6_000, 15_000],
+	attemptTimeoutMs: 10_000,
+	maxRetryAfterMs: 20_000,
+	budgetMs: 60_000,
+} as const;
 
 class RemuxRefused extends Error {
 	constructor(
@@ -32,7 +39,7 @@ const parseRetryAfter = (header: string | null): number | null => {
 		? seconds * 1000
 		: Date.parse(header) - Date.now();
 	if (!Number.isFinite(ms) || ms <= 0) return null;
-	return Math.min(ms, MAX_RETRY_AFTER_MS);
+	return Math.min(ms, FASTSTART_REMUX_RETRY.maxRetryAfterMs);
 };
 
 async function sendFaststartRemux(
@@ -115,13 +122,36 @@ const reasonOf = (error: unknown) =>
 const pause = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+async function sendWithTimeout(
+	send: (signal: AbortSignal) => Promise<void>,
+	timeoutMs: number,
+) {
+	const controller = new AbortController();
+	const timer = setTimeout(
+		() =>
+			controller.abort(
+				new DOMException("The remux request timed out", "TimeoutError"),
+			),
+		timeoutMs,
+	);
+	try {
+		await send(controller.signal);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 async function retryFaststartRemux(
 	send: (signal: AbortSignal) => Promise<void>,
 	videoId: string,
 	firstError: unknown,
+	firstFailedAt: number,
 	delaysMs: readonly number[],
 ): Promise<boolean> {
+	const { attemptTimeoutMs, budgetMs } = FASTSTART_REMUX_RETRY;
+	const deadline = firstFailedAt + budgetMs;
 	let lastError = firstError;
+	let outOfTime = false;
 	for (const [index, delay] of delaysMs.entries()) {
 		// Never sooner than the media server asked, with jitter above that.
 		const asked =
@@ -132,6 +162,10 @@ async function retryFaststartRemux(
 				asked * (1 + Math.random() / 4),
 			),
 		);
+		if (Date.now() + waitMs + attemptTimeoutMs > deadline) {
+			outOfTime = true;
+			break;
+		}
 		console.warn("[faststart-remux] retrying", {
 			videoId,
 			attempt: index + 2,
@@ -140,7 +174,7 @@ async function retryFaststartRemux(
 		});
 		await pause(waitMs);
 		try {
-			await send(AbortSignal.timeout(RETRY_ATTEMPT_TIMEOUT_MS));
+			await sendWithTimeout(send, attemptTimeoutMs);
 			return true;
 		} catch (error) {
 			lastError = error;
@@ -150,6 +184,7 @@ async function retryFaststartRemux(
 	console.error("[faststart-remux] gave up", {
 		videoId,
 		reason: reasonOf(lastError),
+		outOfTime,
 		error: lastError,
 	});
 	return false;
@@ -174,10 +209,12 @@ export async function startFaststartRemux(input: {
 			signal,
 		);
 	let firstError: Error;
+	let firstFailedAt: number;
 	try {
 		await send();
 		return "queued";
 	} catch (cause) {
+		firstFailedAt = Date.now();
 		firstError = cause instanceof Error ? cause : new Error(String(cause));
 		console.error("Failed to queue faststart remux:", firstError);
 		if (!mayClear(firstError)) return "failed";
@@ -194,7 +231,8 @@ export async function startFaststartRemux(input: {
 				send,
 				input.request.videoId,
 				firstError,
-				input.retryDelaysMs ?? RETRY_DELAYS_MS,
+				firstFailedAt,
+				input.retryDelaysMs ?? FASTSTART_REMUX_RETRY.delaysMs,
 			),
 		)
 		.then(input.onRetriesSettled)
