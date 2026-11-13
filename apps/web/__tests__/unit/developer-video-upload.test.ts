@@ -99,7 +99,7 @@ vi.mock("@/lib/infra-storage", async () => {
 	const { billableVideo, storageUsage } = await import(
 		"@/lib/developer-pricing"
 	);
-	return {
+	const storage = {
 		getAppStorageUsage: async (
 			appId: string,
 			newVideo?: Parameters<typeof storageUsage>[0][number]["video"],
@@ -128,6 +128,25 @@ vi.mock("@/lib/infra-storage", async () => {
 			if (newVideo) entries.push({ video: newVideo, count: 1 });
 			return storageUsage(entries);
 		},
+	};
+	return {
+		...storage,
+		getAppStorage: async (
+			...[appId, newVideo, executor, options]: Parameters<
+				typeof storage.getAppStorageUsage
+			>
+		) => ({
+			stored: await storage.getAppStorageUsage(
+				appId,
+				newVideo,
+				executor,
+				options,
+			),
+			counted: await storage.getAppStorageUsage(appId, newVideo, executor, {
+				...options,
+				includeProcessing: true,
+			}),
+		}),
 	};
 });
 

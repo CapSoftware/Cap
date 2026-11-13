@@ -233,25 +233,6 @@ export function orderLedgerRows<Row extends LedgerRow>(rows: readonly Row[]) {
 	return ordered;
 }
 
-export function ledgerPageWindow(
-	rawPage: string | undefined,
-	total: number,
-	size: number = LEDGER_PAGE_SIZE,
-) {
-	const pages = Math.max(1, Math.ceil(total / size));
-	const requested =
-		rawPage !== undefined && /^\d+$/.test(rawPage) ? Number(rawPage) : 1;
-	const page = Math.min(Math.max(1, requested), pages);
-	const offset = (page - 1) * size;
-	return {
-		page,
-		pages,
-		offset,
-		from: total === 0 ? 0 : offset + 1,
-		to: Math.min(total, offset + size),
-	};
-}
-
 export const LEDGER_CSV_COLUMNS = [
 	"id",
 	"time_utc",
