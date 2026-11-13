@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { creditCheckoutSessionParams } from "@/lib/infra-credit-checkout";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/rate-limit", () => ({
@@ -19,6 +20,15 @@ const state = vi.hoisted(() => ({
 	idempotency: null as Record<string, unknown> | null,
 	tables: {} as Record<string, unknown>,
 	redrive: vi.fn(async (_videoId: string) => false),
+	users: [] as Record<string, unknown>[],
+	createCheckoutSession: vi.fn(),
+}));
+
+vi.mock("@cap/utils", async (original) => ({
+	...(await original<typeof import("@cap/utils")>()),
+	stripe: () => ({
+		checkout: { sessions: { create: state.createCheckoutSession } },
+	}),
 }));
 
 vi.mock("@/lib/developer-video-start", async (original) => ({
@@ -44,6 +54,7 @@ vi.mock("@cap/database", () => {
 			];
 		}
 		if (table === tables.developerApps) return state.apps;
+		if (table === tables.users) return state.users;
 		if (table === tables.developerVideos) return state.videos;
 		if (table === tables.developerCreditTransactions) {
 			return state.transactions;
@@ -136,6 +147,7 @@ describe("developer routes of the agent API", () => {
 			developerVideos: schema.developerVideos,
 			developerCreditTransactions: schema.developerCreditTransactions,
 			agentApiIdempotency: schema.agentApiIdempotency,
+			users: schema.users,
 		};
 		const route = await import("@/app/api/v1/[...route]/route");
 		handlers = {
@@ -152,6 +164,8 @@ describe("developer routes of the agent API", () => {
 		state.videos = [];
 		state.transactions = [];
 		state.idempotency = null;
+		state.users = [];
+		state.createCheckoutSession.mockReset();
 	});
 
 	const call = async (method: string, path: string, body?: unknown) => {
@@ -232,6 +246,60 @@ describe("developer routes of the agent API", () => {
 		});
 		expect(declared.length).toBeGreaterThan(0);
 		expect([...tested].sort()).toEqual([...declared].sort());
+	});
+
+	it("opens a credit checkout with the console's receipt, tax and payment tag", async () => {
+		state.apps = [{ id: "account-1" }];
+		state.users = [{ stripeCustomerId: "cus_agent" }];
+		state.createCheckoutSession.mockResolvedValue({
+			url: "https://checkout.stripe.com/agent",
+		});
+
+		const response = await call(
+			"POST",
+			`/developer/apps/${APP}/credits/checkout`,
+			{
+				amountCents: 2500,
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.body.url).toBe("https://checkout.stripe.com/agent");
+		expect(state.createCheckoutSession).toHaveBeenCalledTimes(1);
+		const [params, options] = state.createCheckoutSession.mock.calls[0] ?? [];
+		expect(params).toEqual({
+			...creditCheckoutSessionParams({
+				customerId: "cus_agent",
+				accountId: "account-1",
+				amountCents: 2500,
+				receiptEmail: "owner@example.com",
+			}),
+			success_url: "http://localhost/cli/complete?developerCredits=success",
+			cancel_url: "http://localhost/cli/complete?developerCredits=cancelled",
+			metadata: {
+				type: "developer_credits",
+				appId: APP,
+				accountId: "account-1",
+				amountCents: "2500",
+				userId: "user-1",
+			},
+		});
+		expect(params).toMatchObject({
+			mode: "payment",
+			invoice_creation: {
+				enabled: true,
+				invoice_data: { description: "Cap Infra credits" },
+			},
+			payment_intent_data: {
+				receipt_email: "owner@example.com",
+				metadata: { type: "developer_credits", accountId: "account-1" },
+			},
+			tax_id_collection: { enabled: true },
+			billing_address_collection: "auto",
+			customer_update: { name: "auto", address: "auto" },
+		});
+		expect(params).not.toHaveProperty("automatic_tax");
+		expect(options.idempotencyKey).toMatch(/:checkout$/);
 	});
 
 	it("says what to do when the developer scope is missing", async () => {

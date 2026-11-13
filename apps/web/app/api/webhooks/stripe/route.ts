@@ -37,6 +37,11 @@ import {
 	settleAutoTopUpPaymentIntent,
 } from "@/lib/infra-auto-top-up";
 import { isFreeCreditCheckout } from "@/lib/infra-credit-code";
+import {
+	awaitsCreditGrant,
+	reverseDisputedPayment,
+	reverseRefundedCharge,
+} from "@/lib/infra-credit-reversal";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
 	attachSsoCheckout,
@@ -54,6 +59,8 @@ const relevantEvents = new Set([
 	"invoice.payment_failed",
 	"payment_intent.succeeded",
 	"payment_intent.payment_failed",
+	"charge.refunded",
+	"charge.dispute.created",
 ]);
 
 async function grantDeveloperCredits(
@@ -494,6 +501,21 @@ export const POST = async (req: Request) => {
 					event.data.object as Stripe.PaymentIntent,
 					event.type === "payment_intent.succeeded" ? "succeeded" : "failed",
 				);
+				return NextResponse.json({ received: true });
+			}
+			if (
+				event.type === "charge.refunded" ||
+				event.type === "charge.dispute.created"
+			) {
+				const reversed =
+					event.type === "charge.refunded"
+						? await reverseRefundedCharge(event.data.object as Stripe.Charge)
+						: await reverseDisputedPayment(event.data.object as Stripe.Dispute);
+				if (awaitsCreditGrant(reversed)) {
+					return new Response("Credit grant not recorded yet, retry", {
+						status: 503,
+					});
+				}
 				return NextResponse.json({ received: true });
 			}
 			if (
