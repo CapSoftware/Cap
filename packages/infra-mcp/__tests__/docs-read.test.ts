@@ -229,16 +229,14 @@ describe("fetchDocs", () => {
 		});
 	});
 
-	it("passes a cancellation through instead of calling it unavailable", async () => {
+	it("reports a cancellation as cancelled, not as unavailable or internal", async () => {
 		const controller = new AbortController();
 		const source = fetchDocs("https://docs.test", (_input, init) => {
 			controller.abort();
 			return Promise.reject(init?.signal?.reason ?? new Error("aborted"));
 		});
-		await expect(
-			source("billing", controller.signal),
-		).rejects.not.toMatchObject({
-			code: "docs_unavailable",
+		await expect(source("billing", controller.signal)).rejects.toMatchObject({
+			code: "cancelled",
 		});
 	});
 });

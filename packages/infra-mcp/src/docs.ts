@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { LocalError } from "./errors";
-import { timeLimit } from "./time";
+import { cancelled, timeLimit } from "./time";
 import { type Tool, tool } from "./tool";
 
 export const DOC_PAGES = [
@@ -267,7 +267,8 @@ export function fetchDocs(
 			}
 			text = await response.text();
 		} catch (error) {
-			if (signal.aborted || error instanceof LocalError) throw error;
+			if (signal.aborted) throw cancelled();
+			if (error instanceof LocalError) throw error;
 			throw unavailable(pageUrl, null);
 		} finally {
 			limit.dispose();
