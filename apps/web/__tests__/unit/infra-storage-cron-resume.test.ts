@@ -4,10 +4,14 @@ type ChargeCall = {
 	accountId: string;
 	dateKey: string;
 	retryUnpaid: boolean | undefined;
+	dailyMicroCredits: number;
 };
 
 const state = vi.hoisted(() => ({
-	accounts: [] as { id: string; appId: string }[],
+	accounts: [] as { id: string; appId: string; createdAt: Date }[],
+	appCreatedAt: new Map<string, Date>(),
+	videos: new Map<string, Date[]>(),
+	usageReads: [] as { appIds: string[]; createdBefore: Date | undefined }[],
 	deletedApps: new Set<string>(),
 	unpaid: new Set<string>(),
 	short: new Set<string>(),
@@ -43,17 +47,29 @@ vi.mock("@cap/database", async () => {
 			const after = state.accounts.filter(
 				(account) => cursor === null || account.id > cursor,
 			);
+			const stamp = (date: Date) =>
+				date.toISOString().slice(0, 19).replace("T", " ");
 			return {
 				rows: (limit === null ? after : after.slice(0, limit)).map(
-					(account) => [account.id, account.appId],
+					(account) => [account.id, account.appId, stamp(account.createdAt)],
 				),
 			};
 		}
 		if (sql.includes("from `developer_apps`")) {
+			const bounded = sql.includes("`developer_apps`.`createdAt` < ?");
+			const bound = bounded
+				? new Date(`${String(params.at(-1)).replace(" ", "T")}Z`)
+				: null;
 			return {
-				rows: params
+				rows: (bounded ? params.slice(0, -1) : params)
 					.map(String)
 					.filter((appId) => !state.deletedApps.has(appId))
+					.filter(
+						(appId) =>
+							!bound ||
+							(state.appCreatedAt.get(appId) ?? new Date(0)).getTime() <
+								bound.getTime(),
+					)
 					.map((appId) => [appId]),
 			};
 		}
@@ -81,19 +97,35 @@ vi.mock("@cap/database", async () => {
 	return { db: () => client };
 });
 vi.mock("@/lib/infra-storage", () => ({
-	getStorageUsageByApp: async (appIds: string[]) =>
-		new Map(
-			appIds.map((appId) => [
-				appId,
-				{
-					videoCount: 1,
-					totalMinutes: 10,
-					minutesByTier: { "1080p": 10, "1440p": 0, "2160p": 0 },
-					monthlyMicroCredits: 840,
-					dailyMicroCredits: 28,
-				},
-			]),
-		),
+	getStorageUsageByApp: async (
+		appIds: string[],
+		_extra?: unknown,
+		_executor?: unknown,
+		options: { createdBefore?: Date } = {},
+	) => {
+		state.usageReads.push({ appIds, createdBefore: options.createdBefore });
+		return new Map(
+			appIds.map((appId) => {
+				const videos = (
+					state.videos.get(appId) ?? [new Date("2026-11-01T00:00:00Z")]
+				).filter(
+					(createdAt) =>
+						!options.createdBefore ||
+						createdAt.getTime() < options.createdBefore.getTime(),
+				).length;
+				return [
+					appId,
+					{
+						videoCount: videos,
+						totalMinutes: videos * 10,
+						minutesByTier: { "1080p": videos * 10, "1440p": 0, "2160p": 0 },
+						monthlyMicroCredits: videos * 840,
+						dailyMicroCredits: videos * 28,
+					},
+				];
+			}),
+		);
+	},
 }));
 vi.mock("@/lib/infra-storage-billing", () => ({
 	chargeStorageDay: async ({
@@ -101,13 +133,20 @@ vi.mock("@/lib/infra-storage-billing", () => ({
 		accountId,
 		dateKey,
 		retryUnpaid,
+		usage,
 	}: {
 		appId: string;
 		accountId: string;
 		dateKey: string;
 		retryUnpaid?: boolean;
+		usage: { dailyMicroCredits: number };
 	}) => {
-		state.chargeCalls.push({ accountId, dateKey, retryUnpaid });
+		state.chargeCalls.push({
+			accountId,
+			dateKey,
+			retryUnpaid,
+			dailyMicroCredits: usage.dailyMicroCredits,
+		});
 		vi.setSystemTime(Date.now() + state.secondsPerCharge * 1000);
 		const key = `${accountId}|${dateKey}`;
 		const snapshot = `${appId}|${dateKey}`;
@@ -225,8 +264,15 @@ beforeEach(() => {
 	vi.setSystemTime(new Date("2026-11-12T06:41:00Z"));
 	state.accounts = Array.from({ length: ACCOUNTS }, (_, index) => {
 		const serial = String(index).padStart(4, "0");
-		return { id: `account-${serial}`, appId: `app-${serial}` };
+		return {
+			id: `account-${serial}`,
+			appId: `app-${serial}`,
+			createdAt: new Date("2026-10-01T00:00:00Z"),
+		};
 	});
+	state.appCreatedAt = new Map();
+	state.videos = new Map();
+	state.usageReads = [];
 	state.deletedApps = new Set();
 	state.unpaid = new Set();
 	state.short = new Set();
@@ -518,6 +564,87 @@ describe("a broken chain is finished by the next day's first run", () => {
 				state.snapshotWrites.get(`${id.replace("account", "app")}|2026-11-12`),
 			).toBe(1);
 		}
+	});
+});
+
+describe("the finishing pass counts only what existed on that day", () => {
+	const nextDayTick = () => {
+		vi.setSystemTime(new Date("2026-11-13T00:41:00Z"));
+		settle("2026-11-12");
+		for (const id of [
+			"account-0300",
+			"account-0301",
+			"account-0302",
+			"account-0303",
+		]) {
+			state.charged.delete(`${id}|2026-11-12`);
+		}
+	};
+	const account = (id: string) => {
+		const found = state.accounts.find((row) => row.id === id);
+		if (!found) throw new Error(`no ${id}`);
+		return found;
+	};
+
+	it("does not charge yesterday for an account whose first video arrived after midnight", async () => {
+		nextDayTick();
+		state.videos.set("app-0300", [new Date("2026-11-13T00:30:00Z")]);
+
+		await run();
+
+		expect(chargedFor("2026-11-12")).not.toContain("account-0300");
+		expect(callsFor("2026-11-12").map((call) => call.accountId)).not.toContain(
+			"account-0300",
+		);
+		expect(chargedFor("2026-11-13")).toContain("account-0300");
+	});
+
+	it("does not charge yesterday for an account or app created after midnight", async () => {
+		nextDayTick();
+		account("account-0301").createdAt = new Date("2026-11-13T00:10:00Z");
+		state.appCreatedAt.set("app-0302", new Date("2026-11-13T00:10:00Z"));
+
+		await run();
+
+		const finished = callsFor("2026-11-12").map((call) => call.accountId);
+		expect(finished).not.toContain("account-0301");
+		expect(finished).not.toContain("account-0302");
+		expect(finished.sort()).toEqual(["account-0300", "account-0303"]);
+		expect(chargedFor("2026-11-13")).toEqual(
+			expect.arrayContaining(["account-0301", "account-0302"]),
+		);
+	});
+
+	it("leaves a video created after midnight out of yesterday's charge and keeps the earlier ones", async () => {
+		nextDayTick();
+		state.videos.set("app-0303", [
+			new Date("2026-11-05T00:00:00Z"),
+			new Date("2026-11-12T23:59:59Z"),
+			new Date("2026-11-13T00:20:00Z"),
+		]);
+
+		await run();
+
+		const [yesterday] = callsFor("2026-11-12").filter(
+			(call) => call.accountId === "account-0303",
+		);
+		const [today] = callsFor("2026-11-13").filter(
+			(call) => call.accountId === "account-0303",
+		);
+		expect(yesterday?.dailyMicroCredits).toBe(56);
+		expect(today?.dailyMicroCredits).toBe(84);
+	});
+
+	it("bounds only the finishing pass, at the midnight after that day", async () => {
+		nextDayTick();
+
+		await run();
+
+		const bounds = state.usageReads.map((read) =>
+			read.createdBefore?.toISOString(),
+		);
+		expect(bounds.filter(Boolean)).toEqual(["2026-11-13T00:00:00.000Z"]);
+		expect(bounds.filter((bound) => bound === undefined)).toHaveLength(3);
 	});
 });
 

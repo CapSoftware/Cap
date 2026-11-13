@@ -6,7 +6,7 @@ import {
 	developerCreditTransactions,
 	developerDailyStorageSnapshots,
 } from "@cap/database/schema";
-import { and, asc, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { after, NextResponse } from "next/server";
 import type { StorageUsage } from "@/lib/developer-pricing";
 import { runDueAutoTopUps } from "@/lib/infra-auto-top-up";
@@ -116,12 +116,16 @@ async function sweepDate({
 	let processed = 0;
 	let short = 0;
 	let cursor = from;
+	const dayEnd = finishing
+		? new Date(Date.parse(`${date}T00:00:00.000Z`) + DAY_MS)
+		: null;
 
 	while (!outOfTime()) {
-		const page: { id: string; appId: string }[] = await db()
+		const page: { id: string; appId: string; createdAt: Date }[] = await db()
 			.select({
 				id: developerCreditAccounts.id,
 				appId: developerCreditAccounts.appId,
+				createdAt: developerCreditAccounts.createdAt,
 			})
 			.from(developerCreditAccounts)
 			.where(cursor ? gt(developerCreditAccounts.id, cursor) : undefined)
@@ -129,20 +133,31 @@ async function sweepDate({
 			.limit(PAGE_SIZE);
 		const lastAccount = page.at(-1);
 		if (!lastAccount) return { complete: true, cursor, processed, short };
-		const liveApps = await db()
-			.select({ id: developerApps.id })
-			.from(developerApps)
-			.where(
-				and(
-					inArray(
-						developerApps.id,
-						page.map((account) => account.appId),
-					),
-					isNull(developerApps.deletedAt),
-				),
-			);
+		const existing = dayEnd
+			? page.filter(
+					(account) => new Date(account.createdAt).getTime() < dayEnd.getTime(),
+				)
+			: page;
+		const liveApps =
+			existing.length > 0
+				? await db()
+						.select({ id: developerApps.id })
+						.from(developerApps)
+						.where(
+							and(
+								inArray(
+									developerApps.id,
+									existing.map((account) => account.appId),
+								),
+								isNull(developerApps.deletedAt),
+								dayEnd ? lt(developerApps.createdAt, dayEnd) : undefined,
+							),
+						)
+				: [];
 		const liveAppIds = new Set(liveApps.map((app) => app.id));
-		const accounts = page.filter((account) => liveAppIds.has(account.appId));
+		const accounts = existing.filter((account) =>
+			liveAppIds.has(account.appId),
+		);
 
 		const billedToday =
 			accounts.length > 0
@@ -187,10 +202,15 @@ async function sweepDate({
 		const pending = unbilled.filter(
 			(account) => !settledAppIds.has(account.appId),
 		);
+		const appIds = pending.map((account) => account.appId);
 		const usageByApp =
-			pending.length > 0
-				? await getStorageUsageByApp(pending.map((account) => account.appId))
-				: new Map<string, StorageUsage>();
+			pending.length === 0
+				? new Map<string, StorageUsage>()
+				: dayEnd
+					? await getStorageUsageByApp(appIds, undefined, undefined, {
+							createdBefore: dayEnd,
+						})
+					: await getStorageUsageByApp(appIds);
 		const idleAccountIds = pending
 			.filter(
 				(account) =>
