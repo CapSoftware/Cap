@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
 	keyRows: [] as { appId: string }[],
 	store: {
 		createTranscriptFromUrl: vi.fn(),
+		createTranscriptFromVideo: vi.fn(),
 		createTranscriptUpload: vi.fn(),
 		startTranscriptUpload: vi.fn(),
 		getTranscript: vi.fn(),
@@ -62,6 +63,7 @@ const transcript = (overrides: Record<string, unknown> = {}) => ({
 	status: "queued",
 	sourceType: "url",
 	sourceUrl: "https://media.example.com/a.mp3",
+	videoId: null,
 	s3Key: "developer/app-1/transcripts/tr-1/source",
 	resultKey: null,
 	sourceBytes: null,
@@ -317,7 +319,7 @@ describe("developer transcripts API", () => {
 				expect(body).toMatchObject({
 					code: "invalid_request",
 					error: `Invalid request: Unrecognized key: "${field}"`,
-					hint: "This request accepts url, name, language, userId, metadata. Field names are case-sensitive.",
+					hint: "This request accepts url, videoId, name, language, userId, metadata. Field names are case-sensitive.",
 				});
 				expect(body.issues).toEqual([
 					expect.objectContaining({ code: "unrecognized_keys", keys: [field] }),
@@ -348,6 +350,99 @@ describe("developer transcripts API", () => {
 				expect(mocks.store.createTranscriptUpload).not.toHaveBeenCalled();
 			},
 		);
+
+		it("passes a video id, options and idempotency key to the store", async () => {
+			mocks.store.createTranscriptFromVideo.mockResolvedValue({
+				ok: true,
+				transcript: transcript({
+					sourceType: "video",
+					sourceUrl: null,
+					videoId: "video-1",
+					s3Key: "developer/app-1/video-1/encode-1/out-1/video.mp4",
+				}),
+			});
+			const response = await post(
+				"/",
+				{ videoId: "video-1", language: "en", metadata: { a: 1 } },
+				{ ...SECRET, "Idempotency-Key": "retry-key-1" },
+			);
+			expect(response.status).toBe(200);
+			expect(mocks.store.createTranscriptFromVideo).toHaveBeenCalledWith(
+				"app-1",
+				{
+					videoId: "video-1",
+					language: "en",
+					metadata: { a: 1 },
+					idempotencyKey: "retry-key-1",
+				},
+			);
+			expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			const body = await response.json();
+			expect(body.data).toMatchObject({
+				id: "tr-1",
+				videoId: "video-1",
+				source: { type: "video", url: null },
+			});
+			expect(JSON.stringify(body)).not.toContain("video.mp4");
+		});
+
+		it("returns a null video id for a transcript that is not from a video", async () => {
+			mocks.store.createTranscriptFromUrl.mockResolvedValue({
+				ok: true,
+				transcript: transcript(),
+			});
+			const response = await post(
+				"/",
+				{ url: "https://media.example.com/a.mp3" },
+				SECRET,
+			);
+			expect((await response.json()).data).toMatchObject({
+				videoId: null,
+				source: { type: "url" },
+			});
+		});
+
+		it.each([
+			["both url and videoId", { url: "https://a.example/a", videoId: "v1" }],
+			["neither url nor videoId", { name: "Standup" }],
+			["an empty body", {}],
+		])("refuses %s", async (_label, body) => {
+			const response = await post("/", body, SECRET);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({
+				code: "invalid_request",
+				error: "Invalid request: Send exactly one of url or videoId",
+			});
+			expect(mocks.store.createTranscriptFromUrl).not.toHaveBeenCalled();
+			expect(mocks.store.createTranscriptFromVideo).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			[{ videoId: "" }],
+			[{ videoId: 42 }],
+			[{ videoId: "v".repeat(65) }],
+			[{ videoId: "video-1", video_id: "video-1" }],
+		])("rejects the invalid video body %j", async (body) => {
+			const response = await post("/", body, SECRET);
+			expect(response.status).toBe(400);
+			expect(mocks.store.createTranscriptFromVideo).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			[404, "video_not_found"],
+			[409, "video_not_ready"],
+		] as const)("answers %i %s from the store", async (status, code) => {
+			mocks.store.createTranscriptFromVideo.mockResolvedValue({
+				ok: false,
+				status,
+				code,
+				message: "Video problem",
+				hint: "Fix it",
+			});
+			const response = await post("/", { videoId: "video-1" }, SECRET);
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject({ code });
+		});
 
 		it("rejects a malformed idempotency key", async () => {
 			const response = await post(

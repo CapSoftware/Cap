@@ -228,7 +228,7 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		return new Date(clock);
 	};
 
-	const select = (fields?: Record<string, unknown>) => ({
+	const select = (fields?: Record<string, unknown>, distinct = false) => ({
 		from: (table: Table) => {
 			const state = {
 				condition: undefined as SQL | undefined,
@@ -261,10 +261,19 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 							Object.entries(fields).filter(([alias]) => !(alias in scalars)),
 						)
 					: fields;
-				const projected = project(rows, selected).map((row) => ({
+				const all = project(rows, selected).map((row) => ({
 					...row,
 					...scalars,
 				}));
+				const seen = new Set<string>();
+				const projected = distinct
+					? all.filter((row) => {
+							const key = JSON.stringify(row);
+							if (seen.has(key)) return false;
+							seen.add(key);
+							return true;
+						})
+					: all;
 				return projected.slice(
 					state.offset,
 					state.limit === undefined ? undefined : state.offset + state.limit,
@@ -359,7 +368,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		},
 	});
 
-	const client = { select, insert, update, delete: remove };
+	const client = {
+		select: (fields?: Record<string, unknown>) => select(fields),
+		selectDistinct: (fields: Record<string, unknown>) => select(fields, true),
+		insert,
+		update,
+		delete: remove,
+	};
 
 	const transaction = <T>(callback: (tx: typeof client) => Promise<T>) => {
 		const run = async () => {

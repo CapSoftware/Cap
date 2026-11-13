@@ -32,6 +32,10 @@ import {
 	transcriptObjectKeys,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
+import {
+	findVideoForTranscript,
+	syncVideoCaptions,
+} from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
 import {
 	assertPublicMediaUrl,
@@ -463,6 +467,127 @@ export async function createTranscriptFromUrl(
 	return { ok: true, transcript };
 }
 
+const VIDEO_NOT_FOUND = fail(
+	404,
+	"video_not_found",
+	"Video not found",
+	"Check the video ID and that it belongs to this app.",
+);
+
+const TRANSCRIPT_MAX_VIDEO_ID_LENGTH = 64;
+
+export async function createTranscriptFromVideo(
+	appId: string,
+	input: TranscriptOptionsInput & { videoId: string; idempotencyKey?: string },
+): Promise<{ ok: true; transcript: TranscriptRow } | TranscriptFailure> {
+	const options = validateTranscriptOptions(input);
+	if (!options.ok) return options;
+
+	const videoId = typeof input.videoId === "string" ? input.videoId.trim() : "";
+	if (videoId.length === 0 || videoId.length > TRANSCRIPT_MAX_VIDEO_ID_LENGTH) {
+		return fail(
+			400,
+			"invalid_video_id",
+			"The video ID is not valid",
+			"Send the id of a video in this app.",
+		);
+	}
+
+	const id = input.idempotencyKey
+		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
+		: nanoId();
+
+	const differsFromRequest = (existing: TranscriptRow) => {
+		if (existing.sourceType !== "video") return IDEMPOTENCY_CONFLICT;
+		if (existing.videoId !== videoId) return idempotencyMismatch("videoId");
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? existing.name,
+		});
+		if (different) return idempotencyMismatch(different);
+		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
+	};
+
+	if (input.idempotencyKey) {
+		const existing = await findTranscriptAnyState(appId, id);
+		if (existing) {
+			const conflict = differsFromRequest(existing);
+			if (conflict) return conflict;
+			if (existing.status === "queued") {
+				await dispatchTranscript(id, "queued");
+			}
+			return {
+				ok: true,
+				transcript: (await findTranscript(appId, id)) ?? existing,
+			};
+		}
+	}
+
+	const video = await findVideoForTranscript(appId, videoId);
+	if (video.state === "not_found") return VIDEO_NOT_FOUND;
+	if (video.state === "not_ready") {
+		return video.status === "ready" || video.status === "errored"
+			? fail(
+					409,
+					"video_not_ready",
+					video.status === "errored"
+						? "The video failed to process and has no file to transcribe"
+						: "The video has no stored file to transcribe",
+					"Upload the video again, then transcribe the new video.",
+				)
+			: fail(
+					409,
+					"video_not_ready",
+					"The video is not ready yet",
+					"Wait until the video status is ready, then send the request again.",
+				);
+	}
+
+	const gate = await startGate(appId);
+	if (gate) return gate;
+
+	await db()
+		.insert(developerTranscripts)
+		.values({
+			id,
+			appId,
+			externalUserId: options.externalUserId,
+			name: options.name ?? video.name,
+			status: "queued",
+			queuedAt: new Date(),
+			sourceType: "video",
+			videoId,
+			s3Key: video.sourceKey,
+			requestedLanguage: options.requestedLanguage,
+			metadata: options.metadata,
+		})
+		.onDuplicateKeyUpdate({ set: { id } });
+
+	const stored = await findTranscriptAnyState(appId, id);
+	if (!stored) return NOT_FOUND;
+	const conflict = differsFromRequest(stored);
+	if (conflict) return conflict;
+
+	const dispatched = await dispatchTranscript(id, "queued");
+	if (dispatched === "failed") {
+		await db()
+			.delete(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.id, id),
+					eq(developerTranscripts.appId, appId),
+					eq(developerTranscripts.status, "queued"),
+					isNull(developerTranscripts.startedAt),
+				),
+			);
+		return SPEECH_UNAVAILABLE;
+	}
+
+	const transcript = await findTranscript(appId, id);
+	if (!transcript) return NOT_FOUND;
+	return { ok: true, transcript };
+}
+
 export type TranscriptUploadTarget = {
 	method: "PUT";
 	url: string;
@@ -671,6 +796,7 @@ const summaryColumns = {
 	status: developerTranscripts.status,
 	sourceType: developerTranscripts.sourceType,
 	sourceUrl: developerTranscripts.sourceUrl,
+	videoId: developerTranscripts.videoId,
 	s3Key: developerTranscripts.s3Key,
 	resultKey: developerTranscripts.resultKey,
 	sourceBytes: developerTranscripts.sourceBytes,
@@ -791,6 +917,17 @@ export async function deleteTranscript(
 		);
 
 	await deleteTranscriptObjects(appId, transcript.id);
+	if (
+		transcript.videoId &&
+		transcript.status === "complete" &&
+		(transcript.wordCount ?? 0) > 0
+	) {
+		await syncVideoCaptions({
+			appId,
+			videoId: transcript.videoId,
+			language: transcript.language,
+		});
+	}
 	return { ok: true };
 }
 
