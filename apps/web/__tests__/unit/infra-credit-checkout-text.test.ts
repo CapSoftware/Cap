@@ -43,7 +43,7 @@ describe("credit purchase text", () => {
 			receiptEmail: "owner@example.com",
 		});
 		expect(params.line_items[0]?.price_data.product).toBe("prod_credits");
-		expect(params.payment_method_types).toEqual(["card", "link"]);
+		expect(params.payment_method_types).toEqual(["card"]);
 	});
 });
 
@@ -57,14 +57,19 @@ describe("3D Secure on large credit purchases", () => {
 			receiptEmail: "owner@example.com",
 		});
 
-	it("leaves exactly $1,000 on card and Link with no card options", () => {
-		expect(CREDIT_CHECKOUT_3DS_OVER_CENTS).toBe(100_000);
-		const params = paramsFor(100_000);
-		expect(params.payment_method_types).toEqual(["card", "link"]);
-		expect(params).not.toHaveProperty("payment_method_options");
+	it("offers card only on every credit checkout, whatever the amount", () => {
+		for (const amountCents of [500, 5_000, 100_000, 100_001, 1_000_000]) {
+			expect(paramsFor(amountCents).payment_method_types).toEqual(["card"]);
+		}
 	});
 
-	it("asks for 3D Secure and offers card only from $1,000.01", () => {
+	it("sends no card options at exactly $1,000", () => {
+		expect(CREDIT_CHECKOUT_3DS_OVER_CENTS).toBe(100_000);
+		expect(paramsFor(100_000)).not.toHaveProperty("payment_method_options");
+		expect(paramsFor(5_000)).not.toHaveProperty("payment_method_options");
+	});
+
+	it("asks for 3D Secure from $1,000.01", () => {
 		for (const amountCents of [100_001, 500_000, 1_000_000]) {
 			const params = paramsFor(amountCents);
 			expect(params.payment_method_types).toEqual(["card"]);
@@ -84,16 +89,11 @@ describe("3D Secure on large credit purchases", () => {
 
 	it("changes nothing else about the session", () => {
 		const {
-			payment_method_types: _largeTypes,
 			payment_method_options: _options,
 			line_items: largeItems,
 			...large
 		} = paramsFor(100_001);
-		const {
-			payment_method_types: _smallTypes,
-			line_items: smallItems,
-			...small
-		} = paramsFor(100_000);
+		const { line_items: smallItems, ...small } = paramsFor(100_000);
 		expect(large).toEqual(small);
 		expect(largeItems[0]?.price_data.unit_amount).toBe(100_001);
 		expect(smallItems[0]?.price_data.unit_amount).toBe(100_000);

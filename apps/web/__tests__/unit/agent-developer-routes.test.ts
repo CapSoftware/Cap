@@ -410,7 +410,7 @@ describe("developer routes of the agent API", () => {
 				enabled: true,
 				invoice_data: { description: "Cap Infra credits for Course site" },
 			},
-			payment_method_types: ["card", "link"],
+			payment_method_types: ["card"],
 			payment_intent_data: {
 				description: "Cap Infra credits for Course site",
 				receipt_email: "owner@example.com",

@@ -5,7 +5,7 @@ export const CREDIT_CHECKOUT_METADATA_TYPE = "developer_credits";
 
 export const STRIPE_DESCRIPTION_LIMIT = 1_000;
 
-export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card", "link"] as const;
+export const CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES = ["card"] as const;
 
 export const CREDIT_CHECKOUT_3DS_OVER_CENTS = 100_000;
 
@@ -56,9 +56,7 @@ export function creditCheckoutSessionParams({
 			},
 		],
 		mode: "payment",
-		payment_method_types: largePurchase
-			? ["card"]
-			: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
+		payment_method_types: [...CREDIT_CHECKOUT_PAYMENT_METHOD_TYPES],
 		...(largePurchase
 			? {
 					payment_method_options: {
