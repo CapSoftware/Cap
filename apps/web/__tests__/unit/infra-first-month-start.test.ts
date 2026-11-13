@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@cap/database", () => ({ db: () => ({}) }));
 
 import {
 	clearFirstMonthChargesBeganCache,
+	FIRST_MONTH_START_SETTLED_MS,
 	firstMonthChargesBegan,
 } from "@/lib/infra-first-month-start";
 
@@ -42,6 +43,12 @@ const reader = (results: (Date | null)[]) => {
 describe("when first month charging began", () => {
 	beforeEach(() => {
 		clearFirstMonthChargesBeganCache();
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-13T15:00:00.000Z"));
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("reads the start once it is known, and never queries for it again", async () => {
@@ -71,11 +78,31 @@ describe("when first month charging began", () => {
 
 	it("hands out a copy, so a caller cannot move the start", async () => {
 		const database = reader([FIRST_CHARGE]);
-		const began = await firstMonthChargesBegan(database.database);
-		began?.setTime(0);
+		const read = await firstMonthChargesBegan(database.database);
+		read?.setTime(0);
+		const cached = await firstMonthChargesBegan(database.database);
+		cached?.setTime(0);
 
 		expect(await firstMonthChargesBegan(database.database)).toEqual(
 			FIRST_CHARGE,
 		);
+		expect(database.reads.count).toBe(1);
+	});
+
+	it("keeps reading a start younger than the settle window, so an earlier charge committing late is still found", async () => {
+		const late = new Date("2026-11-13T14:59:00.000Z");
+		const earlier = new Date("2026-11-13T14:58:30.000Z");
+		const database = reader([late, earlier, earlier]);
+
+		expect(await firstMonthChargesBegan(database.database)).toEqual(late);
+		expect(await firstMonthChargesBegan(database.database)).toEqual(earlier);
+		expect(database.reads.count).toBe(2);
+
+		vi.setSystemTime(
+			new Date(earlier.getTime() + FIRST_MONTH_START_SETTLED_MS),
+		);
+		expect(await firstMonthChargesBegan(database.database)).toEqual(earlier);
+		expect(await firstMonthChargesBegan(database.database)).toEqual(earlier);
+		expect(database.reads.count).toBe(3);
 	});
 });
