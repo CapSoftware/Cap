@@ -416,6 +416,7 @@ describe("hosted Cap Infra MCP tools", () => {
 			"videos_create_upload",
 			"videos_delete",
 			"videos_get",
+			"videos_import",
 			"videos_list",
 			"videos_wait",
 		]);

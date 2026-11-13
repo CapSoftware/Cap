@@ -1,8 +1,10 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
-import { WEBHOOK_EVENT_TYPES } from "@/lib/developer-webhook-events";
+import {
+	createWebhookEndpointInput,
+	updateWebhookEndpointInput,
+} from "@/lib/developer-webhook-input";
 import {
 	createWebhookEndpoint,
 	deleteWebhookEndpoint,
@@ -28,34 +30,9 @@ export const app = new Hono<{
 const failureBody = (failure: WebhookFailure) =>
 	apiErrorBody(failure.code, failure.message, failure.hint);
 
-const endpointFields = {
-	url: z.string().min(1).max(2048),
-	events: z
-		.array(
-			z.enum(WEBHOOK_EVENT_TYPES, {
-				error: (issue) =>
-					`Unknown event${typeof issue.input === "string" ? ` ${JSON.stringify(issue.input.slice(0, 100))}` : ""}. Use ${WEBHOOK_EVENT_TYPES.join(" or ")}.`,
-			}),
-		)
-		.min(1, {
-			error: `events must list at least one of: ${WEBHOOK_EVENT_TYPES.join(", ")}`,
-		})
-		.refine((types) => new Set(types).size === types.length, {
-			message: "Each event type can be listed once",
-		}),
-	enabled: z.boolean(),
-};
-
 app.post(
 	"/",
-	developerZValidator(
-		"json",
-		z.strictObject({
-			url: endpointFields.url,
-			events: endpointFields.events.optional(),
-			enabled: endpointFields.enabled.optional(),
-		}),
-	),
+	developerZValidator("json", createWebhookEndpointInput),
 	async (c) => {
 		const result = await createWebhookEndpoint(
 			c.get("developerAppId"),
@@ -107,18 +84,7 @@ app.get("/:id", async (c) => {
 
 app.patch(
 	"/:id",
-	developerZValidator(
-		"json",
-		z
-			.strictObject({
-				url: endpointFields.url.optional(),
-				events: endpointFields.events.optional(),
-				enabled: endpointFields.enabled.optional(),
-			})
-			.refine((fields) => Object.keys(fields).length > 0, {
-				message: "Send at least one of url, events or enabled",
-			}),
-	),
+	developerZValidator("json", updateWebhookEndpointInput),
 	async (c) => {
 		const result = await updateWebhookEndpoint(
 			c.get("developerAppId"),
