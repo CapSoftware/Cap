@@ -207,6 +207,8 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
 	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
+	/** Transcription and AI generation retries per user, from the share page and the agent API. Suggested: 30 / 1h per key (user). */
+	PROCESSING_RETRY: "rl_processing_retry",
 	/** Video edit saves and restores per user: each one re-encodes the video and regenerates AI output. Suggested: 30 / 1h per key (user). */
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
@@ -269,6 +271,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 1,
 		windowMs: 60 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.PROCESSING_RETRY]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },

@@ -179,6 +179,7 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
+import { processingRetryLimited } from "@/lib/processing-retry-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
@@ -7851,6 +7852,20 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const { row, rules } = yield* getViewableCap(path.id);
 						if (row.ownerId !== principal.id) {
 							return yield* forbidden(requestId);
+						}
+						if (payload.retry === true) {
+							const request = yield* HttpServerRequest.HttpServerRequest;
+							const headers = new Headers();
+							for (const [name, value] of Object.entries(request.headers)) {
+								headers.set(name, value);
+							}
+							if (
+								yield* Effect.promise(() =>
+									processingRetryLimited(principal.id, headers),
+								)
+							) {
+								return yield* rateLimited(requestId);
+							}
 						}
 						const includesTranscript = payload.target !== "ai";
 						const includesAi = payload.target !== "transcript";
