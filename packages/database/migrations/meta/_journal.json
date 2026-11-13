@@ -402,9 +402,16 @@
 			"breakpoints": true
 		},
 		{
+			"idx": 57,
+			"version": "5",
+			"when": 1794545935647,
+			"tag": "0057_developer_transcript_video",
+			"breakpoints": true
+		},
+		{
 			"idx": 58,
 			"version": "5",
-			"when": 1794547418121,
+			"when": 1794548555003,
 			"tag": "0058_developer_video_first_month",
 			"breakpoints": true
 		}

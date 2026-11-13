@@ -33,7 +33,11 @@ vi.mock("@cap/database", async () => {
 					limit: async () => rowsFor(table),
 					groupBy: async () => rowsFor(table),
 				});
-			const query = { innerJoin: () => query, where };
+			const query = {
+				innerJoin: () => query,
+				leftJoin: () => query,
+				where,
+			};
 			return query;
 		},
 	});
@@ -123,6 +127,7 @@ const freshKey = (prefix: "csk" | "cpk" | "cut") =>
 				videoId: `video-${++keySerial}`,
 				expiresAt: Date.now() + 60_000,
 				corsOrigin: null,
+				keyId: "key-contract",
 			})
 		: `${prefix}_key_${++keySerial}`;
 
