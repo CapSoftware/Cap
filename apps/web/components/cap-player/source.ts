@@ -177,7 +177,6 @@ export const pickStartingLevel = (
 	return pick;
 };
 
-// Whether level `a` is sharper than level `b`, both indexes into `levels`.
 export const isSharper = (
 	levels: readonly Rendition[],
 	a: number,
