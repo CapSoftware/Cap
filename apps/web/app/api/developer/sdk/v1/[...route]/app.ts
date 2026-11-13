@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import {
 	developerApiError,
 	developerApiNotFound,
+	developerResponseHeaders,
 	developerSdkCors,
 	developerUploadRateLimiter,
 	refuseDeveloperPublicKey,
@@ -10,6 +11,7 @@ import * as upload from "./upload";
 
 export const app = new Hono()
 	.basePath("/api/developer/sdk/v1")
+	.use(developerResponseHeaders)
 	.use(developerSdkCors)
 	.use(developerUploadRateLimiter)
 	.use(refuseDeveloperPublicKey)
