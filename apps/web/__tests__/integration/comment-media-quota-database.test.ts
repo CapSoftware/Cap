@@ -136,7 +136,7 @@ const put = (url: string, contentType: string, bytes: Uint8Array) =>
 	fetch(url, {
 		method: "PUT",
 		headers: { "content-type": contentType },
-		body: bytes,
+		body: new Blob([bytes as Uint8Array<ArrayBuffer>]),
 	});
 
 const storedCount = async () => {
