@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "e34c4bbb-bbe7-4786-ab07-0a9653f6fa17",
+	"id": "c0df94ec-9eca-475a-8bc2-e4b6fac32aea",
 	"prevId": "2773f4a4-e037-4a2a-9537-3e419186570c",
 	"tables": {
 		"accounts": {
@@ -1345,6 +1345,13 @@
 					"notNull": false,
 					"autoincrement": false
 				},
+				"requestedAt": {
+					"name": "requestedAt",
+					"type": "timestamp(3)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"s3Key": {
 					"name": "s3Key",
 					"type": "varchar(512)",
@@ -1514,7 +1521,7 @@
 				},
 				"dev_transcripts_app_video_idx": {
 					"name": "dev_transcripts_app_video_idx",
-					"columns": ["appId", "videoId", "createdAt", "id"],
+					"columns": ["appId", "videoId", "requestedAt", "id"],
 					"isUnique": false
 				}
 			},

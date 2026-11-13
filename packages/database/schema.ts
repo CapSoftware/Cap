@@ -1951,6 +1951,7 @@ export const developerTranscripts = mysqlTable(
 			.$type<DeveloperTranscriptSourceType>(),
 		sourceUrl: varchar("sourceUrl", { length: 2048 }),
 		videoId: nanoIdNullable("videoId"),
+		requestedAt: timestamp("requestedAt", { fsp: 3 }),
 		s3Key: varchar("s3Key", { length: 512 }),
 		resultKey: varchar("resultKey", { length: 512 }),
 		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
@@ -2006,7 +2007,7 @@ export const developerTranscripts = mysqlTable(
 		index("dev_transcripts_app_video_idx").on(
 			table.appId,
 			table.videoId,
-			table.createdAt,
+			table.requestedAt,
 			table.id,
 		),
 	],
