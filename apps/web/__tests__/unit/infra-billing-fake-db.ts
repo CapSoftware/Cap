@@ -319,11 +319,15 @@ function runSelect(query: Query): Record<string, unknown>[] {
 			}
 			const [, type, at] = rendered.params;
 			if (at === "delivery_day") {
-				return latestWritten(
-					ledger.rows.filter(
-						(row) => row.type === type && row.referenceType === at,
-					),
-				).slice(0, 1);
+				return ledger.rows
+					.filter((row) => row.type === type && row.referenceType === at)
+					.sort(
+						(a, b) =>
+							b.createdAt.getTime() - a.createdAt.getTime() ||
+							String(b.referenceId).localeCompare(String(a.referenceId)) ||
+							byId(a, b),
+					)
+					.slice(0, 1);
 			}
 			const ofType = latestWritten(
 				ledger.rows.filter((row) => row.type === type),

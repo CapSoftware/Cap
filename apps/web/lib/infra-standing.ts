@@ -169,15 +169,18 @@ async function latestDeliveryCharge(
 		)
 		.orderBy(
 			desc(developerCreditTransactions.createdAt),
+			desc(developerCreditTransactions.referenceId),
 			desc(developerCreditTransactions.id),
 		)
 		.limit(1);
 	return row ?? null;
 }
 
-// A delivery day is charged two days after it ends, once its CDN logs are
-// final, so it is ordered against storage days by when it was posted rather
-// than by its day key. The later posted daily charge carries the standing,
+// A delivery day is charged once its CDN logs are final, at least two days
+// after it ends, so it is ordered against storage days by when it was posted
+// rather than by its day key. createdAt has whole-second precision and ids are
+// random, so delivery days posted in the same second, which a sweep settles
+// oldest first, are ordered by their day. The later posted daily charge carries the standing,
 // exactly as the latest storage day does on its own. While delivery billing
 // is off, no delivery row is read, so standing is exactly as before.
 async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
