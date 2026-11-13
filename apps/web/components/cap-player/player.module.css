@@ -46,6 +46,11 @@
 	background: #000;
 }
 
+.video:focus-visible {
+	outline: 2px solid var(--cap-player-ink);
+	outline-offset: -2px;
+}
+
 .spinner {
 	position: absolute;
 	left: 50%;
@@ -88,6 +93,7 @@
 
 .start {
 	position: absolute;
+	z-index: 1;
 	left: 50%;
 	top: 50%;
 	display: grid;
@@ -96,7 +102,6 @@
 	height: 64px;
 	margin: -32px 0 0 -32px;
 	padding: 0;
-	z-index: 1;
 	border: 0;
 	border-radius: 50%;
 	background: rgba(12, 13, 15, 0.62);
@@ -470,6 +475,16 @@
 @media (hover: none) {
 	.volumeTrack {
 		display: none;
+	}
+}
+
+@media (pointer: coarse) {
+	.player {
+		--cap-player-control: 44px;
+	}
+
+	.item {
+		height: 44px;
 	}
 }
 
