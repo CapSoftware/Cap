@@ -5,6 +5,7 @@ import {
 	formatCharge,
 	formatCredits,
 	formatDuration,
+	formatDurationOrDash,
 	summarizeStorageMonth,
 	utcDaysAgoKey,
 	utcMonthStart,
@@ -126,5 +127,16 @@ describe("formatAudioLength", () => {
 
 	it("reads zero as minutes", () => {
 		expect(formatAudioLength(0)).toBe("0 audio minutes");
+	});
+});
+
+describe("formatDurationOrDash", () => {
+	it("shows a dash when nothing was measured", () => {
+		expect(formatDurationOrDash(null)).toBe("–");
+		expect(formatDurationOrDash(undefined)).toBe("–");
+	});
+
+	it("shows a measured length as minutes and seconds", () => {
+		expect(formatDurationOrDash(120)).toBe("2:00");
 	});
 });

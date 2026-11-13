@@ -125,6 +125,12 @@ export function formatDuration(seconds: number | null | undefined) {
 		: `${mins}:${pad(secs)}`;
 }
 
+export const NO_DURATION = "–";
+
+export function formatDurationOrDash(seconds: number | null | undefined) {
+	return formatDuration(seconds) ?? NO_DURATION;
+}
+
 export function formatAudioLength(seconds: number) {
 	const total = Math.max(0, Number(seconds) || 0);
 	const plural = (value: number, unit: string) =>
