@@ -1143,6 +1143,15 @@ fn microphone_available(name: &str) -> bool {
     }
 }
 
+/// Starts a recording in the given mode (or falls back to the stored Studio/Instant mode).
+pub(crate) fn start_default_recording(mode: Option<Mode>, cx: &mut App) {
+    let resolved_mode = match mode.unwrap_or_else(Mode::from_store) {
+        Mode::Studio => Mode::Studio,
+        Mode::Instant | Mode::Screenshot => Mode::Instant,
+    };
+    start_from_hotkey(resolved_mode, cx);
+}
+
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
 /// (`hotkeys.rs:158-177`, `lib.rs:5529-5551` over there): confirm a start
 /// without a working microphone, then record. Mic/camera come off the main

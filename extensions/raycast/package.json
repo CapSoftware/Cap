@@ -1,0 +1,80 @@
+{
+	"$schema": "https://www.raycast.com/schemas/extension.json",
+	"name": "cap",
+	"title": "Cap",
+	"description": "Start and stop screen recordings with Cap and open your dashboard.",
+	"icon": "icon.png",
+	"author": "CapSoftware",
+	"categories": ["Productivity", "Media"],
+	"license": "MIT",
+	"preferences": [
+		{
+			"name": "serverUrl",
+			"type": "textfield",
+			"required": false,
+			"title": "Cap Server URL",
+			"description": "Custom self-hosted Cap server URL (defaults to your Cap desktop setting or https://cap.so).",
+			"placeholder": "https://cap.so"
+		}
+	],
+	"commands": [
+		{
+			"name": "start-recording",
+			"title": "Start Recording",
+			"description": "Start recording with your saved Cap default settings",
+			"mode": "no-view",
+			"arguments": [
+				{
+					"name": "mode",
+					"type": "dropdown",
+					"placeholder": "Recording Mode",
+					"required": false,
+					"data": [
+						{
+							"title": "Default (Saved in Cap)",
+							"value": "default"
+						},
+						{
+							"title": "Instant Mode",
+							"value": "instant"
+						},
+						{
+							"title": "Studio Mode",
+							"value": "studio"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "stop-recording",
+			"title": "Stop Recording",
+			"description": "Stop the active Cap recording and copy the shareable link",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-dashboard",
+			"title": "Open Dashboard",
+			"description": "Open your Cap web dashboard",
+			"mode": "no-view"
+		},
+		{
+			"name": "open-settings",
+			"title": "Open Cap Settings",
+			"description": "Open Cap desktop settings",
+			"mode": "no-view"
+		}
+	],
+	"dependencies": {
+		"@raycast/api": "^1.88.0"
+	},
+	"devDependencies": {
+		"@types/node": "20.8.10",
+		"@types/react": "18.2.27",
+		"typescript": "^5.4.5"
+	},
+	"scripts": {
+		"build": "ray build -e dist",
+		"dev": "ray develop"
+	}
+}
