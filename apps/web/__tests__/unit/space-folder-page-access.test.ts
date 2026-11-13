@@ -5,6 +5,9 @@ import FolderPage from "@/app/(org)/dashboard/spaces/[spaceId]/folder/[folderId]
 const mocks = vi.hoisted(() => ({
 	spaceOrOrg: null as unknown,
 	folder: null as unknown,
+	canManage: true,
+	orgRole: "owner",
+	NewSubfolderButton: () => null,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -51,10 +54,10 @@ vi.mock("@/lib/folder", async () => {
 });
 vi.mock("@/lib/org-pro", () => ({ isOrganizationOwnerPro: async () => true }));
 vi.mock("@/actions/organization/authorization", () => ({
-	getOrganizationAccess: async () => ({ role: "owner" }),
+	getOrganizationAccess: async () => ({ role: mocks.orgRole }),
 }));
 vi.mock("@/actions/organization/space-authorization", () => ({
-	getSpaceAccess: async () => ({ canManage: true }),
+	getSpaceAccess: async () => ({ canManage: mocks.canManage }),
 }));
 vi.mock("@/app/(org)/dashboard/_components/CollectionShareControl", () => ({
 	CollectionShareControl: () => null,
@@ -65,7 +68,7 @@ vi.mock("@/app/(org)/dashboard/caps/components/FoldersSection", () => ({
 vi.mock("@/app/(org)/dashboard/folder/[id]/components", () => ({
 	BreadcrumbItem: () => null,
 	ClientMyCapsLink: () => null,
-	NewSubfolderButton: () => null,
+	NewSubfolderButton: mocks.NewSubfolderButton,
 }));
 vi.mock(
 	"@/app/(org)/dashboard/folder/[id]/components/FolderVideosSection",
@@ -108,7 +111,16 @@ const load = (spaceId: string) =>
 beforeEach(() => {
 	mocks.spaceOrOrg = null;
 	mocks.folder = null;
+	mocks.canManage = true;
+	mocks.orgRole = "owner";
 });
+
+const renders = (node: unknown, type: unknown): boolean => {
+	if (Array.isArray(node)) return node.some((child) => renders(child, type));
+	if (!node || typeof node !== "object" || !("props" in node)) return false;
+	const element = node as { type: unknown; props: { children?: unknown } };
+	return element.type === type || renders(element.props.children, type);
+};
 
 describe("space folder page scope", () => {
 	it("renders a folder that belongs to the space", async () => {
@@ -148,4 +160,31 @@ describe("space folder page scope", () => {
 			await expect(load("org-1")).rejects.toThrow("NOT_FOUND");
 		},
 	);
+});
+
+describe("space folder page New Subfolder button", () => {
+	it("shows it to someone who can manage the space", async () => {
+		mocks.spaceOrOrg = SPACE;
+		mocks.folder = folder("space-1");
+
+		expect(renders(await load("space-1"), mocks.NewSubfolderButton)).toBe(true);
+	});
+
+	it("hides it from a space member who cannot create folders there", async () => {
+		mocks.spaceOrOrg = SPACE;
+		mocks.folder = folder("space-1");
+		mocks.canManage = false;
+
+		expect(renders(await load("space-1"), mocks.NewSubfolderButton)).toBe(
+			false,
+		);
+	});
+
+	it("hides it from an organization member on the organization entry", async () => {
+		mocks.spaceOrOrg = ORGANIZATION;
+		mocks.folder = folder("org-1");
+		mocks.orgRole = "member";
+
+		expect(renders(await load("org-1"), mocks.NewSubfolderButton)).toBe(false);
+	});
 });

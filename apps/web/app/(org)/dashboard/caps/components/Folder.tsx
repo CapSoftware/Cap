@@ -498,6 +498,7 @@ const FolderCard = ({
 					onCopyPublicLink={async () => {
 						await copyPublicLink();
 					}}
+					canEdit={moveEnabled}
 					canMove={moveEnabled}
 					onMove={() => setIsMoveDialogOpen(true)}
 				/>
