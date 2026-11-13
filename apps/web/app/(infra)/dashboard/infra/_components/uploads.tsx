@@ -31,6 +31,9 @@ import { INFRA_SUPPORTED_VIDEO_FORMATS } from "@/lib/infra-video-formats";
 import type { InfraLocalUpload } from "@/lib/infra-video-view";
 
 const PART_ATTEMPTS = 3;
+// Parts in flight at once. One stream on a long or lossy line is held far
+// below the line's speed; several streams fill it. Same as the SDK uploader.
+const PART_CONCURRENCY = 6;
 const COMPLETE_ATTEMPTS = 3;
 const RATE_LIMIT_ATTEMPTS = 6;
 const UPLOAD_API = "/api/developer/console/upload";
@@ -351,9 +354,16 @@ async function uploadFile(
 		const parts: { partNumber: number; etag: string; size: number }[] = [];
 		const total = Math.max(1, Math.ceil(file.size / partBytes));
 		const urls = new Map<number, string>();
-		const urlFor = async (partNumber: number) => {
-			if (!urls.has(partNumber)) {
-				const batch = await call<{
+		// Parts upload side by side, so several can find their link missing at
+		// once. Only one asks for a batch; the others wait for it and look again.
+		let presigning: Promise<void> | null = null;
+		const urlFor = async (partNumber: number, partSignal: AbortSignal) => {
+			while (!urls.has(partNumber)) {
+				if (presigning) {
+					await presigning.catch(() => {});
+					continue;
+				}
+				presigning = call<{
 					parts: { partNumber: number; presignedUrl: string }[];
 				}>(
 					"/presign",
@@ -363,40 +373,84 @@ async function uploadFile(
 						uploadId,
 						partNumbers: presignBatch(partNumber, total),
 					},
-					signal,
-				);
-				for (const part of batch.parts) {
-					urls.set(part.partNumber, part.presignedUrl);
+					partSignal,
+				).then((batch) => {
+					for (const part of batch.parts) {
+						urls.set(part.partNumber, part.presignedUrl);
+					}
+				});
+				try {
+					await presigning;
+				} finally {
+					presigning = null;
 				}
+				break;
 			}
 			const url = urls.get(partNumber);
 			urls.delete(partNumber);
 			if (!url) throw new UploadError("A part of the file failed to upload");
 			return url;
 		};
-		for (let index = 0; index < total; index++) {
+
+		// One failed part stops the rest, and its error is the one reported.
+		const partsWork = new AbortController();
+		const stopParts = () => partsWork.abort();
+		signal.addEventListener("abort", stopParts, { once: true });
+		const loaded = new Map<number, number>();
+		let loadedTotal = 0;
+		let next = 0;
+		let failure: unknown = null;
+		const uploadPart = async (index: number) => {
 			const blob = file.slice(index * partBytes, (index + 1) * partBytes);
-			const sent = index * partBytes;
-			let etag: string | null = null;
-			for (let attempt = 1; !etag; attempt++) {
-				stopIfCancelled();
+			const onProgress = (bytes: number) => {
+				loadedTotal += bytes - (loaded.get(index) ?? 0);
+				loaded.set(index, bytes);
+				show(loadedTotal / Math.max(1, file.size), "Uploading");
+			};
+			for (let attempt = 1; ; attempt++) {
+				if (partsWork.signal.aborted) throw new UploadError(CANCELLED);
 				try {
-					const presignedUrl = await urlFor(index + 1);
-					stopIfCancelled();
-					etag = await putPart(
+					const presignedUrl = await urlFor(index + 1, partsWork.signal);
+					if (partsWork.signal.aborted) throw new UploadError(CANCELLED);
+					const etag = await putPart(
 						presignedUrl,
 						blob,
-						(loaded) =>
-							show((sent + loaded) / Math.max(1, file.size), "Uploading"),
-						signal,
+						onProgress,
+						partsWork.signal,
 					);
+					onProgress(blob.size);
+					parts.push({ partNumber: index + 1, etag, size: blob.size });
+					return;
 				} catch (error) {
-					if (signal.aborted || attempt >= PART_ATTEMPTS) throw error;
-					await pause(1000 * attempt, signal);
+					if (partsWork.signal.aborted || attempt >= PART_ATTEMPTS) {
+						throw error;
+					}
+					onProgress(0);
+					await pause(1000 * attempt, partsWork.signal);
 				}
 			}
-			parts.push({ partNumber: index + 1, etag, size: blob.size });
+		};
+		const worker = async () => {
+			while (failure === null && next < total) {
+				const index = next++;
+				try {
+					await uploadPart(index);
+				} catch (error) {
+					failure ??= error;
+					partsWork.abort();
+				}
+			}
+		};
+		try {
+			await Promise.all(
+				Array.from({ length: Math.min(PART_CONCURRENCY, total) }, worker),
+			);
+		} finally {
+			signal.removeEventListener("abort", stopParts);
 		}
+		stopIfCancelled();
+		if (failure !== null) throw failure;
+		parts.sort((a, b) => a.partNumber - b.partNumber);
 
 		stopIfCancelled();
 		show(1, "Finishing", true);
