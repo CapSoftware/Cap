@@ -33,6 +33,9 @@ export const Header = ({ anchorBase = "" }: { anchorBase?: string }) => (
 				</nav>
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5">
+				<Link href={LINKS.home} className={`${NAV_ITEM} hidden sm:inline-flex`}>
+					Cap.so
+				</Link>
 				<Link href={LINKS.signIn} className={NAV_ITEM}>
 					Sign in
 				</Link>
