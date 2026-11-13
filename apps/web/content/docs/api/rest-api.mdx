@@ -974,7 +974,8 @@ curl https://cap.so/api/developer/v1/usage \
       "minutesByTier": { "1080p": 87.5, "1440p": 0, "2160p": 0 },
       "dailyChargeMinutesByTier": { "1080p": 60, "1440p": 0, "2160p": 0 },
       "dailyMicroCredits": 170,
-      "monthlyMicroCredits": 5100
+      "monthlyMicroCredits": 5100,
+      "storedMonthlyMicroCredits": 7438
     },
     "rates": {
       "microCreditsPerDollar": 100000,
@@ -1004,7 +1005,7 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 A video is billed at the lower of two tiers: the tier its source falls in by pixel count, and the `maxResolutionTier` it was created with. A 3840 by 2160 upload created with the default `1080p` tier is encoded and billed at `1080p`. `storage.minutesByTier` groups minutes the same way.
 
-**Storage.** `storage.minutesByTier` is what is stored: the minutes of the videos counted in `totalVideos`, in each tier. `storage.dailyChargeMinutesByTier` is the part of it the daily charge covers, the videos past their first month, and `dailyMicroCredits` and `monthlyMicroCredits` are what those cost per day and per 30 day month. A video in its first month counts in `minutesByTier` and not in the daily figures, because its month was charged when it became ready.
+**Storage.** `storage.minutesByTier` is what is stored: the minutes of the videos counted in `totalVideos`, in each tier. `storage.dailyChargeMinutesByTier` is the part of it the daily charge covers, the videos past their first month, and `dailyMicroCredits` and `monthlyMicroCredits` are what those cost per day and per 30 day month. A video in its first month counts in `minutesByTier` and not in the daily figures, because its month was charged when it became ready. `storedMonthlyMicroCredits` is what a 30 day month costs for everything in `minutesByTier`, first months included: the monthly cost of what is stored now.
 
 **Uploading.** `upload.allowed` is true when the app is in good standing and its balance pays for the first month of every video still encoding and covers 7 days of storage for the videos past their first month. `upload.requiredMicroCredits` is that amount and `upload.shortfallMicroCredits` is how much to add.
 

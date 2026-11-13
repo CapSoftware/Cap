@@ -1717,6 +1717,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 								type: "integer",
 								description: "The same over a 30 day month.",
 							},
+							storedMonthlyMicroCredits: {
+								type: "integer",
+								description:
+									"What a 30 day month of storage costs for every video in minutesByTier, those in their first month included, at the current rates. Answers how much the stored videos cost a month, where monthlyMicroCredits leaves out the first months already charged.",
+							},
 						},
 					},
 					rates: {
