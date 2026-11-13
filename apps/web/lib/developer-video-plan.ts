@@ -1,9 +1,9 @@
-import { randomBytes } from "node:crypto";
 import type {
 	DeveloperVideoRendition,
 	DeveloperVideoResolutionTier,
 } from "@cap/database/types";
 import { z } from "zod";
+import { randomDeveloperId } from "./developer-ids";
 
 export const DEVELOPER_VIDEO_DEFAULT_TIER: DeveloperVideoResolutionTier =
 	"1080p";
@@ -115,11 +115,11 @@ export function planDeveloperVideoEncode(
 }
 
 export function createDeveloperPlaybackId(): string {
-	return randomBytes(18).toString("base64url");
+	return randomDeveloperId(18);
 }
 
 export function createDeveloperEncodeId(): string {
-	return randomBytes(9).toString("base64url");
+	return randomDeveloperId(9);
 }
 
 export interface DeveloperVideoKeys {

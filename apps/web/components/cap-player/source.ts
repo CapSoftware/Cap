@@ -5,16 +5,81 @@ export interface CapPlayerSource {
 
 export type PlaybackMode = "native" | "mse" | "file" | "none";
 
+export interface CapPlayerLevel {
+	index: number;
+	width: number;
+	height: number;
+	bitrate: number;
+	label: string;
+}
+
 export interface Attachment {
 	stop: () => void;
 	warm: () => void;
+	setLevel: (index: number) => void;
 }
 
 export interface AttachOptions {
 	autoPlay: boolean;
 	startAt?: number;
 	onFatal: () => void;
+	onLevels?: (levels: CapPlayerLevel[]) => void;
 }
+
+export const AUTO_LEVEL = -1;
+
+export const resolutionLabel = (width: number, height: number) => {
+	const long = Math.max(width, height);
+	if (long >= 3840) return "4K";
+	if (long >= 2560) return "1440p";
+	if (long >= 1920) return "1080p";
+	if (long >= 1280) return "720p";
+	return long > 0 ? "360p" : "";
+};
+
+const NAMED_RENDITION = /(?:^|\/)(\d{3,4})p(?:\.m3u8)?(?:$|[?#])/;
+
+export const renditionLabel = (level: {
+	width: number;
+	height: number;
+	name?: string;
+	uri?: string;
+}) => {
+	const named =
+		NAMED_RENDITION.exec(level.name ?? "") ??
+		NAMED_RENDITION.exec(level.uri ?? "");
+	if (named) return named[1] === "2160" ? "4K" : `${named[1]}p`;
+	return resolutionLabel(level.width, level.height);
+};
+
+export const listLevels = (
+	levels: readonly {
+		width: number;
+		height: number;
+		bitrate: number;
+		name?: string;
+		uri?: string;
+	}[],
+): CapPlayerLevel[] => {
+	const best = new Map<string, CapPlayerLevel>();
+	levels.forEach((level, index) => {
+		const label = renditionLabel(level);
+		if (!label) return;
+		const kept = best.get(label);
+		if (!kept || level.bitrate > kept.bitrate) {
+			best.set(label, {
+				index,
+				label,
+				width: level.width,
+				height: level.height,
+				bitrate: level.bitrate,
+			});
+		}
+	});
+	return [...best.values()].sort(
+		(a, b) => b.width * b.height - a.width * a.height || b.bitrate - a.bitrate,
+	);
+};
 
 const HLS_MIME = "application/vnd.apple.mpegurl";
 // Safari and Firefox give no connection estimate. Assuming a slow line costs
@@ -129,7 +194,7 @@ export const attachSource = (
 	source: CapPlayerSource,
 	options: AttachOptions,
 ): Attachment => {
-	const { autoPlay, onFatal } = options;
+	const { autoPlay, onFatal, onLevels } = options;
 	const startAt = options.startAt ?? 0;
 	const mode = pickPlaybackMode(video, source);
 	let cancelled = false;
@@ -137,6 +202,7 @@ export const attachSource = (
 	let cancelWarm: () => void = () => undefined;
 	let startPending = startAt > 0;
 	let hlsSeeks = false;
+	let setLevel: (index: number) => void = () => undefined;
 
 	const start = () => {
 		if (autoPlay) void playAllowingMuted(video);
@@ -203,6 +269,8 @@ export const attachSource = (
 			return;
 		}
 		fileAttached = true;
+		setLevel = () => undefined;
+		onLevels?.([]);
 		video.removeEventListener("error", onNativeError);
 		video.addEventListener("error", onFatal);
 		detach = () => {
@@ -237,11 +305,19 @@ export const attachSource = (
 		}
 	};
 
-	const attachment = { stop, warm };
+	const attachment: Attachment = {
+		stop,
+		warm,
+		setLevel: (index) => setLevel(index),
+	};
 
 	if (mode === "none") {
 		onFatal();
-		return { stop: () => undefined, warm: () => undefined };
+		return {
+			stop: () => undefined,
+			warm: () => undefined,
+			setLevel: () => undefined,
+		};
 	}
 
 	video.addEventListener("loadedmetadata", seekToStart);
@@ -274,10 +350,12 @@ export const attachSource = (
 				maxMaxBufferLength: SECONDS_AHEAD_BEFORE_PLAY,
 			});
 			let playRequested = false;
+			let picked = AUTO_LEVEL;
 			const bufferFreely = () => {
 				playRequested = true;
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
-				hls.loadLevel = -1;
+				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
+				else hls.nextLevel = picked;
 			};
 			// hls.js seeks to the start time itself. The time stays pending
 			// until that seek lands, so a fallback to the MP4 before then
@@ -299,6 +377,7 @@ export const attachSource = (
 			// level is fixed because the first segment's speed reading would
 			// otherwise send it off to fetch a second rendition's playlist.
 			hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+				onLevels?.(listLevels(data.levels));
 				const level = pickStartingLevel(
 					data.levels,
 					video.clientWidth * window.devicePixelRatio,
@@ -327,6 +406,13 @@ export const attachSource = (
 				destroy();
 				playNative(reached);
 			});
+			// A pick changes rendition at the next segment. Switching at once
+			// flushes the whole buffer and freezes the picture on a slow line.
+			// Before play a pick is only remembered, so it downloads nothing.
+			setLevel = (index) => {
+				picked = index;
+				if (playRequested) hls.nextLevel = index;
+			};
 			video.preload = "auto";
 			hls.loadSource(source.hls);
 			hls.attachMedia(video);

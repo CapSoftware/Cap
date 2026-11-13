@@ -10,7 +10,7 @@ The repository contains internal webhook endpoints for services such as Stripe a
 
 ## Poll supported API state
 
-Use the [REST API](/docs/api/rest-api) to read the supported developer state. For an uploaded video, poll its status endpoint until `ready` is `true` before presenting it as processed.
+Use the [REST API](/docs/api/rest-api) to read the supported developer state. For an uploaded video, poll [Get Video Status](/docs/api/rest-api#get-video-status) until `status` is `ready` or `errored`. Present it as processed when it is `ready`.
 
 Keep polling bounded:
 
