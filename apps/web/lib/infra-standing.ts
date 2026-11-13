@@ -363,7 +363,8 @@ export async function latestStorageCharges(
 	return charges;
 }
 
-const availableAfterCredit = sql<number>`COALESCE(CAST(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${AVAILABLE_AFTER_FIELD}`}) AS SIGNED), ${developerCreditTransactions.balanceAfterMicroCredits})`;
+const availableAfterCredit = () =>
+	sql<number>`COALESCE(CAST(JSON_EXTRACT(${developerCreditTransactions.metadata}, ${`$.${AVAILABLE_AFTER_FIELD}`}) AS SIGNED), ${developerCreditTransactions.balanceAfterMicroCredits})`;
 
 type ChainRow = {
 	id: string;
@@ -405,7 +406,7 @@ export async function restoredSinceCharge(
 	const restoringCredit = and(
 		eq(developerCreditTransactions.accountId, accountId),
 		gt(developerCreditTransactions.amountMicroCredits, 0),
-		sql`${availableAfterCredit} >= ${charge.owedMicroCredits}`,
+		sql`${availableAfterCredit()} >= ${charge.owedMicroCredits}`,
 	);
 	const [later] = await executor
 		.select({ id: developerCreditTransactions.id })
