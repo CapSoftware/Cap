@@ -250,24 +250,48 @@ describe("hosted Cap Infra MCP auth", () => {
 	};
 
 	it.each([
-		["no Authorization header", null, "Invalid secret key"],
-		["a public key", "cpk_app1_copied_from_a_page", "Invalid secret key"],
-		["an upload token", "cut_uploadtoken123.signature", "Invalid secret key"],
+		[
+			"no Authorization header",
+			null,
+			401,
+			"invalid_secret_key",
+			"Missing secret key",
+		],
+		[
+			"a public key",
+			"cpk_app1_copied_from_a_page",
+			403,
+			"public_key_not_allowed",
+			"Public keys cannot call the REST API",
+		],
+		[
+			"an upload token",
+			"cut_uploadtoken123.signature",
+			401,
+			"invalid_secret_key",
+			"Invalid secret key",
+		],
 		[
 			"a secret key that does not exist",
 			"csk_app1_neverissued",
+			401,
+			"invalid_secret_key",
 			"Invalid or revoked secret key",
 		],
-	])("refuses %s like the REST API", async (_label, credential, message) => {
-		const response = await mcp(credential, initialize);
-		expect(response.status).toBe(401);
-		expect(response.headers.get("www-authenticate")).toContain("Bearer");
-		expect(await response.json()).toMatchObject({
-			code: "invalid_secret_key",
-			message,
-		});
-		expect(state.rest).toHaveLength(0);
-	});
+	])(
+		"refuses %s like the REST API",
+		async (_label, credential, status, code, message) => {
+			const response = await mcp(credential, initialize);
+			expect(response.status).toBe(status);
+			if (status === 401) {
+				expect(response.headers.get("www-authenticate")).toContain("Bearer");
+			} else {
+				expect(response.headers.get("www-authenticate")).toBeNull();
+			}
+			expect(await response.json()).toMatchObject({ code, message });
+			expect(state.rest).toHaveLength(0);
+		},
+	);
 
 	it("sends the REST API's response headers on refusals and answers", async () => {
 		const refused = await mcp(null, initialize, {
