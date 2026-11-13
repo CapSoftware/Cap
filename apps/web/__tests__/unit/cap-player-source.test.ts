@@ -1043,7 +1043,7 @@ describe("withShortPlaylists", () => {
 	});
 });
 
-describe("attachSource swapping the held segment for one that fits", () => {
+describe("attachSource switching to the rendition that fits", () => {
 	type Hls = InstanceType<typeof hlsMock.FakeHls>;
 
 	// Chrome's reading of about 1.6 Mbps, on a fast line or a slow one, so the
@@ -1086,7 +1086,7 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		return { ...attached, hls };
 	};
 
-	it("swaps the held segment for the rendition that fits the player", async () => {
+	it("fetches nothing more before play and switches as playback starts", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		const seeks = countSeeks(video);
@@ -1097,68 +1097,30 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		hls.bandwidthEstimate = JUST_FAST_ENOUGH;
 		held(hls);
 
+		expect(hls.currentLevel).toBe(-1);
+		expect(hls.loadLevel).toBe(0);
+		expect(hls.config.maxMaxBufferLength).toBe(SECONDS_AHEAD_BEFORE_PLAY);
+
+		void video.play();
+
 		expect(hls.currentLevel).toBe(1);
 		expect(seeks()).toBe(0);
 
+		hls.loadLevel = 1;
 		held(hls, 1);
 
 		expect(seeks()).toBe(1);
 		expect(video.currentTime).toBe(0);
+		expect(hls.loadLevel).toBe(-1);
 
 		held(hls, 1);
 
 		expect(seeks()).toBe(1);
-		expect(hls.currentLevel).toBe(1);
 	});
 
-	it("never swaps above the rendition that fits the player", async () => {
-		lowEstimate();
-		const { hls } = await started(new FakeVideo(false));
-
-		hls.bandwidthEstimate = 1_000_000_000;
-		held(hls);
-
-		expect(hls.currentLevel).toBe(1);
-	});
-
-	it("keeps the held segment when the line could not fetch a sharper one in time", async () => {
-		lowEstimate();
-		const { hls } = await started(new FakeVideo(false));
-
-		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
-		held(hls);
-
-		expect(hls.currentLevel).toBe(-1);
-	});
-
-	it("keeps a held segment that already fits", async () => {
-		chrome(true);
-		const { hls } = await started(new FakeVideo(false));
-
-		expect(hls.loadLevel).toBe(1);
-
-		hls.bandwidthEstimate = 1_000_000_000;
-		held(hls, 1);
-
-		expect(hls.currentLevel).toBe(-1);
-	});
-
-	it("only measures video segments", async () => {
-		lowEstimate();
-		const { hls } = await started(new FakeVideo(false));
-
-		hls.bandwidthEstimate = 1_000_000_000;
-		hls.emit("fragBuffered", {
-			frag: { type: "audio", level: 0, duration: 4 },
-		});
-
-		expect(hls.currentLevel).toBe(-1);
-	});
-
-	it("swaps while the first seconds play, then adapts again", async () => {
+	it("switches as soon as the first segment arrives when already playing", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
-		const seeks = countSeeks(video);
 		const { hls } = await started(video);
 
 		hls.bandwidthEstimate = 1_000_000_000;
@@ -1166,44 +1128,95 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		held(hls);
 
 		expect(hls.currentLevel).toBe(1);
+	});
 
-		hls.loadLevel = 1;
+	it("never switches above the rendition that fits the player", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		held(hls);
+		void video.play();
+
+		expect(hls.currentLevel).toBe(1);
+	});
+
+	it("keeps the first segment when the line could not fetch a sharper one in time", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls } = await started(video);
+
+		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
+		held(hls);
+		void video.play();
+
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("keeps a first segment that already fits", async () => {
+		chrome(true);
+		const video = new FakeVideo(false);
+		const { hls } = await started(video);
+
+		expect(hls.loadLevel).toBe(1);
+
+		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls, 1);
+		void video.play();
 
-		expect(seeks()).toBe(1);
-		expect(hls.loadLevel).toBe(-1);
+		expect(hls.currentLevel).toBe(-1);
+	});
+
+	it("only measures video segments", async () => {
+		lowEstimate();
+		const video = new FakeVideo(false);
+		const { hls } = await started(video);
+
+		hls.bandwidthEstimate = 1_000_000_000;
+		hls.emit("fragBuffered", {
+			frag: { type: "audio", level: 0, duration: 4 },
+		});
+		void video.play();
+
+		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("measures the line once", async () => {
 		lowEstimate();
-		const { hls } = await started(new FakeVideo(false));
+		const video = new FakeVideo(false);
+		const { hls } = await started(video);
 
 		hls.bandwidthEstimate = JUST_FAST_ENOUGH - 1;
 		held(hls);
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
+		void video.play();
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
 	it("leaves a quality the viewer picked alone", async () => {
 		lowEstimate();
-		const { hls, setLevel } = await started(new FakeVideo(false));
+		const video = new FakeVideo(false);
+		const { hls, setLevel } = await started(video);
 
 		hls.bandwidthEstimate = 1_000_000_000;
-		setLevel(3);
 		held(hls);
+		setLevel(3);
+		void video.play();
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("swaps once hls.js has reached a start time", async () => {
+	it("switches once hls.js has reached a start time", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		const { hls } = await started(video, { startAt: 45 });
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
+		void video.play();
 
 		expect(hls.currentLevel).toBe(-1);
 
@@ -1212,20 +1225,21 @@ describe("attachSource swapping the held segment for one that fits", () => {
 		expect(hls.currentLevel).toBe(1);
 	});
 
-	it("drops a swap waiting on a start time when the viewer picks a quality", async () => {
+	it("drops a waiting switch when the viewer picks a quality", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		const { hls, setLevel } = await started(video, { startAt: 45 });
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
+		void video.play();
 		setLevel(3);
 		video.dispatchEvent(new Event("seeked"));
 
 		expect(hls.currentLevel).toBe(-1);
 	});
 
-	it("swaps by resolution when bitrate does not rise with it", async () => {
+	it("switches by resolution when bitrate does not rise with it", async () => {
 		lowEstimate();
 		const video = new FakeVideo(false);
 		attach(video, { hls: HLS });
@@ -1236,6 +1250,7 @@ describe("attachSource swapping the held segment for one that fits", () => {
 
 		hls.bandwidthEstimate = 1_000_000_000;
 		held(hls);
+		void video.play();
 
 		expect(hls.currentLevel).toBe(2);
 	});

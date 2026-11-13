@@ -411,26 +411,32 @@ export const attachSource = (
 			});
 			let playRequested = false;
 			let picked = AUTO_LEVEL;
+			// A sharper rendition that the first segment's speed says the line
+			// can carry. Nothing more is fetched before play: the switch is made
+			// when playback starts, and after hls.js's own seek to a start time.
+			let sharper = AUTO_LEVEL;
+			let swappedTo = AUTO_LEVEL;
+			const switchWhenPlaying = () => {
+				if (sharper === AUTO_LEVEL || !playRequested || startPending) return;
+				const level = sharper;
+				sharper = AUTO_LEVEL;
+				if (picked !== AUTO_LEVEL) return;
+				swappedTo = level;
+				hls.currentLevel = level;
+			};
 			const bufferFreely = () => {
 				playRequested = true;
 				hls.config.maxMaxBufferLength = Hls.DefaultConfig.maxMaxBufferLength;
 				if (picked === AUTO_LEVEL) hls.loadLevel = AUTO_LEVEL;
 				else hls.nextLevel = picked;
+				switchWhenPlaying();
 			};
 			// hls.js seeks to the start time itself. The time stays pending
 			// until that seek lands, so a fallback to the MP4 before then
 			// still starts at it.
-			let swappedTo = AUTO_LEVEL;
-			let swapAfterStart = AUTO_LEVEL;
-			const swapTo = (level: number) => {
-				swappedTo = level;
-				hls.currentLevel = level;
-			};
 			const reachedStart = () => {
 				startPending = false;
-				const level = swapAfterStart;
-				swapAfterStart = AUTO_LEVEL;
-				if (level !== AUTO_LEVEL && picked === AUTO_LEVEL) swapTo(level);
+				switchWhenPlaying();
 			};
 			const destroy = () => {
 				hlsSeeks = false;
@@ -453,9 +459,9 @@ export const attachSource = (
 				hls.startLoad(startPending ? startAt : -1);
 			});
 			// The first video segment measures the line. When the measured line
-			// can fetch a sharper rendition that fits the player in time, that
-			// segment is replaced at once, before play or while the first
-			// seconds play, rather than playing on soft until the next segment.
+			// can fetch a sharper rendition that fits the player in time, the
+			// player switches to it as playback starts, rather than playing the
+			// first segment soft.
 			let measured = false;
 			hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
 				if (data.frag.type !== "main") return;
@@ -480,10 +486,8 @@ export const attachSource = (
 					(hls.bandwidthEstimate * SECONDS_TO_SHARPEN) / data.frag.duration,
 				);
 				if (!isSharper(hls.levels, level, data.frag.level)) return;
-				// hls.js is still seeking to the start time; switching now would
-				// undo its seek, so the switch waits for it to land.
-				if (startPending) swapAfterStart = level;
-				else swapTo(level);
+				sharper = level;
+				switchWhenPlaying();
 			});
 			hls.once(Hls.Events.LEVEL_LOADED, (_event, data) => {
 				if (!startPending) return;
