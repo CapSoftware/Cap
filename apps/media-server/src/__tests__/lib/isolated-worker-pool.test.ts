@@ -111,4 +111,20 @@ describe("isolated worker pool", () => {
 		await busy;
 		expect(workers.stats().waiting).toBe(0);
 	}, 30_000);
+
+	test("a request cancelled while it waits for a worker is never sent", async () => {
+		const workers = pool(1);
+		const first = (await workers.run({ op: "pid" }, 10_000)) as number;
+		const busy = workers.run({ op: "slow", ms: 500 }, 20_000);
+		const controller = new AbortController();
+		const queued = workers
+			.run({ op: "crash" }, 20_000, controller.signal)
+			.catch((error: unknown) => error);
+		controller.abort(new Error("cancelled"));
+		expect(((await queued) as Error).message).toBe("cancelled");
+		expect(await busy).toBe(first);
+		// Had the crash been sent, this worker would be gone.
+		expect(await workers.run({ op: "pid" }, 10_000)).toBe(first);
+		expect(workers.stats().started).toBe(1);
+	}, 30_000);
 });

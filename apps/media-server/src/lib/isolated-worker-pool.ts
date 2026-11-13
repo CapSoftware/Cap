@@ -300,6 +300,11 @@ export function createWorkerPool<Request extends object, Failure>(
 			if (signal?.aborted) throw error;
 			throw new WorkerStartError(String(error));
 		}
+		// Cancelled while it waited for a worker: the worker goes back unused.
+		if (signal?.aborted) {
+			release(worker, true);
+			throw signal.reason ?? new DOMException("Aborted", "AbortError");
+		}
 		const requestId = nextRequestId++;
 		const remainingMs = Math.max(1, deadline - performance.now());
 		let timer: ReturnType<typeof setTimeout> | undefined;
