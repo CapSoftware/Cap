@@ -37,6 +37,13 @@ export const SLICED_HLS = {
 	rampFactor: 6,
 	tailWorkers: 3,
 	tailMinSliceSeconds: 60,
+	// Thirds of a long video are long slices, and one long slice still
+	// encoding holds its worker while the others sit idle. Past this size the
+	// rest of the video goes out in even slices, `rounds` per worker, so the
+	// workers finish together. Every slice downloads the whole source, so the
+	// slices stay this long at least.
+	steadyMinSliceSeconds: 300,
+	rounds: 4,
 	// One upload may not hold more encoder slots than this at a time.
 	maxInFlight: 3,
 	// The seconds of video a slice holds may differ from its range by a frame
@@ -59,6 +66,43 @@ export function planDeveloperVideoSlices(
 	) {
 		return null;
 	}
+	const thirds = planInThirds(durationSeconds);
+	const longest = Math.max(
+		...thirds.map(
+			(range) => range.durationSeconds ?? durationSeconds - range.startSeconds,
+		),
+	);
+	return longest <= SLICED_HLS.steadyMinSliceSeconds * 1.5
+		? thirds
+		: planInRounds(durationSeconds);
+}
+
+function planInRounds(durationSeconds: number): HlsSliceRange[] {
+	const first = SLICED_HLS.firstSliceSeconds;
+	const ranges: HlsSliceRange[] = [{ startSeconds: 0, durationSeconds: first }];
+	const ramp = wholeSegments(first * SLICED_HLS.rampFactor);
+	const steady = Math.max(
+		SLICED_HLS.steadyMinSliceSeconds,
+		Math.ceil(
+			(durationSeconds - first - ramp) /
+				(SLICED_HLS.tailWorkers * SLICED_HLS.rounds) /
+				HLS_SEGMENT_SECONDS,
+		) * HLS_SEGMENT_SECONDS,
+	);
+	let covered: number = first;
+	while (durationSeconds - covered > steady * 1.5) {
+		const size = Math.min(
+			steady,
+			wholeSegments(covered * SLICED_HLS.rampFactor),
+		);
+		ranges.push({ startSeconds: covered, durationSeconds: size });
+		covered += size;
+	}
+	ranges.push({ startSeconds: covered });
+	return ranges;
+}
+
+function planInThirds(durationSeconds: number): HlsSliceRange[] {
 	const ranges: HlsSliceRange[] = [
 		{ startSeconds: 0, durationSeconds: SLICED_HLS.firstSliceSeconds },
 	];

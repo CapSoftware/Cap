@@ -70,22 +70,53 @@ describe("which videos are encoded in slices", () => {
 		]);
 	});
 
-	it("needs six jobs for the longest video allowed", () => {
-		expect(planDeveloperVideoSlices(4 * 60 * 60)).toEqual([
+	it("sends an hour out in even slices once thirds would be long", () => {
+		const ranges = planDeveloperVideoSlices(3796.5) ?? [];
+		expect(ranges.slice(0, 3)).toEqual([
+			{ startSeconds: 0, durationSeconds: 20 },
+			{ startSeconds: 20, durationSeconds: 120 },
+			{ startSeconds: 140, durationSeconds: 308 },
+		]);
+		expect(ranges).toHaveLength(14);
+		const middle = ranges.slice(2, -1).map((range) => range.durationSeconds);
+		expect(new Set(middle)).toEqual(new Set([308]));
+		expect(ranges.at(-1)).toEqual({ startSeconds: 3528 });
+	});
+
+	it("keeps the longest video allowed to a few rounds of jobs per worker", () => {
+		const ranges = planDeveloperVideoSlices(4 * 60 * 60) ?? [];
+		expect(ranges).toHaveLength(14);
+		expect(ranges.slice(0, 4)).toEqual([
 			{ startSeconds: 0, durationSeconds: 20 },
 			{ startSeconds: 20, durationSeconds: 120 },
 			{ startSeconds: 140, durationSeconds: 840 },
-			{ startSeconds: 980, durationSeconds: 4476 },
-			{ startSeconds: 5456, durationSeconds: 4476 },
-			{ startSeconds: 9932 },
+			{ startSeconds: 980, durationSeconds: 1192 },
 		]);
+	});
+
+	it("never cuts a long video into slices shorter than the steady size, apart from the start", () => {
+		for (const seconds of [1900, 2400, 3600, 7200, 14_400]) {
+			const ranges = planDeveloperVideoSlices(seconds) ?? [];
+			const steady = ranges
+				.slice(2, -1)
+				.map((range) => range.durationSeconds ?? 0);
+			for (const size of steady.slice(1)) {
+				expect(size).toBeGreaterThanOrEqual(SLICED_HLS.steadyMinSliceSeconds);
+			}
+			const last = ranges.at(-1);
+			expect(seconds - (last?.startSeconds ?? 0)).toBeGreaterThan(
+				SLICED_HLS.steadyMinSliceSeconds / 2,
+			);
+		}
 	});
 
 	it("always covers the whole video on segment boundaries with no gap or overlap", () => {
 		for (let duration = 120; duration <= 4 * 60 * 60; duration += 37.3) {
 			const ranges = planDeveloperVideoSlices(duration) ?? [];
 			expect(ranges.length).toBeGreaterThanOrEqual(2);
-			expect(ranges.length).toBeLessThanOrEqual(6);
+			expect(ranges.length).toBeLessThanOrEqual(
+				2 + SLICED_HLS.tailWorkers * SLICED_HLS.rounds,
+			);
 			expect(ranges[0]).toEqual({
 				startSeconds: 0,
 				durationSeconds: SLICED_HLS.firstSliceSeconds,
