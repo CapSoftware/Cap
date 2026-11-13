@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { developerTranscripts, developerVideos } from "@cap/database/schema";
 import type { DeveloperVideoStatus } from "@cap/database/types";
 import { isLanguageCode, SUPPORTED_LANGUAGES } from "@cap/web-domain";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import {
 	deleteDeveloperObjects,
 	getDeveloperObjectText,
@@ -16,7 +16,6 @@ export const CAPTIONS_CONTENT_TYPE = "text/vtt; charset=utf-8";
 export const CAPTIONS_UNKNOWN_LANGUAGE = "und";
 
 const SYNC_ATTEMPTS = 3;
-const UNKNOWN_LANGUAGE_SCAN = 50;
 
 export type DeveloperVideoCaption = {
 	language: string;
@@ -27,7 +26,7 @@ export type DeveloperVideoCaption = {
 type VideoRef = { id: string; appId: string };
 
 export function captionLanguage(language: string | null | undefined) {
-	const value = (language ?? "").trim().toLowerCase();
+	const value = (language ?? "").trim().toLowerCase().replaceAll("_", "-");
 	return /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/.test(value)
 		? value
 		: CAPTIONS_UNKNOWN_LANGUAGE;
@@ -83,27 +82,40 @@ export async function developerVideoCaptions(
 }
 
 async function newestCaptionSource(video: VideoRef, language: string) {
-	const rows = await db()
+	const stored = await db()
+		.selectDistinct({ language: developerTranscripts.language })
+		.from(developerTranscripts)
+		.where(captionSources(video));
+	const matching = stored
+		.map((row) => row.language)
+		.filter((value) => captionLanguage(value) === language);
+	if (matching.length === 0) return null;
+	const named = matching.filter((value): value is string => value !== null);
+	const [row] = await db()
 		.select({
 			id: developerTranscripts.id,
-			language: developerTranscripts.language,
 			resultKey: developerTranscripts.resultKey,
 		})
 		.from(developerTranscripts)
 		.where(
 			and(
 				captionSources(video),
-				language === CAPTIONS_UNKNOWN_LANGUAGE
-					? undefined
-					: eq(developerTranscripts.language, language),
+				or(
+					named.length > 0
+						? inArray(developerTranscripts.language, named)
+						: undefined,
+					named.length < matching.length
+						? isNull(developerTranscripts.language)
+						: undefined,
+				),
 			),
 		)
 		.orderBy(
 			desc(developerTranscripts.createdAt),
 			desc(developerTranscripts.id),
 		)
-		.limit(language === CAPTIONS_UNKNOWN_LANGUAGE ? UNKNOWN_LANGUAGE_SCAN : 1);
-	return rows.find((row) => captionLanguage(row.language) === language) ?? null;
+		.limit(1);
+	return row ?? null;
 }
 
 async function videoIsStored(video: VideoRef) {

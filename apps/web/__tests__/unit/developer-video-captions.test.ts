@@ -633,6 +633,42 @@ describe("the caption file of a video", () => {
 		expect(context.objects.get(EN_KEY)).toContain("newer words");
 	});
 
+	it("treats a stored code with a region as one language in the list and the file", async () => {
+		seedVideo();
+		seedCompleted("tr-old", "older words", { language: "en_us" });
+		seedCompleted("tr-new", "newer words", { language: "en-US" });
+		const key = "developer/app-1/video-1/captions/en-us.vtt";
+
+		expect(await sync("en_us")).toEqual({
+			state: "written",
+			transcriptId: "tr-new",
+		});
+		expect(context.objects.get(key)).toContain("newer words");
+		expect(await developerVideoCaptions(VIDEO)).toEqual([
+			{ language: "en-us", label: "American English", key },
+		]);
+
+		await deleteTranscript("app-1", "tr-new");
+		expect(context.objects.get(key)).toContain("older words");
+		await deleteTranscript("app-1", "tr-old");
+		expect(context.objects.has(key)).toBe(false);
+	});
+
+	it("writes a file for a transcript whose language was not reported", async () => {
+		seedVideo();
+		seedCompleted("tr-1", "hello there", { language: null });
+		seedCompleted("tr-en", "english words");
+
+		expect(await sync(null)).toEqual({
+			state: "written",
+			transcriptId: "tr-1",
+		});
+		expect(
+			context.objects.get("developer/app-1/video-1/captions/und.vtt"),
+		).toContain("hello there");
+		expect(context.objects.has(EN_KEY)).toBe(false);
+	});
+
 	it("leaves another language's file alone", async () => {
 		seedVideo();
 		seedCompleted("tr-en", "hello there");
