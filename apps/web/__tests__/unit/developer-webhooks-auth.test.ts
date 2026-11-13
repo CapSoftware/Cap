@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 		deleteWebhookEndpoint: vi.fn(),
 		getWebhookEndpoint: vi.fn(),
 		listWebhookEndpoints: vi.fn(),
+		rotateWebhookEndpointSecret: vi.fn(),
 		sendWebhookTestEvent: vi.fn(),
 		updateWebhookEndpoint: vi.fn(),
 	},
@@ -61,6 +62,7 @@ const ROUTES = [
 	["GET", "/wh-1"],
 	["PATCH", "/wh-1"],
 	["DELETE", "/wh-1"],
+	["POST", "/wh-1/rotate-secret"],
 	["POST", "/wh-1/test"],
 ] as const;
 
@@ -133,6 +135,7 @@ describe("webhook routes and a bad key", () => {
 		mocks.store.createWebhookEndpoint.mockResolvedValue(missing);
 		mocks.store.updateWebhookEndpoint.mockResolvedValue(missing);
 		mocks.store.deleteWebhookEndpoint.mockResolvedValue(missing);
+		mocks.store.rotateWebhookEndpointSecret.mockResolvedValue(missing);
 		mocks.store.sendWebhookTestEvent.mockResolvedValue(missing);
 
 		for (const [method, path] of ROUTES) {

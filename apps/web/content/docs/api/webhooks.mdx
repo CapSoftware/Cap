@@ -66,7 +66,7 @@ curl -X POST https://cap.so/api/developer/v1/webhooks \
 }
 ```
 
-`secret` is the endpoint's signing secret. It is returned once, in this response, and never again. Store it with your other secrets. If you lose it, delete the endpoint and create a new one.
+`secret` is the endpoint's signing secret. It is returned once, in this response, and never again. Store it with your other secrets. If you lose it or it leaks, [rotate it](#rotate-the-signing-secret).
 
 The URL must:
 
@@ -85,6 +85,7 @@ Anything else returns `400` with code `invalid_webhook_url`. An app can have 5 e
 | `GET /api/developer/v1/webhooks/:id` | Read one endpoint and the result of its last delivery |
 | `PATCH /api/developer/v1/webhooks/:id` | Change `url`, `events` or `enabled`. Send at least one |
 | `DELETE /api/developer/v1/webhooks/:id` | Delete the endpoint. Deliveries waiting to be retried are dropped |
+| `POST /api/developer/v1/webhooks/:id/rotate-secret` | [Rotate the signing secret](#rotate-the-signing-secret) |
 | `POST /api/developer/v1/webhooks/:id/test` | [Send a test event](#send-a-test-event) |
 
 An ID that does not belong to the app returns `404` with code `webhook_not_found`.
@@ -106,6 +107,15 @@ Every endpoint is returned with these fields:
 | `consecutiveFailures` | number | Failed attempts since the last success |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | When the endpoint's settings last changed |
+
+## Rotate the signing secret
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/webhooks/7k2m9x4q1p3v5wd/rotate-secret \
+  -H "Authorization: Bearer csk_your_secret_key"
+```
+
+The response is the endpoint with a new `secret`, returned once, like the one from create. The old secret stops working at once: every request from then on, including a retry of an earlier event, is signed with the new one. To rotate without dropping an event, have your receiver accept a signature from either secret, rotate, store the new secret, then remove the old one.
 
 ## The request Cap sends
 

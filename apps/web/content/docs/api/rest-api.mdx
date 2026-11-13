@@ -1084,6 +1084,7 @@ Have Cap call your server when a video is ready or has failed, instead of pollin
 | `GET /api/developer/v1/webhooks/:id` | Read one endpoint and how Cap's last call to it went |
 | `PATCH /api/developer/v1/webhooks/:id` | Change `url`, `events` or `enabled` |
 | `DELETE /api/developer/v1/webhooks/:id` | Delete an endpoint |
+| `POST /api/developer/v1/webhooks/:id/rotate-secret` | Replace the signing secret. The new one is returned once |
 | `POST /api/developer/v1/webhooks/:id/test` | Send a test event and report what the endpoint answered |
 
 **Example request:**

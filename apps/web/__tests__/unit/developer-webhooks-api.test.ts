@@ -323,6 +323,7 @@ describe("one app cannot reach another app's endpoints", () => {
 			await send("GET", `/${id}`, B),
 			await send("PATCH", `/${id}`, B, { enabled: false }),
 			await send("PATCH", `/${id}`, B, { url: "https://evil.example.com/x" }),
+			await send("POST", `/${id}/rotate-secret`, B),
 			await send("DELETE", `/${id}`, B),
 			await send("POST", `/${id}/test`, B),
 		];
@@ -352,11 +353,76 @@ describe("one app cannot reach another app's endpoints", () => {
 			["GET", `/${id}`],
 			["PATCH", `/${id}`],
 			["DELETE", `/${id}`],
+			["POST", `/${id}/rotate-secret`],
 			["POST", `/${id}/test`],
 			["POST", "/"],
 		] as const) {
 			expect((await send(method, path, {})).status).toBe(401);
 		}
+	});
+});
+
+describe("rotating the signing secret", () => {
+	it("returns a new secret once, stores it encrypted and signs with it from then on", async () => {
+		const { id, secret: oldSecret } = (await create(A)).body.data;
+		const response = await send("POST", `/${id}/rotate-secret`, A);
+		expect(response.status).toBe(200);
+		const { data } = await response.json();
+		expect(data.secret).toMatch(/^cws_[0-9a-z]{30}$/);
+		expect(data.secret).not.toBe(oldSecret);
+		expect(data).toMatchObject({ id, secretPrefix: data.secret.slice(0, 12) });
+
+		const [row] = rows();
+		expect(await decrypt(String(row?.encryptedSecret))).toBe(data.secret);
+		for (const later of [
+			await send("GET", `/${id}`, A),
+			await send("GET", "/", A),
+		]) {
+			const text = await later.text();
+			expect(text).not.toContain(data.secret);
+			expect(text).not.toContain(oldSecret);
+		}
+
+		const seen: RequestInit[] = [];
+		context.request = async (_url, init) => {
+			seen.push(init);
+			return new Response(null, { status: 204 });
+		};
+		await send("POST", `/${id}/test`, A);
+		const header = new Headers(seen[0]?.headers).get("cap-signature");
+		const body = String(seen[0]?.body);
+		expect(verifyWebhookSignature({ secret: data.secret, body, header })).toBe(
+			true,
+		);
+		expect(verifyWebhookSignature({ secret: oldSecret, body, header })).toBe(
+			false,
+		);
+	});
+
+	it("keeps the endpoint's settings and delivery state", async () => {
+		const { id } = (await create(A)).body.data;
+		await send("PATCH", `/${id}`, A, {
+			url: "https://hooks.example.com/other",
+			events: ["video.errored"],
+			enabled: false,
+		});
+		const before = rows()[0];
+		await send("POST", `/${id}/rotate-secret`, A);
+		expect(rows()[0]).toMatchObject({
+			url: before?.url,
+			events: before?.events,
+			enabled: false,
+			consecutiveFailures: before?.consecutiveFailures,
+		});
+	});
+
+	it("answers not found for a deleted endpoint", async () => {
+		const { id } = (await create(A)).body.data;
+		await send("DELETE", `/${id}`, A);
+		const encrypted = rows()[0]?.encryptedSecret;
+		const response = await send("POST", `/${id}/rotate-secret`, A);
+		expect(response.status).toBe(404);
+		expect(rows()[0]?.encryptedSecret).toBe(encrypted);
 	});
 });
 

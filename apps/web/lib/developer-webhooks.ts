@@ -220,6 +220,31 @@ export async function updateWebhookEndpoint(
 	return endpoint ? { ok: true, endpoint } : notFound();
 }
 
+// The old secret stops working at once: every delivery, including a retry of
+// an earlier event, is signed when it is sent. The new secret is returned
+// here and never again.
+export async function rotateWebhookEndpointSecret(
+	appId: string,
+	endpointId: string,
+): Promise<
+	{ ok: true; endpoint: WebhookEndpointRow; secret: string } | WebhookFailure
+> {
+	const current = await getWebhookEndpoint(appId, endpointId);
+	if (!current) return notFound();
+
+	const secret = createWebhookSecret();
+	await db()
+		.update(developerWebhookEndpoints)
+		.set({
+			secretPrefix: secret.slice(0, SECRET_PREFIX_LENGTH),
+			encryptedSecret: await encrypt(secret),
+		})
+		.where(liveEndpoint(appId, endpointId));
+
+	const endpoint = await getWebhookEndpoint(appId, endpointId);
+	return endpoint ? { ok: true, endpoint, secret } : notFound();
+}
+
 export async function deleteWebhookEndpoint(
 	appId: string,
 	endpointId: string,

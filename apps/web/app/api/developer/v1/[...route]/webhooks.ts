@@ -8,6 +8,7 @@ import {
 	deleteWebhookEndpoint,
 	getWebhookEndpoint,
 	listWebhookEndpoints,
+	rotateWebhookEndpointSecret,
 	sendWebhookTestEvent,
 	serializeWebhookEndpoint,
 	serializeWebhookTestResult,
@@ -129,6 +130,20 @@ app.delete("/:id", async (c) => {
 	);
 	if (!result.ok) return c.json(failureBody(result), result.status);
 	return c.json({ success: true });
+});
+
+app.post("/:id/rotate-secret", async (c) => {
+	const result = await rotateWebhookEndpointSecret(
+		c.get("developerAppId"),
+		c.req.param("id"),
+	);
+	if (!result.ok) return c.json(failureBody(result), result.status);
+	return c.json({
+		data: {
+			...serializeWebhookEndpoint(result.endpoint),
+			secret: result.secret,
+		},
+	});
 });
 
 app.post("/:id/test", async (c) => {

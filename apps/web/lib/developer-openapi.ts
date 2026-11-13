@@ -978,7 +978,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			patch: {
 				operationId: "updateWebhookEndpoint",
 				summary: "Update a webhook endpoint",
-				description: `Changes an endpoint's URL, its event types or whether it is enabled. Send at least one of them. Setting enabled to true turns an endpoint back on after Cap disabled it and clears its failure count. The signing secret does not change. ${WEBHOOK_URL_RULES}`,
+				description: `Changes an endpoint's URL, its event types or whether it is enabled. Send at least one of them. Setting enabled to true turns an endpoint back on after Cap disabled it and clears its failure count. The signing secret does not change; use rotateWebhookSecret for that. ${WEBHOOK_URL_RULES}`,
 				tags: ["Webhooks"],
 				security: secretAuth,
 				parameters: [webhookIdParam],
@@ -1004,6 +1004,25 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 				parameters: [webhookIdParam],
 				responses: {
 					"200": json(ref("Success"), "The endpoint was deleted."),
+					"404": response("WebhookNotFound"),
+					...restErrors,
+				},
+			},
+		},
+		"/api/developer/v1/webhooks/{id}/rotate-secret": {
+			post: {
+				operationId: "rotateWebhookSecret",
+				summary: "Rotate a webhook signing secret",
+				description:
+					"Replaces the endpoint's signing secret and returns the new one. Store it, because it is never returned again. The old secret stops working at once: every delivery from this moment, including a retry of an earlier event, is signed with the new secret. Deploy a receiver that accepts both secrets first, rotate, then remove the old one.",
+				tags: ["Webhooks"],
+				security: secretAuth,
+				parameters: [webhookIdParam],
+				responses: {
+					"200": json(
+						dataEnvelope(ref("WebhookEndpointWithSecret")),
+						"The endpoint and its new signing secret.",
+					),
 					"404": response("WebhookNotFound"),
 					...restErrors,
 				},
