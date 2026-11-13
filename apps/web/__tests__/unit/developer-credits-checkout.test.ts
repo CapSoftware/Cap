@@ -368,7 +368,10 @@ describe("POST /api/developer/credits/checkout", () => {
 				enabled: true,
 				invoice_data: { description: "Cap Infra credits" },
 			},
-			payment_intent_data: { receipt_email: "test@example.com" },
+			payment_intent_data: {
+				receipt_email: "test@example.com",
+				metadata: { type: "developer_credits", accountId: "account-001" },
+			},
 			tax_id_collection: { enabled: true },
 			billing_address_collection: "auto",
 			customer_update: { name: "auto", address: "auto" },

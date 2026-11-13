@@ -134,7 +134,10 @@ app.post(
 					enabled: true,
 					invoice_data: { description: "Cap Infra credits" },
 				},
-				payment_intent_data: { receipt_email: user.email },
+				payment_intent_data: {
+					receipt_email: user.email,
+					metadata: { type: "developer_credits", accountId: account.id },
+				},
 				tax_id_collection: { enabled: true },
 				billing_address_collection: "auto",
 				customer_update: { name: "auto", address: "auto" },
