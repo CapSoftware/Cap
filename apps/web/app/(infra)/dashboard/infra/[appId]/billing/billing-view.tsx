@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import Link from "next/link";
-import type { LedgerRow, ledgerPageWindow } from "@/lib/infra-ledger";
+import type { LedgerRow } from "@/lib/infra-ledger";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
@@ -66,7 +66,6 @@ export function BillingView({
 	shortfallMicroCredits,
 	autoTopUpFailure,
 	transactions,
-	totalTransactions,
 	ledgerPage,
 }: {
 	app: { id: string; name: string };
@@ -76,12 +75,12 @@ export function BillingView({
 	shortfallMicroCredits: number;
 	autoTopUpFailure: { day: string; reason: string } | null;
 	transactions: LedgerRow[];
-	totalTransactions: number;
-	ledgerPage: ReturnType<typeof ledgerPageWindow>;
+	ledgerPage: { newer: string | null; older: string | null };
 }) {
 	const billingPath = infraAppPath(app.id, "billing");
-	const ledgerHref = (page: number) =>
-		`${billingPath}${page > 1 ? `?page=${page}` : ""}#${LEDGER_ANCHOR}`;
+	const ledgerHref = (direction: "before" | "after", cursor: string) =>
+		`${billingPath}?${direction}=${encodeURIComponent(cursor)}#${LEDGER_ANCHOR}`;
+	const hasTransactions = transactions.length > 0 || ledgerPage.newer !== null;
 
 	return (
 		<>
@@ -208,7 +207,7 @@ export function BillingView({
 					title="Transactions"
 					description="Every credit and charge, newest first. Times are in UTC."
 					action={
-						totalTransactions > 0 && (
+						hasTransactions && (
 							<a
 								href={`/api/developer/credits/transactions?appId=${encodeURIComponent(app.id)}`}
 								download
@@ -220,36 +219,29 @@ export function BillingView({
 					}
 				>
 					<CreditTransactionTable transactions={transactions} />
-					{ledgerPage.pages > 1 && (
+					{(ledgerPage.newer || ledgerPage.older) && (
 						<nav
 							aria-label="Transaction pages"
-							className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pt-4"
+							className="flex flex-wrap items-center justify-end gap-2 pt-4"
 						>
-							<p className="m-0 text-[13px] tabular-nums text-[rgba(232,236,244,0.5)]">
-								{ledgerPage.from.toLocaleString("en-US")} to{" "}
-								{ledgerPage.to.toLocaleString("en-US")} of{" "}
-								{totalTransactions.toLocaleString("en-US")}
-							</p>
-							<div className="flex gap-2">
-								{ledgerPage.page > 1 && (
-									<ButtonLink
-										variant="ghost"
-										size="sm"
-										href={ledgerHref(ledgerPage.page - 1)}
-									>
-										Newer
-									</ButtonLink>
-								)}
-								{ledgerPage.page < ledgerPage.pages && (
-									<ButtonLink
-										variant="ghost"
-										size="sm"
-										href={ledgerHref(ledgerPage.page + 1)}
-									>
-										Older
-									</ButtonLink>
-								)}
-							</div>
+							{ledgerPage.newer && (
+								<ButtonLink
+									variant="ghost"
+									size="sm"
+									href={ledgerHref("after", ledgerPage.newer)}
+								>
+									Newer
+								</ButtonLink>
+							)}
+							{ledgerPage.older && (
+								<ButtonLink
+									variant="ghost"
+									size="sm"
+									href={ledgerHref("before", ledgerPage.older)}
+								>
+									Older
+								</ButtonLink>
+							)}
 						</nav>
 					)}
 				</Block>

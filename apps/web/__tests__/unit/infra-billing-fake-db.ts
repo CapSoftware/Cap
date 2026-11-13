@@ -5,7 +5,7 @@ import {
 	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
-import type { SQL } from "drizzle-orm";
+import { type SQL, sql } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const dialect = new MySqlDialect();
@@ -104,6 +104,25 @@ const newestFirst = (rows: LedgerRow[]) =>
 			ledger.rows.indexOf(b) - ledger.rows.indexOf(a),
 	);
 
+const byId = (a: LedgerRow, b: LedgerRow) =>
+	a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+
+const latestWritten = (rows: LedgerRow[]) =>
+	[...rows].sort(
+		(a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byId(a, b),
+	);
+
+const latestStorageDayRows = () => {
+	const days = storageRows().filter(
+		(row) => row.referenceType === "storage_day" && row.referenceId,
+	);
+	const latestDay = days
+		.map((row) => String(row.referenceId))
+		.sort()
+		.at(-1);
+	return days.filter((row) => row.referenceId === latestDay).sort(byId);
+};
+
 function runSelect(query: Query): Record<string, unknown>[] {
 	const keys = Object.keys(query.fields).sort().join(",");
 	const rendered = query.where
@@ -113,13 +132,56 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditAccounts) {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
+		if (keys === "attemptKey,id") {
+			const cutoff = rendered.params.find(
+				(param) =>
+					typeof param === "string" &&
+					/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(param),
+			);
+			const attempts = ledger.rows
+				.filter((row) =>
+					["auto_top_up", "auto_top_up_failed", "auto_top_up_pending"].includes(
+						String(row.referenceType),
+					),
+				)
+				.map((row) => row.createdAt.getTime());
+			const lastAttempt = attempts.length > 0 ? Math.max(...attempts) : null;
+			const due =
+				account.autoTopUpEnabled &&
+				account.stripePaymentMethodId &&
+				account.balanceMicroCredits <
+					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits &&
+				(lastAttempt === null || lastAttempt <= asTime(cutoff));
+			return due
+				? [
+						{
+							id: account.id,
+							attemptKey:
+								lastAttempt === null
+									? "1970-01-01 00:00:00"
+									: new Date(lastAttempt)
+											.toISOString()
+											.slice(0, 19)
+											.replace("T", " "),
+						},
+					]
+				: [];
+		}
+		if (
+			keys === "id" &&
+			/`id` = \?$/.test(rendered.sql) &&
+			rendered.params[0] !== account.id
+		) {
+			return [];
+		}
 		if (
 			rendered.sql.includes("autoTopUpThresholdMicroCredits") &&
 			keys === "id" &&
 			!(
 				account.autoTopUpEnabled &&
 				account.stripePaymentMethodId &&
-				account.balanceMicroCredits < account.autoTopUpThresholdMicroCredits
+				account.balanceMicroCredits <
+					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits
 			)
 		) {
 			return [];
@@ -130,23 +192,65 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditTransactions) {
 		if (keys === "createdAt") {
 			const type = rendered.params[1];
-			return newestFirst(ledger.rows.filter((row) => row.type === type)).slice(
-				0,
-				1,
-			);
+			return latestWritten(
+				ledger.rows.filter((row) => row.type === type),
+			).slice(0, 1);
 		}
 		if (keys === "createdAt,id,metadata") {
+			if (
+				rendered.sql.includes(
+					"`developer_credit_transactions`.`referenceId` <= ?",
+				)
+			) {
+				return latestStorageDayRows().slice(0, 1);
+			}
 			const [, type, at] = rendered.params;
-			const ofType = newestFirst(
+			const ofType = latestWritten(
 				ledger.rows.filter((row) => row.type === type),
 			);
 			return at === undefined
 				? ofType.slice(0, 1)
 				: ofType.filter((row) => row.createdAt.getTime() === asTime(at));
 		}
+		if (keys === "createdAt,metadata") {
+			return rendered.sql.includes(
+				"`developer_credit_transactions`.`referenceId` <= ?",
+			)
+				? latestStorageDayRows().slice(0, 1)
+				: latestWritten(storageRows()).slice(0, 1);
+		}
+		if (keys === "accountId,createdAt,id,metadata") {
+			return latestStorageDayRows();
+		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
 			return storageRows().filter((row) => row.createdAt.getTime() >= since);
+		}
+		if (keys === "accountId,amountMicroCredits") {
+			const [accountId, referenceId, ...referenceTypes] = rendered.params;
+			return ledger.rows.filter(
+				(row) =>
+					row.type === "topup" &&
+					row.accountId === accountId &&
+					row.referenceId === referenceId &&
+					referenceTypes.includes(row.referenceType),
+			);
+		}
+		if (keys === "metadata,referenceId,referenceType") {
+			const allowed = rendered.params.slice(1);
+			return ledger.rows.filter(
+				(row) =>
+					allowed.includes(row.type) && allowed.includes(row.referenceType),
+			);
+		}
+		if (keys === "createdAt,referenceType") {
+			const types = rendered.params.slice(2);
+			return newestFirst(
+				ledger.rows.filter(
+					(row) =>
+						row.type === "adjustment" && types.includes(row.referenceType),
+				),
+			).slice(0, 1);
 		}
 		if (keys === "createdAt,metadata,type") {
 			const types = rendered.params.slice(1);
@@ -221,12 +325,19 @@ function select(fields: Record<string, unknown>) {
 			return chain;
 		},
 		innerJoin: () => chain,
+		leftJoin: () => chain,
 		where(condition: SQL | undefined) {
 			query.where = condition;
 			const rows = Promise.resolve().then(() => runSelect(query));
 			const result = Object.assign(rows, {
 				orderBy: () => result,
-				groupBy: () => result,
+				groupBy: () =>
+					Object.assign(result, {
+						as: (alias: string) => ({
+							appId: sql.raw(`\`${alias}\`.\`appId\``),
+							heldMicroCredits: sql.raw("`heldMicroCredits`"),
+						}),
+					}),
 				limit: () => result,
 				for: () => result,
 			});

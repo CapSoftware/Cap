@@ -114,6 +114,10 @@ Nothing is charged for a hold. Held credit stays in your balance, and the availa
 
 Add credit from the app's Billing page in the console. One purchase is from $5 to $1,000, paid in US dollars, and the credit is added when the payment clears.
 
+Stripe emails a receipt for every payment, a purchase or an auto top-up, to the email on your Cap account. A purchase also comes with a paid invoice, which shows any tax ID you add at checkout.
+
+Credit does not expire. If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.
+
 ### Codes
 
 A code is worth a fixed dollar amount. Choose "Have a code?" on the Billing page, enter it, and it lowers what you pay for that purchase. The credit you get is the amount you chose.
@@ -130,6 +134,8 @@ Cap Pro includes $5 of credit every month. It is for any account with Cap Pro, w
 - You claim it from an app's Billing page, and it goes to that app. It cannot be moved afterwards.
 - The next one can be claimed from the first day of the next month, UTC.
 - A month that is not claimed is not carried over.
+- A free trial does not include it. The credit starts with your first paid month.
+- A team has one credit a month for each paid Cap Pro seat, however the seats are assigned.
 
 ### Auto top-up
 
@@ -167,6 +173,8 @@ Every credit and charge is a row in the app's ledger, with the time in UTC, the 
 | Storage, first month | The video ID |
 | Transcription | The transcript ID |
 | Adjustment | A credit or correction applied by Cap |
+| Payment reversed | The payment that was returned to you. The credit it bought is taken back, in proportion to the amount returned |
+| Payment disputed | The dispute. The credit that payment bought is taken back, the app is paused and auto top-up is switched off until Cap reviews it |
 
 There are three ways to read it:
 

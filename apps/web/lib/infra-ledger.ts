@@ -1,5 +1,9 @@
 import { parseStorageCharge } from "@/lib/infra-standing";
-import { creditDollars, signedCreditDollars } from "@/lib/infra-usage";
+import {
+	creditDollars,
+	formatCharge,
+	signedCreditDollars,
+} from "@/lib/infra-usage";
 
 export const LEDGER_PAGE_SIZE = 50;
 
@@ -43,6 +47,19 @@ const REFERENCE_KINDS: Record<string, string> = {
 	auto_top_up_pending: "Payment",
 	pro_monthly_credit: "Month",
 	manual: "Note",
+	stripe_refund: "Refund",
+	stripe_dispute: "Dispute",
+};
+
+const REVERSAL_LABELS: Record<string, string> = {
+	stripe_refund: "Payment reversed",
+	stripe_dispute: "Payment disputed",
+};
+
+const REVERSAL_NOTES: Record<string, string> = {
+	"Payment reversed": "Credit taken back because the payment was returned.",
+	"Payment disputed":
+		"Credit taken back for a disputed payment. The app is paused and auto top-up is off until Cap reviews it.",
 };
 
 const NOTES: Record<string, string> = {
@@ -66,6 +83,8 @@ const NOTES: Record<string, string> = {
 const DECLINED_WITHOUT_PAYMENT = /^declined-(\d{4}-\d{2}-\d{2})$/;
 
 function ledgerLabel(row: LedgerRow) {
+	const reversal = REVERSAL_LABELS[row.referenceType ?? ""];
+	if (reversal) return reversal;
 	if (row.referenceType === "auto_top_up") return "Auto top-up";
 	if (row.referenceType === "stripe_checkout_session") return "Code redeemed";
 	if (row.type === "storage_daily" && parseStorageCharge(row).shortSince) {
@@ -96,7 +115,7 @@ function ledgerReference(row: LedgerRow) {
 	};
 }
 
-function paidCents(metadata: unknown) {
+function metadataAmount(metadata: unknown, field: string) {
 	let fields: unknown = metadata;
 	if (typeof fields === "string") {
 		try {
@@ -106,17 +125,26 @@ function paidCents(metadata: unknown) {
 		}
 	}
 	if (typeof fields !== "object" || fields === null) return null;
-	const paid = (fields as { paidCents?: unknown }).paidCents;
-	return typeof paid === "number" && Number.isSafeInteger(paid) && paid >= 0
-		? paid
+	const amount = (fields as Record<string, unknown>)[field];
+	return typeof amount === "number" &&
+		Number.isSafeInteger(amount) &&
+		amount >= 0
+		? amount
 		: null;
 }
 
 function ledgerNote(row: LedgerRow, label: string) {
 	const fixed = NOTES[label];
 	if (fixed) return fixed;
+	const reversal = REVERSAL_NOTES[label];
+	if (reversal) {
+		const uncollected = metadataAmount(row.metadata, "uncollectedMicroCredits");
+		return uncollected
+			? `${reversal} ${formatCharge(uncollected)} of it had already been spent and was not taken back.`
+			: reversal;
+	}
 	if (label !== "Top-up") return null;
-	const paid = paidCents(row.metadata);
+	const paid = metadataAmount(row.metadata, "paidCents");
 	return paid === null
 		? null
 		: `$${(paid / 100).toFixed(2)} was paid for this credit.`;
@@ -219,25 +247,6 @@ export function orderLedgerRows<Row extends LedgerRow>(rows: readonly Row[]) {
 		start = end;
 	}
 	return ordered;
-}
-
-export function ledgerPageWindow(
-	rawPage: string | undefined,
-	total: number,
-	size: number = LEDGER_PAGE_SIZE,
-) {
-	const pages = Math.max(1, Math.ceil(total / size));
-	const requested =
-		rawPage !== undefined && /^\d+$/.test(rawPage) ? Number(rawPage) : 1;
-	const page = Math.min(Math.max(1, requested), pages);
-	const offset = (page - 1) * size;
-	return {
-		page,
-		pages,
-		offset,
-		from: total === 0 ? 0 : offset + 1,
-		to: Math.min(total, offset + size),
-	};
 }
 
 export const LEDGER_CSV_COLUMNS = [

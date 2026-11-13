@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
-import { and, gt, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, gt, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
@@ -39,6 +39,7 @@ export type StorageUsageOptions = {
 	includeProcessing?: boolean;
 	excludeVideoId?: string;
 	dailyChargeAt?: Date;
+	createdBefore?: Date;
 };
 
 export function storedVideoGroupsQuery(
@@ -46,6 +47,7 @@ export function storedVideoGroupsQuery(
 	executor: Pick<InfraDbExecutor, "select">,
 	excludeVideoId?: string,
 	now: Date = new Date(),
+	createdBefore?: Date,
 ) {
 	const inFirstMonth = gt(developerVideos.storagePaidUntil, now);
 	return executor
@@ -76,6 +78,9 @@ export function storedVideoGroupsQuery(
 				inArray(developerVideos.appId, [...appIds]),
 				isNull(developerVideos.deletedAt),
 				excludeVideoId ? ne(developerVideos.id, excludeVideoId) : undefined,
+				createdBefore
+					? lt(developerVideos.createdAt, createdBefore)
+					: undefined,
 			),
 		)
 		.groupBy(
@@ -92,6 +97,7 @@ async function storedVideoGroups(
 	executor: InfraDbExecutor,
 	excludeVideoId?: string,
 	now?: Date,
+	createdBefore?: Date,
 ) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
@@ -101,6 +107,7 @@ async function storedVideoGroups(
 				executor,
 				excludeVideoId,
 				now,
+				createdBefore,
 			)),
 		);
 	}
@@ -125,6 +132,7 @@ export async function getStorageUsageByApp(
 			executor,
 			options.excludeVideoId,
 			options.dailyChargeAt,
+			options.createdBefore,
 		)) {
 			entriesByApp.get(group.appId)?.push({
 				video: billableVideo({

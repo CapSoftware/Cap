@@ -55,6 +55,34 @@ export function settleStorageDay({
 	};
 }
 
+export async function recordStorageDayVisits({
+	appIds,
+	dateKey,
+	now,
+}: {
+	appIds: readonly string[];
+	dateKey: string;
+	now: Date;
+}) {
+	if (appIds.length === 0) return;
+	await db()
+		.insert(developerDailyStorageSnapshots)
+		.values(
+			appIds.map((appId) => ({
+				id: nanoId(),
+				appId,
+				snapshotDate: dateKey,
+				totalDurationMinutes: 0,
+				videoCount: 0,
+				microCreditsCharged: 0,
+				processedAt: now,
+			})),
+		)
+		.onDuplicateKeyUpdate({
+			set: { appId: sql`${developerDailyStorageSnapshots.appId}` },
+		});
+}
+
 export async function chargeStorageDay({
 	appId,
 	accountId,
@@ -62,6 +90,7 @@ export async function chargeStorageDay({
 	measure,
 	dateKey,
 	now,
+	retryUnpaid = true,
 }: {
 	appId: string;
 	accountId: string;
@@ -69,6 +98,7 @@ export async function chargeStorageDay({
 	measure?: (tx: InfraDbExecutor) => Promise<StorageUsage>;
 	dateKey: string;
 	now: Date;
+	retryUnpaid?: boolean;
 }): Promise<StorageDayResult> {
 	return db().transaction(async (tx) => {
 		const [account] = await tx
@@ -110,7 +140,10 @@ export async function chargeStorageDay({
 				),
 			)
 			.limit(1);
-		if (snapshot?.processedAt && Number(snapshot.microCreditsCharged) > 0) {
+		if (
+			snapshot?.processedAt &&
+			(Number(snapshot.microCreditsCharged) > 0 || !retryUnpaid)
+		) {
 			return { state: "skipped" as const };
 		}
 

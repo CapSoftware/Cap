@@ -13,7 +13,6 @@ import {
 	LEDGER_CSV_COLUMNS,
 	type LedgerRow,
 	ledgerCsv,
-	ledgerPageWindow,
 	orderLedgerRows,
 	serializeLedgerRow,
 } from "@/lib/infra-ledger";
@@ -585,21 +584,5 @@ describe("CSV export", () => {
 
 	it("is only a header for an app with no transactions", () => {
 		expect(ledgerCsv([])).toBe(`${LEDGER_CSV_COLUMNS.join(",")}\r\n`);
-	});
-});
-
-describe("paging the console ledger", () => {
-	it.each([
-		[undefined, 312, { page: 1, offset: 0, from: 1, to: 50, pages: 7 }],
-		["2", 312, { page: 2, offset: 50, from: 51, to: 100, pages: 7 }],
-		["7", 312, { page: 7, offset: 300, from: 301, to: 312, pages: 7 }],
-		["99", 312, { page: 7, offset: 300, from: 301, to: 312, pages: 7 }],
-		["0", 312, { page: 1, offset: 0, from: 1, to: 50, pages: 7 }],
-		["-3", 312, { page: 1, offset: 0, from: 1, to: 50, pages: 7 }],
-		["abc", 312, { page: 1, offset: 0, from: 1, to: 50, pages: 7 }],
-		["2", 0, { page: 1, offset: 0, from: 0, to: 0, pages: 1 }],
-		["1", 50, { page: 1, offset: 0, from: 1, to: 50, pages: 1 }],
-	])("reads page %j of %i rows", (raw, total, expected) => {
-		expect(ledgerPageWindow(raw, total)).toEqual(expected);
 	});
 });

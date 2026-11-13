@@ -364,3 +364,22 @@ export async function firstMonthShortfallsSince(
 	}
 	return shortfalls;
 }
+
+export async function openFirstMonthShortfalls(
+	accountIds: readonly string[],
+	executor: InfraDbExecutor = db(),
+) {
+	if (accountIds.length === 0) return new Set<string>();
+	const rows = await executor
+		.selectDistinct({ accountId: developerCreditTransactions.accountId })
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				inArray(developerCreditTransactions.accountId, [...accountIds]),
+				eq(developerCreditTransactions.type, FIRST_MONTH_TRANSACTION_TYPE),
+				sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.shortSince')), 'null') <> 'null'`,
+				sql`JSON_EXTRACT(${developerCreditTransactions.metadata}, '$.resolvedAt') IS NULL`,
+			),
+		);
+	return new Set(rows.map((row) => row.accountId));
+}

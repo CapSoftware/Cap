@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "459962d9-53a1-4131-981d-e20a4b4e33c7",
+	"id": "7568082e-2748-491f-897f-16005b895884",
 	"prevId": "2773f4a4-e037-4a2a-9537-3e419186570c",
 	"tables": {
 		"accounts": {
@@ -1068,6 +1068,11 @@
 					"name": "owner_idx",
 					"columns": ["ownerId"],
 					"isUnique": false
+				},
+				"auto_top_up_idx": {
+					"name": "auto_top_up_idx",
+					"columns": ["autoTopUpEnabled"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1172,6 +1177,11 @@
 				"account_ref_dedup_idx": {
 					"name": "account_ref_dedup_idx",
 					"columns": ["accountId", "referenceId", "referenceType"],
+					"isUnique": false
+				},
+				"reference_type_id_idx": {
+					"name": "reference_type_id_idx",
+					"columns": ["referenceType", "referenceId"],
 					"isUnique": false
 				}
 			},
@@ -1504,6 +1514,28 @@
 					"name": "dev_transcripts_status_updated_idx",
 					"columns": ["status", "updatedAt"],
 					"isUnique": false
+				},
+				"dev_transcripts_app_completed_idx": {
+					"name": "dev_transcripts_app_completed_idx",
+					"columns": [
+						"appId",
+						"status",
+						"completedAt",
+						"durationSeconds",
+						"billedMicroCredits"
+					],
+					"isUnique": false
+				},
+				"dev_transcripts_app_status_held_idx": {
+					"name": "dev_transcripts_app_status_held_idx",
+					"columns": [
+						"appId",
+						"status",
+						"createdAt",
+						"deletedAt",
+						"reservedMicroCredits"
+					],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {
@@ -1658,13 +1690,6 @@
 					"notNull": false,
 					"autoincrement": false
 				},
-				"storagePaidUntil": {
-					"name": "storagePaidUntil",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
 				"deletedAt": {
 					"name": "deletedAt",
 					"type": "timestamp",
@@ -1721,25 +1746,6 @@
 				"files_pending_idx": {
 					"name": "files_pending_idx",
 					"columns": ["filesDeletedAt", "deletedAt"],
-					"isUnique": false
-				},
-				"app_storage_idx": {
-					"name": "app_storage_idx",
-					"columns": [
-						"appId",
-						"deletedAt",
-						"status",
-						"maxResolutionTier",
-						"width",
-						"height",
-						"storagePaidUntil",
-						"duration"
-					],
-					"isUnique": false
-				},
-				"first_month_due_idx": {
-					"name": "first_month_due_idx",
-					"columns": ["storagePaidUntil", "status", "createdAt"],
 					"isUnique": false
 				}
 			},

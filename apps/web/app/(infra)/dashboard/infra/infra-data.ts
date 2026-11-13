@@ -5,7 +5,6 @@ import {
 } from "@cap/database/auth/session";
 import {
 	developerApiKeys,
-	developerAppDomains,
 	developerApps,
 	developerCreditAccounts,
 	developerCreditTransactions,
@@ -13,8 +12,17 @@ import {
 	developerVideos,
 	organizations,
 } from "@cap/database/schema";
-import { userIsPro } from "@cap/utils";
-import { and, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	gt,
+	gte,
+	inArray,
+	isNull,
+	sql,
+} from "drizzle-orm";
 import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -28,6 +36,7 @@ import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
+import { proCreditEligibility } from "@/lib/infra-pro-credit-eligibility";
 import {
 	INFRA_APP_COOKIE,
 	INFRA_BASE_PATH,
@@ -49,106 +58,70 @@ export type DeveloperApiKey = Pick<
 	"id" | "keyType" | "keyPrefix" | "createdAt" | "revokedAt"
 >;
 
-export type DeveloperApp = typeof developerApps.$inferSelect & {
-	domains: (typeof developerAppDomains.$inferSelect)[];
-	apiKeys: DeveloperApiKey[];
-	creditAccount: typeof developerCreditAccounts.$inferSelect | null;
-	videoCount: number;
-};
+export type InfraApp = Pick<
+	typeof developerApps.$inferSelect,
+	"id" | "name" | "environment" | "createdAt"
+>;
 
-export type InfraAppSummary = {
-	id: string;
-	name: string;
-	environment: DeveloperApp["environment"];
-	balanceMicroCredits: number;
-};
+export type InfraCreditAccount = typeof developerCreditAccounts.$inferSelect;
 
-export async function getDeveloperApps(
+export type InfraAppSummary = Pick<InfraApp, "id" | "name" | "environment">;
+
+export function getDeveloperApps(
 	user: Pick<typeof userSelectProps, "id">,
-): Promise<DeveloperApp[]> {
-	const apps = await db()
-		.select()
+): Promise<InfraApp[]> {
+	return db()
+		.select({
+			id: developerApps.id,
+			name: developerApps.name,
+			environment: developerApps.environment,
+			createdAt: developerApps.createdAt,
+		})
 		.from(developerApps)
 		.where(
 			and(eq(developerApps.ownerId, user.id), isNull(developerApps.deletedAt)),
 		)
 		.orderBy(desc(developerApps.createdAt));
+}
 
-	if (apps.length === 0) return [];
+const getInfraCreditAccount = cache(
+	async (appId: string): Promise<InfraCreditAccount | null> => {
+		const [account] = await db()
+			.select()
+			.from(developerCreditAccounts)
+			.where(eq(developerCreditAccounts.appId, appId))
+			.limit(1);
+		return account ?? null;
+	},
+);
 
-	const appIds = apps.map((a) => a.id);
-
-	const [allDomains, allApiKeys, allCreditAccounts, allVideoCounts] =
-		await Promise.all([
-			db()
-				.select()
-				.from(developerAppDomains)
-				.where(inArray(developerAppDomains.appId, appIds)),
-			db()
-				.select({
-					id: developerApiKeys.id,
-					appId: developerApiKeys.appId,
-					keyType: developerApiKeys.keyType,
-					keyPrefix: developerApiKeys.keyPrefix,
-					createdAt: developerApiKeys.createdAt,
-					revokedAt: developerApiKeys.revokedAt,
-				})
-				.from(developerApiKeys)
-				.where(
-					and(
-						inArray(developerApiKeys.appId, appIds),
-						isNull(developerApiKeys.revokedAt),
-					),
+export const getInfraApiKeys = cache(
+	(appId: string): Promise<DeveloperApiKey[]> =>
+		db()
+			.select({
+				id: developerApiKeys.id,
+				keyType: developerApiKeys.keyType,
+				keyPrefix: developerApiKeys.keyPrefix,
+				createdAt: developerApiKeys.createdAt,
+				revokedAt: developerApiKeys.revokedAt,
+			})
+			.from(developerApiKeys)
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					isNull(developerApiKeys.revokedAt),
 				),
-			db()
-				.select()
-				.from(developerCreditAccounts)
-				.where(inArray(developerCreditAccounts.appId, appIds)),
-			db()
-				.select({
-					appId: developerVideos.appId,
-					count: count(),
-				})
-				.from(developerVideos)
-				.where(
-					and(
-						inArray(developerVideos.appId, appIds),
-						isNull(developerVideos.deletedAt),
-					),
-				)
-				.groupBy(developerVideos.appId),
-		]);
+			),
+);
 
-	const domainsByApp = new Map<string, (typeof allDomains)[number][]>();
-	for (const d of allDomains) {
-		const list = domainsByApp.get(d.appId) ?? [];
-		list.push(d);
-		domainsByApp.set(d.appId, list);
-	}
-
-	const keysByApp = new Map<string, (typeof allApiKeys)[number][]>();
-	for (const k of allApiKeys) {
-		const list = keysByApp.get(k.appId) ?? [];
-		list.push(k);
-		keysByApp.set(k.appId, list);
-	}
-
-	const accountsByApp = new Map(allCreditAccounts.map((c) => [c.appId, c]));
-	const countsByApp = new Map(allVideoCounts.map((v) => [v.appId, v.count]));
-
-	return apps.map((app) => ({
-		...app,
-		domains: domainsByApp.get(app.id) ?? [],
-		apiKeys: (keysByApp.get(app.id) ?? []).map((k) => ({
-			id: k.id,
-			keyType: k.keyType,
-			keyPrefix: k.keyPrefix,
-			createdAt: k.createdAt,
-			revokedAt: k.revokedAt,
-		})),
-		creditAccount: accountsByApp.get(app.id) ?? null,
-		videoCount: countsByApp.get(app.id) ?? 0,
-	}));
+export async function getInfraVideoCount(appId: string) {
+	const [row] = await db()
+		.select({ count: count() })
+		.from(developerVideos)
+		.where(
+			and(eq(developerVideos.appId, appId), isNull(developerVideos.deletedAt)),
+		);
+	return row?.count ?? 0;
 }
 
 export async function getDeveloperAppVideos(
@@ -283,7 +256,7 @@ export async function getInfraOrganizations() {
 }
 
 export type InfraProCredit = {
-	status: "available" | "claimed" | "not_pro";
+	status: "available" | "claimed" | "trial" | "not_pro";
 	nextDate: string;
 };
 
@@ -291,7 +264,8 @@ export async function getInfraProCredit(): Promise<InfraProCredit> {
 	const user = await requireInfraUser();
 	const now = new Date();
 	const nextDate = nextProCreditDate(now).toISOString();
-	if (!userIsPro(user)) return { status: "not_pro", nextDate };
+	const eligibility = proCreditEligibility(user);
+	if (eligibility !== "paid") return { status: eligibility, nextDate };
 	const claimed = await hasClaimedProCredit(user.id, now);
 	return { status: claimed ? "claimed" : "available", nextDate };
 }
@@ -307,10 +281,14 @@ export async function getSelectedInfraApp() {
 }
 
 export async function requireInfraApp(appId: string) {
-	const apps = await getInfraApps(infraAppPath(appId));
+	const user = await requireInfraUser(infraAppPath(appId));
+	const [apps, creditAccount] = await Promise.all([
+		getInfraAppsForUser(user.id),
+		getInfraCreditAccount(appId),
+	]);
 	const app = apps.find((a) => a.id === appId);
 	if (!app) notFound();
-	return { app, apps };
+	return { app: { ...app, creditAccount }, apps };
 }
 
 // A page title is only sent once the app is known to exist for this viewer.
@@ -329,13 +307,8 @@ export const infraPageMetadata =
 		return { title: `${title} | Cap Infra` };
 	};
 
-export function toInfraAppSummary(app: DeveloperApp): InfraAppSummary {
-	return {
-		id: app.id,
-		name: app.name,
-		environment: app.environment,
-		balanceMicroCredits: app.creditAccount?.balanceMicroCredits ?? 0,
-	};
+export function toInfraAppSummary(app: InfraApp): InfraAppSummary {
+	return { id: app.id, name: app.name, environment: app.environment };
 }
 
 export async function getInfraStorageSnapshots(
@@ -354,6 +327,7 @@ export async function getInfraStorageSnapshots(
 			and(
 				eq(developerDailyStorageSnapshots.appId, appId),
 				gte(developerDailyStorageSnapshots.snapshotDate, sinceDateKey),
+				gt(developerDailyStorageSnapshots.totalDurationMinutes, 0),
 			),
 		)
 		.orderBy(desc(developerDailyStorageSnapshots.snapshotDate));

@@ -1230,6 +1230,7 @@ describe("developer video dispatch", () => {
 			maxTier: "1080p",
 			includeAudio: true,
 			inputExtension: ".mov",
+			infra: true,
 		});
 		expect(Object.keys(body.uploads)).toEqual([
 			"master.m3u8",
@@ -1271,7 +1272,11 @@ describe("developer video dispatch", () => {
 
 		const [path, body] = mocks.startJob.mock.calls[0] ?? [];
 		expect(path).toBe("/video/process");
-		expect(body).toMatchObject({ maxWidth: 1920, maxHeight: 1920 });
+		expect(body).toMatchObject({
+			maxWidth: 1920,
+			maxHeight: 1920,
+			infra: true,
+		});
 		const mp4 = video().processing?.mp4;
 		const token = mp4?.state === "running" ? mp4.token : "";
 		expect(body.outputPresignedUrl).toContain(`${ENCODE}/${token}/video.mp4`);

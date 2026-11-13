@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerCreditTransactions,
 } from "@cap/database/schema";
-import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
@@ -12,12 +12,16 @@ import {
 } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
 import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
-import { formatCredits, formatNeed } from "@/lib/infra-usage";
+import { formatCredits, formatNeed, utcDateKey } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
 export const FIRST_MONTH_TRANSACTION_TYPE = "video_create" as const;
 export const FIRST_MONTH_REFERENCE_TYPE = "developer_video" as const;
+export const STRIPE_DISPUTE_REFERENCE_TYPE = "stripe_dispute" as const;
+export const DISPUTE_REVIEW_REFERENCE_TYPE = "manual" as const;
+export const DISPUTED_UPLOAD_MESSAGE =
+	"A payment for this app was disputed, so uploads are blocked and playback is paused. Contact us to restore it.";
 
 const GRACE_MS = INFRA_GRACE_DAYS * 24 * 60 * 60 * 1000;
 
@@ -26,6 +30,7 @@ export type InfraStandingState = "active" | "grace" | "paused";
 export type InfraAppStanding = {
 	state: InfraStandingState;
 	pausesAt: Date | null;
+	disputed?: boolean;
 };
 
 export type StorageCharge = {
@@ -116,11 +121,19 @@ export function resolveStanding({
 	};
 }
 
-async function latestChargeOfType(
-	executor: InfraDbExecutor,
-	accountId: string,
-	type: "storage_daily",
-) {
+const storageDayCeiling = () =>
+	utcDateKey(new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+const storageDayRows = () =>
+	and(
+		eq(developerCreditTransactions.type, "storage_daily"),
+		eq(developerCreditTransactions.referenceType, STORAGE_DAY_REFERENCE_TYPE),
+	);
+
+const latestStorageDay = (accountId: string, ceiling: string) =>
+	sql`(select ${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId} from ${developerCreditTransactions} where ${developerCreditTransactions.accountId} = ${accountId} and ${developerCreditTransactions.referenceType} = ${STORAGE_DAY_REFERENCE_TYPE} and ${developerCreditTransactions.referenceId} <= ${ceiling} order by ${developerCreditTransactions.referenceId} desc limit 1)`;
+
+async function latestDailyCharge(executor: InfraDbExecutor, accountId: string) {
 	const [row] = await executor
 		.select({
 			id: developerCreditTransactions.id,
@@ -131,10 +144,14 @@ async function latestChargeOfType(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, type),
+				storageDayRows(),
+				lte(developerCreditTransactions.referenceId, storageDayCeiling()),
 			),
 		)
-		.orderBy(desc(developerCreditTransactions.createdAt))
+		.orderBy(
+			desc(developerCreditTransactions.referenceId),
+			desc(developerCreditTransactions.id),
+		)
 		.limit(1);
 	return row ? parseStorageCharge(row) : null;
 }
@@ -181,7 +198,7 @@ export async function latestStorageCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
 ): Promise<StorageCharge | null> {
-	const daily = await latestChargeOfType(executor, accountId, "storage_daily");
+	const daily = await latestDailyCharge(executor, accountId);
 	const firstMonth = await latestFirstMonthCharge(executor, accountId);
 	if (
 		firstMonth?.shortSince &&
@@ -220,6 +237,38 @@ export async function latchCoveredShortfall(
 	return true;
 }
 
+export async function latestStorageCharges(
+	executor: InfraDbExecutor,
+	accountIds: readonly string[],
+) {
+	const charges = new Map<string, StorageCharge>();
+	if (accountIds.length === 0) return charges;
+	const ceiling = storageDayCeiling();
+	const rows = await executor
+		.select({
+			id: developerCreditTransactions.id,
+			accountId: developerCreditTransactions.accountId,
+			createdAt: developerCreditTransactions.createdAt,
+			metadata: developerCreditTransactions.metadata,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				storageDayRows(),
+				sql`(${developerCreditTransactions.accountId}, ${developerCreditTransactions.referenceId}) in (select latest.accountId, latest.referenceId from (${sql.join(
+					accountIds.map((accountId) => latestStorageDay(accountId, ceiling)),
+					sql` union all `,
+				)}) latest)`,
+			),
+		);
+	for (const row of [...rows].sort((a, b) => (a.id < b.id ? 1 : -1))) {
+		if (!charges.has(row.accountId)) {
+			charges.set(row.accountId, parseStorageCharge(row));
+		}
+	}
+	return charges;
+}
+
 export async function restoredSinceCharge(
 	executor: InfraDbExecutor,
 	accountId: string,
@@ -244,12 +293,50 @@ export async function restoredSinceCharge(
 	return !!credit;
 }
 
+export async function disputedSince(
+	executor: InfraDbExecutor,
+	accountId: string,
+) {
+	const [latest] = await executor
+		.select({
+			referenceType: developerCreditTransactions.referenceType,
+			createdAt: developerCreditTransactions.createdAt,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, "adjustment"),
+				inArray(developerCreditTransactions.referenceType, [
+					STRIPE_DISPUTE_REFERENCE_TYPE,
+					DISPUTE_REVIEW_REFERENCE_TYPE,
+				]),
+			),
+		)
+		.orderBy(desc(developerCreditTransactions.createdAt))
+		.limit(1);
+	return latest?.referenceType === STRIPE_DISPUTE_REFERENCE_TYPE
+		? new Date(latest.createdAt)
+		: null;
+}
+
 export async function accountStanding(
 	executor: InfraDbExecutor,
 	account: { id: string; balanceMicroCredits: number },
 	now: Date,
 ) {
-	const lastCharge = await latestStorageCharge(executor, account.id);
+	const [lastCharge, disputedAt] = await Promise.all([
+		latestStorageCharge(executor, account.id),
+		disputedSince(executor, account.id),
+	]);
+	if (disputedAt) {
+		const standing: InfraAppStanding = {
+			state: "paused",
+			pausesAt: disputedAt,
+			disputed: true,
+		};
+		return { lastCharge, standing };
+	}
 	const covered =
 		!lastCharge?.shortSince ||
 		account.balanceMicroCredits >= lastCharge.owedMicroCredits;
@@ -329,6 +416,14 @@ export function uploadAdmission({
 		requiredMicroCredits,
 		shortfallMicroCredits,
 	};
+	if (standing.disputed) {
+		return {
+			...base,
+			allowed: false,
+			reason: "out_of_credit",
+			message: DISPUTED_UPLOAD_MESSAGE,
+		};
+	}
 	const covers = uploadCreditCovers(storage);
 	if (!inGoodStanding) {
 		return {
@@ -378,17 +473,18 @@ export async function getInfraBilling(
 	newVideo?: BillableVideo | null,
 	now: Date = new Date(),
 	executor?: InfraDbExecutor,
-	options: { excludeVideoId?: string } = {},
+	options: { excludeVideoId?: string; storage?: AppStorage } = {},
 ) {
-	const counted = { ...options, now };
 	const [{ account, lastCharge, standing }, storage] = executor
 		? [
 				await appStanding(appId, now, executor),
-				await getAppStorage(appId, newVideo, executor, counted),
+				options.storage ??
+					(await getAppStorage(appId, newVideo, executor, { ...options, now })),
 			]
 		: await Promise.all([
 				appStanding(appId, now),
-				getAppStorage(appId, newVideo, undefined, counted),
+				options.storage ??
+					getAppStorage(appId, newVideo, undefined, { ...options, now }),
 			]);
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,
@@ -415,7 +511,7 @@ export async function getInfraUploadAdmission(
 	appId: string,
 	newVideo?: BillableVideo | null,
 	executor?: InfraDbExecutor,
-	options: { excludeVideoId?: string } = {},
+	options: { excludeVideoId?: string; storage?: AppStorage } = {},
 ): Promise<InfraUploadAdmission> {
 	return (await getInfraBilling(appId, newVideo, new Date(), executor, options))
 		.admission;
