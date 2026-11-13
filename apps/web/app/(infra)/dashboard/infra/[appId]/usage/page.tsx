@@ -4,6 +4,7 @@ import {
 	storageMicroCreditsPerMinutePerMonth,
 } from "@/lib/developer-pricing";
 import { getTranscriptionUsageSince } from "@/lib/developer-transcript-store";
+import { deliveryJson, getDeliveredUsage } from "@/lib/infra-delivery";
 import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -18,6 +19,7 @@ import {
 	utcDaysAgoKey,
 	utcMonthStart,
 } from "@/lib/infra-usage";
+import { DeliveredMinutes } from "../../_components/delivered-minutes";
 import {
 	Block,
 	Empty,
@@ -70,17 +72,25 @@ export default async function InfraUsagePage({
 	const { app } = await requireInfraApp(appId);
 	const now = new Date();
 
-	const [storage, snapshots, transcription, firstMonths] = await Promise.all([
-		getAppStorage(app.id),
-		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
-		getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
-			console.error("[infra-usage] Transcription usage unavailable", error);
-			return null;
-		}),
-		app.creditAccount
-			? getInfraFirstMonthChargesSince(app.creditAccount.id, utcMonthStart(now))
-			: Promise.resolve({ chargedMicroCredits: 0, videos: 0 }),
-	]);
+	const [storage, snapshots, transcription, firstMonths, delivered] =
+		await Promise.all([
+			getAppStorage(app.id),
+			getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
+			getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
+				console.error("[infra-usage] Transcription usage unavailable", error);
+				return null;
+			}),
+			app.creditAccount
+				? getInfraFirstMonthChargesSince(
+						app.creditAccount.id,
+						utcMonthStart(now),
+					)
+				: Promise.resolve({ chargedMicroCredits: 0, videos: 0 }),
+			getDeliveredUsage(app.id, now).catch((error) => {
+				console.error("[infra-usage] Delivery usage unavailable", error);
+				return null;
+			}),
+		]);
 	const usage = storage.stored;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
 		(tier) => usage.minutesByTier[tier] > 0,
@@ -236,6 +246,11 @@ export default async function InfraUsagePage({
 					</div>
 				</Block>
 			)}
+
+			<DeliveredMinutes
+				delivery={deliveryJson(delivered)}
+				monthName={monthName}
+			/>
 
 			<Block
 				title="Daily storage"
