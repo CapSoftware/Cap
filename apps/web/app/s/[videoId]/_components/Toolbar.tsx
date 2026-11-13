@@ -135,6 +135,7 @@ export const Toolbar = ({
 					});
 				} catch (error) {
 					console.error("Error posting comment:", error);
+					toast.error("Couldn't add your reaction. Please try again.");
 				}
 			},
 		});

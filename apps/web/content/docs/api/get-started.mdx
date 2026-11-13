@@ -351,7 +351,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 300 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 

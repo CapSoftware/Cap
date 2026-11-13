@@ -1307,6 +1307,16 @@ describe("developer video dispatch", () => {
 		expect(video().processing?.attempts.mp4).toBe(0);
 	});
 
+	it("records when the media server last answered busy", async () => {
+		mocks.startJob.mockResolvedValue({ status: "busy" });
+		const before = Date.now();
+
+		await dispatchDeveloperVideoPart("video-1", "encode-1", "mp4");
+
+		expect(video().processing?.busyAt).toBeGreaterThanOrEqual(before);
+		expect(video().processing?.busyAt).toBeLessThanOrEqual(Date.now());
+	});
+
 	it("keeps the part for a later try when the media server cannot be reached", async () => {
 		mocks.startJob.mockResolvedValue({ status: "unreachable" });
 
