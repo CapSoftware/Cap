@@ -53,6 +53,9 @@ vi.mock("@/app/api/utils", async () => {
 });
 
 const { app } = await import("@/app/api/developer/v1/[...route]/videos");
+const { markDeveloperVideoDeleted } = await import(
+	"@/lib/developer-video-delete"
+);
 
 const BASE =
 	"https://web.example/api/developer/playback/playback-id-0123456789ab";
@@ -881,6 +884,44 @@ describe("developer video API", () => {
 			await remove();
 
 			expect(mocks.cancelJob.mock.calls).toEqual([["job-mp4"]]);
+		});
+
+		it("answers as before and settles and cancels once, also on a repeat delete", async () => {
+			const now = new Date("2026-11-13T12:00:00.000Z");
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: "job-hls",
+						startedAt: 2_000,
+					},
+				}),
+			});
+
+			const first = await remove();
+			const repeated = await remove();
+
+			expect([first.status, repeated.status]).toEqual([200, 200]);
+			expect(await first.text()).toBe('{"success":true}');
+			expect(await repeated.text()).toBe('{"success":true}');
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+			expect(mocks.settleAtDelete.mock.calls).toEqual([["video-1"]]);
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-hls"]]);
+
+			mocks.store.updates = [];
+			mocks.store.video = { ...mocks.store.video, deletedAt: null } as never;
+			await markDeveloperVideoDeleted(
+				{ appId: "app-1", videoId: "video-1" },
+				now,
+			);
+			expect(mocks.store.updates).toEqual([{ deletedAt: now }]);
+			expect(mocks.settleAtDelete.mock.calls).toEqual([
+				["video-1"],
+				["video-1"],
+			]);
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-hls"], ["job-hls"]]);
 		});
 
 		it("cancels nothing for a video that finished encoding", async () => {
