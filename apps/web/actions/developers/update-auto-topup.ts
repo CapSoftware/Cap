@@ -5,6 +5,9 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { developerApps, developerCreditAccounts } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { canUseInfra } from "@/lib/infra-access";
+import { actionFailure } from "@/lib/infra-action-result";
+import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
 
 export async function updateDeveloperAutoTopUp(data: {
 	appId: string;
@@ -13,11 +16,21 @@ export async function updateDeveloperAutoTopUp(data: {
 	amountCents?: number;
 }) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user || !canUseInfra(user.email)) throw new Error("Unauthorized");
 
-	const [app] = await db()
-		.select()
-		.from(developerApps)
+	const [account] = await db()
+		.select({
+			id: developerCreditAccounts.id,
+			stripePaymentMethodId: developerCreditAccounts.stripePaymentMethodId,
+			autoTopUpThresholdMicroCredits:
+				developerCreditAccounts.autoTopUpThresholdMicroCredits,
+			autoTopUpAmountCents: developerCreditAccounts.autoTopUpAmountCents,
+		})
+		.from(developerCreditAccounts)
+		.innerJoin(
+			developerApps,
+			eq(developerCreditAccounts.appId, developerApps.id),
+		)
 		.where(
 			and(
 				eq(developerApps.id, data.appId),
@@ -27,37 +40,32 @@ export async function updateDeveloperAutoTopUp(data: {
 		)
 		.limit(1);
 
-	if (!app) throw new Error("App not found");
+	if (!account) throw new Error("App not found");
 
-	if (
-		data.thresholdMicroCredits !== undefined &&
-		data.thresholdMicroCredits < 0
-	) {
-		throw new Error("Threshold must be non-negative");
-	}
-	if (data.amountCents !== undefined && data.amountCents <= 0) {
-		throw new Error("Top-up amount must be positive");
-	}
-	if (data.amountCents !== undefined && data.amountCents > 100_000) {
-		throw new Error("Top-up amount must be between $0.01 and $1,000.00");
-	}
-
-	const updates: Partial<typeof developerCreditAccounts.$inferInsert> = {
-		autoTopUpEnabled: data.enabled,
-	};
-
-	if (data.thresholdMicroCredits !== undefined) {
-		updates.autoTopUpThresholdMicroCredits = data.thresholdMicroCredits;
-	}
-	if (data.amountCents !== undefined) {
-		updates.autoTopUpAmountCents = data.amountCents;
-	}
+	const thresholdMicroCredits =
+		data.thresholdMicroCredits ?? account.autoTopUpThresholdMicroCredits;
+	const amountCents = data.amountCents ?? account.autoTopUpAmountCents;
+	const invalid = autoTopUpSettingsError({
+		enabled: data.enabled,
+		thresholdMicroCredits,
+		amountCents,
+		hasCard: !!account.stripePaymentMethodId,
+	});
+	if (invalid) return actionFailure(invalid);
 
 	await db()
 		.update(developerCreditAccounts)
-		.set(updates)
-		.where(eq(developerCreditAccounts.appId, data.appId));
+		.set(
+			data.enabled
+				? {
+						autoTopUpEnabled: true,
+						autoTopUpThresholdMicroCredits: thresholdMicroCredits,
+						autoTopUpAmountCents: amountCents,
+					}
+				: { autoTopUpEnabled: false },
+		)
+		.where(eq(developerCreditAccounts.id, account.id));
 
 	revalidatePath("/dashboard/infra", "layout");
-	return { success: true };
+	return { success: true as const };
 }

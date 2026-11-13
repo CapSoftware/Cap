@@ -137,6 +137,16 @@ jobs:
             src/__tests__/lib/hls-ladder.test.ts \
             src/__tests__/lib/hls-ladder-encode.integration.test.ts \
             src/__tests__/lib/hls-ladder-route.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/media-address-guard.test.ts \
+            src/__tests__/lib/media-relay.integration.test.ts \
+            src/__tests__/lib/media-input-policy.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/source-frame-limit.integration.test.ts \
+            src/__tests__/lib/media-probe-sample-counts.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/encode-stall.test.ts \
+            src/__tests__/lib/media-edit-stderr.test.ts
 
       - name: Verify long recording performance in the production image
         env:

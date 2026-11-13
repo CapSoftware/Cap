@@ -264,6 +264,19 @@ export const developerCapabilities = (
 		confirmation: "user",
 		sideEffect: "destructive",
 	}),
+	uploadVideos: scopedAction(scopes, "developer:write", {
+		confirmation: "user",
+		sideEffect: "paid",
+	}),
+	transcribe: scopedAction(scopes, "developer:write", {
+		confirmation: "user",
+		sideEffect: "paid",
+		asynchronous: true,
+	}),
+	deleteTranscripts: scopedAction(scopes, "developer:write", {
+		confirmation: "user",
+		sideEffect: "destructive",
+	}),
 });
 
 export const normalizeOrganization = (

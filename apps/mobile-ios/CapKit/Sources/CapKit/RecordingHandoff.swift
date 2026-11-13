@@ -2,15 +2,27 @@ import Foundation
 import Security
 
 public enum RecordingHandoff {
+    /// How the recording left the extension. Cap only hears about an upload it finishes itself, so the other two
+    /// endings have to be told to it.
+    public enum Outcome: String, Codable, Sendable {
+        case uploaded
+        case handedOver
+        case failed
+    }
+
     public struct Entry: Codable, Sendable, Equatable {
         public let capId: String
         public let shareUrl: String
         public let createdAt: Date
+        public let outcome: Outcome?
+        public let durationSeconds: Double?
 
-        public init(capId: String, shareUrl: String, createdAt: Date = .now) {
+        public init(capId: String, shareUrl: String, createdAt: Date = .now, outcome: Outcome? = nil, durationSeconds: Double? = nil) {
             self.capId = capId
             self.shareUrl = shareUrl
             self.createdAt = createdAt
+            self.outcome = outcome
+            self.durationSeconds = durationSeconds
         }
     }
 

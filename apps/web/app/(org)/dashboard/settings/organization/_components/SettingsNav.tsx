@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { TabSquiggle } from "./doodles";
 
 export function SettingsNav() {
 	const pathname = usePathname();
@@ -23,11 +24,15 @@ export function SettingsNav() {
 			href: "/dashboard/settings/organization/content",
 		},
 		{
-			label: buildEnv.NEXT_PUBLIC_IS_CAP ? "Billing & Members" : "Members",
-			href: "/dashboard/settings/organization/billing",
+			label: "Members",
+			href: "/dashboard/settings/organization/members",
 		},
 		...(buildEnv.NEXT_PUBLIC_IS_CAP
 			? [
+					{
+						label: "Billing",
+						href: "/dashboard/settings/organization/billing",
+					},
 					{
 						label: "Security & Compliance",
 						href: "/dashboard/settings/organization/security",
@@ -61,9 +66,11 @@ export function SettingsNav() {
 						{isActive && (
 							<motion.div
 								layoutId="org-settings-tab"
-								className="absolute right-0 bottom-0 w-full h-px rounded-full bg-gray-12"
+								className="absolute right-0 bottom-0 w-full"
 								transition={{ ease: "easeOut", duration: 0.2 }}
-							/>
+							>
+								<TabSquiggle />
+							</motion.div>
 						)}
 					</div>
 				);

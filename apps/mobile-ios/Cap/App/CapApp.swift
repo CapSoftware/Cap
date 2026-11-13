@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         RecordingCoordinator.shared.start()
         UNUserNotificationCenter.current().delegate = self
         Task { await PushNotifications.shared.registerIfAllowed() }
+        Usage.start()
         return true
     }
 
@@ -103,6 +104,7 @@ struct RootView: View {
             switch model.phase {
             case .signedOut:
                 SignInView()
+                    .usageScreen("sign_in")
                     .transition(.opacity)
             case let .signedIn(session):
                 MainTabView(session: session)
@@ -264,10 +266,12 @@ struct MainTabView: View {
                 case .stack:
                     NavigationStack(path: $homePath) {
                         HomeView()
+                            .usageScreen("caps")
                             .navigationDestination(for: Route.self, destination: destination)
                     }
                 case .split:
                     LibrarySplitView(path: $homePath, destination: destination)
+                        .usageScreen("caps")
                 }
             }
             Tab("Record", systemImage: "record.circle", value: AppTab.record) {
@@ -276,12 +280,14 @@ struct MainTabView: View {
             Tab("Analytics", systemImage: "chart.xyaxis.line", value: AppTab.analytics) {
                 NavigationStack(path: $analyticsPath) {
                     AnalyticsScreen(scope: .organization)
+                        .usageScreen("analytics")
                         .navigationDestination(for: Route.self, destination: destination)
                 }
             }
             Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) {
                 NavigationStack(path: $settingsPath) {
                     SettingsView()
+                        .usageScreen("settings")
                         .navigationDestination(for: Route.self, destination: destination)
                 }
             }

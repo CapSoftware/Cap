@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type appType from "../../app";
 import { parseHlsLadderMaster } from "../../lib/hls-ladder";
@@ -25,6 +27,7 @@ let app: typeof appType;
 let getJob: typeof import("../../lib/job-manager").getJob;
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl = "";
+const workDir = mkdtempSync(join(tmpdir(), "cap-ladder-route-"));
 const uploads = new Map<string, { bytes: Uint8Array; contentType: string }>();
 const webhooks: JobProgress[] = [];
 
@@ -66,6 +69,24 @@ beforeAll(async () => {
 	app = (await import("../../app")).default;
 	getJob = (await import("../../lib/job-manager")).getJob;
 	const fixture = readFileSync(FIXTURE);
+	const largePath = join(workDir, "large.mp4");
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=1280x720:rate=30:duration=3",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"ultrafast",
+		"-pix_fmt",
+		"yuv420p",
+		"-y",
+		largePath,
+	]);
+	const large = readFileSync(largePath);
 	server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -82,11 +103,17 @@ beforeAll(async () => {
 				});
 				return new Response(null, { status: 200, headers: { ETag: '"x"' } });
 			}
-			if (url.pathname === "/fixture.mp4") {
-				return new Response(fixture, {
+			const source =
+				url.pathname === "/fixture.mp4"
+					? fixture
+					: url.pathname === "/large.mp4"
+						? large
+						: null;
+			if (source) {
+				return new Response(source, {
 					headers: {
 						"Content-Type": "video/mp4",
-						"Content-Length": String(fixture.byteLength),
+						"Content-Length": String(source.byteLength),
 					},
 				});
 			}
@@ -98,7 +125,26 @@ beforeAll(async () => {
 
 afterAll(() => {
 	server?.stop(true);
+	rmSync(workDir, { recursive: true, force: true });
 });
+
+function imageSize(bytes: Uint8Array): string {
+	const path = join(workDir, "poster.jpg");
+	writeFileSync(path, bytes);
+	return execFileSync(
+		"ffprobe",
+		[
+			"-v",
+			"error",
+			"-show_entries",
+			"stream=width,height",
+			"-of",
+			"csv=p=0:s=x",
+			path,
+		],
+		{ encoding: "utf8" },
+	).trim();
+}
 
 describe("POST /video/ladder", () => {
 	test("rejects a request without the shared secret", async () => {
@@ -149,6 +195,36 @@ describe("POST /video/ladder", () => {
 		const final = webhooks.findLast((payload) => payload.jobId === jobId);
 		expect(final?.phase).toBe("complete");
 		expect(final?.ladder?.renditions.length).toBe(ladder?.renditions.length);
+	}, 120_000);
+
+	test("takes the poster from the largest rendition it encoded", async () => {
+		const response = await startLadder({
+			videoUrl: `${baseUrl}/large.mp4`,
+			maxTier: "360p",
+			uploads: uploadTargets("poster"),
+			thumbnailPresignedUrl: `${baseUrl}/uploads/poster/poster.jpg`,
+		});
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		expect(job.error).toBeUndefined();
+		expect(job.phase).toBe("complete");
+		expect(job.ladder?.renditions.map((rendition) => rendition.name)).toEqual([
+			"360p",
+		]);
+		const poster = uploads.get("poster/poster.jpg");
+		expect(poster?.contentType).toBe("image/jpeg");
+		expect(imageSize(poster?.bytes ?? new Uint8Array())).toBe("640x360");
+	}, 120_000);
+
+	test("fails the job when the poster cannot be uploaded", async () => {
+		const response = await startLadder({
+			uploads: uploadTargets("poster-refused"),
+			thumbnailPresignedUrl: `${baseUrl}/refused/poster.jpg`,
+		});
+		const { jobId } = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(jobId);
+		expect(job.phase).toBe("error");
 	}, 120_000);
 
 	test("encodes one slice without audio when asked", async () => {

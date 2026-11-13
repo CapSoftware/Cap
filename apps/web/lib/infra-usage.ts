@@ -1,4 +1,11 @@
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
+import type { InfraResolutionTier } from "@/lib/infra-pricing";
+
+export const INFRA_TIER_LABELS: Record<InfraResolutionTier, string> = {
+	"1080p": "Up to 1080p",
+	"1440p": "1440p",
+	"2160p": "4K",
+};
 
 export type InfraStorageSnapshot = {
 	snapshotDate: string;
@@ -34,24 +41,67 @@ export function summarizeStorageMonth(
 	return { chargedMicroCredits, billedDays };
 }
 
+const MICRO_CREDITS_PER_CENT = MICRO_CREDITS_PER_DOLLAR / 100;
+
+const wholeMicroCredits = (
+	microCredits: number,
+	round: (value: number) => number,
+) => {
+	const value = Number(microCredits);
+	return Number.isFinite(value) ? Math.max(0, round(value)) : 0;
+};
+
+function exactDollars(microCredits: number, grouped: boolean) {
+	const dollars = Math.floor(microCredits / MICRO_CREDITS_PER_DOLLAR);
+	const rest = microCredits % MICRO_CREDITS_PER_DOLLAR;
+	const decimals =
+		rest % MICRO_CREDITS_PER_CENT === 0
+			? String(rest / MICRO_CREDITS_PER_CENT).padStart(2, "0")
+			: String(rest).padStart(5, "0");
+	return `${grouped ? dollars.toLocaleString("en-US") : dollars}.${decimals}`;
+}
+
+export function creditDollars(microCredits: number) {
+	return exactDollars(wholeMicroCredits(microCredits, Math.floor), false);
+}
+
+export function signedCreditDollars(microCredits: number) {
+	const size = wholeMicroCredits(Math.abs(Number(microCredits)), Math.round);
+	const sign = Number(microCredits) < 0 && size > 0 ? "-" : "";
+	return `${sign}${exactDollars(size, false)}`;
+}
+
 export function formatCredits(microCredits: number) {
-	const dollars = (Number(microCredits) || 0) / MICRO_CREDITS_PER_DOLLAR;
-	return `$${dollars.toLocaleString("en-US", {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	})}`;
+	return `$${exactDollars(wholeMicroCredits(microCredits, Math.floor), true)}`;
+}
+
+export function formatNeed(microCredits: number) {
+	return `$${exactDollars(wholeMicroCredits(microCredits, Math.ceil), true)}`;
 }
 
 export function formatCharge(microCredits: number) {
-	const dollars =
-		Math.abs(Number(microCredits) || 0) / MICRO_CREDITS_PER_DOLLAR;
-	if (dollars > 0 && dollars < 0.01) {
-		return `$${dollars.toFixed(4)}`;
+	const size = Math.abs(Number(microCredits) || 0);
+	const whole = wholeMicroCredits(size, Math.round);
+	if (size > 0 && whole === 0) return `<$${exactDollars(1, true)}`;
+	return `$${exactDollars(whole, true)}`;
+}
+
+const BYTE_UNITS = ["KB", "MB", "GB", "TB"] as const;
+
+export function formatBytes(bytes: number | null | undefined) {
+	if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) {
+		return null;
 	}
-	return `$${dollars.toLocaleString("en-US", {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	})}`;
+	if (bytes < 1000) return `${Math.max(0, Math.round(bytes))} B`;
+	let value = bytes / 1000;
+	let unit = 0;
+	while (value >= 999.5 && unit < BYTE_UNITS.length - 1) {
+		value /= 1000;
+		unit += 1;
+	}
+	return `${value.toLocaleString("en-US", {
+		maximumFractionDigits: value < 10 ? 1 : 0,
+	})} ${BYTE_UNITS[unit]}`;
 }
 
 export function formatMinutes(minutes: number) {

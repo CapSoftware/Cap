@@ -21,7 +21,14 @@ import {
 	type EncodedHlsLadder,
 	encodeHlsLadder,
 } from "../../lib/hls-ladder-encode";
+import {
+	getMaxConcurrentProbeOperations,
+	registerMediaOperation,
+	unregisterMediaOperation,
+} from "../../lib/media-operations";
 import { probeVideoFile } from "../../lib/media-probe";
+import { generateThumbnail } from "../../lib/media-video";
+import { getActiveSubprocessCount } from "../../lib/subprocess";
 
 const SOURCE_SECONDS = 26;
 
@@ -252,6 +259,15 @@ describe("HLS ladder encode", () => {
 		expect(Math.abs(audioSeconds - videoSeconds)).toBeLessThan(0.5);
 	}, 180_000);
 
+	test("a slice leaves out the audio unless it asks for it", async () => {
+		const slice = await encodeHlsLadder(source, await probeVideoFile(source), {
+			range: { startSeconds: 16 },
+		});
+		ladders.push(slice);
+		expect(slice.result.audio).toBeNull();
+		expect(slice.files.map((file) => file.name)).not.toContain("audio.m4s");
+	}, 120_000);
+
 	test("slices line up when the source does not start at zero", async () => {
 		const offset = join(directory, "offset.mp4");
 		writeSource(offset, ["-output_ts_offset", "10"]);
@@ -264,6 +280,165 @@ describe("HLS ladder encode", () => {
 		);
 		const output = stitch(slices, "stitched-offset");
 		expectSameFrames(videoFrameTimes(join(output, "720p.m3u8")), wholeFrames);
+	}, 180_000);
+
+	function writeFiltered(path: string, seconds: number, select: string) {
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			`testsrc2=size=640x360:rate=30:duration=${seconds}`,
+			"-vf",
+			`select='${select}'`,
+			"-fps_mode",
+			"vfr",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"ultrafast",
+			"-pix_fmt",
+			"yuv420p",
+			"-y",
+			path,
+		]);
+	}
+
+	function framesBetween(times: number[], start: number, end: number) {
+		return times.filter((time) => time >= start - 0.001 && time < end - 0.001)
+			.length;
+	}
+
+	test("keeps every frame of a source that starts slowly and speeds up", async () => {
+		const variable = join(directory, "variable.mp4");
+		writeFiltered(variable, 20, "if(lt(t,12),not(mod(n,15)),1)");
+		const sourceFrames = videoFrameTimes(variable);
+		expect(framesBetween(sourceFrames, 0, 12)).toBe(24);
+		expect(framesBetween(sourceFrames, 12, 20)).toBe(240);
+		expect((await probeVideoFile(variable)).fps).toBeLessThan(10);
+
+		const whole = await encode(undefined, true, variable);
+		for (const rendition of whole.result.renditions) {
+			const frames = videoFrameTimes(fileNamed(whole, rendition.playlist).path);
+			expect(framesBetween(frames, 12, 20)).toBe(240);
+			expect(frames.length).toBe(600);
+		}
+
+		const slices = await Promise.all(
+			planHlsLadderSlices(20, 2, 8).map((range) =>
+				encode(range, false, variable),
+			),
+		);
+		const sliced = slices.flatMap((slice) =>
+			videoFrameTimes(fileNamed(slice, "360p.m3u8").path),
+		);
+		expect(sliced.length).toBe(600);
+		expect(new Set(sliced.map((time) => Math.round(time * 30))).size).toBe(600);
+		expect(framesBetween(sliced, 12, 20)).toBe(240);
+	}, 180_000);
+
+	test("fails instead of guessing the frame rate when the probe pool is full", async () => {
+		const metadata = await probeVideoFile(source);
+		const subprocesses = getActiveSubprocessCount();
+		const running = Array.from(
+			{ length: getMaxConcurrentProbeOperations() },
+			() => registerMediaOperation("probe", () => {}),
+		);
+		try {
+			await expect(encodeHlsLadder(source, metadata)).rejects.toThrow(
+				"Server is busy",
+			);
+			expect(getActiveSubprocessCount()).toBe(subprocesses);
+		} finally {
+			for (const operation of running) unregisterMediaOperation(operation);
+		}
+	}, 60_000);
+
+	test("starts a slice on time when it begins inside a still stretch", async () => {
+		const still = join(directory, "still.mp4");
+		writeFiltered(still, SOURCE_SECONDS, "not(between(t,13,20))");
+		expect(framesBetween(videoFrameTimes(still), 13.1, 20)).toBe(0);
+		const whole = videoFrameTimes(
+			fileNamed(await encode(undefined, true, still), "360p.m3u8").path,
+		);
+		expect(whole.length).toBe(SOURCE_SECONDS * 30);
+
+		const ranges = planHlsLadderSlices(SOURCE_SECONDS, 2, 8);
+		expect(ranges[1]).toEqual({ startSeconds: 16 });
+		const [first, second] = await Promise.all(
+			ranges.map((range) => encode(range, false, still)),
+		);
+		if (!first || !second) throw new Error("missing slice");
+		const firstFrames = videoFrameTimes(fileNamed(first, "360p.m3u8").path);
+		const secondFrames = videoFrameTimes(fileNamed(second, "360p.m3u8").path);
+		expect(firstFrames.length).toBe(16 * 30);
+		expect(secondFrames.length).toBe((SOURCE_SECONDS - 16) * 30);
+		expect(secondFrames[0]).toBeCloseTo(16, 3);
+		expect(firstFrames.length + secondFrames.length).toBe(whole.length);
+
+		const bounded = videoFrameTimes(
+			fileNamed(
+				await encode({ startSeconds: 16, durationSeconds: 4 }, false, still),
+				"360p.m3u8",
+			).path,
+		);
+		const wholeBetween = whole.filter(
+			(time) => time >= 16 - 0.001 && time < 20 - 0.001,
+		);
+		expect(bounded.length).toBe(4 * 30);
+		expect(bounded.length).toBe(wholeBetween.length);
+		expect(bounded[0]).toBeCloseTo(wholeBetween[0] ?? Number.NaN, 3);
+		expect(bounded.at(-1)).toBeCloseTo(wholeBetween.at(-1) ?? Number.NaN, 3);
+	}, 180_000);
+
+	test("keeps audio in a codec the probe cannot name", async () => {
+		const lossless = join(directory, "lossless.mov");
+		execFileSync("ffmpeg", [
+			"-v",
+			"error",
+			"-i",
+			source,
+			"-t",
+			"6",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"alac",
+			"-y",
+			lossless,
+		]);
+		const metadata = await probeVideoFile(lossless);
+		expect(metadata.audioCodec).toBeNull();
+		expect(metadata.audioChannels).toBe(1);
+
+		const ladder = await encode(undefined, true, lossless);
+		expect(ladder.result.audio?.media).toBe("audio.m4s");
+		const master = fileNamed(ladder, "master.m3u8").path;
+		expect(streamSeconds(master, "a:0")).toBeGreaterThan(5.5);
+
+		const slice = await encode({ startSeconds: 0 }, true, lossless);
+		expect(slice.result.audio?.media).toBe("audio.m4s");
+	}, 120_000);
+
+	test("offers its largest rendition as the source of the poster", async () => {
+		const ladder = await encode();
+		expect(ladder.poster.path).toBe(fileNamed(ladder, "720p.m4s").path);
+		expect(ladder.poster.durationSeconds).toBeCloseTo(SOURCE_SECONDS, 0);
+		const poster = await generateThumbnail(
+			ladder.poster.path,
+			ladder.poster.durationSeconds,
+		);
+		expect(poster[0]).toBe(0xff);
+		expect(poster[1]).toBe(0xd8);
+
+		const slice = await encode({ startSeconds: 16 }, false);
+		expect(slice.poster.durationSeconds).toBeCloseTo(SOURCE_SECONDS - 16, 0);
+		const slicePoster = await generateThumbnail(
+			slice.poster.path,
+			slice.poster.durationSeconds,
+		);
+		expect(slicePoster[1]).toBe(0xd8);
 	}, 180_000);
 
 	test("keeps a rotated source in the orientation it plays in", async () => {

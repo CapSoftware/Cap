@@ -149,7 +149,13 @@ async fn organization_operations_validate_wait_timeouts_before_submitting() {
             assert_eq!(requests.len(), expected_requests, "{arguments:?} {timeout}");
             if expected_requests == 0 {
                 assert!(!output.status.success());
-                assert!(output.stdout.is_empty());
+                let error = parse_json(&output);
+                assert_eq!(error["code"], "INVALID_REQUEST");
+                assert_eq!(
+                    error["message"],
+                    "--timeout must be between 1 and 86400 seconds"
+                );
+                assert_eq!(error["error"], error["message"]);
                 assert!(
                     stderr(&output)
                         .contains("INVALID_REQUEST: --timeout must be between 1 and 86400 seconds")
@@ -950,6 +956,10 @@ fn dashboard_parity_help_exposes_secure_command_trees() {
         &["organizations", "invite", "add", "--help"][..],
         &["developers", "credits", "--help"][..],
         &["developers", "videos", "--help"][..],
+        &["developers", "videos", "upload", "--help"][..],
+        &["developers", "transcripts", "--help"][..],
+        &["developers", "transcripts", "create", "--help"][..],
+        &["developers", "transcripts", "text", "--help"][..],
         &["developers", "transactions", "--help"][..],
         &["library", "folders", "public-page", "--help"][..],
         &["library", "folders", "logo", "--help"][..],
@@ -1269,6 +1279,12 @@ fn mcp_stdout_is_protocol_only_and_exposes_expected_tools() {
         "developer_videos_list",
         "developer_transactions_list",
         "developer_video_delete",
+        "developer_video_upload",
+        "developer_transcript_create",
+        "developer_transcript_get",
+        "developer_transcript_wait",
+        "developer_transcripts_list",
+        "developer_transcript_delete",
         "developer_app_update",
         "developer_domain_add",
         "developer_auto_top_up_update",
@@ -1649,4 +1665,1523 @@ fn caps_json_errors_include_the_standard_error_field() {
         assert_eq!(error["code"], "INVALID_REQUEST");
         assert_eq!(error["retryable"], false);
     }
+}
+
+const INFRA_APP: &str = "app000000000001";
+const INFRA_VIDEO: &str = "vid000000000001";
+const INFRA_DASH_VIDEO: &str = "-Vid0000000dash";
+const INFRA_FAILED_VIDEO: &str = "vidfailed000001";
+const INFRA_SLOW_VIDEO: &str = "vidslow00000001";
+const INFRA_STALLED_VIDEO: &str = "vidstall0000001";
+const INFRA_STALLED_TRANSCRIPT: &str = "trstall00000001";
+const INFRA_STALL: Duration = Duration::from_secs(4);
+const INFRA_TRANSCRIPT: &str = "tr0000000000001";
+const INFRA_DASH_TRANSCRIPT: &str = "-EDG5hrbuAwXDNY";
+const INFRA_FAILED_TRANSCRIPT: &str = "trfailed0000001";
+const INFRA_NO_SCOPE_TOKEN: &str = "cap_cli_synthetic_no_scope_token";
+const INFRA_APP_NOT_FOUND: &str =
+    "Developer app not found. Run `cap developers list` to see your apps.";
+const INFRA_SCOPE_HINT: &str = "Run `cap auth login --profile full` and approve it in the browser, or create a CLI API key with the full profile in Cap under Settings, Account and set it as CAP_AGENT_TOKEN.";
+
+#[derive(Default)]
+struct InfraStubState {
+    requests: Vec<String>,
+    reads: std::collections::HashMap<String, usize>,
+}
+
+struct InfraStub {
+    url: String,
+    state: Arc<std::sync::Mutex<InfraStubState>>,
+}
+
+impl InfraStub {
+    fn requests(&self) -> Vec<String> {
+        self.state.lock().unwrap().requests.clone()
+    }
+
+    fn writes(&self) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .filter(|request| !request.starts_with("GET "))
+            .collect()
+    }
+}
+
+fn infra_error(status: u16, code: &str, message: &str) -> (u16, Value) {
+    (
+        status,
+        serde_json::json!({
+            "code": code,
+            "message": message,
+            "retryable": false,
+            "retryAfterMs": null,
+            "requestId": "req_stub",
+        }),
+    )
+}
+
+fn infra_video(base: &str, id: &str, status: &str) -> Value {
+    let ready = status == "ready";
+    let playback = format!("{base}/api/developer/playback/pb-{id}");
+    let file = |name: &str| {
+        if ready {
+            Value::String(format!("{playback}/{name}"))
+        } else {
+            Value::Null
+        }
+    };
+    serde_json::json!({
+        "id": id,
+        "appId": INFRA_APP,
+        "externalUserId": null,
+        "name": "demo",
+        "status": status,
+        "errorReason": if status == "errored" {
+            Value::String("The file could not be decoded".to_string())
+        } else {
+            Value::Null
+        },
+        "playbackId": format!("pb-{id}"),
+        "durationSeconds": 1.0,
+        "width": 32,
+        "height": 32,
+        "fps": 30,
+        "maxResolutionTier": "1080p",
+        "renditions": if ready {
+            serde_json::json!([{
+                "name": "360p",
+                "width": 32,
+                "height": 32,
+                "bitrate": 400_000,
+                "bytes": 50_000,
+                "codecs": "avc1.64001f",
+            }])
+        } else {
+            serde_json::json!([])
+        },
+        "transcriptionStatus": null,
+        "hlsUrl": file("master.m3u8"),
+        "mp4Url": file("video.mp4"),
+        "posterUrl": file("poster.jpg"),
+        "shareUrl": format!("{base}/dev/pb-{id}"),
+        "embedUrl": format!("{base}/dev/pb-{id}/embed"),
+        "createdAt": "2026-11-12T10:00:00.000Z",
+        "updatedAt": "2026-11-12T10:00:09.000Z",
+    })
+}
+
+fn infra_transcript(id: &str, status: &str) -> Value {
+    let failed = status == "error";
+    serde_json::json!({
+        "id": id,
+        "appId": INFRA_APP,
+        "status": status,
+        "name": "talk",
+        "sourceType": "url",
+        "sourceUrl": "https://example.com/talk.mp3",
+        "durationSeconds": if status == "complete" { serde_json::json!(11.75) } else { Value::Null },
+        "language": if status == "complete" { serde_json::json!("en") } else { Value::Null },
+        "wordCount": if status == "complete" { serde_json::json!(5) } else { Value::Null },
+        "costMicroCredits": if status == "complete" { 33 } else { 0 },
+        "errorCode": if failed { serde_json::json!("source_unreachable") } else { Value::Null },
+        "errorMessage": if failed { serde_json::json!("The URL answered 404") } else { Value::Null },
+        "externalUserId": null,
+        "createdAt": "2026-11-12T10:00:00.000Z",
+        "updatedAt": "2026-11-12T10:00:06.000Z",
+        "completedAt": if status == "complete" {
+            serde_json::json!("2026-11-12T10:00:06.000Z")
+        } else {
+            Value::Null
+        },
+    })
+}
+
+fn infra_capabilities() -> Value {
+    let action = serde_json::json!({
+        "allowed": true,
+        "reason": null,
+        "requiredScopes": ["developer:write"],
+        "confirmation": "user",
+        "sideEffect": "write",
+        "idempotencyRequired": true,
+        "asynchronous": false,
+    });
+    serde_json::json!({
+        "read": action,
+        "update": action,
+        "rotateSecrets": action,
+        "purchaseCredits": action,
+        "deleteVideos": action,
+        "uploadVideos": action,
+        "transcribe": action,
+        "deleteTranscripts": action,
+    })
+}
+
+fn infra_respond(
+    state: &mut InfraStubState,
+    base: &str,
+    method: &str,
+    target: &str,
+    authorization: &str,
+    body: &[u8],
+) -> (u16, Value) {
+    let path = target.split('?').next().unwrap_or_default();
+    if method == "PUT" && path == "/upload/object" {
+        return (200, Value::Null);
+    }
+    let Some(route) = path.strip_prefix("/api/v1/developer/apps") else {
+        return infra_error(404, "NOT_FOUND", "No such route");
+    };
+    if authorization.ends_with(INFRA_NO_SCOPE_TOKEN) {
+        let scope = if method == "GET" {
+            "developer:read"
+        } else {
+            "developer:write"
+        };
+        let (status, mut error) = infra_error(
+            403,
+            "FORBIDDEN",
+            &format!("The {scope} permission is required. {INFRA_SCOPE_HINT}"),
+        );
+        error["hint"] = Value::String(INFRA_SCOPE_HINT.to_string());
+        error["requiredScopes"] = serde_json::json!([scope]);
+        return (status, error);
+    }
+    if route.is_empty() {
+        return (
+            200,
+            serde_json::json!({
+                "apps": [{
+                    "id": INFRA_APP,
+                    "name": "Console checks agent",
+                    "environment": "development",
+                    "logoUrl": null,
+                    "createdAt": "2026-11-01T00:00:00.000Z",
+                    "updatedAt": "2026-11-01T00:00:00.000Z",
+                }],
+                "capabilities": infra_capabilities(),
+                "requestId": "req_stub",
+            }),
+        );
+    }
+    let segments = route.trim_start_matches('/').split('/').collect::<Vec<_>>();
+    if segments.first() != Some(&INFRA_APP) {
+        return infra_error(404, "NOT_FOUND", INFRA_APP_NOT_FOUND);
+    }
+    let mutation = |kind: &str, id: &str, action: &str| {
+        (
+            200,
+            serde_json::json!({
+                "resource": { "type": kind, "id": id, "revision": null },
+                "action": action,
+                "requestId": "req_stub",
+            }),
+        )
+    };
+    let reads = |state: &mut InfraStubState, key: &str| {
+        let count = state.reads.entry(key.to_string()).or_default();
+        *count += 1;
+        *count
+    };
+    match (method, &segments[1..]) {
+        ("GET", ["context"]) => (
+            200,
+            serde_json::json!({
+                "app": {
+                    "id": INFRA_APP,
+                    "name": "Console checks agent",
+                    "environment": "development",
+                    "logoUrl": null,
+                    "createdAt": "2026-11-01T00:00:00.000Z",
+                    "updatedAt": "2026-11-01T00:00:00.000Z",
+                    "capabilities": infra_capabilities(),
+                },
+                "domains": [{
+                    "id": "dom000000000001",
+                    "domain": "https://app.example.com",
+                    "createdAt": "2026-11-01T00:00:00.000Z",
+                }],
+                "keys": [
+                    {
+                        "id": "key1",
+                        "keyType": "public",
+                        "keyPrefix": "cpk_abcdefgh",
+                        "lastUsedAt": null,
+                        "revokedAt": null,
+                        "createdAt": "2026-11-01T00:00:00.000Z",
+                    },
+                    {
+                        "id": "key0",
+                        "keyType": "secret",
+                        "keyPrefix": "csk_oldoldol",
+                        "lastUsedAt": null,
+                        "revokedAt": "2026-11-02T00:00:00.000Z",
+                        "createdAt": "2026-11-01T00:00:00.000Z",
+                    },
+                ],
+                "usage": { "videoCount": 2, "storageMinutes": 0.2 },
+                "credits": {
+                    "balanceMicroCredits": 999_868,
+                    "autoTopUpEnabled": false,
+                    "autoTopUpThresholdMicroCredits": 0,
+                    "autoTopUpAmountCents": 0,
+                    "cardSaved": false,
+                },
+                "billingHint": null,
+                "billing": {
+                    "standing": { "state": "active", "pausesAt": null },
+                    "upload": {
+                        "allowed": true,
+                        "reason": null,
+                        "requiredMicroCredits": 4,
+                        "shortfallMicroCredits": 0,
+                        "message": null,
+                    },
+                    "storage": {
+                        "minutesByTier": { "1080p": 0.2, "1440p": 0, "2160p": 0 },
+                        "dailyMicroCredits": 1,
+                        "monthlyMicroCredits": 17,
+                    },
+                },
+                "requestId": "req_stub",
+            }),
+        ),
+        ("GET", ["videos"]) => (
+            200,
+            serde_json::json!({
+                "videos": [
+                    infra_video(base, INFRA_VIDEO, "ready"),
+                    infra_video(base, INFRA_SLOW_VIDEO, "processing"),
+                ],
+                "capabilities": infra_capabilities(),
+                "nextCursor": null,
+                "requestId": "req_stub",
+            }),
+        ),
+        ("POST", ["videos"]) => {
+            let payload: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let id = match payload.get("name").and_then(Value::as_str) {
+                Some("fails") => INFRA_FAILED_VIDEO,
+                Some("slow") => INFRA_SLOW_VIDEO,
+                _ => INFRA_VIDEO,
+            };
+            (
+                200,
+                serde_json::json!({
+                    "video": {
+                        "id": id,
+                        "appId": INFRA_APP,
+                        "name": "demo",
+                        "playbackId": format!("pb-{id}"),
+                    },
+                    "upload": {
+                        "method": "PUT",
+                        "url": format!("{base}/upload/object"),
+                        "headers": { "Content-Type": "video/mp4" },
+                        "expiresAt": "2026-11-12T11:00:00.000Z",
+                    },
+                    "requestId": "req_stub",
+                }),
+            )
+        }
+        ("POST", ["videos", id, "complete"]) => (
+            200,
+            serde_json::json!({
+                "video": infra_video(base, id, "processing"),
+                "requestId": "req_stub",
+            }),
+        ),
+        ("GET", ["videos", id]) => {
+            let status = match *id {
+                INFRA_FAILED_VIDEO => "errored",
+                INFRA_SLOW_VIDEO => "processing",
+                INFRA_VIDEO => {
+                    if reads(state, id) % 2 == 1 {
+                        "processing"
+                    } else {
+                        "ready"
+                    }
+                }
+                INFRA_DASH_VIDEO | INFRA_STALLED_VIDEO => "ready",
+                _ => {
+                    return infra_error(404, "NOT_FOUND", "Video not found in this developer app");
+                }
+            };
+            (
+                200,
+                serde_json::json!({
+                    "video": infra_video(base, id, status),
+                    "requestId": "req_stub",
+                }),
+            )
+        }
+        ("DELETE", ["videos", id]) => mutation("developer_video", id, "deleted"),
+        ("GET", ["transcripts"]) => (
+            200,
+            serde_json::json!({
+                "transcripts": [infra_transcript(INFRA_TRANSCRIPT, "complete")],
+                "nextCursor": null,
+                "requestId": "req_stub",
+            }),
+        ),
+        ("POST", ["transcripts"]) => {
+            let payload: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let missing = payload
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| url.contains("missing"));
+            let id = if missing {
+                INFRA_FAILED_TRANSCRIPT
+            } else {
+                INFRA_TRANSCRIPT
+            };
+            (
+                200,
+                serde_json::json!({
+                    "transcript": infra_transcript(id, "queued"),
+                    "upload": null,
+                    "requestId": "req_stub",
+                }),
+            )
+        }
+        ("GET", ["transcripts", id]) => {
+            let status = match *id {
+                INFRA_FAILED_TRANSCRIPT => "error",
+                INFRA_TRANSCRIPT => {
+                    if reads(state, id) % 2 == 1 {
+                        "queued"
+                    } else {
+                        "complete"
+                    }
+                }
+                INFRA_DASH_TRANSCRIPT | INFRA_STALLED_TRANSCRIPT => "complete",
+                _ => {
+                    return infra_error(
+                        404,
+                        "NOT_FOUND",
+                        "Transcript not found in this developer app",
+                    );
+                }
+            };
+            (
+                200,
+                serde_json::json!({
+                    "transcript": infra_transcript(id, status),
+                    "text": if status == "complete" {
+                        serde_json::json!("Cap Infra turns speech into text.")
+                    } else {
+                        Value::Null
+                    },
+                    "segments": null,
+                    "requestId": "req_stub",
+                }),
+            )
+        }
+        ("DELETE", ["transcripts", id]) => mutation("developer_transcript", id, "deleted"),
+        ("GET", ["transactions"]) => (
+            200,
+            serde_json::json!({
+                "transactions": [{
+                    "id": "txn1",
+                    "type": "transcription",
+                    "amountMicroCredits": -33,
+                    "balanceAfterMicroCredits": 999_868,
+                    "referenceId": INFRA_TRANSCRIPT,
+                    "referenceType": "developer_transcript",
+                    "createdAt": "2026-11-12T10:00:06.000Z",
+                }],
+                "nextCursor": null,
+                "requestId": "req_stub",
+            }),
+        ),
+        ("DELETE", []) => mutation("developer_app", INFRA_APP, "deleted"),
+        ("POST", ["keys", "rotate"]) => mutation("developer_app", INFRA_APP, "rotated"),
+        ("DELETE", ["domains", id]) => mutation("developer_domain", id, "deleted"),
+        _ => infra_error(404, "NOT_FOUND", "No such route"),
+    }
+}
+
+fn start_infra_stub() -> InfraStub {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let state = Arc::new(std::sync::Mutex::new(InfraStubState::default()));
+    let server_state = state.clone();
+    let base = url.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let state = server_state.clone();
+            let base = base.clone();
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_string();
+                let target = parts.next().unwrap_or_default().to_string();
+                let mut length = 0_usize;
+                let mut authorization = String::new();
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        } else if name.eq_ignore_ascii_case("authorization") {
+                            authorization = value.trim().to_string();
+                        }
+                    }
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    return;
+                }
+                if target.contains("stall") {
+                    thread::sleep(INFRA_STALL);
+                }
+                let (status, value) = {
+                    let mut state = state.lock().unwrap();
+                    state.requests.push(format!("{method} {target}"));
+                    infra_respond(&mut state, &base, &method, &target, &authorization, &body)
+                };
+                let payload = if value.is_null() {
+                    String::new()
+                } else {
+                    value.to_string()
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} Stub\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.flush();
+            });
+        }
+    });
+    InfraStub { url, state }
+}
+
+fn infra_cap(stub: &InfraStub, args: &[&str]) -> Output {
+    cap()
+        .args(args)
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", &stub.url)
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to spawn cap binary")
+}
+
+fn single_json_error(output: &Output) -> Value {
+    assert!(!output.status.success(), "expected a failure");
+    let value = parse_json(output);
+    assert!(value.is_object(), "stdout must be one JSON object");
+    assert!(value["error"].is_string());
+    assert!(value["code"].is_string());
+    assert_eq!(value["error"], value["message"]);
+    value
+}
+
+#[test]
+fn developer_journey_runs_without_the_dashboard_in_json_and_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let media = directory.path().join("demo.mp4");
+    write_test_media(&media);
+    let media = media.to_str().unwrap();
+
+    for json in [true, false] {
+        let stub = start_infra_stub();
+        let run = |args: &[&str]| {
+            let mut args = args.to_vec();
+            if json {
+                args.push("--json");
+            }
+            let output = infra_cap(&stub, &args);
+            assert!(
+                output.status.success(),
+                "cap {args:?} failed: {}",
+                stderr(&output)
+            );
+            println!("$ cap {}\n{}", args.join(" "), stdout(&output));
+            output
+        };
+
+        let apps = parse_json(&run(&["developers", "list"]));
+        assert_eq!(apps["apps"][0]["id"], INFRA_APP);
+        assert!(apps["apps"][0].get("capabilities").is_none());
+
+        let uploaded = parse_json(&run(&[
+            "developers",
+            "videos",
+            "upload",
+            INFRA_APP,
+            media,
+            "--wait",
+            "--yes",
+        ]));
+        assert_eq!(uploaded["video"]["id"], INFRA_VIDEO);
+        assert_eq!(uploaded["video"]["status"], "ready");
+        let share = format!("{}/dev/pb-{INFRA_VIDEO}", stub.url);
+        assert_eq!(uploaded["video"]["shareUrl"], share.as_str());
+        assert_eq!(
+            uploaded["video"]["embedUrl"],
+            format!("{share}/embed").as_str()
+        );
+        assert!(uploaded["video"]["hlsUrl"].is_string());
+        assert!(uploaded["video"]["mp4Url"].is_string());
+        assert_eq!(uploaded["video"]["durationSeconds"], 1.0);
+        assert_eq!(uploaded["video"]["width"], 32);
+
+        let fetched = parse_json(&run(&[
+            "developers",
+            "videos",
+            "get",
+            INFRA_APP,
+            INFRA_VIDEO,
+        ]));
+        assert_eq!(fetched["video"]["playbackId"], format!("pb-{INFRA_VIDEO}"));
+
+        let waited = parse_json(&run(&[
+            "developers",
+            "videos",
+            "wait",
+            INFRA_APP,
+            INFRA_VIDEO,
+        ]));
+        assert_eq!(waited["video"]["status"], "ready");
+
+        let listed = parse_json(&run(&["developers", "videos", "list", INFRA_APP]));
+        assert_eq!(listed["videos"][0]["status"], "ready");
+        assert_eq!(listed["videos"][1]["status"], "processing");
+        assert!(listed["videos"][0]["playbackId"].is_string());
+        assert!(listed["videos"][0]["shareUrl"].is_string());
+
+        let created = run(&[
+            "developers",
+            "transcripts",
+            "create",
+            INFRA_APP,
+            "--url",
+            "https://example.com/talk.mp3",
+            "--wait",
+            "--yes",
+        ]);
+        let text = run(&[
+            "developers",
+            "transcripts",
+            "text",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+        ]);
+        if json {
+            assert_eq!(parse_json(&created)["transcript"]["status"], "complete");
+            assert_eq!(
+                parse_json(&text)["text"],
+                "Cap Infra turns speech into text."
+            );
+        } else {
+            assert_eq!(stdout(&created), "Cap Infra turns speech into text.\n");
+            assert_eq!(stdout(&text), "Cap Infra turns speech into text.\n");
+        }
+
+        let usage = parse_json(&run(&["developers", "usage", INFRA_APP]));
+        assert_eq!(usage["usage"]["videoCount"], 2);
+        assert_eq!(usage["credits"]["balanceMicroCredits"], 999_868);
+        assert_eq!(usage["billing"]["upload"]["allowed"], true);
+        assert!(usage.get("keys").is_none());
+
+        let transactions = parse_json(&run(&["developers", "transactions", INFRA_APP]));
+        assert_eq!(
+            transactions["transactions"][0]["referenceId"],
+            INFRA_TRANSCRIPT
+        );
+
+        let requests = stub.requests();
+        assert!(requests.contains(&format!("POST /api/v1/developer/apps/{INFRA_APP}/videos")));
+        assert!(requests.contains(&"PUT /upload/object".to_string()));
+        assert!(requests.contains(&format!(
+            "POST /api/v1/developer/apps/{INFRA_APP}/videos/{INFRA_VIDEO}/complete"
+        )));
+    }
+}
+
+#[test]
+fn developer_failures_print_one_json_object_on_stdout() {
+    let stub = start_infra_stub();
+    let directory = tempfile::tempdir().unwrap();
+    let media = directory.path().join("demo.mp4");
+    write_test_media(&media);
+    let media = media.to_str().unwrap();
+
+    let unconfirmed = infra_cap(&stub, &["developers", "delete", INFRA_APP, "--json"]);
+    assert_eq!(unconfirmed.status.code(), Some(1));
+    let error = single_json_error(&unconfirmed);
+    assert_eq!(error["code"], "APPROVAL_REQUIRED");
+    assert!(error["hint"].as_str().unwrap().contains("--yes"));
+
+    for args in [
+        vec!["developers", "get", "nosuchapp123456"],
+        vec!["developers", "usage", "nosuchapp123456"],
+        vec!["developers", "videos", "list", "nosuchapp123456"],
+        vec![
+            "developers",
+            "videos",
+            "get",
+            "nosuchapp123456",
+            INFRA_VIDEO,
+        ],
+        vec!["developers", "transactions", "nosuchapp123456"],
+        vec!["developers", "transcripts", "list", "nosuchapp123456"],
+        vec!["developers", "delete", "nosuchapp123456", "--yes"],
+        vec!["developers", "delete", "nosuchapp123456", "--dry-run"],
+        vec![
+            "developers",
+            "videos",
+            "delete",
+            "nosuchapp123456",
+            INFRA_VIDEO,
+            "--yes",
+        ],
+    ] {
+        let mut args = args;
+        args.push("--json");
+        let output = infra_cap(&stub, &args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let error = single_json_error(&output);
+        assert_eq!(error["code"], "NOT_FOUND", "{args:?}");
+        assert_eq!(error["message"], INFRA_APP_NOT_FOUND, "{args:?}");
+        assert_eq!(error["requestId"], "req_stub", "{args:?}");
+    }
+
+    let no_scope = cap()
+        .args(["developers", "list", "--json"])
+        .env("CAP_AGENT_TOKEN", INFRA_NO_SCOPE_TOKEN)
+        .env("CAP_SERVER_URL", &stub.url)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let error = single_json_error(&no_scope);
+    assert_eq!(error["code"], "FORBIDDEN");
+    assert_eq!(error["hint"], INFRA_SCOPE_HINT);
+    assert_eq!(error["requestId"], "req_stub");
+    let no_scope_text = cap()
+        .args(["developers", "list"])
+        .env("CAP_AGENT_TOKEN", INFRA_NO_SCOPE_TOKEN)
+        .env("CAP_SERVER_URL", &stub.url)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(no_scope_text.stdout.is_empty());
+    assert!(stderr(&no_scope_text).contains("cap auth login --profile full"));
+
+    let failed_transcript = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "transcripts",
+            "create",
+            INFRA_APP,
+            "--url",
+            "https://example.com/missing.mp3",
+            "--wait",
+            "--yes",
+            "--json",
+        ],
+    );
+    let error = single_json_error(&failed_transcript);
+    assert_eq!(error["code"], "TRANSCRIPT_FAILED");
+    assert_eq!(error["transcriptId"], INFRA_FAILED_TRANSCRIPT);
+    assert!(error["message"].as_str().unwrap().contains("404"));
+
+    let failed_upload = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "upload",
+            INFRA_APP,
+            media,
+            "--name",
+            "fails",
+            "--wait",
+            "--yes",
+            "--json",
+        ],
+    );
+    let error = single_json_error(&failed_upload);
+    assert_eq!(error["code"], "VIDEO_FAILED");
+    assert_eq!(error["videoId"], INFRA_FAILED_VIDEO);
+    assert_eq!(error["message"], "The file could not be decoded");
+
+    let timed_out = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "upload",
+            INFRA_APP,
+            media,
+            "--name",
+            "slow",
+            "--wait",
+            "--timeout-seconds",
+            "1",
+            "--yes",
+            "--json",
+        ],
+    );
+    let error = single_json_error(&timed_out);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["retryable"], true);
+    assert_eq!(error["videoId"], INFRA_SLOW_VIDEO);
+    assert_eq!(error["status"], "processing");
+    assert!(error["hint"].as_str().unwrap().contains(&format!(
+        "cap developers videos wait {INFRA_APP} {INFRA_SLOW_VIDEO}"
+    )));
+    let timed_out_text = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "wait",
+            INFRA_APP,
+            INFRA_SLOW_VIDEO,
+            "--timeout-seconds",
+            "1",
+        ],
+    );
+    assert_eq!(timed_out_text.status.code(), Some(1));
+    assert!(timed_out_text.stdout.is_empty());
+    assert!(stderr(&timed_out_text).contains(&format!("videoId: {INFRA_SLOW_VIDEO}")));
+
+    let bad_limit = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "list",
+            INFRA_APP,
+            "--limit",
+            "0",
+            "--json",
+        ],
+    );
+    assert_eq!(single_json_error(&bad_limit)["code"], "INVALID_REQUEST");
+
+    let local_format = infra_cap(
+        &stub,
+        &["developers", "get", "nosuchapp123456", "--format", "json"],
+    );
+    assert_eq!(single_json_error(&local_format)["code"], "NOT_FOUND");
+
+    let usage = infra_cap(&stub, &["developers", "videos", "get", INFRA_APP, "--json"]);
+    assert_eq!(usage.status.code(), Some(2));
+    let error = single_json_error(&usage);
+    assert_eq!(error["code"], "USAGE");
+    assert!(error["message"].as_str().unwrap().contains("<VIDEO>"));
+
+    let unknown = infra_cap(&stub, &["developers", "videos", "status", "--json"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert_eq!(single_json_error(&unknown)["code"], "USAGE");
+
+    let unreachable = cap()
+        .args(["developers", "list", "--json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let error = single_json_error(&unreachable);
+    assert_eq!(error["code"], "TEMPORARY_UNAVAILABLE");
+    assert_eq!(error["retryable"], true);
+    assert!(error["hint"].is_string());
+}
+
+#[test]
+fn commands_without_their_own_json_errors_still_print_one() {
+    let output = cap()
+        .args(["account", "get", "--json"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error = single_json_error(&output);
+    assert_eq!(error["code"], "TEMPORARY_UNAVAILABLE");
+
+    let text = cap()
+        .args(["account", "get"])
+        .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+        .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(text.status.code(), Some(1));
+    assert!(text.stdout.is_empty());
+}
+
+#[test]
+fn developer_ids_that_begin_with_a_dash_are_read_as_values() {
+    let stub = start_infra_stub();
+    for args in [
+        vec![
+            "developers",
+            "transcripts",
+            "wait",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+            "--json",
+        ],
+        vec![
+            "developers",
+            "transcripts",
+            "wait",
+            "--json",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+        ],
+        vec![
+            "developers",
+            "transcripts",
+            "get",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+            "--segments",
+            "--json",
+        ],
+        vec![
+            "developers",
+            "transcripts",
+            "text",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+            "--json",
+        ],
+        vec![
+            "developers",
+            "transcripts",
+            "delete",
+            INFRA_APP,
+            INFRA_DASH_TRANSCRIPT,
+            "--yes",
+            "--json",
+        ],
+        vec![
+            "developers",
+            "videos",
+            "get",
+            INFRA_APP,
+            INFRA_DASH_VIDEO,
+            "--json",
+        ],
+        vec![
+            "developers",
+            "videos",
+            "wait",
+            INFRA_APP,
+            INFRA_DASH_VIDEO,
+            "--timeout-seconds",
+            "5",
+            "--json",
+        ],
+        vec![
+            "developers",
+            "videos",
+            "delete",
+            INFRA_APP,
+            INFRA_DASH_VIDEO,
+            "--yes",
+            "--json",
+        ],
+        vec![
+            "developers",
+            "videos",
+            "get",
+            INFRA_APP,
+            "-hAbc0000000001",
+            "--json",
+        ],
+        vec![
+            "developers",
+            "videos",
+            "get",
+            INFRA_APP,
+            "--Abc0000000001",
+            "--json",
+        ],
+    ] {
+        let output = infra_cap(&stub, &args);
+        let value = parse_json(&output);
+        let id = args[4.min(args.len() - 1)];
+        if id.contains("Abc") {
+            assert_eq!(value["code"], "NOT_FOUND", "{args:?}");
+            assert_eq!(value["message"], "Video not found in this developer app");
+        } else {
+            assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        }
+    }
+    let requests = stub.requests();
+    for expected in [
+        format!("GET /api/v1/developer/apps/{INFRA_APP}/transcripts/{INFRA_DASH_TRANSCRIPT}"),
+        format!(
+            "GET /api/v1/developer/apps/{INFRA_APP}/transcripts/{INFRA_DASH_TRANSCRIPT}?include=segments"
+        ),
+        format!("DELETE /api/v1/developer/apps/{INFRA_APP}/transcripts/{INFRA_DASH_TRANSCRIPT}"),
+        format!("GET /api/v1/developer/apps/{INFRA_APP}/videos/{INFRA_DASH_VIDEO}"),
+        format!("DELETE /api/v1/developer/apps/{INFRA_APP}/videos/{INFRA_DASH_VIDEO}"),
+        format!("GET /api/v1/developer/apps/{INFRA_APP}/videos/-hAbc0000000001"),
+        format!("GET /api/v1/developer/apps/{INFRA_APP}/videos/--Abc0000000001"),
+    ] {
+        assert!(requests.contains(&expected), "missing request {expected}");
+    }
+}
+
+#[test]
+fn developer_dry_runs_show_the_target_and_change_nothing() {
+    let stub = start_infra_stub();
+    let preview = |args: &[&str]| {
+        let mut args = args.to_vec();
+        args.extend(["--dry-run", "--json"]);
+        let output = infra_cap(&stub, &args);
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        let value = parse_json(&output);
+        assert_eq!(value["dryRun"], true);
+        value
+    };
+
+    let app = preview(&["developers", "delete", INFRA_APP]);
+    assert_eq!(app["action"], "delete_developer_app");
+    assert_eq!(app["target"]["name"], "Console checks agent");
+    assert_eq!(app["target"]["videoCount"], 2);
+    assert_eq!(app["target"]["domainCount"], 1);
+    assert_eq!(
+        app["target"]["activeKeys"],
+        serde_json::json!([{ "keyType": "public", "keyPrefix": "cpk_abcdefgh" }])
+    );
+
+    let keys = preview(&["developers", "keys", "rotate", INFRA_APP]);
+    assert_eq!(keys["action"], "rotate_developer_keys");
+    assert_eq!(keys["target"]["activeKeys"][0]["keyPrefix"], "cpk_abcdefgh");
+
+    let video = preview(&[
+        "developers",
+        "videos",
+        "delete",
+        INFRA_APP,
+        INFRA_DASH_VIDEO,
+    ]);
+    assert_eq!(video["target"]["videoId"], INFRA_DASH_VIDEO);
+    assert_eq!(video["target"]["status"], "ready");
+    assert!(stub.requests().contains(&format!(
+        "GET /api/v1/developer/apps/{INFRA_APP}/videos/{INFRA_DASH_VIDEO}?restart=false"
+    )));
+
+    let transcript = preview(&[
+        "developers",
+        "transcripts",
+        "delete",
+        INFRA_APP,
+        INFRA_DASH_TRANSCRIPT,
+    ]);
+    assert_eq!(transcript["target"]["transcriptId"], INFRA_DASH_TRANSCRIPT);
+
+    for domain in ["dom000000000001", "https://app.example.com"] {
+        let removal = preview(&["developers", "domains", "remove", INFRA_APP, domain]);
+        assert_eq!(removal["target"]["domainId"], "dom000000000001");
+        assert_eq!(removal["target"]["domain"], "https://app.example.com");
+    }
+    assert_eq!(stub.writes(), Vec::<String>::new());
+
+    let by_origin = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "domains",
+            "remove",
+            INFRA_APP,
+            "https://app.example.com",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert!(by_origin.status.success(), "{}", stderr(&by_origin));
+    assert_eq!(
+        stub.writes(),
+        vec![format!(
+            "DELETE /api/v1/developer/apps/{INFRA_APP}/domains/dom000000000001"
+        )]
+    );
+}
+
+#[test]
+fn upload_help_points_at_the_developer_upload() {
+    let top = stdout(&run(&["--help"]));
+    assert!(top.contains("personal Cap library"));
+    assert!(top.contains("Cap Infra"));
+    let upload = stdout(&run(&["upload", "--help"]));
+    assert!(upload.contains("personal Cap library"));
+    assert!(upload.contains("cap developers videos upload"));
+    let developers = stdout(&run(&["developers", "--help"]));
+    assert!(developers.contains("Cap Infra"));
+    assert!(developers.contains("100,000 micro-credits are $1"));
+    for line in developers
+        .lines()
+        .skip_while(|line| !line.starts_with("Commands:"))
+        .skip(1)
+        .take_while(|line| !line.trim().is_empty())
+    {
+        let mut words = line.split_whitespace();
+        let name = words.next().unwrap_or_default();
+        assert!(
+            words.next().is_some(),
+            "`cap developers {name}` has no description"
+        );
+    }
+}
+
+struct McpSession {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: mpsc::Receiver<std::io::Result<String>>,
+    next_id: u64,
+}
+
+impl McpSession {
+    fn start(server_url: &str) -> Self {
+        let mut child = cap()
+            .args(["mcp", "serve"])
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", server_url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to start MCP server");
+        let stdout = child.stdout.take().unwrap();
+        let (sender, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let stdin = child.stdin.take().unwrap();
+        let mut session = Self {
+            child,
+            stdin,
+            lines,
+            next_id: 1,
+        };
+        session.request(
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": { "name": "cap-test", "version": "1" }
+            }),
+        );
+        writeln!(
+            session.stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            })
+        )
+        .unwrap();
+        session
+    }
+
+    fn send(&mut self, method: &str, params: Value) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        writeln!(
+            self.stdin,
+            "{}",
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
+        )
+        .unwrap();
+        self.stdin.flush().unwrap();
+        id
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        writeln!(
+            self.stdin,
+            "{}",
+            serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params })
+        )
+        .unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> (Value, usize) {
+        let id = self.send(method, params);
+        self.receive(id)
+    }
+
+    fn notification(&mut self, method: &str) -> Value {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(20))
+                .expect("MCP server sent no notification")
+                .unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["method"] == method {
+                return value;
+            }
+        }
+    }
+
+    fn receive(&mut self, id: u64) -> (Value, usize) {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(20))
+                .expect("MCP server did not answer")
+                .unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["id"] == id {
+                return (value, line.len());
+            }
+        }
+    }
+
+    fn call(&mut self, name: &str, arguments: Value) -> (Value, usize) {
+        let (response, bytes) = self.request(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": arguments }),
+        );
+        (response["result"].clone(), bytes)
+    }
+}
+
+impl Drop for McpSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn mcp_payload(result: &Value) -> Value {
+    let content = result["content"].as_array().expect("tool result content");
+    assert_eq!(content.len(), 1, "the payload must be returned once");
+    assert!(
+        result.get("structuredContent").is_none(),
+        "the payload must not be repeated as structured content"
+    );
+    serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn mcp_developer_tools_finish_the_job_and_return_each_result_once() {
+    let stub = start_infra_stub();
+    let directory = tempfile::tempdir().unwrap();
+    let media = directory.path().join("demo.mp4");
+    write_test_media(&media);
+    let mut session = McpSession::start(&stub.url);
+
+    let (tools, _) = session.request("tools/list", serde_json::json!({}));
+    let tools = tools["result"]["tools"].as_array().unwrap().clone();
+    let developer_tools = tools
+        .iter()
+        .filter(|tool| tool["name"].as_str().unwrap().starts_with("developer_"))
+        .collect::<Vec<_>>();
+    for name in ["developer_video_get", "developer_video_wait"] {
+        assert!(
+            developer_tools.iter().any(|tool| tool["name"] == name),
+            "missing MCP tool {name}"
+        );
+    }
+    for tool in &developer_tools {
+        if let Some(properties) = tool["inputSchema"]["properties"].as_object() {
+            for (argument, schema) in properties {
+                assert!(
+                    schema["description"].is_string(),
+                    "{}.{argument} has no description",
+                    tool["name"]
+                );
+            }
+        }
+    }
+
+    let (listed, bytes) = session.call(
+        "developer_videos_list",
+        serde_json::json!({ "app_id": INFRA_APP }),
+    );
+    assert_eq!(listed["isError"], false);
+    let payload = mcp_payload(&listed);
+    assert_eq!(payload["videos"][0]["status"], "ready");
+    assert!(payload["videos"][0]["playbackId"].is_string());
+    assert!(payload["videos"][0].get("capabilities").is_none());
+    println!("developer_videos_list response for 2 videos: {bytes} bytes");
+
+    let (uploaded, _) = session.call(
+        "developer_video_upload",
+        serde_json::json!({
+            "app_id": INFRA_APP,
+            "file_path": media.to_str().unwrap(),
+            "wait": true,
+            "confirmed": true,
+        }),
+    );
+    assert_eq!(uploaded["isError"], false, "{uploaded}");
+    let payload = mcp_payload(&uploaded);
+    assert_eq!(payload["video"]["status"], "ready");
+    assert!(payload["video"]["shareUrl"].is_string());
+
+    let (fetched, _) = session.call(
+        "developer_video_get",
+        serde_json::json!({ "app_id": INFRA_APP, "video_id": INFRA_DASH_VIDEO }),
+    );
+    assert_eq!(mcp_payload(&fetched)["video"]["id"], INFRA_DASH_VIDEO);
+
+    let (failed, _) = session.call(
+        "developer_video_wait",
+        serde_json::json!({ "app_id": INFRA_APP, "video_id": INFRA_FAILED_VIDEO }),
+    );
+    assert_eq!(failed["isError"], true);
+    let error = mcp_payload(&failed);
+    assert_eq!(error["code"], "VIDEO_FAILED");
+    assert_eq!(error["videoId"], INFRA_FAILED_VIDEO);
+
+    let (timed_out, _) = session.call(
+        "developer_video_wait",
+        serde_json::json!({
+            "app_id": INFRA_APP,
+            "video_id": INFRA_SLOW_VIDEO,
+            "timeout_seconds": 1,
+        }),
+    );
+    let error = mcp_payload(&timed_out);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["videoId"], INFRA_SLOW_VIDEO);
+
+    let (failed_transcript, _) = session.call(
+        "developer_transcript_create",
+        serde_json::json!({
+            "app_id": INFRA_APP,
+            "url": "https://example.com/missing.mp3",
+            "wait": true,
+            "confirmed": true,
+        }),
+    );
+    let error = mcp_payload(&failed_transcript);
+    assert_eq!(error["code"], "TRANSCRIPT_FAILED");
+    assert_eq!(error["transcriptId"], INFRA_FAILED_TRANSCRIPT);
+
+    let (missing_app, _) = session.call(
+        "developer_videos_list",
+        serde_json::json!({ "app_id": "nosuchapp123456" }),
+    );
+    assert_eq!(missing_app["isError"], true);
+    assert_eq!(mcp_payload(&missing_app)["message"], INFRA_APP_NOT_FOUND);
+
+    let writes_before = stub.writes().len();
+    let (preview, _) = session.call(
+        "developer_app_delete",
+        serde_json::json!({ "app_id": INFRA_APP, "dry_run": true }),
+    );
+    let payload = mcp_payload(&preview);
+    assert_eq!(payload["dryRun"], true);
+    assert_eq!(payload["target"]["videoCount"], 2);
+    let (refused, _) = session.call(
+        "developer_app_delete",
+        serde_json::json!({ "app_id": INFRA_APP }),
+    );
+    assert_eq!(mcp_payload(&refused)["code"], "APPROVAL_REQUIRED");
+    assert_eq!(stub.writes().len(), writes_before);
+}
+
+#[test]
+fn developer_waits_stop_at_their_deadline() {
+    let stub = start_infra_stub();
+    let answered = |id: &str| {
+        stub.requests()
+            .iter()
+            .filter(|request| request.starts_with("GET ") && request.ends_with(id))
+            .count()
+    };
+
+    for (kind, id, id_key) in [
+        ("videos", INFRA_STALLED_VIDEO, "videoId"),
+        ("transcripts", INFRA_STALLED_TRANSCRIPT, "transcriptId"),
+    ] {
+        let output = infra_cap(
+            &stub,
+            &[
+                "developers",
+                kind,
+                "wait",
+                INFRA_APP,
+                id,
+                "--timeout-seconds",
+                "1",
+                "--json",
+            ],
+        );
+        assert_eq!(
+            answered(id),
+            0,
+            "the {kind} wait outlived its 1 second limit and saw the late answer"
+        );
+        assert_eq!(output.status.code(), Some(1), "{kind}");
+        let error = single_json_error(&output);
+        assert_eq!(error["code"], "NOT_READY", "{kind}");
+        assert_eq!(error["retryable"], true, "{kind}");
+        assert_eq!(error[id_key], id, "{kind}");
+        assert!(error.get("status").is_none(), "{kind}");
+    }
+
+    let output = infra_cap(
+        &stub,
+        &[
+            "developers",
+            "videos",
+            "wait",
+            INFRA_APP,
+            INFRA_SLOW_VIDEO,
+            "--timeout-seconds",
+            "2",
+            "--json",
+        ],
+    );
+    let polls = answered(INFRA_SLOW_VIDEO);
+    assert!(
+        (1..=3).contains(&polls),
+        "a 2 second wait polls at 0, 0.5 and 1.5 seconds, not {polls} times"
+    );
+    let error = single_json_error(&output);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["videoId"], INFRA_SLOW_VIDEO);
+    assert_eq!(error["status"], "processing");
+    assert!(error["hint"].as_str().unwrap().contains(&format!(
+        "cap developers videos wait {INFRA_APP} {INFRA_SLOW_VIDEO}"
+    )));
+
+    for _ in 0..200 {
+        if answered(INFRA_STALLED_VIDEO) == 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(answered(INFRA_STALLED_VIDEO), 1);
+    let mut session = McpSession::start(&stub.url);
+    let (result, _) = session.call(
+        "developer_video_wait",
+        serde_json::json!({
+            "app_id": INFRA_APP,
+            "video_id": INFRA_STALLED_VIDEO,
+            "timeout_seconds": 1,
+        }),
+    );
+    assert_eq!(
+        answered(INFRA_STALLED_VIDEO),
+        1,
+        "the MCP wait outlived its 1 second limit and saw the late answer"
+    );
+    assert_eq!(result["isError"], true);
+    let error = mcp_payload(&result);
+    assert_eq!(error["code"], "NOT_READY");
+    assert_eq!(error["videoId"], INFRA_STALLED_VIDEO);
+}
+
+#[test]
+fn account_command_failures_keep_their_typed_fields_in_json() {
+    let unreachable = |args: &[&str]| {
+        cap()
+            .args(args)
+            .env("CAP_AGENT_TOKEN", "cap_cli_synthetic_test_token")
+            .env("CAP_SERVER_URL", "http://127.0.0.1:9")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["account", "get", "--json"],
+        vec!["organizations", "list", "--json"],
+        vec!["library", "folders", "list", "org_test", "--json"],
+        vec!["notifications", "list", "--json"],
+        vec!["jobs", "get", "op_test", "--json"],
+    ] {
+        let output = unreachable(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let error = single_json_error(&output);
+        assert_eq!(error["code"], "TEMPORARY_UNAVAILABLE", "{args:?}");
+        assert_eq!(error["retryable"], true, "{args:?}");
+        assert_eq!(error["retryAfterMs"], 500, "{args:?}");
+        assert!(error["hint"].is_string(), "{args:?}");
+    }
+
+    let stub = start_infra_stub();
+    let missing = infra_cap(&stub, &["organizations", "get", "org_missing", "--json"]);
+    let error = single_json_error(&missing);
+    assert_eq!(error["code"], "NOT_FOUND");
+    assert_eq!(error["retryable"], false);
+    assert_eq!(error["requestId"], "req_stub");
+
+    let local = unreachable(&["organizations", "update", "org_test", "--yes", "--json"]);
+    let error = single_json_error(&local);
+    assert_eq!(error["retryable"], false);
+    assert!(!error["message"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn mcp_upload_announces_the_video_id_before_a_cancelled_wait() {
+    let stub = start_infra_stub();
+    let directory = tempfile::tempdir().unwrap();
+    let media = directory.path().join("demo.mp4");
+    write_test_media(&media);
+    let mut session = McpSession::start(&stub.url);
+
+    let id = session.send(
+        "tools/call",
+        serde_json::json!({
+            "name": "developer_video_upload",
+            "arguments": {
+                "app_id": INFRA_APP,
+                "file_path": media.to_str().unwrap(),
+                "name": "slow",
+                "wait": true,
+                "confirmed": true,
+            },
+            "_meta": { "progressToken": "upload-1" },
+        }),
+    );
+    let progress = session.notification("notifications/progress");
+    assert_eq!(progress["params"]["progressToken"], "upload-1");
+    let message = progress["params"]["message"].as_str().unwrap();
+    assert!(message.contains(INFRA_SLOW_VIDEO), "{message}");
+    assert!(message.contains("developer_video_wait"), "{message}");
+
+    session.notify(
+        "notifications/cancelled",
+        serde_json::json!({ "requestId": id, "reason": "test" }),
+    );
+    let (tools, _) = session.request("tools/list", serde_json::json!({}));
+    assert!(tools["result"]["tools"].is_array());
+    thread::sleep(Duration::from_millis(1_500));
+    let polls = |stub: &InfraStub| {
+        stub.requests()
+            .iter()
+            .filter(|request| request.ends_with(INFRA_SLOW_VIDEO))
+            .count()
+    };
+    let after_cancel = polls(&stub);
+    thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(polls(&stub), after_cancel, "the wait kept polling");
+
+    let (resumed, _) = session.call(
+        "developer_video_get",
+        serde_json::json!({ "app_id": INFRA_APP, "video_id": INFRA_SLOW_VIDEO }),
+    );
+    assert_eq!(mcp_payload(&resumed)["video"]["status"], "processing");
 }
