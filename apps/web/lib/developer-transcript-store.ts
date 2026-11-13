@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
@@ -10,6 +9,7 @@ import {
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
 import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { start } from "workflow/api";
+import { developerIdFromKey } from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -154,10 +154,7 @@ const affectedRows = (result: unknown) => {
 };
 
 export function transcriptIdForIdempotencyKey(appId: string, key: string) {
-	return createHash("sha256")
-		.update(["developer-transcript", appId, key].join("\0"), "utf8")
-		.digest("base64url")
-		.slice(0, 15);
+	return developerIdFromKey("developer-transcript", appId, key);
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
