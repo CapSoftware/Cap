@@ -397,7 +397,7 @@ describe("developer OpenAPI spec", () => {
 		] as const;
 		const implemented = new Set<string>();
 		for (const [dir, base] of routeDirs) {
-			const source = readFileSync(join(apiRoot, dir, "route.ts"), "utf8");
+			const source = readFileSync(join(apiRoot, dir, "app.ts"), "utf8");
 			const modules = new Map(
 				[...source.matchAll(/import \* as (\w+) from "\.\/([^"]+)"/g)].map(
 					([, name, file]) => [name, file],
