@@ -36,7 +36,7 @@ const compare = (left: unknown, operator: string, right: unknown) => {
 	}
 };
 
-function compile(condition: SQL | undefined): Predicate {
+function compile(condition: SQL | undefined, outer: Row = {}): Predicate {
 	if (!condition) return () => true;
 	const query = dialect.sqlToQuery(condition);
 	const tokens =
@@ -104,6 +104,10 @@ function compile(condition: SQL | undefined): Predicate {
 			}
 			expect(")");
 			return (row) => values.some((value) => compare(row[column], "=", value));
+		}
+		if (peek()?.startsWith("`")) {
+			const reference = columnName();
+			return (row) => compare(row[column], operator, outer[reference]);
 		}
 		const value = param();
 		return (row) => compare(row[column], operator, value);
@@ -228,69 +232,107 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		return new Date(clock);
 	};
 
-	const select = (fields?: Record<string, unknown>) => ({
+	const select = (fields?: Record<string, unknown>, distinct = false) => ({
 		from: (table: Table) => {
 			const state = {
 				condition: undefined as SQL | undefined,
 				ordered: false,
+				orderColumn: "createdAt",
+				ascending: false,
 				limit: undefined as number | undefined,
 				offset: 0,
 			};
-			const run = async () => {
-				let rows = rowsOf(table).filter(compile(state.condition));
+			const run = async (outer: Row = {}) => {
+				let rows = rowsOf(table).filter(compile(state.condition, outer));
 				if (state.ordered) {
+					const time = (row: Row) => {
+						const value = row[state.orderColumn];
+						return value instanceof Date ? value.getTime() : 0;
+					};
+					const direction = state.ascending ? -1 : 1;
 					rows = [...rows].sort((a, b) => {
-						const byDate =
-							(b.createdAt as Date).getTime() - (a.createdAt as Date).getTime();
-						return byDate !== 0
-							? byDate
-							: String(b.id).localeCompare(String(a.id));
+						const byDate = time(b) - time(a);
+						return (
+							direction *
+							(byDate !== 0 ? byDate : String(b.id).localeCompare(String(a.id)))
+						);
 					});
 				}
-				const scalars: Row = {};
-				for (const [alias, field] of Object.entries(fields ?? {})) {
-					const inner = isSql(field)
-						? field.queryChunks.find(isQuery)
-						: undefined;
-					if (!inner) continue;
-					const [first] = await inner;
-					scalars[alias] = Object.values(first ?? {})[0] ?? null;
-				}
+				const subqueries = Object.entries(fields ?? {}).flatMap(
+					([alias, field]) => {
+						const inner = isSql(field)
+							? field.queryChunks.find(isQuery)
+							: undefined;
+						return inner ? [[alias, inner] as const] : [];
+					},
+				);
+				const scalarAliases = new Set(subqueries.map(([alias]) => alias));
 				const selected = fields
 					? Object.fromEntries(
-							Object.entries(fields).filter(([alias]) => !(alias in scalars)),
+							Object.entries(fields).filter(
+								([alias]) => !scalarAliases.has(alias),
+							),
 						)
 					: fields;
-				const projected = project(rows, selected).map((row) => ({
-					...row,
-					...scalars,
-				}));
+				const all: Row[] = [];
+				const base = project(rows, selected);
+				for (const [index, row] of base.entries()) {
+					const scalars: Row = {};
+					for (const [alias, inner] of subqueries) {
+						const correlated = inner as PromiseLike<Row[]> & {
+							runFor?: (outer: Row) => Promise<Row[]>;
+						};
+						const [first] = correlated.runFor
+							? await correlated.runFor(rows[index] ?? {})
+							: await inner;
+						scalars[alias] = Object.values(first ?? {})[0] ?? null;
+					}
+					all.push({ ...row, ...scalars });
+				}
+				const seen = new Set<string>();
+				const projected = distinct
+					? all.filter((row) => {
+							const key = JSON.stringify(row);
+							if (seen.has(key)) return false;
+							seen.add(key);
+							return true;
+						})
+					: all;
 				return projected.slice(
 					state.offset,
 					state.limit === undefined ? undefined : state.offset + state.limit,
 				);
 			};
-			const chain = Object.assign(Promise.resolve().then(run), {
-				where(condition: SQL | undefined) {
-					state.condition = condition;
-					return chain;
+			const chain = Object.assign(
+				Promise.resolve().then(() => run()),
+				{
+					runFor: (outer: Row) => run(outer),
+					where(condition: SQL | undefined) {
+						state.condition = condition;
+						return chain;
+					},
+					orderBy(first?: SQL) {
+						state.ordered = true;
+						const named = first
+							? dialect.sqlToQuery(first).sql.match(/`(\w+)`(?: (desc|asc))?$/i)
+							: null;
+						state.orderColumn = named?.[1] ?? "createdAt";
+						state.ascending = named?.[2]?.toLowerCase() === "asc";
+						return chain;
+					},
+					limit(count: number) {
+						state.limit = count;
+						return chain;
+					},
+					offset(count: number) {
+						state.offset = count;
+						return chain;
+					},
+					for() {
+						return chain;
+					},
 				},
-				orderBy() {
-					state.ordered = true;
-					return chain;
-				},
-				limit(count: number) {
-					state.limit = count;
-					return chain;
-				},
-				offset(count: number) {
-					state.offset = count;
-					return chain;
-				},
-				for() {
-					return chain;
-				},
-			});
+			);
 			return chain;
 		},
 	});
@@ -359,7 +401,13 @@ export function createFakeDatabase(defaults: Map<Table, () => Row>) {
 		},
 	});
 
-	const client = { select, insert, update, delete: remove };
+	const client = {
+		select: (fields?: Record<string, unknown>) => select(fields),
+		selectDistinct: (fields: Record<string, unknown>) => select(fields, true),
+		insert,
+		update,
+		delete: remove,
+	};
 
 	const transaction = <T>(callback: (tx: typeof client) => Promise<T>) => {
 		const run = async () => {

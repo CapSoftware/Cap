@@ -39,6 +39,7 @@ const nextConfig = {
 		],
 		"/dashboard/settings/organization/billing": ["./lib/baa/*.pdf"],
 		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
+		"/docs-markdown/**": ["./content/docs/**/*.mdx"],
 	},
 	transpilePackages: [
 		"@cap/ui",
@@ -46,6 +47,7 @@ const nextConfig = {
 		"@cap/web-api-contract",
 		"@cap/web-domain",
 		"@cap/env",
+		"@cap/infra-mcp",
 		"@cap/database",
 		"@cap/recorder-core",
 		"next-mdx-remote",

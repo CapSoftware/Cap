@@ -8,6 +8,23 @@ Most of the repository is licensed under AGPLv3. The LICENSE file identifies a l
 
 For the expanded machine-readable reference, see https://cap.so/llms-full.txt.
 
+## Cap Infra (video and speech API)
+
+Cap Infra is Cap's usage-billed API for building video and speech into your own product. Upload a video and get adaptive HLS, an MP4, a poster, a share link and a hosted player back, or turn an audio or video file into a transcript with word timings. It is separate from the Cap screen recorder: it needs no Cap Desktop, no `cap` CLI and no user sign-in, only an app's secret key.
+
+- Overview and a copyable agent setup prompt: https://cap.so/infra
+- Get started, from a new app to a playing video: https://cap.so/docs/api/get-started
+- REST reference: https://cap.so/docs/api/rest-api
+- OpenAPI 3.1 description (take every path and field name from it): https://cap.so/openapi.json
+- Billing: https://cap.so/docs/api/billing
+- Console, where an app and its keys are created: https://cap.so/dashboard/infra
+- Hosted MCP server for agents: `https://cap.so/api/developer/mcp` (Streamable HTTP, `Authorization: Bearer <csk_ key>`). Setup: https://cap.so/docs/api/get-started#10-use-with-agents-mcp
+- **Auth.** Send the app's secret key (`csk_`) as `Authorization: Bearer <key>`, from server code only. It never goes into browser code. For an upload from the browser, the server calls `POST /api/developer/v1/uploads` and gives the browser the short-lived upload token (`cut_`) it returns, which works for that one video. A public `cpk_` key cannot create or upload videos.
+- **Rate limits.** A secret key allows 300 requests a minute across the REST endpoints, and all the keys of one account together 1,200 a minute. Each upload token allows 1,200 a minute across the upload endpoints. Requests with a rejected key or token are limited to 30 a minute per address. On a `429`, wait for the `Retry-After` seconds, then retry.
+- **Polling.** A webhook (`video.ready`, `video.errored`) can tell your server when a video is done instead: https://cap.so/docs/api/webhooks. Without one, after an upload completes, poll `GET /api/developer/v1/videos/{id}/status` every 3 seconds until `status` is `ready` or `errored`; a short video is usually ready on the first check. Transcripts have no webhook: poll `GET /api/developer/v1/transcripts/{id}` every 5 seconds until `status` is `complete` or `error`.
+- **Errors** are JSON with `error`, `code`, `message`, `hint` and `docs` fields.
+- **Docs as Markdown.** Every page under https://cap.so/docs is available as Markdown: add `.md` to its URL (for example https://cap.so/docs/api/get-started.md) or request it with `Accept: text/markdown`.
+
 ## When to Use Cap
 
 Reach for Cap when a task involves one of these jobs:
@@ -16,7 +33,7 @@ Reach for Cap when a task involves one of these jobs:
 - **Read what a recording says.** Fetch the title, status, summary, and timestamped transcript of a recording the user owns, so you can answer questions, write notes, or file a bug from a walkthrough. Use `cap caps context <id> --json`, `cap caps transcript`, or the `caps_context` MCP tool.
 - **Manage a video library.** List, search, move, retitle, share, password-protect, or delete Caps, and manage folders, spaces, members, and viewer settings with `cap caps ...` and `cap organizations ...`.
 - **Move videos off Loom.** Import single Loom links or a CSV of Loom links into Cap with `cap caps import loom`, then wait for the job with `cap jobs wait`.
-- **Host video for your own product.** Use the Cap Developer API to create videos, upload them, and get HLS, MP4, poster, share and embed URLs. The guide at https://cap.so/docs/api/get-started goes from a new app to a playing video, and the reference at https://cap.so/docs/api/rest-api covers upload, playback, transcripts and billing.
+- **Host video or transcribe speech in your own product.** Use Cap Infra, described in its own section above.
 
 Cap is not a live video calling, livestreaming, or general file hosting tool.
 
@@ -24,8 +41,8 @@ How to call Cap:
 
 - **On the user's machine:** the `cap` CLI that ships with Cap Desktop. Run `cap guide --json` first for the installed command and output contract. `cap mcp serve` exposes the same actions to MCP clients over stdio.
 - **Remote MCP (read-only):** Streamable HTTP at https://cap.so/api/mcp with OAuth. Server card: https://cap.so/.well-known/mcp
-- **Developer API (HTTP):** OpenAPI 3.1 description at https://cap.so/openapi.json. Create an app and keys at https://cap.so/dashboard/infra. Create each upload from your server with the secret key (`POST /api/developer/v1/uploads`) and upload the file from the browser with the upload token it returns. A public key cannot create or upload videos. Errors are JSON with `error`, `code`, `hint`, and `docs` fields. Each key and each upload token allows 60 requests per minute. `GET /api/developer/v1/usage` returns the current prices in `rates`, `GET /api/developer/v1/transactions` returns every credit and charge, and https://cap.so/docs/api/billing explains what is charged and when.
-- **Markdown:** requesting https://cap.so with `Accept: text/markdown` returns this file, and missing pages return a Markdown 404.
+- **Cap Infra API (HTTP):** see the Cap Infra section above. `GET /api/developer/v1/usage` returns the current prices in `rates`, `GET /api/developer/v1/transactions` returns every credit and charge, and https://cap.so/docs/api/billing explains what is charged and when.
+- **Markdown:** requesting https://cap.so with `Accept: text/markdown` returns this file, every docs page is available as Markdown (add `.md` or send `Accept: text/markdown`), and missing pages return a Markdown 404.
 
 ## Recording Modes
 
@@ -45,7 +62,7 @@ Cap does not assign global recording shortcuts by default. Users configure suppo
 - Organization roles, members, spaces, folders, branding, viewer settings, and aggregate analytics.
 - Cap-managed storage, Google Drive for new uploads, and S3-compatible storage. Provider changes do not automatically move existing files.
 - Single Loom imports, organization CSV imports up to 500 rows per self-serve batch, and a durable per-video agent import workflow.
-- A developer REST API for hosting video in your own product, with adaptive HLS and MP4 playback and a hosted player. There are no published SDK packages, and a public customer webhook subscription API is not currently documented.
+- A developer REST API for hosting video in your own product, with adaptive HLS and MP4 playback and a hosted player. There are no published SDK packages. Webhooks tell your server when a video is ready or has failed.
 
 Captions, transcripts, titles, summaries, and chapters depend on the recording, processing state, plan, and effective organization settings. Do not promise that every recording has every AI field immediately.
 
@@ -61,9 +78,12 @@ Cap has run organization migrations spanning hundreds of users and tens of thous
 
 ## Use Cap With an AI Agent
 
-Cap can be operated through a shell-capable agent using the `cap` CLI or its MCP server.
+There are two products, with a different starting point for each:
 
-- Cap for Agents (start here, includes the copyable setup prompt): https://cap.so/agents
+- **Build video or speech into an app with an API key:** that is Cap Infra. Start at https://cap.so/infra, then https://cap.so/openapi.json. Do not install Cap Desktop or the `cap` CLI for this.
+- **Record, share and manage a person's own Cap recordings:** that is the Cap screen recorder, driven through a shell-capable agent with the `cap` CLI or its MCP server. Start at https://cap.so/agents. The rest of this section is about this one.
+
+- Cap for Agents (start here for the screen recorder, includes the copyable setup prompt): https://cap.so/agents
 - Overview and copyable prompt: https://cap.so/docs/agents
 - Setup: https://cap.so/docs/agents/setup
 - Workflows: https://cap.so/docs/agents/workflows
@@ -82,8 +102,9 @@ For Loom imports, `--space` takes one Cap space name rather than a folder path. 
 - Docs: https://cap.so/docs
 - Sharing: https://cap.so/docs/sharing/share-a-cap
 - Self-hosting: https://cap.so/docs/self-hosting
-- Developer API guide: https://cap.so/docs/api/get-started
-- REST API: https://cap.so/docs/api/rest-api
-- Developer API OpenAPI description: https://cap.so/openapi.json
+- Cap Infra: https://cap.so/infra
+- Cap Infra get started: https://cap.so/docs/api/get-started
+- Cap Infra REST API: https://cap.so/docs/api/rest-api
+- Cap Infra OpenAPI description: https://cap.so/openapi.json
 - MCP server card: https://cap.so/.well-known/mcp
 - Source code: https://github.com/CapSoftware/Cap

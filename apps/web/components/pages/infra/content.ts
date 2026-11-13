@@ -92,11 +92,12 @@ export const BAA = "BAA available.";
 
 export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
-const DOCS = "/docs/api/rest-api";
+const REFERENCE = "/docs/api/rest-api";
 
 export const LINKS = {
-	docs: DOCS,
-	uploadDocs: `${DOCS}#multipart-upload`,
+	docs: "/docs/api/get-started",
+	reference: REFERENCE,
+	uploadDocs: `${REFERENCE}#multipart-upload`,
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -172,11 +173,6 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 		rates: PRICES.storagePer1000Minutes,
 	},
 	{
-		meter: "Speech to text",
-		unit: "per hour of audio",
-		price: usd(PRICES.speechPerHour),
-	},
-	{
 		meter: "Player",
 		price: "Included",
 		note: "a hosted page and an iframe embed",
@@ -214,9 +210,11 @@ export const VIDEO_STATUS_RESPONSE = `{
       { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
       { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
     ],
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
-    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" }
   }
 }`;
 
@@ -356,7 +354,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "How do I know when a video is ready?",
 		answer:
-			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
+			"Check the video's status from your server every 3 seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
 	},
 	{
 		question: "How do API keys work?",

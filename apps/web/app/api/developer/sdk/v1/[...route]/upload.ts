@@ -99,6 +99,7 @@ app.post(
 			partNumbers:
 				requested.partNumbers ??
 				(requested.partNumber === undefined ? [] : [requested.partNumber]),
+			maxBytes: c.get("developerUploadMaxBytes"),
 		});
 		if (result.status !== 200) return c.json(result.body, result.status);
 		if (requested.partNumbers) return c.json({ parts: result.body.parts });

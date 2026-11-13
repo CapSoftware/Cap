@@ -8,9 +8,12 @@ export type StoredVideo = {
 	status: string;
 };
 
+export type StoredKey = { appId: string; revokedAt: string | null };
+
 export const state = {
 	query: vi.fn(),
 	videos: new Map<string, StoredVideo>(),
+	keys: new Map<string, StoredKey | null>(),
 	apps: new Set<string>(),
 	environment: "production",
 	nextVideo: 0,
@@ -39,22 +42,61 @@ const admitted = {
 
 const KEY_TYPES: Record<string, string> = { cpk: "public", csk: "secret" };
 
+export const keyIdOf = (key: string) => key.replace(/^c[ps]k_/, "key_");
+
+function storedKey(key: string, appId: string) {
+	const id = keyIdOf(key);
+	if (!state.keys.has(id)) state.keys.set(id, { appId, revokedAt: null });
+	return state.keys.get(id) ?? null;
+}
+
+export function revokeKey(key: string) {
+	const stored = state.keys.get(keyIdOf(key));
+	if (stored) stored.revokedAt = "2026-11-12 10:00:01";
+}
+
+export const removeKey = (key: string) => state.keys.set(keyIdOf(key), null);
+
+const revokedTime = (revokedAt: string) =>
+	Date.parse(`${revokedAt.replace(" ", "T")}Z`);
+
 async function answer(query: string, params: unknown[]) {
+	if (
+		query.includes("from `developer_api_keys`") &&
+		query.includes("`developer_api_keys`.`revokedAt` > ?")
+	) {
+		const [appId, , since] = params;
+		const sinceTime = new Date(since as Date | string).getTime();
+		const revoked = [...state.keys.entries()].find(([, key]) => {
+			if (!key || key.appId !== appId || key.revokedAt === null) return false;
+			return revokedTime(key.revokedAt) > sinceTime;
+		});
+		return { rows: revoked ? [[revoked[0]]] : [] };
+	}
 	if (query.includes("from `developer_api_keys`")) {
-		const [prefix = "", appId = ""] = String(params[0])
-			.replace("hash:", "")
-			.split("_");
+		const key = String(params[0]).replace("hash:", "");
+		const [prefix = "", appId = ""] = key.split("_");
 		if (KEY_TYPES[prefix] !== params[1] || !state.apps.has(appId)) {
 			return { rows: [] };
 		}
-		return { rows: [[appId, state.environment]] };
+		const stored = storedKey(key, appId);
+		if (!stored || stored.revokedAt) return { rows: [] };
+		return { rows: [[appId, keyIdOf(key), `owner-${appId}`]] };
 	}
 	if (query.includes("from `developer_videos` inner join `developer_apps`")) {
-		const video = state.videos.get(String(params[0]));
-		if (!video || video.appId !== params[1] || !state.apps.has(video.appId)) {
+		const [keyId, , videoId, appId] = params;
+		const video = state.videos.get(String(videoId));
+		if (!video || video.appId !== appId || !state.apps.has(video.appId)) {
 			return { rows: [] };
 		}
-		return { rows: [[video.duration, video.deletedAt]] };
+		const key = state.keys.get(String(keyId));
+		return {
+			rows: [
+				key && key.appId === video.appId
+					? [video.duration, video.deletedAt, keyId, key.revokedAt]
+					: [video.duration, video.deletedAt, null, null],
+			],
+		};
 	}
 	if (query.includes("from `developer_app_domains`")) {
 		return { rows: [["domain-1"]] };
@@ -110,6 +152,7 @@ export function resetUploadHarness() {
 	state.listParts.mockReset();
 	state.presign.mockReset();
 	state.videos.clear();
+	state.keys.clear();
 	state.apps = new Set(["app1", "app2"]);
 	state.environment = "production";
 	state.nextVideo = 0;

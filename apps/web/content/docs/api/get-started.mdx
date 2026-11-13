@@ -302,7 +302,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 
 `waitForVideo` and `playVideo` are added in the next two steps.
 
-- **Parts.** Every part except the last must be at least 5 MB, and an upload takes up to 10,000 parts. A file smaller than one part is sent as a single part.
+- **Parts.** Every part except the last must be at least 5 MB. Number the parts from 1 with no gaps: a token signs part numbers up to the last one its size limit allows, which is 6,867 for the 36 GB limit. A file smaller than one part is sent as a single part.
 - **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made.
 - **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
@@ -351,7 +351,7 @@ Add this to `index.html`, below the upload script:
 - **`ready`** means the video can be played. Processing has made at least one of `hlsUrl` and `mp4Url`, and the poster.
 - **`hlsUrl` can still be `null` for a moment after `ready`.** The MP4 is often finished first and the adaptive HLS renditions follow a few seconds later. The loop above keeps checking a few more times for `hlsUrl`, then plays the MP4.
 - **`errored`** is final. `errorReason` says why, for example that the file could not be read as a video. It is written for you and can mention your credit balance, so log it and show your users your own message. A failed video is not billed and cannot be processed again: create a new upload.
-- **Pace the checks.** A secret key allows 60 requests per minute, and every status check your server makes for any user counts toward it. Leave at least 3 seconds between checks and slow down from there. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
+- **Pace the checks.** A secret key allows 300 requests per minute, and every status check your server makes for any user counts toward it. Check every 3 seconds, which usually finds a short video ready on the first check, and slow down for longer ones as the loop above does. On a `429`, wait for the `Retry-After` seconds and ask again. See [Rate Limits](/docs/api/rest-api#rate-limits).
 
 ## 5. Play it
 
@@ -395,28 +395,7 @@ Add this to `index.html`, below the other scripts:
     if (width && height) player.style.aspectRatio = `${width} / ${height}`;
 
     if (hlsUrl && window.Hls && Hls.isSupported()) {
-      const megabits = navigator.connection?.downlink;
-      const estimate = megabits > 0 ? megabits * 800000 : 1500000;
-      hls = new Hls({
-        autoStartLoad: false,
-        abrEwmaDefaultEstimate: estimate,
-        abrEwmaDefaultEstimateMax: estimate,
-        startFragPrefetch: true,
-        capLevelToPlayerSize: true,
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event, { levels }) => {
-        const wanted = player.clientWidth * window.devicePixelRatio;
-        let level = 0;
-        while (
-          levels[level + 1] &&
-          levels[level + 1].bitrate <= estimate &&
-          levels[level].width < wanted
-        ) {
-          level++;
-        }
-        hls.startLevel = level;
-        hls.startLoad();
-      });
+      hls = new Hls({ capLevelToPlayerSize: true });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal || data.response?.code === 403) playMp4();
       });
@@ -442,13 +421,12 @@ Safari plays HLS by itself. Every other browser needs [hls.js](https://github.co
 
 | Setting | Why |
 |---------|-----|
-| `autoStartLoad: false`, then `startLevel` and `startLoad()` | Start on a rendition the viewer's connection can carry. Without it hls.js starts on the first rendition the playlist lists, which is too large for a slow connection |
-| `abrEwmaDefaultEstimate` and `abrEwmaDefaultEstimateMax` | Give hls.js the browser's own estimate of the connection. Safari and Firefox do not give one, so the page assumes a slow connection there: the video starts on the smallest rendition and steps up once hls.js has measured a download |
-| `startFragPrefetch` | Fetch the first segment while the video element is still being set up |
 | `capLevelToPlayerSize` | Never load a rendition larger than the player on the page |
 | The `403` check | Media links inside the playlist expire after 12 hours. A `403` means one has expired, so switch to the MP4 at once instead of letting hls.js retry |
 | `playMp4` on a fatal error | Keep playing from the same position if HLS fails for any other reason |
 | `stopHls` at the start of `playVideo` | Stop the previous video's player before starting the next one on the same page |
+
+There is no start level to set. The master playlist lists a rendition that starts quickly first, and players begin with the first one listed.
 
 [Play a Video](/docs/api/rest-api#play-a-video) covers a Content Security Policy, bitrates and what happens when playback stops.
 
@@ -807,7 +785,9 @@ The same secret key turns an audio or video file into text. It is a separate cal
 
 1. Create the transcript with `POST /api/developer/v1/transcripts/uploads`, sending the file's exact size in bytes as `contentLength`. The response holds the transcript's `id` and a signed `upload.url`.
 2. `PUT` the file to `upload.url`.
-3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` until `status` is `complete` or `error`, leaving at least 3 seconds between checks. A complete transcript has its `text`.
+3. Start it with `POST /api/developer/v1/transcripts/:id/start`, then check `GET /api/developer/v1/transcripts/:id` every 5 seconds until `status` is `complete` or `error`. A complete transcript has its `text`.
+
+To wait on several transcripts, check them as a batch with one list call per status instead of one call each: `GET /api/developer/v1/transcripts?status=queued&limit=100`, then `status=processing`. Ask for `queued` first: a transcript only moves from `queued` to `processing` to a final status, so one missing from both lists has finished. Get it for its `text`, and keep checking it if its `status` is not yet `complete` or `error`. An app has at most 20 transcripts in flight, and checking each of 20 every 5 seconds takes 240 requests a minute, most of a key's limit, while the two list calls take 24.
 
 A file that is already at a public URL needs no upload. Send it as `url` to `POST /api/developer/v1/transcripts` and check the transcript the same way. That includes a video you uploaded here: send its `mp4Url` as the `url` once the video is `ready`.
 
@@ -820,3 +800,46 @@ Uploading and encoding are free. Stored video and transcription are paid for fro
 - The app's Billing page in the console shows the balance and every charge.
 - [Get Usage](/docs/api/rest-api#get-usage) returns the balance, whether the app can take an upload, and the current prices.
 - [List Transactions](/docs/api/rest-api#list-transactions) returns every credit and charge.
+
+## 10. Use with agents (MCP)
+
+Cap Infra has a hosted MCP server, so an agent such as Claude Code, Cursor or Codex can upload, check and transcribe video with the app's secret key.
+
+- URL: `https://cap.so/api/developer/mcp`
+- Header: `Authorization: Bearer` followed by the secret key
+
+Claude Code, with the key in `CAP_SECRET_KEY`:
+
+```bash
+claude mcp add --transport http cap-infra https://cap.so/api/developer/mcp --header "Authorization: Bearer $CAP_SECRET_KEY"
+```
+
+Cursor, in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cap-infra": {
+      "url": "https://cap.so/api/developer/mcp",
+      "headers": { "Authorization": "Bearer csk_your_secret_key" }
+    }
+  }
+}
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.cap-infra]
+url = "https://cap.so/api/developer/mcp"
+bearer_token_env_var = "CAP_SECRET_KEY"
+```
+
+The tools:
+
+- `videos_create_upload` and `videos_complete_upload`: create a video and get signed links that the agent uploads the file to from your machine, then start encoding.
+- `videos_wait`, `videos_get`, `videos_list` and `videos_delete`: follow a video until it plays, read its links, list and delete.
+- `transcripts_create`: transcribe a public URL or a ready video. `transcripts_wait`, `transcripts_text`, `transcripts_get`, `transcripts_list` and `transcripts_delete` follow it and read the text.
+- `account_usage` and `account_transactions`: the balance, prices and every charge.
+
+Each MCP request, and each API call a tool makes, counts toward the key's per-minute limit. Wait tools return within 45 seconds; call them again to keep waiting.
