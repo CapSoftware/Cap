@@ -367,4 +367,46 @@ describe("the ceiling on transcripts running at once", () => {
 
 		expect(await fromUrl()).toMatchObject({ ok: false, status: 402 });
 	});
+
+	it("admits both copies of a repeated request that race each other at the last slot", async () => {
+		seedRunning(19);
+
+		const [first, second] = await Promise.all([
+			fromUrl(URL_A, "race-key-01"),
+			fromUrl(URL_A, "race-key-01"),
+		]);
+
+		expect(first.ok && second.ok).toBe(true);
+		if (!first.ok || !second.ok) throw new Error("create failed");
+		expect(second.transcript.id).toBe(first.transcript.id);
+		expect(transcripts()).toHaveLength(20);
+		expect(context.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("still refuses a different request that races for the last slot", async () => {
+		seedRunning(19);
+
+		const results = await Promise.all([
+			fromUrl(URL_A, "race-key-01"),
+			fromUrl(URL_A, "race-key-02"),
+		]);
+
+		expect(results.filter((result) => result.ok)).toHaveLength(1);
+		expect(results.filter((result) => !result.ok)).toEqual([
+			expect.objectContaining(CEILING),
+		]);
+	});
+
+	it("answers both copies of a start sent twice at the last slot, and starts it once", async () => {
+		seedRunning(19);
+		const id = await waitingUpload();
+
+		const results = await Promise.all([
+			startTranscriptUpload("app-1", id),
+			startTranscriptUpload("app-1", id),
+		]);
+
+		expect(results.every((result) => result.ok)).toBe(true);
+		expect(context.start).toHaveBeenCalledTimes(1);
+	});
 });

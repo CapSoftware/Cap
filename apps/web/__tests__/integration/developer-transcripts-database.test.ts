@@ -1357,4 +1357,55 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			(await createTranscriptFromUrl(quiet, { url: URL_A }, guards)).ok,
 		).toBe(true);
 	});
+
+	it("admits every copy of a repeated request or start that races for the last slot", async () => {
+		for (let round = 0; round < 6; round++) {
+			const appId = await makeApp(500_000);
+			for (let index = 0; index < 19; index++) await makeTranscript(appId);
+			fixture.start.mockClear();
+			const key = `race-key-${id()}`;
+
+			const creates = await Promise.all(
+				Array.from({ length: 4 }, () =>
+					createTranscriptFromUrl(
+						appId,
+						{ url: URL_A, idempotencyKey: key },
+						guards,
+					),
+				),
+			);
+
+			expect(creates.every((result) => result.ok)).toBe(true);
+			expect(
+				new Set(
+					creates.map((result) => (result.ok ? result.transcript.id : "")),
+				),
+			).toHaveProperty("size", 1);
+			expect(fixture.start).toHaveBeenCalledTimes(1);
+			expect(
+				await createTranscriptFromUrl(appId, { url: URL_A }, guards),
+			).toMatchObject({ ok: false, status: 429 });
+		}
+
+		for (let round = 0; round < 6; round++) {
+			const appId = await makeApp(500_000);
+			for (let index = 0; index < 19; index++) await makeTranscript(appId);
+			const created = await createTranscriptUpload(appId, {
+				fileName: "clip.mp3",
+				contentLength: 1024,
+			});
+			if (!created.ok) throw new Error("Upload transcript was not created.");
+			fixture.objectSize = 1024;
+			fixture.start.mockClear();
+
+			const starts = await Promise.all(
+				Array.from({ length: 4 }, () =>
+					startTranscriptUpload(appId, created.transcript.id),
+				),
+			);
+
+			expect(starts.every((result) => result.ok)).toBe(true);
+			expect(fixture.start).toHaveBeenCalledTimes(1);
+		}
+	});
 });
