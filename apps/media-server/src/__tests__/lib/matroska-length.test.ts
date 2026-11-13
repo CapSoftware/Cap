@@ -3,7 +3,7 @@ import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { matroskaEndFromTail } from "../../lib/matroska-tail";
-import { encodeLengthLimit } from "../../lib/media-common";
+import { createMediaInput, encodeLengthLimit } from "../../lib/media-common";
 import {
 	probeVideo,
 	UNFINISHED_RECORDING_MESSAGE,
@@ -54,6 +54,28 @@ async function lastPacketTime(path: string): Promise<number> {
 	return Math.max(...lines);
 }
 
+async function secondsFromTail(path: string): Promise<number> {
+	const end = await matroskaEndFromTail(path);
+	if (typeof end !== "number")
+		throw new Error(`No length from the tail: ${end}`);
+	return end;
+}
+
+// The length a probe gave this file before the tail was read: every
+// cluster read from the start.
+async function fullReadLength(path: string): Promise<number> {
+	const input = createMediaInput(path);
+	try {
+		const [start, end] = await Promise.all([
+			input.getFirstTimestamp(),
+			input.computeDuration(undefined, { skipLiveWait: true }),
+		]);
+		return Number.isFinite(start) && start > 0 ? Math.max(0, end - start) : end;
+	} finally {
+		input.dispose();
+	}
+}
+
 function slowStream(file: Blob, start: number): ReadableStream<Uint8Array> {
 	let offset = start;
 	const chunk = 256 * 1024;
@@ -84,6 +106,20 @@ beforeAll(async () => {
 		"sh",
 		"-c",
 		`ffmpeg -v error ${[...video, ...audio].join(" ")} -c:v libvpx -deadline realtime -cpu-used 8 -c:a libopus -f webm -live 1 - > "${join(dir, "recorder.webm")}"`,
+	]);
+
+	// A finished file whose single cluster is larger than any tail read, as
+	// a high bitrate recording with long clusters has.
+	await run([
+		"sh",
+		"-c",
+		`ffmpeg -v error -f lavfi -i testsrc2=d=2:s=1280x720:r=30 -vf noise=alls=30:allf=t -c:v libx264 -preset ultrafast -qp 0 -an -f matroska -cluster_size_limit 1000000000 -cluster_time_limit 60000 - > "${join(dir, "one-cluster.mkv")}"`,
+	]);
+	// A short browser recording: live WebM, no Duration, no Cues.
+	await run([
+		"sh",
+		"-c",
+		`ffmpeg -v error -f lavfi -i testsrc2=d=7:s=640x360:r=30 -f lavfi -i sine=d=7 -c:v libvpx -deadline realtime -cpu-used 8 -c:a libopus -f webm -live 1 - > "${join(dir, "browser.webm")}"`,
 	]);
 
 	// What production saw: a short recording looped into a long one with
@@ -142,7 +178,10 @@ beforeAll(async () => {
 		hostname: "127.0.0.1",
 		port: 0,
 		async fetch(request) {
-			const name = new URL(request.url).pathname.slice(1);
+			const requested = new URL(request.url).pathname.slice(1);
+			// A "-fast" name is the same file from a server with no rate limit.
+			const fast = requested.includes("-fast.");
+			const name = requested.replace("-fast.", ".");
 			const file = Bun.file(join(dir, name));
 			const size = file.size;
 			const range = request.headers.get("range") ?? "";
@@ -164,7 +203,9 @@ beforeAll(async () => {
 			const openEnded = span !== null && !span[2];
 			served.set(name, (served.get(name) ?? 0) + (openEnded ? 0 : length));
 			return new Response(
-				openEnded ? slowStream(file, start) : file.slice(start, end + 1),
+				openEnded && !fast
+					? slowStream(file, start)
+					: file.slice(start, end + 1),
 				{
 					status: range ? 206 : 200,
 					headers: {
@@ -191,10 +232,10 @@ describe("the length of a Matroska file with no Duration and no Cues", () => {
 		async (name) => {
 			const expected = await lastPacketTime(join(dir, name));
 			expect(expected).toBeGreaterThan(59);
-			const local = await matroskaEndFromTail(join(dir, name));
+			const local = await secondsFromTail(join(dir, name));
 			expect(Math.abs((local ?? 0) - expected)).toBeLessThan(1);
 			served.delete(name);
-			const remote = await matroskaEndFromTail(`${origin}/${name}`);
+			const remote = await secondsFromTail(`${origin}/${name}`);
 			expect(Math.abs((remote ?? 0) - expected)).toBeLessThan(1);
 		},
 		60_000,
@@ -203,7 +244,7 @@ describe("the length of a Matroska file with no Duration and no Cues", () => {
 	test("a file hundreds of megabytes long is measured from two small reads", async () => {
 		served.delete("sparse.mkv");
 		const started = performance.now();
-		const end = await matroskaEndFromTail(`${origin}/sparse.mkv`);
+		const end = await secondsFromTail(`${origin}/sparse.mkv`);
 		expect(performance.now() - started).toBeLessThan(2_000);
 		expect(
 			Math.abs((end ?? 0) - (await lastPacketTime(join(dir, "piped.mkv")))),
@@ -228,7 +269,29 @@ describe("the length of a Matroska file with no Duration and no Cues", () => {
 		expect(encodeLengthLimit(metadata)).toBeGreaterThanOrEqual(expected);
 	}, 60_000);
 
-	test("a file whose end holds no cluster is refused as unfinished, not timed out", async () => {
+	test("a finished file whose last cluster is larger than the tail read is measured, not refused", async () => {
+		const path = join(dir, "one-cluster.mkv");
+		expect(Bun.file(path).size).toBeGreaterThan(40 * 1024 * 1024);
+		expect(await matroskaEndFromTail(path)).toBeNull();
+		const expected = await lastPacketTime(path);
+		for (const source of [path, `${origin}/one-cluster-fast.mkv`]) {
+			const metadata = await probeVideo(source);
+			expect(Math.abs(metadata.duration - expected)).toBeLessThan(1);
+			expect(encodeLengthLimit(metadata)).toBeGreaterThanOrEqual(expected);
+		}
+	}, 120_000);
+
+	test("a short browser recording keeps exactly the length it had before", async () => {
+		const path = join(dir, "browser.webm");
+		const before = await fullReadLength(path);
+		for (const source of [path, `${origin}/browser-fast.webm`]) {
+			const metadata = await probeVideo(source);
+			expect(metadata.duration).toBe(before);
+			expect(metadata.timestampSpan).toBe(before);
+		}
+	}, 60_000);
+
+	test("a file that ends in zero bytes is refused as unfinished, not timed out", async () => {
 		const started = performance.now();
 		const error = await probeVideo(`${origin}/no-tail.mkv`).then(
 			() => null,

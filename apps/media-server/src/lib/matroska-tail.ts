@@ -231,18 +231,32 @@ async function readTail(
 		: await readLocalRange(path, "tail", bytes);
 }
 
+// How much of a tail must be zero bytes for it to count as blank: what a
+// recorder that preallocated its file and stopped leaves behind.
+const BLANK_TAIL_BYTES = 64 * 1024;
+
+function endsBlank(tail: Uint8Array): boolean {
+	if (tail.length < BLANK_TAIL_BYTES) return false;
+	for (let i = tail.length - BLANK_TAIL_BYTES; i < tail.length; i++) {
+		if (tail[i] !== 0) return false;
+	}
+	return true;
+}
+
 // The time of the last block in a Matroska or WebM file, in seconds, from
-// its first 64 KB and its last few megabytes. Null when there is no cluster
-// to read there, undefined when the source cannot be read by range. A
-// failed read throws.
+// its first 64 KB and its last few megabytes. "blank" when the file ends in
+// zero bytes, null when no cluster starts in the tail (the file was cut off,
+// or its last cluster is larger than the read), undefined when the source
+// cannot be read by range. A failed read throws.
 export async function matroskaEndFromTail(
 	path: string,
-): Promise<number | null | undefined> {
+): Promise<number | "blank" | null | undefined> {
 	const head = await readHead(path);
 	if (!head) return undefined;
 	for (const bytes of TAIL_READS) {
 		const tail = await readTail(path, bytes);
 		if (!tail) return undefined;
+		if (endsBlank(tail)) return "blank";
 		const last = lastBlockTimestamp(tail);
 		if (last !== null) return (last * timecodeScaleNs(head)) / 1_000_000_000;
 		// The whole file was read and holds no cluster.
