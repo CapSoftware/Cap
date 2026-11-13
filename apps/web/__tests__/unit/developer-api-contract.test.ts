@@ -38,7 +38,11 @@ vi.mock("@cap/database", async () => {
 					limit: async () => rowsFor(table, fields),
 					groupBy: async () => rowsFor(table, fields),
 				});
-			const query = { innerJoin: () => query, where };
+			const query = {
+				innerJoin: () => query,
+				leftJoin: () => query,
+				where,
+			};
 			return query;
 		},
 	});

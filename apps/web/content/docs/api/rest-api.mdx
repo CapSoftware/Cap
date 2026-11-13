@@ -31,7 +31,7 @@ API keys are managed in Cap Infra, not the general Settings page.
 3. Two keys are generated for each app:
    - **Secret key** (`csk_...`) -- Must be kept private. Used with the REST API, including to create uploads.
    - **Public key** (`cpk_...`) -- Cannot create or upload videos. Browsers upload with an upload token instead.
-4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair.
+4. Store both keys securely. You can generate a new pair on the API keys page, which revokes the previous pair and the upload tokens the previous secret key created.
 
 ### Using Your Keys
 
@@ -236,8 +236,9 @@ The token is the only credential the [SDK API](/docs/api/rest-api#sdk-api-endpoi
 - It uploads this video and no other.
 - It works until `expiresAt`. Raise `timeoutSeconds` for large files on slow connections. If it expires before the upload completes, [renew it](/docs/api/rest-api#renew-upload-token) and continue the same upload.
 - It stops working when the upload completes or the video is deleted.
+- It stops working when the secret key that created it is revoked. [Renew it](/docs/api/rest-api#renew-upload-token) with the new secret key to continue the same upload.
 
-`maxBytes` caps the file a token can upload. [Initiate Upload](/docs/api/rest-api#initiate-upload) refuses a declared `contentLength` over the cap before any byte is sent, and [Complete Upload](/docs/api/rest-api#complete-upload) measures the bytes in storage and refuses an upload over the cap, whatever sizes the request claims. Both answer `400` with the code `file_too_large`. Without `maxBytes` the only limit is the 36 GB one.
+`maxBytes` caps the file a token can upload. [Initiate Upload](/docs/api/rest-api#initiate-upload) refuses a declared `contentLength` over the cap before any byte is sent, and [Complete Upload](/docs/api/rest-api#complete-upload) measures the bytes in storage and refuses an upload over the cap, whatever sizes the request claims. Both answer `400` with the code `file_too_large`. Without `maxBytes` the only limit is the 36 GB one. The cap also limits the part numbers a token can sign, see [Get Presigned Part URL](/docs/api/rest-api#get-presigned-part-url).
 
 A video whose upload is never completed stays in the `uploading` status and counts in `uploadingVideos` until you delete it with [Delete Video](/docs/api/rest-api#delete-video).
 
@@ -317,6 +318,8 @@ If the page was reloaded and lost its `uploadId`, call Initiate Upload with the 
 An upload left open is discarded a day after it was opened. After that, Complete Upload returns `404` with the code `upload_not_found`: call Initiate Upload again and send the file again.
 
 Renewing does not cancel earlier tokens. Each works until its own `expiresAt`.
+
+**When the secret key is regenerated mid-upload.** Tokens created with the previous secret key answer `401` with the code `invalid_upload_token`, and the hint says the key was rotated. Renew the token with the new secret key and finish the upload the same way.
 
 | Status | `code` | Meaning |
 |--------|--------|---------|
@@ -1054,7 +1057,7 @@ The SDK API uploads a video's file from a browser or app. Every endpoint takes t
 After creating an upload, send its file in parts with the upload token:
 
 1. Initiate the upload to get an `uploadId`.
-2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes), and an upload can have up to 10,000 parts. The whole file can be up to 36 GB.
+2. Split the file into parts. Every part except the last must be at least 5 MB (5,242,880 bytes). Number the parts from 1 with no gaps. The whole file can be up to 36 GB, which is at most 6,867 parts.
 3. Get presigned URLs for the parts, up to 50 per request. `PUT` each part's bytes to its URL and keep the `ETag` response header.
 4. Complete the upload with the list of parts.
 
@@ -1134,6 +1137,8 @@ curl -X POST https://cap.so/api/developer/sdk/v1/upload/multipart/presign-part \
 ```
 
 A request with `partNumber` returns one URL as `{ "presignedUrl": "https://..." }`. More than 50 part numbers, or an empty list, returns `400` with the code `invalid_part_count`.
+
+A token signs part numbers up to the last one its size limit allows: `maxBytes` divided by 5,242,880 and rounded up, or 6,867 for a token with no `maxBytes`. A higher part number returns `400` with the code `part_number_too_large`, and no part in that request is signed.
 
 Each URL is valid for one hour, so sign parts shortly before you upload them and sign again for any part whose URL has expired. Upload a part by sending a `PUT` request to its URL with the bytes as the body and no extra headers:
 
