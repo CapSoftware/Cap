@@ -104,6 +104,31 @@ describe.skipIf(!patched)("sample counts a file only declares", () => {
 		});
 	}
 
+	test("a track with one size for every sample is held to what its chunks can hold", async () => {
+		const shared = Buffer.from(PLAIN);
+		shared.writeUInt32BE(100, shared.indexOf("stsz", 0, "latin1") + 8);
+		const honest = join(dir, "shared-size.mp4");
+		writeFileSync(honest, shared);
+		expect((await probeVideoFile(honest)).duration).toBeCloseTo(1.1, 1);
+
+		const inflated = Buffer.from(shared);
+		inflated.writeUInt32BE(1, inflated.indexOf("stsz", 0, "latin1") + 8);
+		for (const [box, offset] of [
+			["stsc", 16],
+			["stts", 12],
+			["ctts", 12],
+		] as const) {
+			inflated.writeUInt32BE(MAX, inflated.indexOf(box, 0, "latin1") + offset);
+		}
+		const path = join(dir, "shared-size-max.mp4");
+		writeFileSync(path, inflated);
+		const result = await probeWithin(path);
+		expect(result.error).toBeNull();
+		expect(result.metadata?.width).toBe(64);
+		expect(result.grownMb).toBeLessThan(80);
+		expect(result.ms).toBeLessThan(2000);
+	});
+
 	test("a fragment run claiming more samples than a fragment can hold is refused at once", async () => {
 		const at = FRAGMENTED.indexOf("trun", 0, "latin1");
 		expect(at).toBeGreaterThan(0);
