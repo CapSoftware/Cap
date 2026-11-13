@@ -7,12 +7,9 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	Input,
 } from "@cap/ui";
 import type { Folder, Space } from "@cap/web-domain";
-import { faFolder } from "@fortawesome/free-solid-svg-icons/faFolder";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
-import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import type React from "react";
@@ -22,6 +19,10 @@ import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { PublicCollectionField } from "../../../_components/PublicCollectionField";
 import { useDashboardContext } from "../../../Contexts";
+import {
+	DEFAULT_FOLDER_COLOR,
+	FolderDetailsFields,
+} from "../../../caps/components/FolderColorPicker";
 
 interface Props {
 	open: boolean;
@@ -30,22 +31,14 @@ interface Props {
 	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
-const FolderOptions = [
-	{ value: "normal", label: "Normal", color: "#9ca3af" },
-	{ value: "blue", label: "Blue", color: "#3b82f6" },
-	{ value: "red", label: "Red", color: "#ef4444" },
-	{ value: "yellow", label: "Yellow", color: "#eab308" },
-] as const;
-
 export const SubfolderDialog: React.FC<Props> = ({
 	open,
 	onOpenChange,
 	parentFolderId,
 	spaceId,
 }) => {
-	const [selectedColor, setSelectedColor] = useState<
-		(typeof FolderOptions)[number]["value"] | null
-	>(null);
+	const [selectedColor, setSelectedColor] =
+		useState<Folder.FolderColor>(DEFAULT_FOLDER_COLOR);
 	const [folderName, setFolderName] = useState<string>("");
 	const [publicEnabled, setPublicEnabled] = useState(false);
 	const { activeSpace, activeOrganization, setUpgradeModalOpen } =
@@ -54,7 +47,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 
 	useEffect(() => {
 		if (!open) {
-			setSelectedColor(null);
+			setSelectedColor(DEFAULT_FOLDER_COLOR);
 			setFolderName("");
 			setPublicEnabled(false);
 		}
@@ -77,95 +70,62 @@ export const SubfolderDialog: React.FC<Props> = ({
 			}),
 		onSuccess: () => {
 			setFolderName("");
-			setSelectedColor(null);
+			setSelectedColor(DEFAULT_FOLDER_COLOR);
 			onOpenChange(false);
 			router.refresh();
-			toast.success("Subfolder created successfully");
+			toast.success("Subfolder created");
 		},
 		onError: () => {
 			toast.error("Failed to create subfolder");
 		},
 	});
 
+	const canCreate = folderName.trim().length > 0 && !createSubfolder.isPending;
+	const submit = () => {
+		if (!canCreate) return;
+		createSubfolder.mutate({
+			name: folderName,
+			color: selectedColor,
+			public: publicEnabled,
+		});
+	};
+
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="w-[calc(100%-20px)]">
+			<DialogContent className="w-[calc(100%-20px)] max-w-md">
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faFolderPlus} className="size-3.5" />}
 				>
-					<DialogTitle>New Subfolder</DialogTitle>
+					<DialogTitle>New subfolder</DialogTitle>
 				</DialogHeader>
-				<div className="p-5">
-					<Input
-						value={folderName}
-						onChange={(e) => setFolderName(e.target.value)}
-						required
+				<div className="flex flex-col gap-3 p-5">
+					<FolderDetailsFields
+						name={folderName}
+						onNameChange={setFolderName}
+						color={selectedColor}
+						onColorChange={setSelectedColor}
+						onSubmit={submit}
 						placeholder="Subfolder name"
+						disabled={createSubfolder.isPending}
 					/>
-					<div className="flex flex-wrap gap-2 mt-3">
-						{FolderOptions.map((option) => {
-							return (
-								<button
-									type="button"
-									className={clsx(
-										"flex flex-col flex-1 gap-2 items-center p-3 rounded-xl border transition-colors duration-200 cursor-pointer",
-										selectedColor === option.value
-											? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
-											: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
-									)}
-									key={`folder-${option.value}`}
-									onClick={() => {
-										if (selectedColor === option.value) {
-											setSelectedColor(null);
-											return;
-										}
-										setSelectedColor(option.value);
-									}}
-								>
-									<FontAwesomeIcon
-										icon={faFolder}
-										style={{
-											color: option.color,
-											width: "40px",
-											height: "40px",
-										}}
-									/>
-									<span className="text-xs text-gray-10">{option.label}</span>
-								</button>
-							);
-						})}
-					</div>
-					<div className="mt-4">
-						<PublicCollectionField
-							kind="folder"
-							enabled={publicEnabled}
-							onChange={setPublicEnabled}
-							isPro={Boolean(activeOrganization?.ownerIsPro)}
-							onUpgrade={() => setUpgradeModalOpen(true)}
-						/>
-					</div>
+					<PublicCollectionField
+						kind="folder"
+						enabled={publicEnabled}
+						onChange={setPublicEnabled}
+						isPro={Boolean(activeOrganization?.ownerIsPro)}
+						onUpgrade={() => setUpgradeModalOpen(true)}
+					/>
 				</div>
 				<DialogFooter>
 					<Button size="sm" variant="gray" onClick={() => onOpenChange(false)}>
 						Cancel
 					</Button>
 					<Button
-						onClick={() => {
-							if (selectedColor === null) return;
-							createSubfolder.mutate({
-								name: folderName,
-								color: selectedColor,
-								public: publicEnabled,
-							});
-						}}
+						onClick={submit}
 						size="sm"
 						spinner={createSubfolder.isPending}
 						variant="dark"
-						disabled={
-							!selectedColor ||
-							!folderName.trim().length ||
-							createSubfolder.isPending
-						}
+						disabled={!canCreate}
 					>
 						{createSubfolder.isPending ? "Creating..." : "Create"}
 					</Button>

@@ -54,7 +54,7 @@ export const OrganizationIndicator = ({
 				<DialogTrigger asChild>
 					<Button variant="gray" size="sm" className="z-10">
 						<FontAwesomeIcon className="mr-1 size-4" icon={faBuilding} />
-						{memberCount} members
+						{memberCount} {memberCount === 1 ? "member" : "members"}
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">

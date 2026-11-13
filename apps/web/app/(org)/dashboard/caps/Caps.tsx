@@ -6,7 +6,6 @@ import { Button } from "@cap/ui";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons/faFolderPlus";
-import { faInfoCircle } from "@fortawesome/free-solid-svg-icons/faInfoCircle";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -31,9 +30,11 @@ import {
 } from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
+import { DragHint } from "./components/DragHint";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import { FoldersSection } from "./components/FoldersSection";
+import { useCapsMoved } from "./components/useCapsMoved";
 import { useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
@@ -93,8 +94,11 @@ export const Caps = ({
 	const totalPages = Math.ceil(count / limit);
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
-	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const moveLocation = { type: "personal" } as const;
+
+	useCapsMoved((ids) =>
+		setSelectedCaps((current) => current.filter((id) => !ids.includes(id))),
+	);
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -248,19 +252,6 @@ export const Caps = ({
 		};
 	}, [selectedCaps, data, deleteCaps, isDeletingCaps]);
 
-	useEffect(() => {
-		const handleDragStart = () => setIsDraggingCap(true);
-		const handleDragEnd = () => setIsDraggingCap(false);
-
-		window.addEventListener("dragstart", handleDragStart);
-		window.addEventListener("dragend", handleDragEnd);
-
-		return () => {
-			window.removeEventListener("dragstart", handleDragStart);
-			window.removeEventListener("dragend", handleDragEnd);
-		};
-	}, []);
-
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
 		() =>
@@ -333,6 +324,7 @@ export const Caps = ({
 										isSelected={selectedCaps.includes(video.id)}
 										anyCapSelected={anyCapSelected}
 										onSelectToggle={() => handleCapSelection(video.id)}
+										selectedIds={selectedCaps}
 										canMove
 										moveLocation={moveLocation}
 										moveRootLabel="My Caps"
@@ -356,21 +348,7 @@ export const Caps = ({
 				moveLocation={moveLocation}
 				moveRootLabel="My Caps"
 			/>
-			{isDraggingCap && (
-				<div className="fixed inset-0 z-50 pointer-events-none">
-					<div className="flex justify-center items-center w-full h-full">
-						<div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
-							<FontAwesomeIcon
-								className="size-3.5 text-white opacity-50"
-								icon={faInfoCircle}
-							/>
-							<p className="text-white">
-								Drag to a space to share or folder to move
-							</p>
-						</div>
-					</div>
-				</div>
-			)}
+			<DragHint caps="Drop on a folder to move, or on a space to share" />
 		</div>
 	);
 };

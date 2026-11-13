@@ -43,7 +43,11 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import type { MoveLocation } from "@/lib/move-items";
+import {
+	CAP_DRAG_TYPE,
+	type MoveLocation,
+	serializeCapDrag,
+} from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { startBrowserDownload } from "@/lib/start-browser-download";
 import {
@@ -127,6 +131,7 @@ export interface CapCardProps extends PropsWithChildren {
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
 	onSelectToggle?: () => void;
+	selectedIds?: Video.VideoId[];
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
 	isDeleting?: boolean;
@@ -149,6 +154,7 @@ export const CapCard = ({
 	hideSharedStatus = false,
 	isSelected = false,
 	onSelectToggle,
+	selectedIds,
 	anyCapSelected = false,
 	isDeleting = false,
 	canMove = false,
@@ -225,6 +231,7 @@ export const CapCard = ({
 
 	const isOwner = userId === cap.ownerId;
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
+	const dragEnabled = moveEnabled && (!anyCapSelected || isSelected);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
@@ -259,49 +266,25 @@ export const CapCard = ({
 		prevUploadProgressRef.current = uploadProgress;
 	}, [uploadProgress, queryClient, cap.id]);
 
-	// Helper function to create a drag preview element
-	const createDragPreview = (text: string): HTMLElement => {
-		// Create the element
-		const element = document.createElement("div");
-
-		// Add text content
-		element.textContent = text;
-
-		// Apply Tailwind-like styles directly
-		element.className =
-			"px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
-
-		// Position off-screen
-		element.style.position = "absolute";
-		element.style.top = "-9999px";
-		element.style.left = "-9999px";
-
-		return element;
-	};
-
 	const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
-		if (anyCapSelected || !moveEnabled) return;
+		if (!dragEnabled) return;
 
-		// Set the data transfer
-		e.dataTransfer.setData(
-			"application/cap",
-			JSON.stringify({
-				id: cap.id,
-				name: cap.name,
-			}),
-		);
-
-		// Set drag effect to 'move' to avoid showing the + icon
+		const draggedIds = isSelected ? (selectedIds ?? []) : [];
+		e.dataTransfer.setData(CAP_DRAG_TYPE, serializeCapDrag(cap, draggedIds));
 		e.dataTransfer.effectAllowed = "move";
 
-		// Set the drag image using the helper function
 		try {
-			const dragPreview = createDragPreview(cap.name);
+			const dragPreview = document.createElement("div");
+			dragPreview.textContent =
+				draggedIds.length > 1 ? `${draggedIds.length} Caps` : cap.name;
+			dragPreview.className =
+				"px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
+			dragPreview.style.position = "absolute";
+			dragPreview.style.top = "-9999px";
+			dragPreview.style.left = "-9999px";
 			document.body.appendChild(dragPreview);
 			e.dataTransfer.setDragImage(dragPreview, 10, 10);
-
-			// Clean up after a short delay
-			setTimeout(() => document.body.removeChild(dragPreview), 100);
+			setTimeout(() => dragPreview.remove(), 100);
 		} catch (error) {
 			console.error("Error setting drag image:", error);
 		}
@@ -416,7 +399,7 @@ export const CapCard = ({
 			)}
 			<fieldset
 				aria-label={cap.name}
-				draggable={moveEnabled && !anyCapSelected}
+				draggable={dragEnabled}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
@@ -427,9 +410,7 @@ export const CapCard = ({
 							? "border-blue-10 hover:border-blue-10"
 							: "hover:border-blue-10",
 					isDragging && "opacity-50",
-					moveEnabled &&
-						!anyCapSelected &&
-						"cursor-grab active:cursor-grabbing",
+					dragEnabled && "cursor-grab active:cursor-grabbing",
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
