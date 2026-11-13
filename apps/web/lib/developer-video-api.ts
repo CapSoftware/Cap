@@ -28,6 +28,42 @@ export function developerVideoOutputs(
 	};
 }
 
+export type DeveloperVideoOutputState =
+	| "processing"
+	| "ready"
+	| "failed"
+	| "none";
+
+export interface DeveloperVideoOutputStates {
+	hls: DeveloperVideoOutputState;
+	mp4: DeveloperVideoOutputState;
+}
+
+// A null hlsUrl or mp4Url alone cannot say whether that output is still being
+// encoded or will never exist. "ready" matches a non-null URL exactly. A part
+// waiting for a busy encoder to retry is still "processing". "none" is only
+// for videos uploaded before encoding existed, which never get these outputs.
+export function developerVideoOutputStates(
+	video: Pick<
+		DeveloperVideoRow,
+		"status" | "playbackId" | "processing" | "duration" | "width"
+	>,
+): DeveloperVideoOutputStates {
+	const outputs = developerVideoOutputs(video);
+	const processing = video.processing;
+	const state = (part: "hls" | "mp4"): DeveloperVideoOutputState => {
+		if (outputs[part]) return "ready";
+		if (video.status === "errored") return "failed";
+		if (!processing) {
+			return video.playbackId === null && developerVideoIsReady(video)
+				? "none"
+				: "processing";
+		}
+		return processing[part].state === "failed" ? "failed" : "processing";
+	};
+	return { hls: state("hls"), mp4: state("mp4") };
+}
+
 export function developerPlaybackBaseUrl(): string {
 	const configured = serverEnv().INFRA_PLAYBACK_URL;
 	const base = configured || `${serverEnv().WEB_URL}/api/developer/playback`;
@@ -112,6 +148,7 @@ export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 		...fields,
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
 			: { shareUrl: null, embedUrl: null }),
@@ -146,5 +183,6 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		playbackId: video.playbackId,
 		renditions: video.renditions ?? [],
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 	};
 }

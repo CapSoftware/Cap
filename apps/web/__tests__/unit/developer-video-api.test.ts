@@ -149,8 +149,105 @@ describe("developer video API", () => {
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 			shareUrl: PAGE,
 			embedUrl: `${PAGE}/embed`,
+		});
+	});
+
+	describe("output states", () => {
+		const outputsOf = async (path: string) =>
+			(await get(path)).body.data.outputs;
+		const withParts = (
+			status: "uploading" | "processing" | "ready" | "errored",
+			hls: Record<string, unknown>,
+			mp4: Record<string, unknown>,
+		) => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status,
+				processing: processingState({
+					...base.processing,
+					hls,
+					mp4,
+				} as never),
+			};
+		};
+
+		it("says an MP4 that failed for good will not come on a ready video", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "failed", reason: "encoder refused" },
+			);
+			for (const path of ["/video-1", "/video-1/status"]) {
+				const { body } = await get(path);
+				expect(body.data.hlsUrl).toBe(`${BASE}/master.m3u8`);
+				expect(body.data.mp4Url).toBeNull();
+				expect(body.data.outputs).toEqual({ hls: "ready", mp4: "failed" });
+			}
+		});
+
+		it("says an MP4 still encoding or waiting for a retry is still coming", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "running", token: "t", jobId: null, startedAt: 1 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "unavailable", reason: "busy", retryAt: 2 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+		});
+
+		it("never says ready while the URL is still null", async () => {
+			withParts(
+				"processing",
+				{ state: "complete", output: "hls-out" },
+				{ state: "pending" },
+			);
+			const { body } = await get("/video-1");
+			expect(body.data.hlsUrl).toBeNull();
+			expect(body.data.outputs).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("says nothing is coming for an errored video", async () => {
+			withParts("errored", { state: "pending" }, { state: "pending" });
+			expect(await outputsOf("/video-1/status")).toEqual({
+				hls: "failed",
+				mp4: "failed",
+			});
+		});
+
+		it("reads a video still uploading as processing", async () => {
+			mocks.store.video = { ...ready(), status: "uploading", processing: null };
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("says none for a video uploaded before encoding existed", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "ready",
+				playbackId: null,
+				processing: null,
+			};
+			expect(await outputsOf("/video-1")).toEqual({ hls: "none", mp4: "none" });
 		});
 	});
 
@@ -714,6 +811,7 @@ describe("developer video API", () => {
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 		});
 	});
 
