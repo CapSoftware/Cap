@@ -213,10 +213,11 @@ const disputeRows = (accountId: string | typeof developerCreditAccounts.id) =>
 		]),
 	);
 
-const latestDisputeOrder = [
-	desc(developerCreditTransactions.createdAt),
-	desc(developerCreditTransactions.id),
-] as const;
+const latestDisputeOrder = () =>
+	[
+		desc(developerCreditTransactions.createdAt),
+		desc(developerCreditTransactions.id),
+	] as const;
 
 const disputeAt = (
 	referenceType: string | null | undefined,
@@ -237,7 +238,7 @@ export async function disputedSince(
 		})
 		.from(developerCreditTransactions)
 		.where(disputeRows(accountId))
-		.orderBy(...latestDisputeOrder)
+		.orderBy(...latestDisputeOrder())
 		.limit(1);
 	return disputeAt(latest?.referenceType, latest?.createdAt);
 }
@@ -262,7 +263,7 @@ export async function readStandingAccount(
 			.select({ value: column })
 			.from(developerCreditTransactions)
 			.where(disputeRows(developerCreditAccounts.id))
-			.orderBy(...latestDisputeOrder)
+			.orderBy(...latestDisputeOrder())
 			.limit(1)})`;
 	const [row] = await executor
 		.select({
