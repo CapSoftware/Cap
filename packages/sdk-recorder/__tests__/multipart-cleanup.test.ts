@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { MultipartClient } from "../src/upload/multipart-client";
+import { CHUNK_SIZE, MultipartClient } from "../src/upload/multipart-client";
 
 const originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
-const chunkBytes = 5 * 1024 * 1024;
+const chunkBytes = CHUNK_SIZE;
 const client = () =>
 	new MultipartClient("https://api.example.test", "fixture-key");
 const setFetch = (
@@ -259,7 +259,7 @@ test("preserves successful multi-batch bytes, completion parts and progress", as
 		contentType: "video/mp4",
 		contentLength: 3 * chunkBytes + 123,
 	});
-	expect(progress).toEqual([0.75, 1]);
+	expect(progress).toEqual([0.25, 0.5, 0.75, 1]);
 	expect(completion).toEqual({
 		videoId: "video",
 		uploadId: "upload",
@@ -370,6 +370,36 @@ test("signs exactly the parts a file has when it fills whole batches", async () 
 	expect(server.uploaded).toHaveLength(50);
 });
 
+const highestPartWithin = (maxBytes: number) =>
+	Math.max(1, Math.ceil(maxBytes / chunkBytes));
+
+test.each([
+	1,
+	chunkBytes - 1,
+	chunkBytes,
+	chunkBytes + 1,
+	3 * chunkBytes,
+	3 * chunkBytes + 1,
+	50 * chunkBytes,
+	50 * chunkBytes + 1,
+	120 * chunkBytes + 7,
+])(
+	"never asks to sign a part past the last one a size cap of %i bytes allows",
+	async (size) => {
+		const server = batchUploadServer();
+
+		await client().uploadBlob("video", sizedBlob(size));
+
+		const asked = server.signed.flat();
+		expect(Math.min(...asked)).toBe(1);
+		expect(Math.max(...asked)).toBe(highestPartWithin(size));
+		expect(server.uploaded.toSorted((a, b) => a - b)).toEqual(
+			range(1, highestPartWithin(size)),
+		);
+		expect(server.aborted()).toBe(0);
+	},
+);
+
 test("signs the remaining parts again once the signed URLs are 30 minutes old", async () => {
 	const nowDescriptor = Object.getOwnPropertyDescriptor(Date, "now");
 	let now = 1_000_000;
@@ -378,15 +408,15 @@ test("signs the remaining parts again once the signed URLs are 30 minutes old", 
 	try {
 		await client().uploadBlob("video", sizedBlob(9 * chunkBytes), {
 			onProgress: (progress) => {
-				if (progress === 3 / 9) now += 30 * 60 * 1000;
-				if (progress === 6 / 9) now += 30 * 60 * 1000 + 1;
+				if (progress === 1 / 9) now += 30 * 60 * 1000;
+				if (progress === 2 / 9) now += 30 * 60 * 1000 + 1;
 			},
 		});
 	} finally {
 		if (nowDescriptor) Object.defineProperty(Date, "now", nowDescriptor);
 	}
 
-	expect(server.signed).toEqual([range(1, 9), range(7, 9)]);
+	expect(server.signed).toEqual([range(1, 9), range(8, 9)]);
 	expect(server.uploaded.toSorted((a, b) => a - b)).toEqual(range(1, 9));
 	expect(server.aborted()).toBe(0);
 });

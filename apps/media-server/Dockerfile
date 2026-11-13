@@ -10,7 +10,8 @@ COPY apps/media-server/package.json apps/media-server/bun.lock ./
 COPY apps/media-server/patches ./patches
 RUN bun install --frozen-lockfile --production
 # The build stops here if the parser limits in patches/ were not applied.
-RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
+RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js \
+	&& grep -q PCM_CHUNK_SPAN_LIMIT node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
 
 COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
@@ -35,7 +36,9 @@ RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/au
 	&& bun test src/__tests__/routes/peer-jobs.test.ts \
 	&& bun test src/__tests__/lib/live-transcribe.test.ts src/__tests__/routes/live-transcribe.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
-	&& bun test src/__tests__/lib/media-video.integration.test.ts
+	&& bun test src/__tests__/lib/media-video.integration.test.ts \
+	&& bun test src/__tests__/lib/isolated-worker-pool.test.ts src/__tests__/lib/media-probe-hardening.test.ts src/__tests__/lib/process-hardening.test.ts \
+	&& bun test src/__tests__/routes/thumbnail-remote.test.ts src/__tests__/routes/health.test.ts
 
 RUN MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 bun test \
 	src/__tests__/lib/recording-verification.integration.test.ts \
@@ -51,4 +54,10 @@ EXPOSE 3456
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then(async (response) => process.exit(response.ok || (await response.json().catch(() => ({}))).status === 'draining' ? 0 : 1)).catch(() => process.exit(1))"]
 
+# The container starts as root only to hand its temp and GPU cache volumes
+# and the GPU devices to the bun user; the entrypoint then runs the server,
+# and every FFmpeg it starts, as that user. See docker-entrypoint.sh.
+COPY apps/media-server/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod 755 ./docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]

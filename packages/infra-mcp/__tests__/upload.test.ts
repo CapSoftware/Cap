@@ -39,6 +39,26 @@ const restCalls = () =>
 		request.path.startsWith("/api/developer/v1/"),
 	);
 
+describe("unsupported formats", () => {
+	it("refuses an AVI file locally with the supported formats before calling the API", async () => {
+		const file = await files.write("lesson.avi", 20_000);
+		const refused = await session.call("videos_upload", { path: file.path });
+
+		expect(refused.isError).toBe(true);
+		expect(refused.body).toMatchObject({
+			error: {
+				code: "unsupported_format",
+				message: "lesson.avi is not a format Cap Infra can play",
+			},
+		});
+		expect(JSON.stringify(refused.body)).toContain(
+			"MP4, MOV, MKV and WebM files with H.264, HEVC, VP8, VP9, AV1, ProRes, MPEG-4 or Motion JPEG video",
+		);
+		expect(restCalls()).toHaveLength(0);
+		expect(stub.videos.size).toBe(0);
+	});
+});
+
 describe("multipart upload", () => {
 	it("sends 127 parts with their links asked for 50 at a time", async () => {
 		const file = await files.write("long.mp4", 129_500);

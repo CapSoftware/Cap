@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	formatAudioLength,
+	formatBalanceCents,
 	formatBytes,
 	formatCharge,
 	formatCredits,
 	formatDuration,
+	formatDurationOrDash,
 	summarizeStorageMonth,
 	utcDaysAgoKey,
 	utcMonthStart,
@@ -102,5 +105,58 @@ describe("formatting", () => {
 		expect(formatDuration(null)).toBeNull();
 		expect(formatDuration(65.4)).toBe("1:05");
 		expect(formatDuration(3723)).toBe("1:02:03");
+	});
+});
+
+describe("formatAudioLength", () => {
+	it("shows seconds under a minute so a small charge never reads as 0 hours", () => {
+		expect(formatAudioLength(12)).toBe("12 audio seconds");
+		expect(formatAudioLength(1)).toBe("1 audio second");
+	});
+
+	it("shows minutes under an hour", () => {
+		expect(formatAudioLength(270)).toBe("4.5 audio minutes");
+		expect(formatAudioLength(60)).toBe("1 audio minute");
+		expect(formatAudioLength(2_400)).toBe("40 audio minutes");
+	});
+
+	it("shows hours from one hour up", () => {
+		expect(formatAudioLength(3_600)).toBe("1 audio hour");
+		expect(formatAudioLength(5_400)).toBe("1.5 audio hours");
+		expect(formatAudioLength(54_000)).toBe("15 audio hours");
+	});
+
+	it("reads zero as minutes", () => {
+		expect(formatAudioLength(0)).toBe("0 audio minutes");
+	});
+});
+
+describe("formatDurationOrDash", () => {
+	it("shows a dash when nothing was measured", () => {
+		expect(formatDurationOrDash(null)).toBe("–");
+		expect(formatDurationOrDash(undefined)).toBe("–");
+	});
+
+	it("shows a measured length as minutes and seconds", () => {
+		expect(formatDurationOrDash(120)).toBe("2:00");
+	});
+});
+
+describe("formatBalanceCents", () => {
+	it("rounds down to whole cents so it never shows more than the balance", () => {
+		expect(formatBalanceCents(999_816)).toBe("$9.99");
+		expect(formatBalanceCents(9_998_160)).toBe("$99.98");
+	});
+
+	it("shows a positive balance under a cent as under a cent", () => {
+		expect(formatBalanceCents(999)).toBe("<$0.01");
+	});
+
+	it("shows zero as zero", () => {
+		expect(formatBalanceCents(0)).toBe("$0.00");
+	});
+
+	it("groups thousands", () => {
+		expect(formatBalanceCents(123_456_789_000)).toBe("$1,234,567.89");
 	});
 });

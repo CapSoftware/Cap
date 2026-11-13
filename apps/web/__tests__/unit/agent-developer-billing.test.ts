@@ -9,10 +9,13 @@ vi.mock("@/lib/infra-standing", () => ({
 	infraBillingJson: (billing: unknown) => ({ json: billing }),
 }));
 
+import { Agent } from "@cap/web-domain";
+import { Schema } from "effect";
 import {
 	BILLING_ACCESS_HINT,
 	developerAppBillingSection,
 } from "@/lib/agent-developer-billing";
+import { developerOpenApiSpec } from "@/lib/developer-openapi";
 
 const credits = {
 	balanceMicroCredits: 500_000,
@@ -57,6 +60,37 @@ describe("billing data in the developer app context", () => {
 		expect((await section(["developer:read", "billing:write"])).billing).toBe(
 			null,
 		);
+	});
+
+	it("returns the same storage fields as GET /usage", () => {
+		const tiers = { "1080p": 87.5, "1440p": 0, "2160p": 0 };
+		const restStorage =
+			developerOpenApiSpec("https://cap.so").components.schemas.Usage.properties
+				.storage;
+		const storage = Object.fromEntries(
+			restStorage.required.map((field: string) => [
+				field,
+				field.endsWith("ByTier") ? tiers : 170,
+			]),
+		);
+		const billing = Schema.encodeSync(
+			Agent.AgentDeveloperAppContextResponse.fields.billing,
+		)({
+			standing: { state: "active", pausesAt: null },
+			upload: {
+				allowed: true,
+				reason: null,
+				requiredMicroCredits: 1190,
+				shortfallMicroCredits: 0,
+				message: null,
+			},
+			storage: storage as never,
+		});
+
+		expect(Object.keys(billing?.storage ?? {}).sort()).toEqual(
+			[...restStorage.required].sort(),
+		);
+		expect(restStorage.required).toContain("dailyChargeMinutesByTier");
 	});
 
 	it("is the only way the app context handler returns credits or billing", () => {

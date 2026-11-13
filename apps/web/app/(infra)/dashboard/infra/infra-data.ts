@@ -3,6 +3,7 @@ import {
 	getCurrentUser,
 	type userSelectProps,
 } from "@cap/database/auth/session";
+import { developerVideoTakenDownSql } from "@cap/database/developer-video-takedown";
 import {
 	developerApiKeys,
 	developerApps,
@@ -12,7 +13,17 @@ import {
 	developerVideos,
 	organizations,
 } from "@cap/database/schema";
-import { and, count, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	gt,
+	gte,
+	inArray,
+	isNull,
+	sql,
+} from "drizzle-orm";
 import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -21,9 +32,12 @@ import { exactUserIdMatch } from "@/lib/developer-user-scope";
 import {
 	developerVideoPageUrls,
 	developerVideoPlaybackUrls,
+	developerVideoReportedDuration,
 } from "@/lib/developer-video-api";
+import { developerVideoCaptionTracks } from "@/lib/developer-video-captions";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
+import { developerVideoIsTakenDown } from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
 import { hasClaimedProCredit, nextProCreditDate } from "@/lib/infra-pro-credit";
 import { proCreditEligibility } from "@/lib/infra-pro-credit-eligibility";
@@ -137,9 +151,11 @@ export async function getDeveloperAppVideos(
 			width: developerVideos.width,
 			createdAt: developerVideos.createdAt,
 			status: developerVideos.status,
+			processing: developerVideos.processing,
 			legacy: sql<
 				number | string
 			>`(${developerVideos.playbackId} IS NULL AND ${developerVideos.processing} IS NULL)`,
+			takenDown: developerVideoTakenDownSql(),
 		})
 		.from(developerVideos)
 		.where(and(...conditions))
@@ -148,7 +164,11 @@ export async function getDeveloperAppVideos(
 		.offset(options?.offset ?? 0);
 
 	return rows.map((row) =>
-		toInfraVideoListItem({ ...row, legacy: Number(row.legacy) === 1 }),
+		toInfraVideoListItem({
+			...row,
+			reportedDuration: developerVideoReportedDuration(row),
+			legacy: Number(row.legacy) === 1,
+		}),
 	);
 }
 
@@ -169,6 +189,7 @@ async function findDeveloperAppVideo(appId: string, videoId: string) {
 			renditions: developerVideos.renditions,
 			playbackId: developerVideos.playbackId,
 			processing: developerVideos.processing,
+			metadata: developerVideos.metadata,
 		})
 		.from(developerVideos)
 		.where(
@@ -195,11 +216,23 @@ export const getDeveloperAppVideo = cache(
 		) {
 			row = (await findDeveloperAppVideo(appId, videoId)) ?? row;
 		}
-		return toInfraVideoDetail(
-			{ ...row, legacy: row.playbackId === null && row.processing === null },
+		const detail = toInfraVideoDetail(
+			{
+				...row,
+				reportedDuration: developerVideoReportedDuration(row),
+				legacy: row.playbackId === null && row.processing === null,
+				takenDown: developerVideoIsTakenDown(row),
+			},
 			developerVideoPlaybackUrls(row),
 			row.playbackId ? developerVideoPageUrls(row.playbackId) : null,
 		);
+		if (detail.state !== "ready" || (!detail.hlsUrl && !detail.mp4Url)) {
+			return detail;
+		}
+		return {
+			...detail,
+			captions: await developerVideoCaptionTracks({ ...row, appId }),
+		};
 	},
 );
 
@@ -344,10 +377,39 @@ export async function getInfraStorageChargesSince(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "storage_daily"),
+				inArray(developerCreditTransactions.type, [
+					"storage_daily",
+					"video_create",
+				]),
 				gte(developerCreditTransactions.createdAt, since),
 			),
 		);
 
 	return Number(row?.total ?? 0) || 0;
+}
+
+export async function getInfraFirstMonthChargesSince(
+	accountId: string,
+	since: Date,
+) {
+	const [row] = await db()
+		.select({
+			total: sql<
+				string | number | null
+			>`COALESCE(SUM(-${developerCreditTransactions.amountMicroCredits}), 0)`,
+			videos: count(),
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				eq(developerCreditTransactions.type, "video_create"),
+				gte(developerCreditTransactions.createdAt, since),
+			),
+		);
+
+	return {
+		chargedMicroCredits: Number(row?.total ?? 0) || 0,
+		videos: Number(row?.videos ?? 0) || 0,
+	};
 }

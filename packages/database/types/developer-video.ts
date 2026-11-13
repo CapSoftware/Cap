@@ -57,6 +57,12 @@ export interface DeveloperVideoProcessingState {
 	mp4: DeveloperVideoPartState;
 	attempts: Record<DeveloperVideoPart, number>;
 	lostJobs?: Partial<Record<DeveloperVideoPart, number>>;
+	// When every worker last answered busy to a start of this encode.
+	busyAt?: number;
+	// When the video became ready with an output still encoding. video.ready
+	// is sent, and this removed, once the outputs settle. A video that became
+	// ready without it was already announced, by this code or by older code.
+	readyEventDueAt?: number;
 	unavailableChecks: number;
 	poster: { output: string } | null;
 	bytes: {
@@ -66,3 +72,7 @@ export interface DeveloperVideoProcessingState {
 		poster: number;
 	};
 }
+
+// A video Cap staff took down keeps its own metadata under this key. See
+// developer-video-takedown.ts for why the flag lives in metadata.
+export const DEVELOPER_VIDEO_TAKEDOWN_KEY = "__capTakedown";

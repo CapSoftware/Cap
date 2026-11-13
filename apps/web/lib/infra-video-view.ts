@@ -1,10 +1,18 @@
-export type InfraVideoState = "uploading" | "processing" | "ready" | "failed";
+import { embedAccentColor } from "./developer-video-params";
+
+export type InfraVideoState =
+	| "uploading"
+	| "processing"
+	| "ready"
+	| "failed"
+	| "taken_down";
 
 export const INFRA_VIDEO_STATE_LABELS: Record<InfraVideoState, string> = {
 	uploading: "Uploading",
 	processing: "Processing",
 	ready: "Ready",
 	failed: "Failed",
+	taken_down: "Taken down",
 };
 
 export type InfraLocalUpload = "sending" | "sent" | null;
@@ -76,6 +84,12 @@ export type InfraVideoSize = {
 	bytes: number;
 };
 
+export type InfraVideoCaption = {
+	language: string;
+	label: string;
+	url: string;
+};
+
 export type InfraVideoDetail = InfraVideoListItem & {
 	width: number | null;
 	height: number | null;
@@ -88,11 +102,13 @@ export type InfraVideoDetail = InfraVideoListItem & {
 	shareUrl: string | null;
 	embedCode: string | null;
 	stillEncoding: boolean;
+	captions: InfraVideoCaption[];
 };
 
 type StateInput = {
 	status: string;
 	legacy: boolean;
+	takenDown: boolean;
 	duration: number | null;
 	width: number | null;
 };
@@ -100,6 +116,7 @@ type StateInput = {
 // Mirrors developerVideoIsReady: a video uploaded before encoding existed has
 // no playback id and no processing state, and is ready once it was measured.
 export function infraVideoState(video: StateInput): InfraVideoState {
+	if (video.takenDown) return "taken_down";
 	if (video.status === "ready") return "ready";
 	if (video.legacy && video.duration !== null && video.width !== null) {
 		return "ready";
@@ -137,6 +154,7 @@ type ListRow = StateInput & {
 	name: string;
 	externalUserId: string | null;
 	createdAt: Date;
+	reportedDuration?: number | null;
 };
 
 export function toInfraVideoListItem(row: ListRow): InfraVideoListItem {
@@ -144,7 +162,8 @@ export function toInfraVideoListItem(row: ListRow): InfraVideoListItem {
 		id: row.id,
 		name: row.name,
 		externalUserId: row.externalUserId,
-		duration: row.duration,
+		duration:
+			row.reportedDuration === undefined ? row.duration : row.reportedDuration,
 		createdAt: row.createdAt,
 		state: infraVideoState(row),
 	};
@@ -171,9 +190,44 @@ const escapeAttribute = (value: string) =>
 		.replaceAll("<", "&lt;")
 		.replaceAll(">", "&gt;");
 
+export interface InfraEmbedOptions {
+	color: string | null;
+	controls: boolean;
+	autoplay: boolean;
+	captions: boolean;
+	qualityMenu: boolean;
+}
+
+export const DEFAULT_EMBED_OPTIONS: InfraEmbedOptions = {
+	color: null,
+	controls: true,
+	autoplay: false,
+	captions: false,
+	qualityMenu: true,
+};
+
+export function infraVideoEmbedUrl(
+	embedUrl: string,
+	options: InfraEmbedOptions = DEFAULT_EMBED_OPTIONS,
+): string {
+	const query = new URLSearchParams();
+	const color = embedAccentColor(options.color ?? undefined);
+	if (color) query.set("color", color.slice(1));
+	if (!options.controls) query.set("controls", "0");
+	if (options.autoplay) {
+		query.set("autoplay", "1");
+		query.set("muted", "1");
+	}
+	if (options.captions) query.set("captions", "1");
+	if (!options.qualityMenu) query.set("quality_menu", "0");
+	const search = query.toString();
+	return search ? `${embedUrl}?${search}` : embedUrl;
+}
+
 export function infraVideoEmbedCode(
 	embedUrl: string,
 	video: { name: string; width: number | null; height: number | null },
+	options: InfraEmbedOptions = DEFAULT_EMBED_OPTIONS,
 ): string {
 	const measured =
 		video.width !== null &&
@@ -181,7 +235,7 @@ export function infraVideoEmbedCode(
 		video.width > 0 &&
 		video.height > 0;
 	const shape = measured ? `${video.width} / ${video.height}` : "16 / 9";
-	return `<iframe src="${escapeAttribute(embedUrl)}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>`;
+	return `<iframe src="${escapeAttribute(infraVideoEmbedUrl(embedUrl, options))}" title="${escapeAttribute(video.name)}" style="width: 100%; aspect-ratio: ${shape}; border: 0" allow="autoplay" allowfullscreen loading="lazy"></iframe>`;
 }
 
 export function toInfraVideoDetail(
@@ -194,7 +248,8 @@ export function toInfraVideoDetail(
 	page: { shareUrl: string; embedUrl: string } | null = null,
 ): InfraVideoDetail {
 	const item = toInfraVideoListItem(row);
-	const shared = page !== null && item.state !== "failed";
+	const shared =
+		page !== null && item.state !== "failed" && item.state !== "taken_down";
 	return {
 		...item,
 		width: row.width,
@@ -219,6 +274,7 @@ export function toInfraVideoDetail(
 			[row.processing.hls, row.processing.mp4].some((part) =>
 				UNFINISHED_PARTS.has(part.state),
 			),
+		captions: [],
 	};
 }
 

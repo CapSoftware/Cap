@@ -1905,6 +1905,7 @@ export const developerVideos = mysqlTable(
 		storedBytes: bigint("storedBytes", { mode: "number", unsigned: true }),
 		errorReason: varchar("errorReason", { length: 512 }),
 		processing: json("processing").$type<DeveloperVideoProcessingState>(),
+		storagePaidUntil: timestamp("storagePaidUntil"),
 		deletedAt: timestamp("deletedAt"),
 		filesDeletedAt: timestamp("filesDeletedAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1916,6 +1917,22 @@ export const developerVideos = mysqlTable(
 		index("app_deleted_idx").on(table.appId, table.deletedAt),
 		uniqueIndex("playback_id_idx").on(table.playbackId),
 		index("files_pending_idx").on(table.filesDeletedAt, table.deletedAt),
+		index("app_storage_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.status,
+			table.maxResolutionTier,
+			table.width,
+			table.height,
+			table.storagePaidUntil,
+			table.duration,
+			table.createdAt,
+		),
+		index("first_month_due_idx").on(
+			table.storagePaidUntil,
+			table.status,
+			table.createdAt,
+		),
 	],
 );
 
@@ -1926,7 +1943,7 @@ export type DeveloperTranscriptStatus =
 	| "complete"
 	| "error";
 
-export type DeveloperTranscriptSourceType = "upload" | "url";
+export type DeveloperTranscriptSourceType = "upload" | "url" | "video";
 
 export const developerTranscripts = mysqlTable(
 	"developer_transcripts",
@@ -1945,11 +1962,13 @@ export const developerTranscripts = mysqlTable(
 			.$type<DeveloperTranscriptStatus>(),
 		sourceType: varchar("sourceType", {
 			length: 8,
-			enum: ["upload", "url"],
+			enum: ["upload", "url", "video"],
 		})
 			.notNull()
 			.$type<DeveloperTranscriptSourceType>(),
 		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		videoId: nanoIdNullable("videoId"),
+		requestedAt: timestamp("requestedAt", { fsp: 3 }),
 		s3Key: varchar("s3Key", { length: 512 }),
 		resultKey: varchar("resultKey", { length: 512 }),
 		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
@@ -2015,6 +2034,12 @@ export const developerTranscripts = mysqlTable(
 			table.createdAt,
 			table.deletedAt,
 			table.reservedMicroCredits,
+		),
+		index("dev_transcripts_app_video_idx").on(
+			table.appId,
+			table.videoId,
+			table.requestedAt,
+			table.id,
 		),
 	],
 );
@@ -2170,6 +2195,42 @@ export const developerDailyStorageSnapshots = mysqlTable(
 	(table) => [unique("app_date_unique").on(table.appId, table.snapshotDate)],
 );
 
+export const developerWebhookEndpoints = mysqlTable(
+	"developer_webhook_endpoints",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		appId: nanoId("appId")
+			.notNull()
+			.references(() => developerApps.id),
+		url: varchar("url", { length: 2048 }).notNull(),
+		secretPrefix: varchar("secretPrefix", { length: 12 }).notNull(),
+		encryptedSecret: encryptedText("encryptedSecret").notNull(),
+		events: json("events").notNull().$type<string[]>(),
+		enabled: boolean("enabled").notNull().default(true),
+		disabledReason: varchar("disabledReason", { length: 32 }),
+		lastDeliveryAt: timestamp("lastDeliveryAt"),
+		lastDeliveryStatus: varchar("lastDeliveryStatus", {
+			length: 16,
+			enum: ["succeeded", "failed"],
+		}),
+		lastResponseStatus: int("lastResponseStatus"),
+		lastErrorCode: varchar("lastErrorCode", { length: 32 }),
+		consecutiveFailures: int("consecutiveFailures").notNull().default(0),
+		failingSince: timestamp("failingSince"),
+		deletedAt: timestamp("deletedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		index("dev_webhooks_app_list_idx").on(
+			table.appId,
+			table.deletedAt,
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
 export const developerAppsRelations = relations(
 	developerApps,
 	({ one, many }) => ({
@@ -2258,6 +2319,16 @@ export const developerDailyStorageSnapshotsRelations = relations(
 	({ one }) => ({
 		app: one(developerApps, {
 			fields: [developerDailyStorageSnapshots.appId],
+			references: [developerApps.id],
+		}),
+	}),
+);
+
+export const developerWebhookEndpointsRelations = relations(
+	developerWebhookEndpoints,
+	({ one }) => ({
+		app: one(developerApps, {
+			fields: [developerWebhookEndpoints.appId],
 			references: [developerApps.id],
 		}),
 	}),

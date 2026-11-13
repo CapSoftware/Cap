@@ -237,4 +237,36 @@ describe("sharing dialog viewer invitations", () => {
 		expect(mocks.toast.error).toHaveBeenCalledWith("Unable to invite viewer");
 		expectNoSuccessEffects();
 	});
+
+	it("keeps unsaved edits when the page refreshes, and resets on reopen", async () => {
+		const renderOpen = (isOpen: boolean) =>
+			act(async () => {
+				root.render(
+					createElement(
+						QueryClientProvider,
+						{ client: queryClient },
+						createElement(SharingDialog, {
+							isOpen,
+							onClose: vi.fn(),
+							capId: Video.VideoId.make("video-id"),
+							capName: "Test video",
+							sharedSpaces: [],
+							onSharingUpdated: vi.fn(),
+							isPublic: false,
+						}),
+					),
+				);
+			});
+		await render();
+		await enterEmail("someone@example.com");
+
+		await renderOpen(true);
+		await flushUpdates();
+		expect(emailInput().value).toBe("someone@example.com");
+
+		await renderOpen(false);
+		await renderOpen(true);
+		await flushUpdates();
+		expect(emailInput().value).toBe("");
+	});
 });
