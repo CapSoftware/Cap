@@ -1165,6 +1165,8 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 							"auto_top_up",
 							"auto_top_up_failed",
 							"auto_top_up_pending",
+							"stripe_refund",
+							"stripe_dispute",
 							null,
 						],
 						description: "What referenceId identifies.",

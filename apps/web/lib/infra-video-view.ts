@@ -112,6 +112,7 @@ export function infraVideoState(video: StateInput): InfraVideoState {
 const ABOUT_THE_FILE =
 	/^(This (file|video) |The uploaded file |Video is longer than )/;
 const ABOUT_CREDIT = /^Not enough credit /;
+const ABOUT_A_DISPUTE = /^A payment for this app /;
 
 export const INFRA_VIDEO_FAILURE_FALLBACK =
 	"This video could not be processed. Upload it again, or export it as an MP4 and upload that.";
@@ -124,7 +125,9 @@ export const INFRA_VIDEO_PUBLIC_FAILURE = "This video is not available.";
 // the owner gets only the sentences written for customers.
 export function infraVideoFailure(reason: string | null | undefined): string {
 	const text = reason?.trim() ?? "";
-	return ABOUT_THE_FILE.test(text) || ABOUT_CREDIT.test(text)
+	return ABOUT_THE_FILE.test(text) ||
+		ABOUT_CREDIT.test(text) ||
+		ABOUT_A_DISPUTE.test(text)
 		? text
 		: INFRA_VIDEO_FAILURE_FALLBACK;
 }

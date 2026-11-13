@@ -73,6 +73,8 @@ vi.mock("@cap/database", () => ({
 }));
 
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "txn" }));
+vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
+vi.mock("@cap/utils", () => ({ stripe: () => ({}), userIsPro: () => true }));
 vi.mock("@cap/database/schema", () => ({
 	users: { table: "users", id: "id" },
 	developerCreditAccounts: {
@@ -155,7 +157,10 @@ describe("Cap Pro monthly Infra credit", () => {
 
 	it("refuses a second claim in the same month, even for another app", async () => {
 		await claim();
-		expect(await claim(november, "account-2")).toEqual({ claimed: false });
+		expect(await claim(november, "account-2")).toEqual({
+			claimed: false,
+			reason: "already_claimed",
+		});
 		expect(state.balance).toBe(500_000);
 	});
 
