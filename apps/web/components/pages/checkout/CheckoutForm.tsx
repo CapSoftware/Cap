@@ -33,7 +33,7 @@ import {
 import { Segmented } from "@/components/pages/pricing/controls";
 import { homepageCopy } from "@/data/homepage-copy";
 import type { CheckoutPlan } from "@/lib/checkout/plans";
-import { formatUsEin } from "@/lib/checkout/us-ein";
+import { formatUsEin, usEinChange } from "@/lib/checkout/us-ein";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import {
 	CARD,
@@ -628,6 +628,7 @@ function PaymentForm({
 	const einId = useId();
 	const [ein, setEin] = useState("");
 	const [appliedEin, setAppliedEin] = useState<string | null>(null);
+	const [einSaveUnconfirmed, setEinSaveUnconfirmed] = useState(false);
 	const [einError, setEinError] = useState<string | null>(null);
 	const [addressCountry, setAddressCountry] = useState(
 		checkout.billingAddress?.address.country ?? null,
@@ -672,26 +673,28 @@ function PaymentForm({
 	};
 
 	const applyUsEin = async () => {
-		const value = usCompany ? ein.trim() : "";
-		const formatted = value ? formatUsEin(value) : null;
-		if (value && !formatted) {
+		const change = usEinChange({
+			ein,
+			usCompany,
+			appliedEin,
+			saveUnconfirmed: einSaveUnconfirmed,
+		});
+		if (change.state === "invalid") {
 			setEinError("Enter your EIN as 9 digits, like 12-3456789.");
 			return false;
 		}
-		if (
-			usCompany ? formatted !== null && formatted === appliedEin : !appliedEin
-		) {
-			return true;
-		}
+		if (change.state === "unchanged") return true;
 		const result = await setProCheckoutUsEin({
 			clientSecret: await clientSecret,
-			ein: formatted ?? "",
+			ein: change.ein ?? "",
 		});
 		if (!result.ok) {
+			setEinSaveUnconfirmed(true);
 			setError("Couldn't save your EIN. Please try again.");
 			return false;
 		}
-		setAppliedEin(formatted);
+		setEinSaveUnconfirmed(false);
+		setAppliedEin(change.ein);
 		return true;
 	};
 

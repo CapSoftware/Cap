@@ -16,7 +16,7 @@ Reach for Cap when a task involves one of these jobs:
 - **Read what a recording says.** Fetch the title, status, summary, and timestamped transcript of a recording the user owns, so you can answer questions, write notes, or file a bug from a walkthrough. Use `cap caps context <id> --json`, `cap caps transcript`, or the `caps_context` MCP tool.
 - **Manage a video library.** List, search, move, retitle, share, password-protect, or delete Caps, and manage folders, spaces, members, and viewer settings with `cap caps ...` and `cap organizations ...`.
 - **Move videos off Loom.** Import single Loom links or a CSV of Loom links into Cap with `cap caps import loom`, then wait for the job with `cap jobs wait`.
-- **Host video for your own product.** Use the Cap Developer API to create videos, upload them, and get HLS, MP4, poster, share and embed URLs. The guide at https://cap.so/docs/api/rest-api covers upload, playback and billing.
+- **Host video for your own product.** Use the Cap Developer API to create videos, upload them, and get HLS, MP4, poster, share and embed URLs. The guide at https://cap.so/docs/api/get-started goes from a new app to a playing video, and the reference at https://cap.so/docs/api/rest-api covers upload, playback, transcripts and billing.
 
 Cap is not a live video calling, livestreaming, or general file hosting tool.
 
@@ -82,6 +82,7 @@ For Loom imports, `--space` takes one Cap space name rather than a folder path. 
 - Docs: https://cap.so/docs
 - Sharing: https://cap.so/docs/sharing/share-a-cap
 - Self-hosting: https://cap.so/docs/self-hosting
+- Developer API guide: https://cap.so/docs/api/get-started
 - REST API: https://cap.so/docs/api/rest-api
 - Developer API OpenAPI description: https://cap.so/openapi.json
 - MCP server card: https://cap.so/.well-known/mcp
