@@ -57,7 +57,24 @@ export function revokeKey(key: string) {
 
 export const removeKey = (key: string) => state.keys.set(keyIdOf(key), null);
 
+const revokedTime = (revokedAt: string) =>
+	Date.parse(`${revokedAt.replace(" ", "T")}Z`);
+
 async function answer(query: string, params: unknown[]) {
+	if (
+		query.includes("from `developer_api_keys`") &&
+		query.includes("`developer_api_keys`.`revokedAt` > ?")
+	) {
+		const [appId, , since] = params;
+		const sinceTime = new Date(since as Date | string).getTime();
+		const revoked = [...state.keys.entries()].find(
+			([, key]) =>
+				key?.appId === appId &&
+				key.revokedAt !== null &&
+				revokedTime(key.revokedAt) > sinceTime,
+		);
+		return { rows: revoked ? [[revoked[0]]] : [] };
+	}
 	if (query.includes("from `developer_api_keys`")) {
 		const key = String(params[0]).replace("hash:", "");
 		const [prefix = "", appId = ""] = key.split("_");

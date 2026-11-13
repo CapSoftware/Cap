@@ -10,7 +10,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Context, Next } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
@@ -32,6 +32,7 @@ import {
 	isDeveloperPublicKey,
 	missingUploadTokenRefusal,
 	publicKeyRefusal,
+	UPLOAD_TOKEN_MAX_SECONDS,
 	UPLOAD_TOKEN_PREFIX,
 	uploadTokenRefusal,
 	verifyDeveloperUploadToken,
@@ -323,10 +324,22 @@ export const withDeveloperUploadToken = createMiddleware<{
 	}
 
 	if (keyId === undefined) {
-		return c.json(uploadTokenRefusal("expired"), 401);
-	}
-
-	if (video.keyId === null || video.keyRevokedAt) {
+		const [revoked] = await db()
+			.select({ id: developerApiKeys.id })
+			.from(developerApiKeys)
+			.where(
+				and(
+					eq(developerApiKeys.appId, appId),
+					eq(developerApiKeys.keyType, "secret"),
+					gt(
+						developerApiKeys.revokedAt,
+						new Date(check.token.expiresAt - UPLOAD_TOKEN_MAX_SECONDS * 1000),
+					),
+				),
+			)
+			.limit(1);
+		if (revoked) return c.json(uploadTokenRefusal("rotated"), 401);
+	} else if (video.keyId === null || video.keyRevokedAt) {
 		return c.json(uploadTokenRefusal("rotated"), 401);
 	}
 
