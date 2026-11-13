@@ -257,6 +257,19 @@ describe("developer video API", () => {
 			}
 		});
 
+		it("reports no duration when a length measured at upload was never confirmed by processing", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "errored",
+				errorReason: "Processing took too long. Upload the video again.",
+				duration: 60,
+				processing: null,
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
 		it("keeps the measured duration of a video that failed after it was measured", async () => {
 			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
 			for (const path of ["/video-1", "/video-1/status"]) {

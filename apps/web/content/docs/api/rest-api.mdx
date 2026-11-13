@@ -1454,7 +1454,7 @@ The full video object returned by list and get endpoints:
 | `appId` | string | The developer app that owns this video |
 | `externalUserId` | string \| null | Your external user identifier |
 | `name` | string | Video display name |
-| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again if the video failed before it could be measured |
+| `duration` | number \| null | Duration in seconds (null until upload completes). Holds the submitted value at first and the measured value once processing has read the file. Null again for a failed video that processing had not measured yet, even if a length was reported when the upload completed |
 | `width` | number \| null | Measured source width in pixels (null until upload completes) |
 | `height` | number \| null | Measured source height in pixels (null until upload completes) |
 | `fps` | number \| null | Measured frames per second (null until upload completes) |

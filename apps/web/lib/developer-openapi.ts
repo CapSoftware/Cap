@@ -345,7 +345,7 @@ const developerVideoSchema = {
 		duration: {
 			type: ["number", "null"],
 			description:
-				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a video that failed before it could be measured.",
+				"Duration in seconds. Set when the upload completes and replaced by the measured value during processing. Null for a failed video that processing had not measured yet, even if a length was reported when the upload completed.",
 		},
 		width: {
 			type: ["integer", "null"],

@@ -64,9 +64,11 @@ export function developerVideoOutputStates(
 	return { hls: state("hls"), mp4: state("mp4") };
 }
 
-// Until a video is measured, its stored duration is only the length the
-// upload declared, held to what its size allows. A video that failed before
-// it could be measured never gets a real one, so it reports none.
+// A failed video reports only a length that processing measured. Before that,
+// the stored duration came from the upload: the length the client declared,
+// held to what the file's size allows, or a measurement taken at upload. A
+// video processing refused or never reached reports none, so a client never
+// reads a length for a file that may not be a video at all.
 export function developerVideoReportedDuration(
 	video: Pick<DeveloperVideoRow, "status" | "processing" | "duration">,
 ): number | null {
