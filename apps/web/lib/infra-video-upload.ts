@@ -8,13 +8,13 @@ import type { User } from "@cap/web-domain";
 import { and, asc, eq, gt, isNotNull, isNull, lt, lte } from "drizzle-orm";
 import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
-import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import { developerVideoPageUrls } from "@/lib/developer-video-api";
 import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
 } from "@/lib/developer-video-charge";
+import { keyedDeveloperVideoId } from "@/lib/developer-video-ids";
 import {
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_DEFAULT_TIER,
@@ -445,7 +445,7 @@ export async function replayKeyedInfraVideo(input: {
 }) {
 	return replayKeyedVideo(
 		input.appId,
-		developerVideoIdForIdempotencyKey(input.appId, input.idempotencyKey),
+		await keyedDeveloperVideoId(input.appId, input.idempotencyKey),
 		videoRequest(input),
 	);
 }
@@ -482,7 +482,7 @@ export async function createInfraVideo({
 
 	const request = videoRequest({ name, userId, metadata, maxResolutionTier });
 	const videoId = idempotencyKey
-		? developerVideoIdForIdempotencyKey(appId, idempotencyKey)
+		? await keyedDeveloperVideoId(appId, idempotencyKey)
 		: (reservedVideoId ?? nanoId());
 
 	if (idempotencyKey) {

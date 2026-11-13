@@ -45,6 +45,16 @@ export const docsMarkdownSlug = (
 	return slug ? slug : null;
 };
 
+export const INFRA_MARKDOWN_ROUTE = "/infra-markdown";
+
+export const isInfraMarkdownRequest = (
+	pathname: string,
+	accept: string | null,
+) =>
+	pathname === "/infra.md" ||
+	((pathname === "/infra" || pathname === "/infra/") &&
+		prefersMarkdown(accept));
+
 export const markdownHeaders = (cacheControl: string) => ({
 	"Content-Type": `${MARKDOWN_TYPE}; charset=utf-8`,
 	Vary: "Accept",

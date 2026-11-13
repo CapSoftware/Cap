@@ -50,6 +50,11 @@ vi.mock("@cap/database/crypto", () => ({
 	encrypt: vi.fn(async (value: string) => `encrypted:${value}`),
 }));
 
+vi.mock("@/lib/infra-balance", async (original) => ({
+	...(await original<typeof import("@/lib/infra-balance")>()),
+	heldTranscriptMicroCredits: async () => 0,
+}));
+
 vi.mock("@cap/database/schema", () => ({
 	developerApps: {
 		id: "id",
@@ -101,6 +106,11 @@ vi.mock("@/lib/developer-key-hash", () => ({
 
 vi.mock("next/cache", () => ({
 	revalidatePath: vi.fn(),
+}));
+
+const purge = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: purge,
 }));
 
 vi.mock("@/lib/developer-video-cancel", () => ({
@@ -360,6 +370,24 @@ describe("deleteDeveloperApp", () => {
 		mockDb.limit.mockResolvedValue([]);
 		await expect(deleteDeveloperApp("app-456")).rejects.toThrow();
 		expect(mockCancelEncodes).not.toHaveBeenCalled();
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it("drops the cached playback of every video in the app once the delete has committed", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		let committed = false;
+		mockDb.transaction.mockImplementationOnce(async (fn) => {
+			await fn(mockDb);
+			committed = true;
+		});
+		purge.mockImplementationOnce(async () => {
+			expect(committed).toBe(true);
+		});
+
+		await deleteDeveloperApp("app-456");
+
+		expect(purge.mock.calls).toEqual([["infra-app-app-456"]]);
 	});
 });
 
@@ -866,6 +894,22 @@ describe("deleteDeveloperVideo", () => {
 		await deleteDeveloperVideo("app-456", "video-001");
 
 		expect(firstMonth.atDelete).not.toHaveBeenCalled();
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it("drops the video's cached playback after the delete is written", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
+
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(purge.mock.calls).toEqual([["infra-video-video-001"]]);
+		const [deleteWrite] = mockDb.set.mock.invocationCallOrder;
+		const [purged] = purge.mock.invocationCallOrder;
+		expect(purged).toBeGreaterThan(deleteWrite ?? Infinity);
 	});
 
 	it("returns success true", async () => {

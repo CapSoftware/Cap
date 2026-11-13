@@ -27,8 +27,27 @@ const firstMonthChargeOf = (
 		sql`JSON_EXTRACT(${row.metadata}, '$.paidUntil') IS NOT NULL`,
 	);
 
+export const FIRST_MONTH_START_SETTLED_MS = 10 * 60 * 1000;
+
+let chargesBegan: Date | null = null;
+
+export function clearFirstMonthChargesBeganCache() {
+	chargesBegan = null;
+}
+
 export async function firstMonthChargesBegan(
 	executor: Reader = db(),
+): Promise<Date | null> {
+	if (chargesBegan) return new Date(chargesBegan.getTime());
+	const began = await readFirstMonthChargesBegan(executor);
+	if (began && Date.now() - began.getTime() >= FIRST_MONTH_START_SETTLED_MS) {
+		chargesBegan = new Date(began.getTime());
+	}
+	return began;
+}
+
+async function readFirstMonthChargesBegan(
+	executor: Reader,
 ): Promise<Date | null> {
 	const charge = alias(developerCreditTransactions, "first_month_charge");
 	const settled = alias(developerVideos, "settled_video");

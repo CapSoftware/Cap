@@ -18,6 +18,7 @@ import {
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoDurationSeconds,
 	videoImport,
 	videoLinks,
 	videoRow,
@@ -30,7 +31,7 @@ import {
 	tool,
 } from "./tool";
 import { uploadVideo } from "./upload";
-import { waitFor } from "./wait";
+import { singleCheckBelowSeconds, waitFor } from "./wait";
 
 export type {
 	Tool,
@@ -121,14 +122,20 @@ const offset = z
 	.min(0)
 	.optional()
 	.describe("How many to skip (default 0)");
-const waitSeconds = (max: number) =>
+const waitSeconds = (
+	max: number,
+	pollSeconds: number,
+	singleCheckBelow: number,
+) =>
 	z
 		.number()
 		.int()
 		.min(1)
 		.max(max)
 		.optional()
-		.describe(`Longest time to wait, in seconds (default and maximum ${max})`);
+		.describe(
+			`Longest time to wait, in seconds (default and maximum ${max}). Checks are at least ${pollSeconds} seconds apart, so a timeout below ${singleCheckBelow} makes one check and returns at once`,
+		);
 const metadata = z
 	.record(z.string(), z.unknown())
 	.optional()
@@ -149,7 +156,11 @@ export function createTools(deps: ToolDeps): Tool[] {
 	const surface = deps.surface ?? "local";
 	const local = surface === "local";
 	const maxWaitSeconds = deps.maxWaitSeconds ?? MAX_WAIT_SECONDS;
-	const timeoutSeconds = waitSeconds(maxWaitSeconds);
+	const timeoutSeconds = waitSeconds(
+		maxWaitSeconds,
+		deps.wait.pollIntervalMs / 1000,
+		singleCheckBelowSeconds(deps.wait),
+	);
 	const credit = deps.credit ?? creditLinkFor(config.consoleUrl, client);
 	const transcript = async (
 		fields: Record<string, unknown>,
@@ -532,6 +543,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
+					durationSeconds: videoDurationSeconds(last),
 					...videoLinks({ ...firstLook(), ...last }),
 					...(firstAbsent === undefined
 						? waitOutcome(outcome, "videos_wait")
@@ -630,7 +642,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					.max(255)
 					.optional()
 					.describe(
-						"Your own user id for this transcript, used to filter lists",
+						"Your own user id for this transcript, used to filter lists. With videoId, leave it out to use the video's userId",
 					),
 				metadata,
 				idempotencyKey: z

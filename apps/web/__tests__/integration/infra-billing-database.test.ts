@@ -9,7 +9,15 @@ import { eq, inArray } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
@@ -119,6 +127,13 @@ describe.runIf(Boolean(databaseUrl))(
 			pool = createPool(databaseUrl);
 			fixture.database = drizzle(pool);
 			await database().select().from(developerVideos).limit(1);
+		});
+
+		afterEach(async () => {
+			const { clearFirstMonthChargesBeganCache } = await import(
+				"@/lib/infra-first-month-start"
+			);
+			clearFirstMonthChargesBeganCache();
 		});
 
 		afterAll(async () => {

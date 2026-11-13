@@ -148,6 +148,7 @@ describe("videos", () => {
 					name: "Launch demo",
 					status: "ready",
 					duration: 1,
+					durationSeconds: 1,
 					userId: "user_42",
 					createdAt: video?.createdAt,
 					shareUrl: `${stub.url}/dev/${video?.playbackId}`,

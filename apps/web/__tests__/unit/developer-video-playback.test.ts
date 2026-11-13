@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	sign: vi.fn(),
 	answersAnyOrigin: vi.fn(),
 	standing: vi.fn(),
+	captions: vi.fn(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -31,6 +32,10 @@ vi.mock("@cap/env", () => ({
 }));
 vi.mock("@/lib/infra-standing", () => ({
 	getInfraAppStanding: mocks.standing,
+}));
+vi.mock("@/lib/developer-video-captions", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/developer-video-captions")>()),
+	developerVideoCaptions: mocks.captions,
 }));
 vi.mock("@/lib/developer-video-storage", () => ({
 	developerVideoUrlAnswersAnyOrigin: mocks.answersAnyOrigin,
@@ -145,6 +150,7 @@ beforeEach(() => {
 	mocks.store.appDeleted = false;
 	mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
 	mocks.answersAnyOrigin.mockReturnValue(true);
+	mocks.captions.mockResolvedValue([]);
 	mocks.sign.mockImplementation(
 		async (key: string, validity: { signingDate: Date; expiresIn: number }) =>
 			`https://cdn.example/${key}?expires=${cloudFrontExpiresAt(validity, Date.now())}&sig=a,b`,
@@ -222,6 +228,7 @@ describe("developer video playback route", () => {
 		expect(response.headers.get("content-type")).toBe(
 			"application/vnd.apple.mpegurl",
 		);
+		expect(response.headers.get("vary")).toBeNull();
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("cache-control")).toBe(
 			"public, max-age=60, s-maxage=60",
@@ -325,7 +332,7 @@ describe("developer video playback route", () => {
 		expect(await (await play("master.m3u8")).text()).toBe(stored);
 	});
 
-	it("sends a long playlist as plain text whatever the player accepts", async () => {
+	it("sends a rendition playlist uncompressed as text/plain whatever the player accepts, for the platform to compress", async () => {
 		const long = [
 			"#EXTM3U",
 			'#EXT-X-MAP:URI="1080p.m4s",BYTERANGE="800@0"',
@@ -348,8 +355,13 @@ describe("developer video playback route", () => {
 
 			expect(response.headers.get("content-encoding")).toBeNull();
 			expect(response.headers.get("content-type")).toBe(
-				"application/vnd.apple.mpegurl",
+				"text/plain; charset=utf-8",
 			);
+			expect(response.headers.get("vary")).toBeNull();
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
 			expect(body.startsWith("#EXTM3U\n")).toBe(true);
 			expect(body.endsWith("#EXT-X-ENDLIST")).toBe(true);
 			expect(body.split("\n")).toHaveLength(long.split("\n").length);
@@ -922,6 +934,299 @@ describe("developer video playback route", () => {
 		])("answers 404 for the captions file name %s", async (file) => {
 			expect((await play(file)).status).toBe(404);
 			expect(mocks.readText).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("cache tags", () => {
+		const TAGS = "infra-video-video-1,infra-app-app-1";
+
+		it("tags every answer the CDN may keep with the video and its app", async () => {
+			mocks.captions.mockResolvedValue([
+				{ language: "en", label: "English", key: "k" },
+			]);
+			mocks.readText.mockImplementation(async (key: string) =>
+				key === `${HLS_PREFIX}master.m3u8`
+					? master
+					: key === `${HLS_PREFIX}1080p.m3u8`
+						? rendition
+						: key.endsWith("/captions/en.vtt")
+							? "WEBVTT\n"
+							: null,
+			);
+
+			for (const file of [
+				"master.m3u8",
+				"1080p.m3u8",
+				"1080p.m4s",
+				"video.mp4",
+				"poster.jpg",
+				"captions-en.vtt",
+				"captions-en.m3u8",
+			]) {
+				const response = await play(file);
+				expect([200, 302]).toContain(response.status);
+				expect(response.headers.get("cache-control")).toBe(
+					"public, max-age=60, s-maxage=60",
+				);
+				expect(response.headers.get("vercel-cache-tag")).toBe(TAGS);
+			}
+
+			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+			const paused = await play("master.m3u8");
+			expect(paused.status).toBe(402);
+			expect(paused.headers.get("vercel-cache-tag")).toBe(TAGS);
+		});
+
+		it("tags nothing the CDN does not keep", async () => {
+			mocks.readText.mockResolvedValue(null);
+			const missing = await play("720p.m3u8");
+			expect(missing.status).toBe(404);
+			expect(missing.headers.get("vercel-cache-tag")).toBeNull();
+
+			mocks.store.video = ready({
+				metadata: {
+					__capTakedown: { at: "2026-11-13T07:00:00.000Z", metadata: null },
+				},
+			});
+			const gone = await play("master.m3u8");
+			expect(gone.status).toBe(410);
+			expect(gone.headers.get("vercel-cache-tag")).toBeNull();
+		});
+	});
+
+	describe("subtitles in the master playlist", () => {
+		const english = {
+			language: "en",
+			label: "English",
+			key: "developer/app-1/video-1/captions/en.vtt",
+		};
+		const SUBTITLES_LINE =
+			'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI="captions-en.m3u8"';
+		const stored = ladder(
+			variant("1080p", 4_573_338, "1920x1080"),
+			variant("720p", 2_501_452, "1280x720"),
+		);
+		const withoutSubtitles = (body: string) =>
+			body
+				.split("\n")
+				.filter((line) => !line.includes("TYPE=SUBTITLES"))
+				.map((line) => line.replace(',SUBTITLES="subs"', ""))
+				.join("\n");
+
+		beforeEach(() => {
+			mocks.readText.mockResolvedValue(stored);
+		});
+
+		it("serves the master of a video with no captions byte for byte as before", async () => {
+			const plain = await (await play("master.m3u8")).text();
+			const shortForm = await (await playShort("master.m3u8")).text();
+			const picked = await (
+				await play("master.m3u8", PLAYBACK_ID, asking("?rendition=720p"))
+			).text();
+
+			mocks.captions.mockResolvedValue([english]);
+			const opted = asking("?subtitles=none");
+			expect(await (await play("master.m3u8", PLAYBACK_ID, opted)).text()).toBe(
+				plain,
+			);
+
+			expect(plain).not.toContain("SUBTITLES");
+			expect(shortForm).not.toContain("SUBTITLES");
+			expect(picked).not.toContain("SUBTITLES");
+		});
+
+		it("lists each captions language as a WebVTT subtitle rendition every variant points at", async () => {
+			const plain = await (await play("master.m3u8")).text();
+			mocks.captions.mockResolvedValue([english]);
+
+			const response = await play("master.m3u8");
+			const body = await response.text();
+			const lines = body.split("\n");
+
+			expect(response.headers.get("content-type")).toBe(
+				"application/vnd.apple.mpegurl",
+			);
+			expect(lines.filter((line) => line.includes("TYPE=SUBTITLES"))).toEqual([
+				SUBTITLES_LINE,
+			]);
+			expect(lines.indexOf(SUBTITLES_LINE)).toBe(
+				lines.findIndex((line) => line.includes("TYPE=AUDIO")) + 1,
+			);
+			const variants = lines.filter((line) =>
+				line.startsWith("#EXT-X-STREAM-INF:"),
+			);
+			expect(variants).toHaveLength(2);
+			for (const line of variants) {
+				expect(line.endsWith(',AUDIO="aud",SUBTITLES="subs"')).toBe(true);
+			}
+			expect(withoutSubtitles(body)).toBe(plain);
+		});
+
+		it("keeps the subtitles in a short form master without asking for their short form", async () => {
+			mocks.captions.mockResolvedValue([english]);
+
+			const lines = (await (await playShort("master.m3u8")).text()).split("\n");
+
+			expect(lines).toContain(SUBTITLES_LINE);
+			expect(
+				lines.filter((line) => line.endsWith(".m3u8?segments=short")),
+			).toEqual(["720p.m3u8?segments=short", "1080p.m3u8?segments=short"]);
+		});
+
+		it("keeps the subtitles in a master narrowed to one rendition", async () => {
+			mocks.captions.mockResolvedValue([english]);
+
+			const body = await (
+				await play("master.m3u8", PLAYBACK_ID, asking("?rendition=1080p"))
+			).text();
+
+			expect(order(body)).toEqual(["1080p.m3u8"]);
+			expect(body).toContain(SUBTITLES_LINE);
+			expect(body).toContain(',AUDIO="aud",SUBTITLES="subs"');
+		});
+
+		it("names every language once, and leaves out the language of captions with none reported", async () => {
+			mocks.captions.mockResolvedValue([
+				{ language: "pt-br", label: "Portuguese", key: "a" },
+				{ language: "pt", label: "Portuguese", key: "b" },
+				{ language: "und", label: "Captions", key: "c" },
+			]);
+
+			const lines = (await (await play("master.m3u8")).text())
+				.split("\n")
+				.filter((line) => line.includes("TYPE=SUBTITLES"));
+
+			expect(lines).toEqual([
+				'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Portuguese",LANGUAGE="pt-br",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI="captions-pt-br.m3u8"',
+				'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Portuguese (pt)",LANGUAGE="pt",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI="captions-pt.m3u8"',
+				'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Captions",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI="captions-und.m3u8"',
+			]);
+		});
+
+		it("does not look captions up for Cap's own player", async () => {
+			await play("master.m3u8", PLAYBACK_ID, asking("?subtitles=none"));
+			await play(
+				"master.m3u8",
+				PLAYBACK_ID,
+				asking("?subtitles=none&segments=short"),
+			);
+
+			expect(mocks.captions).not.toHaveBeenCalled();
+		});
+
+		it("serves the master without subtitles when the captions lookup fails", async () => {
+			const plain = await (await play("master.m3u8")).text();
+			mocks.captions.mockRejectedValue(new Error("database down"));
+
+			const response = await play("master.m3u8");
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(plain);
+		});
+
+		it("lists no subtitles for a video of unknown length", async () => {
+			mocks.store.video = ready({ duration: null });
+			mocks.captions.mockResolvedValue([english]);
+			const video = mocks.store.video;
+			if (video?.processing) {
+				video.processing = {
+					...video.processing,
+					probe: { ...video.processing.probe, duration: null },
+				} as typeof video.processing;
+			}
+
+			const body = await (await play("master.m3u8")).text();
+
+			expect(body).not.toContain("SUBTITLES");
+			expect(mocks.captions).not.toHaveBeenCalled();
+		});
+
+		it("leaves a master that already has subtitles as it is", async () => {
+			const own = [
+				"#EXTM3U",
+				'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="text",NAME="Own",URI="own.m3u8"',
+				'#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,SUBTITLES="text"',
+				"360p.m3u8",
+			].join("\n");
+			mocks.readText.mockResolvedValue(own);
+			mocks.captions.mockResolvedValue([english]);
+
+			expect(await (await play("master.m3u8")).text()).toBe(own);
+		});
+	});
+
+	describe("subtitle playlists", () => {
+		const english = { language: "en", label: "English", key: "k" };
+
+		beforeEach(() => {
+			mocks.captions.mockResolvedValue([english]);
+		});
+
+		it("wraps the captions file in a one segment playlist as long as the video", async () => {
+			mocks.store.video = ready({ duration: 154.32 });
+
+			const response = await play("captions-en.m3u8");
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(
+				[
+					"#EXTM3U",
+					"#EXT-X-VERSION:3",
+					"#EXT-X-TARGETDURATION:155",
+					"#EXT-X-MEDIA-SEQUENCE:0",
+					"#EXT-X-PLAYLIST-TYPE:VOD",
+					"#EXTINF:154.320000,",
+					"captions-en.vtt",
+					"#EXT-X-ENDLIST",
+					"",
+				].join("\n"),
+			);
+			expect(response.headers.get("content-type")).toBe(
+				"application/vnd.apple.mpegurl",
+			);
+			expect(response.headers.get("cache-control")).toBe(
+				"public, max-age=60, s-maxage=60",
+			);
+			expect(response.headers.get("access-control-allow-origin")).toBe("*");
+			expect(mocks.readText).not.toHaveBeenCalled();
+			expect(mocks.sign).not.toHaveBeenCalled();
+		});
+
+		it("answers 404 without caching for a language the video has no captions in", async () => {
+			const response = await play("captions-fr.m3u8");
+
+			expect(response.status).toBe(404);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+		});
+
+		it("answers 404 when the captions cannot be listed", async () => {
+			mocks.captions.mockRejectedValue(new Error("database down"));
+
+			expect((await play("captions-en.m3u8")).status).toBe(404);
+		});
+
+		it("refuses the subtitle playlist of a paused app or a video that was taken down", async () => {
+			mocks.standing.mockResolvedValue({ state: "paused", pausesAt: null });
+			expect((await play("captions-en.m3u8")).status).toBe(402);
+
+			mocks.standing.mockResolvedValue({ state: "active", pausesAt: null });
+			mocks.store.video = ready({
+				metadata: {
+					__capTakedown: { at: "2026-11-13T07:00:00.000Z", metadata: null },
+				},
+			});
+			expect((await play("captions-en.m3u8")).status).toBe(410);
+			expect(mocks.captions).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			"captions-EN.m3u8",
+			"captions-.m3u8",
+			"captions-e.m3u8",
+			"captions-en.m3u8.bak",
+		])("answers 404 for the subtitle playlist name %s", async (file) => {
+			expect((await play(file)).status).toBe(404);
+			expect(mocks.captions).not.toHaveBeenCalled();
 		});
 	});
 

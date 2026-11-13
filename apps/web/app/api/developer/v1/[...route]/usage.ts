@@ -43,7 +43,10 @@ app.get("/", async (c) => {
 			totalDurationMinutes: stored.totalMinutes,
 			standing,
 			upload,
-			storage: infraStorageJson(storage),
+			storage: {
+				...infraStorageJson(storage),
+				storedMonthlyMicroCredits: Math.round(stored.monthlyMicroCredits),
+			},
 			...speech,
 			rates: {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
