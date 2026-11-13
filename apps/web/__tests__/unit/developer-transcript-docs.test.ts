@@ -138,6 +138,65 @@ describe("the language parameter", () => {
 	});
 });
 
+describe("transcribing a stored video", () => {
+	const request = spec.components.schemas.CreateTranscriptRequest as {
+		oneOf?: { required: string[] }[];
+		required?: string[];
+		properties: Record<string, unknown>;
+	};
+	const transcript = spec.components.schemas.Transcript as {
+		properties: {
+			videoId?: { type: string[] };
+			source: { properties: { type: { enum: string[] } } };
+		};
+	};
+
+	it("accepts videoId or url on Create Transcript in the OpenAPI document", () => {
+		expect(Object.keys(request.properties)).toEqual(
+			expect.arrayContaining(["url", "videoId"]),
+		);
+		expect(request.required).toBeUndefined();
+		expect(request.oneOf).toEqual([
+			{ required: ["url"] },
+			{ required: ["videoId"] },
+		]);
+	});
+
+	it("describes the videoId field and the video source type on the transcript", () => {
+		expect(transcript.properties.videoId?.type).toEqual(["string", "null"]);
+		expect(transcript.properties.source.properties.type.enum).toEqual([
+			"upload",
+			"url",
+			"video",
+		]);
+	});
+
+	it("documents videoId, what it costs and that captions come from it", () => {
+		expect(transcriptDocs).toContain(
+			"| `videoId` | string | One of `url` or `videoId` |",
+		);
+		expect(transcriptDocs).toContain(
+			'"source": { "type": "video", "url": null }',
+		);
+		expect(transcriptDocs).toContain('"videoId": "abc123def456"');
+		expect(transcriptDocs).toContain(
+			"It costs the transcript price only, $0.10 per audio hour.",
+		);
+		expect(transcriptDocs).toContain(
+			"When a transcript of a video completes with speech, Cap writes a WebVTT captions file for the video in that language, from the newest completed transcript of the video in that language.",
+		);
+		expect(transcriptDocs).toContain("`videoId`, `contentLength`, `name`");
+	});
+
+	it("says only what ships: no player captions and no captions URL", () => {
+		for (const text of [transcriptDocs, specText]) {
+			expect(text).not.toMatch(/captions for the hosted player/i);
+			expect(text).not.toMatch(/\.vtt|captions\//i);
+		}
+		expect(transcriptDocs).not.toMatch(/player/i);
+	});
+});
+
 describe("limits and deletes that cost money", () => {
 	it("states the ceiling on running transcripts and how long to wait, from the code", () => {
 		expect(TRANSCRIPT_MAX_CONCURRENT).toBe(20);
