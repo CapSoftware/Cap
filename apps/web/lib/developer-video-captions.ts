@@ -70,6 +70,17 @@ export function captionsFileLanguage(file: string): string | null {
 	return file.match(CAPTIONS_FILE_PATTERN)?.[1] ?? null;
 }
 
+const CAPTIONS_PLAYLIST_PATTERN =
+	/^captions-([a-z]{2,3}(?:-[a-z0-9]{2,8})*)\.m3u8$/;
+
+export function captionsPlaylistName(language: string) {
+	return `captions-${captionLanguage(language)}.m3u8`;
+}
+
+export function captionsPlaylistLanguage(file: string): string | null {
+	return file.match(CAPTIONS_PLAYLIST_PATTERN)?.[1] ?? null;
+}
+
 const captionSources = (video: VideoRef) =>
 	and(
 		eq(developerTranscripts.appId, video.appId),

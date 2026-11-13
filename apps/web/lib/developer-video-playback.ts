@@ -3,8 +3,17 @@ import { developerApps, developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { developerVideoOutputs } from "./developer-video-api";
 import {
+	CACHE_TAG_HEADER,
+	developerPlaybackCacheTags,
+} from "./developer-video-cache";
+import {
 	CAPTIONS_CONTENT_TYPE,
+	CAPTIONS_UNKNOWN_LANGUAGE,
 	captionsFileLanguage,
+	captionsFileName,
+	captionsPlaylistLanguage,
+	captionsPlaylistName,
+	developerVideoCaptions,
 	videoCaptionsKey,
 } from "./developer-video-captions";
 import {
@@ -336,15 +345,144 @@ export function leadWithStartRendition(master: string): string {
 	].join("\n")}\n`;
 }
 
-// Sent as it is. The platform does not compress this content type, and a body
-// compressed here reaches the viewer without its Content-Encoding header, so a
-// player cannot read it.
+const SUBTITLES_GROUP = "subs";
+const NO_SUBTITLES_QUERY = "none";
+
+// Cap's own player draws the captions it is given and asks for a master
+// without them. Listed there too, Safari's own player would offer every
+// language twice and could show both at once.
+export function wantsSubtitles(request: Request): boolean {
+	return onlyQueryValue(request, "subtitles") !== NO_SUBTITLES_QUERY;
+}
+
+type SubtitleTrack = { language: string; label: string };
+
+const attributeText = (value: string) => value.replace(/["\r\n]/g, "").trim();
+
+// Lists each captions language as a WebVTT subtitle rendition, so a player
+// that reads only the master playlist, hls.js or Safari's own, can offer
+// them. A master with no captions, or one that already has subtitles, is
+// served as it is.
+export function listSubtitles(
+	master: string,
+	tracks: readonly SubtitleTrack[],
+): string {
+	if (tracks.length === 0) return master;
+	const lines = master.split(/\r?\n/);
+	if (
+		lines.some(
+			(line) =>
+				line.startsWith("#EXT-X-MEDIA:") &&
+				/[:,]TYPE=SUBTITLES(,|$)/.test(line),
+		) ||
+		lines.some((line) => /^#EXT-X-STREAM-INF:.*[:,]SUBTITLES=/.test(line))
+	) {
+		return master;
+	}
+	const firstVariant = lines.findIndex((line) =>
+		line.startsWith("#EXT-X-STREAM-INF:"),
+	);
+	if (firstVariant === -1) return master;
+	const lastMedia = lines.findLastIndex((line) =>
+		line.startsWith("#EXT-X-MEDIA:"),
+	);
+	const at =
+		lastMedia >= 0 && lastMedia < firstVariant ? lastMedia + 1 : firstVariant;
+
+	const names = new Set<string>();
+	const media = tracks.map(({ language, label }) => {
+		let name = attributeText(label) || language;
+		if (names.has(name)) name = `${name} (${language})`;
+		names.add(name);
+		return [
+			"#EXT-X-MEDIA:TYPE=SUBTITLES",
+			`GROUP-ID="${SUBTITLES_GROUP}"`,
+			`NAME="${name}"`,
+			...(language === CAPTIONS_UNKNOWN_LANGUAGE
+				? []
+				: [`LANGUAGE="${language}"`]),
+			"DEFAULT=NO",
+			"AUTOSELECT=YES",
+			"FORCED=NO",
+			`URI="${captionsPlaylistName(language)}"`,
+		].join(",");
+	});
+	const listed = lines.map((line) =>
+		line.startsWith("#EXT-X-STREAM-INF:")
+			? `${line},SUBTITLES="${SUBTITLES_GROUP}"`
+			: line,
+	);
+	listed.splice(at, 0, ...media);
+	return listed.join("\n");
+}
+
+export function subtitlesPlaylist(
+	language: string,
+	durationSeconds: number,
+): string {
+	return [
+		"#EXTM3U",
+		"#EXT-X-VERSION:3",
+		`#EXT-X-TARGETDURATION:${Math.ceil(durationSeconds)}`,
+		"#EXT-X-MEDIA-SEQUENCE:0",
+		"#EXT-X-PLAYLIST-TYPE:VOD",
+		`#EXTINF:${durationSeconds.toFixed(6)},`,
+		captionsFileName(language),
+		"#EXT-X-ENDLIST",
+		"",
+	].join("\n");
+}
+
+type PlayableVideo = NonNullable<Awaited<ReturnType<typeof findPlayableVideo>>>;
+
+function playbackDuration(video: PlayableVideo): number | null {
+	const duration = video.duration ?? video.processing?.probe?.duration ?? null;
+	return typeof duration === "number" &&
+		Number.isFinite(duration) &&
+		duration > 0
+		? duration
+		: null;
+}
+
+// Captions are extra to playback, so a failed lookup serves the master
+// without them.
+async function subtitleTracks(video: PlayableVideo): Promise<SubtitleTrack[]> {
+	if (playbackDuration(video) === null) return [];
+	try {
+		return await developerVideoCaptions(video);
+	} catch (error) {
+		console.error("[developer-playback] Failed to list captions", error);
+		return [];
+	}
+}
+
+// Never compressed here: a body compressed in this handler reached viewers
+// without its Content-Encoding header. The platform compresses text/plain
+// itself and not the HLS type, so a rendition playlist, which signs a URL per
+// segment and runs to tens of KB, is sent as text/plain. Players read it by
+// its .m3u8 path, which the HLS spec allows in place of the HLS type. No Vary
+// is set: the platform keeps one cached copy and encodes it per request,
+// while a Vary from here split its cache by every distinct Accept-Encoding
+// value. The master and subtitle playlists are a few hundred bytes and keep
+// the HLS type, which a player may check before it treats a URL as HLS.
+const MEDIA_PLAYLIST_CONTENT_TYPE = "text/plain; charset=utf-8";
+
 function playlistResponse(playlist: string): Response {
 	return new Response(playlist, {
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
 			...CACHEABLE,
 			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
+		},
+	});
+}
+
+function mediaPlaylistResponse(playlist: string): Response {
+	return new Response(playlist, {
+		headers: {
+			...PLAYBACK_CORS_HEADERS,
+			...CACHEABLE,
+			"Content-Type": MEDIA_PLAYLIST_CONTENT_TYPE,
 		},
 	});
 }
@@ -394,6 +532,24 @@ export async function developerPlaybackResponse(
 	const video = await findPlayableVideo(playbackId);
 	if (video && developerVideoIsTakenDown(video)) return gone();
 	if (!video?.processing) return notFound();
+	const response = await playableVideoResponse(
+		{ ...video, processing: video.processing },
+		file,
+		request,
+	);
+	if (response.headers.get("Cache-Control")?.startsWith("public")) {
+		response.headers.set(CACHE_TAG_HEADER, developerPlaybackCacheTags(video));
+	}
+	return response;
+}
+
+async function playableVideoResponse(
+	video: PlayableVideo & {
+		processing: NonNullable<PlayableVideo["processing"]>;
+	},
+	file: string,
+	request: Request,
+): Promise<Response> {
 	if ((await getInfraAppStanding(video.appId)).state === "paused") {
 		return paused();
 	}
@@ -404,6 +560,16 @@ export async function developerPlaybackResponse(
 			videoCaptionsKey(video, captionsLanguage),
 		);
 		return captions === null ? notFound() : captionsResponse(captions);
+	}
+
+	const subtitlesLanguage = captionsPlaylistLanguage(file);
+	if (subtitlesLanguage) {
+		const duration = playbackDuration(video);
+		const tracks = await subtitleTracks(video);
+		return duration !== null &&
+			tracks.some((track) => track.language === subtitlesLanguage)
+			? playlistResponse(subtitlesPlaylist(subtitlesLanguage, duration))
+			: notFound();
 	}
 
 	const { processing } = video;
@@ -433,16 +599,25 @@ export async function developerPlaybackResponse(
 		return redirectTo(`${keys.hlsPrefix}${file}`, request);
 	}
 
-	const playlist = await readDeveloperVideoText(`${keys.hlsPrefix}${file}`);
+	const isMaster = file === DEVELOPER_VIDEO_MASTER_PLAYLIST;
+	const [playlist, subtitles] = await Promise.all([
+		readDeveloperVideoText(`${keys.hlsPrefix}${file}`),
+		isMaster && wantsSubtitles(request) ? subtitleTracks(video) : [],
+	]);
 	if (!playlist) return notFound();
 	const short = wantsShortSegments(request);
-	if (file === DEVELOPER_VIDEO_MASTER_PLAYLIST) {
+	if (isMaster) {
 		const master = leadWithStartRendition(
 			selectRenditions(playlist, renditionChoice(request)),
 		);
-		return playlistResponse(short ? listShortSegmentPlaylists(master) : master);
+		return playlistResponse(
+			listSubtitles(
+				short ? listShortSegmentPlaylists(master) : master,
+				subtitles,
+			),
+		);
 	}
-	return playlistResponse(
+	return mediaPlaylistResponse(
 		await signMediaPlaylist(
 			playlist,
 			(name) =>

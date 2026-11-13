@@ -19,6 +19,11 @@ const mocks = vi.hoisted(() => ({
 	createImport: vi.fn(),
 	importView: vi.fn(),
 	startWorkflow: vi.fn(),
+	purge: vi.fn(),
+}));
+
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: mocks.purge,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -893,6 +898,29 @@ describe("developer video API", () => {
 			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
 			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
 			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+		});
+
+		it("drops the video's cached playback once it is marked deleted", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			});
+
+			expect((await remove()).status).toBe(200);
+			expect(mocks.purge.mock.calls).toEqual([["infra-video-video-1"]]);
+		});
+
+		it("still deletes the video when the cache purge fails", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockRejectedValue(new Error("429"));
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+			mocks.purge.mockReset();
 		});
 
 		it("cancels the encode jobs of a video deleted mid-encode", async () => {
