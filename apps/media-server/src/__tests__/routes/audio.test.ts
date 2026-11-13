@@ -154,11 +154,11 @@ describe("POST /audio/extract", () => {
 	});
 
 	for (const path of ["/audio/extract", "/audio/check"]) {
-		test(`${path} answers 422 with the same body text for a source with no video stream`, async () => {
+		test(`${path} answers 422 for a source with no media stream`, async () => {
 			mock.module("../../lib/media-audio", () => ({
 				...mediaAudio,
 				checkHasAudioTrack: async () => {
-					throw new Error("No video stream found");
+					throw new Error("No media stream found");
 				},
 			}));
 			const { default: appWithMock } = await import("../../app");
@@ -171,8 +171,8 @@ describe("POST /audio/extract", () => {
 
 			expect(response.status).toBe(422);
 			const data = await response.json();
-			expect(data.code).toBe("NO_VIDEO_STREAM");
-			expect(data.details).toBe("No video stream found");
+			expect(data.code).toBe("NO_MEDIA_STREAM");
+			expect(data.details).toBe("No media stream found");
 			expect(data.error).toBe(
 				path === "/audio/extract"
 					? "Failed to extract audio"

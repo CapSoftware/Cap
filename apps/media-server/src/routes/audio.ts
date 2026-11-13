@@ -47,11 +47,10 @@ function isTimeoutError(err: unknown): boolean {
 	return err instanceof Error && err.message.includes("timed out");
 }
 
-// A source with no video stream is a problem with the input, not the server.
-// The body keeps the same error and details as before, so callers that read
-// them see no change; only the status and code say it is not worth retrying.
-function isNoVideoStreamError(err: unknown): boolean {
-	return err instanceof Error && err.message === "No video stream found";
+// A source with no streams at all is a problem with the input, not the
+// server, so it is not worth retrying.
+function isNoMediaStreamError(err: unknown): boolean {
+	return err instanceof Error && err.message === "No media stream found";
 }
 
 function drainingResponse(c: Context) {
@@ -126,11 +125,11 @@ audio.post("/check", async (c) => {
 			);
 		}
 
-		if (isNoVideoStreamError(err)) {
+		if (isNoMediaStreamError(err)) {
 			return c.json(
 				{
 					error: "Failed to check audio track",
-					code: "NO_VIDEO_STREAM",
+					code: "NO_MEDIA_STREAM",
 					details: (err as Error).message,
 				},
 				422,
@@ -238,11 +237,11 @@ audio.post("/extract", async (c) => {
 			);
 		}
 
-		if (isNoVideoStreamError(err)) {
+		if (isNoMediaStreamError(err)) {
 			return c.json(
 				{
 					error: "Failed to extract audio",
-					code: "NO_VIDEO_STREAM",
+					code: "NO_MEDIA_STREAM",
 					details: (err as Error).message,
 				},
 				422,
