@@ -63,6 +63,7 @@ const { getInfraBilling } = await import("@/lib/infra-standing");
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const { chargeDeliveryDay, deliveryBillingStart, settleDeliveryDays } =
 	await import("@/lib/infra-delivery-billing");
+await import("@/lib/infra-auto-top-up");
 const { describeLedgerRow } = await import("@/lib/infra-ledger");
 
 const databaseUrl = process.env.CAP_INFRA_TEST_DATABASE_URL;
@@ -375,8 +376,8 @@ describe.runIf(Boolean(databaseUrl))(
 				metadata: row.metadata,
 			}));
 			const byKey = (
-				a: { accountId: string; referenceId: string },
-				b: { accountId: string; referenceId: string },
+				a: { accountId: string; referenceId: string | null },
+				b: { accountId: string; referenceId: string | null },
 			) =>
 				`${a.accountId}:${a.referenceId}`.localeCompare(
 					`${b.accountId}:${b.referenceId}`,
