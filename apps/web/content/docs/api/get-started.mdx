@@ -302,7 +302,7 @@ Save this as `index.html` beside `server.mjs`. It uses no library.
 
 `waitForVideo` and `playVideo` are added in the next two steps.
 
-- **Parts.** Every part except the last must be at least 5 MB, and an upload takes up to 10,000 parts. A file smaller than one part is sent as a single part.
+- **Parts.** Every part except the last must be at least 5 MB. Number the parts from 1 with no gaps: a token signs part numbers up to the last one its size limit allows, which is 6,867 for the 36 GB limit. A file smaller than one part is sent as a single part.
 - **Signing.** One request signs up to 50 parts. The page signs ten at a time, because a signed URL works for one hour and should be used soon after it is made.
 - **The `PUT`.** Send the bytes with no extra headers. The response's `ETag` header is readable from page JavaScript, and complete needs it for every part.
 - **Duration and size.** Complete requires `durationInSecs`. The page reads it, with `width` and `height`, by loading the file into a `<video>` element. When the browser cannot read the file, for example a format it does not play, send `durationInSecs: 1` and leave `width` and `height` out. Cap measures the file while it processes and replaces all three.
