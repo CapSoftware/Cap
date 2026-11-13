@@ -1792,6 +1792,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 						required: [
 							"microCreditsPerDollar",
 							"storageDollarsPer1000MinutesPerMonth",
+							"deliveryDollarsPer1000Minutes",
 							"speechDollarsPerHour",
 							"uploadAdmissionDays",
 						],
@@ -1811,6 +1812,11 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 										{ type: "number" },
 									]),
 								),
+							},
+							deliveryDollarsPer1000Minutes: {
+								type: "number",
+								description:
+									"Dollars per 1,000 delivered minutes, one flat rate at every resolution. Each day is charged once, when its figures become final.",
 							},
 							speechDollarsPerHour: {
 								type: "number",

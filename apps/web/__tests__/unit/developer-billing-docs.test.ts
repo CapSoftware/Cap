@@ -56,6 +56,7 @@ import { LEDGER_PAGE_SIZE } from "@/lib/infra-ledger";
 import {
 	INFRA_DELIVERY_BILLED_FROM_TEXT,
 	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_DELIVERY_PRICE_TEXT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 	INFRA_TIER_MAX_PIXELS,
@@ -179,7 +180,7 @@ describe("the Billing page", () => {
 			`| Speech to text | $${SPEECH_DOLLARS_PER_HOUR.toFixed(2)} per audio hour | When a transcript completes |`,
 		);
 		expect(billing).toContain(
-			`| Delivery | $${INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES.toFixed(2)} per 1,000 delivered minutes | Once a day, when the day is final |`,
+			`| Delivery | ${INFRA_DELIVERY_PRICE_TEXT} | Once a day, when the day is final |`,
 		);
 		expect(billing).toContain(
 			`which is ${SPEECH_MICRO_CREDITS_PER_HOUR.toLocaleString("en-US")} micro-credits`,
@@ -484,8 +485,11 @@ describe("the Billing page", () => {
 		);
 		expect(
 			Object.keys(spec.components.schemas.Usage.properties.rates.properties),
-		).not.toContain("deliveryDollarsPer1000Minutes");
-		expect(rest).toContain("The delivery price is not in `rates`.");
+		).toContain("deliveryDollarsPer1000Minutes");
+		expect(rest).not.toContain("The delivery price is not in `rates`.");
+		expect(billing).toContain(
+			'labelled "Delivery", with the UTC day as its reference.',
+		);
 	});
 });
 
@@ -558,6 +562,9 @@ describe("examples in the REST API reference", () => {
 		).toBe(data.totalDurationMinutes);
 		expect(data.rates.storageDollarsPer1000MinutesPerMonth).toEqual(
 			INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+		);
+		expect(data.rates.deliveryDollarsPer1000Minutes).toBe(
+			INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 		);
 		expect(data.rates.speechDollarsPerHour).toBe(SPEECH_DOLLARS_PER_HOUR);
 		expect(data.rates.uploadAdmissionDays).toBe(UPLOAD_ADMISSION_DAYS);

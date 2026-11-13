@@ -42,7 +42,7 @@ How to call Cap:
 
 - **On the user's machine:** the `cap` CLI that ships with Cap Desktop. Run `cap guide --json` first for the installed command and output contract. `cap mcp serve` exposes the same actions to MCP clients over stdio.
 - **Remote MCP (read-only):** Streamable HTTP at https://cap.so/api/mcp with OAuth. Server card: https://cap.so/.well-known/mcp
-- **Cap Infra API (HTTP):** see the Cap Infra section above. `GET /api/developer/v1/usage` returns the storage and speech prices in `rates`, `GET /api/developer/v1/transactions` returns every credit and charge, and https://cap.so/docs/api/billing explains what is charged and when.
+- **Cap Infra API (HTTP):** see the Cap Infra section above. `GET /api/developer/v1/usage` returns the current prices in `rates`, `GET /api/developer/v1/transactions` returns every credit and charge, and https://cap.so/docs/api/billing explains what is charged and when.
 - **Markdown:** requesting https://cap.so with `Accept: text/markdown` returns this file, every docs page is available as Markdown (add `.md` or send `Accept: text/markdown`), and missing pages return a Markdown 404.
 
 ## Recording Modes
