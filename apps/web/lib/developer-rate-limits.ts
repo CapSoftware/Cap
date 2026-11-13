@@ -8,8 +8,6 @@ export const DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE = 1200;
 
 // The pace every doc, the OpenAPI document and the agent prompt recommend. A
 // short video is playable about 3 seconds after its upload completes and a
-// short transcript takes about 5 seconds, so one check usually finds it done,
-// and one video and one transcript polled together use 32 of a key's 60
-// requests a minute.
+// short transcript takes about 5 seconds, so one check usually finds it done.
 export const DEVELOPER_VIDEO_STATUS_POLL_SECONDS = 3;
 export const DEVELOPER_TRANSCRIPT_POLL_SECONDS = 5;
