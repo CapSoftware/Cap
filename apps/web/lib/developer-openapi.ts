@@ -220,6 +220,7 @@ const uploadTokenAuth = [{ uploadToken: [] }];
 
 const restErrors = {
 	"401": response("Unauthorized"),
+	"403": response("Forbidden"),
 	"429": response("RateLimited"),
 	"500": response("InternalError"),
 };
@@ -601,7 +602,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
@@ -627,7 +627,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"409": response("Conflict"),
 					"415": response("UnsupportedMediaType"),
 					"503": response("Unavailable"),
@@ -651,7 +650,6 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					),
 					"400": response("BadRequest"),
 					"402": response("PaymentRequired"),
-					"403": response("Forbidden"),
 					"404": response("NotFound"),
 					"409": response("Conflict"),
 					"503": response("Unavailable"),
@@ -1715,7 +1713,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 			),
 			Forbidden: json(
 				ref("Error"),
-				"The request is not allowed. On the upload operations the code is public_key_not_allowed when a public key was sent, origin_not_allowed when the Origin header differs from the token's corsOrigin, and video_mismatch when the body names a video other than the token's. Elsewhere, the account cannot use this feature yet.",
+				"The request is not allowed. The code is public_key_not_allowed when a public key was sent where a secret key or upload token is required. On the upload operations the code is origin_not_allowed when the Origin header differs from the token's corsOrigin, and video_mismatch when the body names a video other than the token's. Elsewhere, the account cannot use this feature yet.",
 			),
 			NotFound: json(
 				ref("Error"),
