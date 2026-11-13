@@ -117,10 +117,10 @@ import {
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import {
-	DEVELOPER_AUTH_FAILURES_PER_MINUTE as FAILURES,
 	DEVELOPER_KEY_REQUESTS_PER_MINUTE,
 	DEVELOPER_OWNER_REQUESTS_PER_MINUTE,
 	DEVELOPER_UPLOAD_TOKEN_REQUESTS_PER_MINUTE,
+	DEVELOPER_AUTH_FAILURES_PER_MINUTE as FAILURES,
 } from "@/lib/developer-rate-limits";
 import { createDeveloperUploadToken } from "@/lib/developer-upload-token";
 import {
