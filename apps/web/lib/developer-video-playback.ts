@@ -9,10 +9,8 @@ import {
 	developerVideoKeys,
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
-import {
-	slicedHlsPlayback,
-	slicedHlsPlaylistText,
-} from "./developer-video-slices";
+import { slicedHlsPlaylistText } from "./developer-video-sliced-ladder";
+import { slicedHlsPlayback } from "./developer-video-slices";
 import {
 	readDeveloperVideoText,
 	signedDeveloperVideoUrl,

@@ -352,14 +352,17 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+// Recovery work and the slices of one long video arrive several at a time.
+// Both are held to half of the slots, so a recording that arrives while they
+// run still finds a free one.
 export function canAcceptNewVideoProcess(
-	priority: "interactive" | "recovery" = "interactive",
+	priority: "interactive" | "recovery" | "slice" = "interactive",
 ): boolean {
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
 	return (
 		active <
-		(priority === "recovery" && resources.effectiveMax > 1
+		(priority !== "interactive" && resources.effectiveMax > 1
 			? Math.max(1, Math.floor(resources.effectiveMax / 2))
 			: resources.effectiveMax)
 	);

@@ -1004,11 +1004,9 @@ video.post("/ladder", async (c) => {
 			503,
 		);
 	}
-	// One long video is sent as several slices at once. They may fill half of
-	// this worker's slots and no more, so a recording that arrives while they
-	// encode still finds a free one. A refused slice is sent again by its
-	// caller, which reaches another worker through the load balancer.
-	if (!canAcceptNewVideoProcess(result.data.range ? "recovery" : undefined)) {
+	// A slice refused here is sent again by its caller, which reaches another
+	// worker through the load balancer.
+	if (!canAcceptNewVideoProcess(result.data.range ? "slice" : "interactive")) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
