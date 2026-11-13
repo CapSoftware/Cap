@@ -55,6 +55,7 @@ import {
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	assertPublicMediaUrl,
@@ -441,9 +442,9 @@ async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	if (!(await appOwnerCanUseInfra(appId))) return NOT_AVAILABLE;
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
 	const refusal = await transcriptStartRefusal(appId);
-	return refusal
-		? fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT)
-		: null;
+	if (!refusal) return null;
+	await scheduleAutoTopUp({ appId });
+	return fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT);
 }
 
 export async function createTranscriptFromUrl(

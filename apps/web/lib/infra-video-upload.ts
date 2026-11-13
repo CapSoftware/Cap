@@ -10,6 +10,7 @@ import { Cause, Effect, Exit, Option } from "effect";
 import { API_RETRY_HINT, apiErrorBody } from "@/lib/api-errors";
 import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import { developerVideoPageUrls } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import {
 	admitDeveloperVideoUpload,
 	type DeveloperVideoUpload,
@@ -29,6 +30,7 @@ import {
 	withoutReservedMetadata,
 } from "@/lib/developer-video-takedown";
 import { canUseInfra } from "@/lib/infra-access";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
 import { lockInfraAccount } from "@/lib/infra-balance";
 import {
 	getInfraUploadAdmission,
@@ -442,6 +444,7 @@ export async function createInfraVideo({
 > {
 	const admission = await getInfraUploadAdmission(appId);
 	if (!admission.allowed) {
+		await scheduleAutoTopUp({ appId });
 		return { status: 402, body: uploadAdmissionError(admission) };
 	}
 
@@ -767,6 +770,7 @@ export async function completeInfraUpload({
 			]);
 			if (recorded) return ok({ success: true });
 			if (!admission.allowed) {
+				await scheduleAutoTopUp({ appId });
 				return { status: 402, body: uploadAdmissionError(admission) };
 			}
 		}
@@ -832,6 +836,7 @@ export async function completeInfraUpload({
 			await removeStoredFile(s3Key);
 			await releaseDeveloperVideoUpload(videoId, claim);
 			claim = null;
+			await scheduleAutoTopUp({ appId });
 			const refusal = uploadAdmissionError(admission);
 			return {
 				status: 402,
@@ -933,7 +938,8 @@ async function retireUnrecordedVideo(
 	now: Date,
 	missingKey?: string,
 ) {
-	return db().transaction(async (tx) => {
+	let deleted = false;
+	const retired = await db().transaction(async (tx) => {
 		await lockInfraAccount(tx, appId);
 
 		const read = tx
@@ -973,8 +979,11 @@ async function retireUnrecordedVideo(
 			.where(
 				and(eq(developerVideos.id, videoId), isNull(developerVideos.duration)),
 			);
+		deleted = true;
 		return true;
 	});
+	if (deleted) await cancelDeveloperVideoEncodes({ appId, videoId });
+	return retired;
 }
 
 async function unrecordedVideosPage(
