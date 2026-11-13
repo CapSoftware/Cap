@@ -1055,42 +1055,36 @@ export const POST = async (req: Request) => {
 						? User.UserId.make(customer.metadata.userId)
 						: undefined;
 				}
-				if (!foundUserId) {
-					console.log("No user found in metadata, checking customer email");
-					if ("email" in customer && customer.email) {
-						const userByEmail = await db()
+
+				let [subscriptionUser] = foundUserId
+					? await db()
 							.select()
 							.from(users)
-							.where(eq(users.email, customer.email))
-							.limit(1);
+							.where(eq(users.id, foundUserId))
+							.limit(1)
+					: [];
 
-						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
-							foundUserId = userByEmail[0].id;
-							linkCustomerToUser = true;
-							console.log(`User found by email: ${foundUserId}`);
-						} else {
-							console.log("No user found by email");
-							return new Response("No user found", {
-								status: 400,
-							});
-						}
-					} else {
-						console.log("No email found for customer");
-						return new Response("No user found", {
-							status: 400,
-						});
-					}
-				}
-
-				const userResult = await db()
-					.select()
-					.from(users)
-					.where(eq(users.id, foundUserId));
-
-				const [subscriptionUser] = userResult;
+				// Older customers carry a metadata userId for an account that no
+				// longer exists. Rejecting the event left the account on past_due,
+				// which keeps Pro forever, so match on email like the other events.
 				if (!subscriptionUser) {
-					console.log("No user found in database");
-					return new Response("No user found", { status: 400 });
+					console.log("No user found from metadata, checking customer email");
+					if (!("email" in customer) || !customer.email) {
+						console.log("No email found for customer");
+						return new Response("No user found", { status: 400 });
+					}
+					[subscriptionUser] = await db()
+						.select()
+						.from(users)
+						.where(eq(users.email, customer.email))
+						.limit(1);
+					if (!subscriptionUser) {
+						console.log("No user found by email");
+						return new Response("No user found", { status: 400 });
+					}
+					foundUserId = subscriptionUser.id;
+					linkCustomerToUser = true;
+					console.log(`User found by email: ${foundUserId}`);
 				}
 
 				if (
@@ -1108,7 +1102,7 @@ export const POST = async (req: Request) => {
 
 				if (linkCustomerToUser) {
 					await stripe().customers.update(customer.id, {
-						metadata: { userId: foundUserId },
+						metadata: { userId: subscriptionUser.id },
 					});
 				}
 
@@ -1133,11 +1127,11 @@ export const POST = async (req: Request) => {
 				await db()
 					.update(users)
 					.set(userUpdate)
-					.where(eq(users.id, foundUserId));
-				await enqueueLoopsSync(db(), foundUserId);
+					.where(eq(users.id, subscriptionUser.id));
+				await enqueueLoopsSync(db(), subscriptionUser.id);
 
 				console.log("User updated successfully", {
-					foundUserId,
+					userId: subscriptionUser.id,
 					...userUpdate,
 				});
 			}
