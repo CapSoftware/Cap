@@ -4,9 +4,9 @@ import type { DeveloperVideoStatus } from "@cap/database/types";
 import { isLanguageCode, SUPPORTED_LANGUAGES } from "@cap/web-domain";
 import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import {
-	deleteDeveloperObjects,
 	getDeveloperObjectText,
 	putDeveloperObject,
+	removeDeveloperObject,
 } from "@/lib/developer-transcript-storage";
 import { buildWebVtt } from "@/lib/developer-transcript-vtt";
 import type { TranscriptResultObject } from "@/lib/developer-transcripts";
@@ -15,7 +15,7 @@ import { developerVideoKeys } from "@/lib/developer-video-plan";
 export const CAPTIONS_CONTENT_TYPE = "text/vtt; charset=utf-8";
 export const CAPTIONS_UNKNOWN_LANGUAGE = "und";
 
-const SYNC_ATTEMPTS = 3;
+const SYNC_ATTEMPTS = 5;
 
 export type DeveloperVideoCaption = {
 	language: string;
@@ -152,22 +152,30 @@ export async function syncVideoCaptions(input: {
 	const video = { id: input.videoId, appId: input.appId };
 	const language = captionLanguage(input.language);
 	const key = videoCaptionsKey(video, language);
-	const stored = await videoIsStored(video);
 
-	let source = stored ? await newestCaptionSource(video, language) : null;
-	for (let attempt = 0; source && attempt < SYNC_ATTEMPTS; attempt++) {
-		const captions = await captionsFor(source.resultKey);
-		if (captions === null) break;
-		await putDeveloperObject(key, captions, CAPTIONS_CONTENT_TYPE);
-		const latest = await newestCaptionSource(video, language);
-		if (latest?.id === source.id) {
-			return { state: "written", transcriptId: source.id };
+	const currentSource = async () =>
+		(await videoIsStored(video))
+			? await newestCaptionSource(video, language)
+			: null;
+
+	for (let attempt = 0; attempt < SYNC_ATTEMPTS; attempt++) {
+		const source = await currentSource();
+		const captions = source ? await captionsFor(source.resultKey) : null;
+		if (source && captions !== null) {
+			await putDeveloperObject(key, captions, CAPTIONS_CONTENT_TYPE);
+		} else {
+			await removeDeveloperObject(key);
 		}
-		source = latest;
+		const latest = await currentSource();
+		if ((latest?.id ?? null) === (source?.id ?? null)) {
+			return source && captions !== null
+				? { state: "written", transcriptId: source.id }
+				: { state: "removed" };
+		}
 	}
-
-	await deleteDeveloperObjects([key]);
-	return { state: "removed" };
+	throw new Error(
+		`Captions for video ${video.id} kept changing while they were written`,
+	);
 }
 
 export type VideoForTranscript =
