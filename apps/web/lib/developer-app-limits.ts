@@ -38,6 +38,16 @@ export function developerKeyRotationLimited(
 	});
 }
 
+export const DEVELOPER_CONSOLE_RATE_MESSAGE =
+	"Too many requests at once. Try again in a minute.";
+
+// Console actions that act like REST calls count in the REST API's
+// per-account firewall bucket (same rule, same key), so the console cannot
+// send more than the API would.
+export function developerConsoleRequestLimited(userId: User.UserId) {
+	return isRateLimited(RATE_LIMIT_IDS.DEVELOPER_API_OWNER, { key: userId });
+}
+
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
 >[0];
