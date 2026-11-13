@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
 	events: [] as string[],
 	rateLimited: new Set<string>(),
 	putObject: vi.fn(),
+	deleteObject: vi.fn(),
 	uploadSpaceIcon: vi.fn(),
 }));
 
@@ -101,10 +102,25 @@ vi.mock("@cap/database/crypto", () => ({
 	hashPassword: async (value: string) => `hashed:${value}`,
 }));
 vi.mock("@cap/utils", () => ({ userIsPro: () => true }));
-vi.mock("@cap/web-backend", () => ({ S3Buckets: {} }));
-vi.mock("@/lib/server", () => ({
-	runPromise: async () => state.putObject(),
-}));
+vi.mock("@cap/web-backend", async () => {
+	const { Effect } = await import("effect");
+	return {
+		S3Buckets: {
+			getBucketAccess: () =>
+				Effect.succeed([
+					{
+						putObject: (key: string) => Effect.sync(() => state.putObject(key)),
+						deleteObject: (key: string) =>
+							Effect.sync(() => state.deleteObject(key)),
+					},
+				]),
+		},
+	};
+});
+vi.mock("@/lib/server", async () => {
+	const { Effect } = await import("effect");
+	return { runPromise: Effect.runPromise };
+});
 vi.mock("@/lib/org-pro", () => ({ isOrganizationOwnerPro: async () => true }));
 vi.mock("@/actions/organization/upload-space-icon", () => ({
 	uploadSpaceIcon: state.uploadSpaceIcon,
@@ -147,6 +163,7 @@ beforeEach(() => {
 	state.events.length = 0;
 	state.rateLimited.clear();
 	state.putObject.mockReset();
+	state.deleteObject.mockReset();
 	state.uploadSpaceIcon.mockReset();
 	state.uploadSpaceIcon.mockResolvedValue({ iconUrl: "icon-key" });
 });
@@ -211,6 +228,26 @@ describe("organization creation limits", () => {
 
 		expect(results.filter((result) => result.success)).toHaveLength(3);
 		expect(state.ownedOrganizations).toBe(ORGANIZATION_LIMIT);
+	});
+
+	it("removes the icons of creates refused at the cap", async () => {
+		state.ownedOrganizations = ORGANIZATION_LIMIT - 1;
+
+		const results = await Promise.all(
+			Array.from({ length: 5 }, (_, index) =>
+				createOrganization(form({ name: `Acme ${index}`, icon: icon() })),
+			),
+		);
+
+		expect(results.filter((result) => result.success)).toHaveLength(1);
+		expect(state.putObject).toHaveBeenCalledTimes(5);
+		expect(state.deleteObject).toHaveBeenCalledTimes(4);
+		const kept = state.putObject.mock.calls
+			.map(([key]) => key)
+			.filter(
+				(key) => !state.deleteObject.mock.calls.some(([gone]) => gone === key),
+			);
+		expect(kept).toHaveLength(1);
 	});
 
 	it("needs the row lock to hold the cap", async () => {
