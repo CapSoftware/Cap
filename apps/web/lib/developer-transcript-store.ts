@@ -1036,8 +1036,12 @@ export async function deleteTranscript(
 async function syncDeletedTranscriptCaptions(
 	appId: string,
 	transcriptId: string,
+	known?: TranscriptRow | null,
 ) {
-	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	const transcript =
+		known === undefined
+			? await findTranscriptAnyState(appId, transcriptId)
+			: known;
 	if (
 		!transcript?.deletedAt ||
 		!transcript.videoId ||
@@ -1057,9 +1061,12 @@ export async function deleteTranscriptObjects(
 	appId: string,
 	transcriptId: string,
 ) {
-	const keys = transcriptObjectKeys(appId, transcriptId);
-	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
-	await syncDeletedTranscriptCaptions(appId, transcriptId);
+	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	if (transcript?.status !== "processing") {
+		const keys = transcriptObjectKeys(appId, transcriptId);
+		await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	}
+	await syncDeletedTranscriptCaptions(appId, transcriptId, transcript);
 }
 
 const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;
