@@ -23,6 +23,8 @@ import {
 	developerVideoKeys,
 	HLS_PLAYLIST_CONTENT_TYPE,
 } from "./developer-video-plan";
+import { slicedHlsPlaylistText } from "./developer-video-sliced-ladder";
+import { slicedHlsPlayback } from "./developer-video-slices";
 import {
 	developerVideoUrlAnswersAnyOrigin,
 	readDeveloperVideoText,
@@ -45,6 +47,11 @@ const SIGNED_URL_WINDOW_SECONDS = 6 * 60 * 60;
 // for playback after a top-up.
 const CACHE_SECONDS = 60;
 
+// A ladder still being encoded in slices gains segments every few seconds and
+// players ask for its playlists again about once per segment, so those answers
+// are shared only for a moment.
+const GROWING_CACHE_SECONDS = 2;
+
 const START_MAX_BANDWIDTH = 2_600_000;
 const START_MAX_SHORT_SIDE = 1080;
 
@@ -58,6 +65,10 @@ export const PLAYBACK_CORS_HEADERS = {
 
 const CACHEABLE = {
 	"Cache-Control": `public, max-age=${CACHE_SECONDS}, s-maxage=${CACHE_SECONDS}`,
+};
+
+const GROWING = {
+	"Cache-Control": `public, max-age=${GROWING_CACHE_SECONDS}, s-maxage=${GROWING_CACHE_SECONDS}`,
 };
 
 function notFound(): Response {
@@ -467,21 +478,27 @@ async function subtitleTracks(video: PlayableVideo): Promise<SubtitleTrack[]> {
 // the HLS type, which a player may check before it treats a URL as HLS.
 const MEDIA_PLAYLIST_CONTENT_TYPE = "text/plain; charset=utf-8";
 
-function playlistResponse(playlist: string): Response {
+function playlistResponse(
+	playlist: string,
+	cache: Record<string, string> = CACHEABLE,
+): Response {
 	return new Response(playlist, {
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
-			...CACHEABLE,
+			...cache,
 			"Content-Type": HLS_PLAYLIST_CONTENT_TYPE,
 		},
 	});
 }
 
-function mediaPlaylistResponse(playlist: string): Response {
+function mediaPlaylistResponse(
+	playlist: string,
+	cache: Record<string, string> = CACHEABLE,
+): Response {
 	return new Response(playlist, {
 		headers: {
 			...PLAYBACK_CORS_HEADERS,
-			...CACHEABLE,
+			...cache,
 			"Content-Type": MEDIA_PLAYLIST_CONTENT_TYPE,
 		},
 	});
@@ -587,23 +604,34 @@ async function playableVideoResponse(
 			? redirectTo(keysFor(processing.poster.output).poster, request)
 			: notFound();
 	}
-	if (
-		!outputs.hls ||
-		processing.hls.state !== "complete" ||
-		!HLS_FILE_PATTERN.test(file)
-	) {
+	// While a ladder is encoded in slices its playlists are built from the
+	// slices that are in. Once it is whole they are read from storage like any
+	// other ladder's.
+	const slices = slicedHlsPlayback(processing);
+	const hlsOutput =
+		processing.hls.state === "complete"
+			? processing.hls.output
+			: slices?.output;
+	if (!outputs.hls || !hlsOutput || !HLS_FILE_PATTERN.test(file)) {
 		return notFound();
 	}
-	const keys = keysFor(processing.hls.output);
+	const keys = keysFor(hlsOutput);
 	if (MEDIA_FILE_PATTERN.test(file)) {
 		return redirectTo(`${keys.hlsPrefix}${file}`, request);
 	}
 
 	const isMaster = file === DEVELOPER_VIDEO_MASTER_PLAYLIST;
 	const [playlist, subtitles] = await Promise.all([
-		readDeveloperVideoText(`${keys.hlsPrefix}${file}`),
+		slices
+			? slicedHlsPlaylistText(
+					{ video, encodeId: processing.encodeId, ...slices },
+					file,
+					readDeveloperVideoText,
+				)
+			: readDeveloperVideoText(`${keys.hlsPrefix}${file}`),
 		isMaster && wantsSubtitles(request) ? subtitleTracks(video) : [],
 	]);
+	const cache = slices && !slices.ended ? GROWING : CACHEABLE;
 	if (!playlist) return notFound();
 	const short = wantsShortSegments(request);
 	if (isMaster) {
@@ -615,6 +643,7 @@ async function playableVideoResponse(
 				short ? listShortSegmentPlaylists(master) : master,
 				subtitles,
 			),
+			cache,
 		);
 	}
 	return mediaPlaylistResponse(
@@ -628,5 +657,6 @@ async function playableVideoResponse(
 				),
 			short ? developerVideoUrlAnswersAnyOrigin : undefined,
 		),
+		cache,
 	);
 }

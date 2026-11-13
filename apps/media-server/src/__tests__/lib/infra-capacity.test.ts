@@ -116,6 +116,52 @@ describe("capacity for Cap Infra jobs", () => {
 		expect(allowsWithReserve(1, 0)).toBe(true);
 	});
 
+	test("a slice keeps half of the worker's slots free, and never less than the reserve", () => {
+		const sliceAllows = (
+			effectiveMax: number,
+			active: number,
+			reservedSlots = 1,
+		) =>
+			jobManager.infraCapacityAllows({
+				effectiveMax,
+				active,
+				activeHeavyLadders: 0,
+				heavyLadder: false,
+				reservedSlots: jobManager.infraSliceReservedSlots(
+					effectiveMax,
+					reservedSlots,
+				),
+				maxHeavyLadders: 1,
+			});
+		expect(jobManager.infraSliceReservedSlots(4, 1)).toBe(2);
+		expect(jobManager.infraSliceReservedSlots(5, 1)).toBe(3);
+		expect(jobManager.infraSliceReservedSlots(4, 3)).toBe(3);
+		expect(sliceAllows(4, 1)).toBe(true);
+		expect(sliceAllows(4, 2)).toBe(false);
+		expect(sliceAllows(5, 2)).toBe(false);
+		expect(sliceAllows(6, 2)).toBe(true);
+		expect(sliceAllows(6, 3)).toBe(false);
+		expect(sliceAllows(2, 0)).toBe(true);
+		expect(sliceAllows(2, 1)).toBe(false);
+		expect(sliceAllows(1, 0)).toBe(true);
+		expect(sliceAllows(1, 1)).toBe(false);
+		expect(sliceAllows(4, 0, 3)).toBe(true);
+		expect(sliceAllows(4, 1, 3)).toBe(false);
+	});
+
+	test("a heavy slice still waits for the running heavy ladder", () => {
+		expect(
+			jobManager.infraCapacityAllows({
+				effectiveMax: 8,
+				active: 1,
+				activeHeavyLadders: 1,
+				heavyLadder: true,
+				reservedSlots: jobManager.infraSliceReservedSlots(8, 1),
+				maxHeavyLadders: 1,
+			}),
+		).toBe(false);
+	});
+
 	test("counts only heavy ladders that are still running", () => {
 		const before = jobManager.getActiveInfraHeavyLadderCount();
 		const job = addActiveJob(true);
@@ -139,7 +185,7 @@ describe("routes", () => {
 		expect(response.status).toBe(503);
 		expect((await response.json()).code).toBe("SERVER_BUSY");
 		expect(response.headers.get("Retry-After")).not.toBeNull();
-		expect(infra).toHaveBeenCalledWith(true);
+		expect(infra).toHaveBeenCalledWith(true, false);
 	});
 
 	test("a 1080p Infra ladder is not counted as heavy", async () => {
@@ -151,7 +197,27 @@ describe("routes", () => {
 		await app.fetch(
 			request("/video/ladder", ladderBody({ infra: true, maxTier: "1080p" })),
 		);
-		expect(infra).toHaveBeenCalledWith(false);
+		expect(infra).toHaveBeenCalledWith(false, false);
+	});
+
+	test("an Infra ladder slice is held to the slice reserve", async () => {
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
+		const infra = spyOn(
+			jobManager,
+			"canAcceptNewInfraVideoProcess",
+		).mockReturnValue(false);
+		const response = await app.fetch(
+			request(
+				"/video/ladder",
+				ladderBody({
+					infra: true,
+					range: { startSeconds: 20, durationSeconds: 96 },
+				}),
+			),
+		);
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).not.toBeNull();
+		expect(infra).toHaveBeenCalledWith(true, true);
 	});
 
 	test("an Infra MP4 over its limit gets the busy answer", async () => {

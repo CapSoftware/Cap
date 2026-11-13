@@ -1062,7 +1062,10 @@ video.post("/ladder", async (c) => {
 	if (
 		!canAcceptNewVideoProcess() ||
 		(result.data.infra === true &&
-			!canAcceptNewInfraVideoProcess(infraHeavyLadder))
+			!canAcceptNewInfraVideoProcess(
+				infraHeavyLadder,
+				result.data.range !== undefined,
+			))
 	) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
