@@ -23,6 +23,27 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+export function withinDeadline<T>(
+	work: Promise<T>,
+	deadlineAt: number,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const expiry = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new LocalError(
+						"timeout",
+						"The time allowed for this call ran out",
+						"Run the tool again.",
+					),
+				),
+			Math.max(0, deadlineAt - Date.now()),
+		);
+	});
+	return Promise.race([work, expiry]).finally(() => clearTimeout(timer));
+}
+
 export function timeLimit(ms: number, signal?: AbortSignal) {
 	const controller = new AbortController();
 	let timedOut = false;

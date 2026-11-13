@@ -18,12 +18,14 @@ export type ToolReply = {
 };
 
 export const FAST: ServerOptions = {
-	wait: { pollIntervalMs: 20, maxPollIntervalMs: 40 },
+	wait: { pollIntervalMs: 20, maxPollIntervalMs: 40, mp4WaitMs: 1500 },
 	upload: {
 		partBytes: 1024,
 		partConcurrency: 4,
 		retryDelayMs: 5,
 		completionRetryMs: 10,
+		abortBudgetMs: 300,
+		progressIntervalMs: 0,
 	},
 };
 

@@ -103,6 +103,7 @@ export function createInfraServer(config: Config, options: ServerOptions = {}) {
 		};
 		const call: ToolCall = {
 			signal: extra.signal,
+			wantsProgress: progressToken !== undefined,
 			announce,
 			progress: (done, total, message) => {
 				if (progressToken === undefined) return;

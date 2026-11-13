@@ -4,11 +4,13 @@ import { sleep } from "./time";
 export type WaitTuning = {
 	pollIntervalMs: number;
 	maxPollIntervalMs: number;
+	mp4WaitMs: number;
 };
 
 export const DEFAULT_WAIT_TUNING: WaitTuning = {
 	pollIntervalMs: 3_000,
 	maxPollIntervalMs: 10_000,
+	mp4WaitMs: 30_000,
 };
 
 const POLL_GROWTH = 1.2;
@@ -62,9 +64,16 @@ export async function waitFor<T>(options: {
 			return outcome(true);
 		}
 
-		const interval = Math.min(
-			options.tuning.maxPollIntervalMs,
-			options.tuning.pollIntervalMs * POLL_GROWTH ** (polls - 1),
+		const told =
+			lastError instanceof ApiError && lastError.retryAfterSeconds
+				? lastError.retryAfterSeconds * 1000
+				: 0;
+		const interval = Math.max(
+			told,
+			Math.min(
+				options.tuning.maxPollIntervalMs,
+				options.tuning.pollIntervalMs * POLL_GROWTH ** (polls - 1),
+			),
 		);
 		if (Date.now() + interval + SHORTEST_USEFUL_POLL_MS > deadlineAt) {
 			return outcome(false);

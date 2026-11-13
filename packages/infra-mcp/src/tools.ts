@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import type { Config } from "./config";
-import { LocalError, withContext } from "./errors";
+import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
 import { inspectFile, storageTimeoutMs } from "./files";
 import {
 	asRecord,
@@ -27,6 +27,7 @@ export type ToolKind = "read" | "write" | "delete";
 
 export type ToolCall = {
 	signal: AbortSignal;
+	wantsProgress: boolean;
 	progress: (done: number, total: number | undefined, message: string) => void;
 	announce: (event: string, fields: Record<string, unknown>) => void;
 };
@@ -71,7 +72,29 @@ export const TRANSCRIPT_STATUSES = [
 	"complete",
 	"error",
 ] as const;
+export const VIDEO_OUTPUTS = ["all", "hls", "mp4", "any"] as const;
 const MAX_WAIT_SECONDS = 900;
+const START_ATTEMPTS = 2;
+const MEGABYTE = 1_000_000;
+
+type VideoOutput = (typeof VIDEO_OUTPUTS)[number];
+
+const OUTPUT_LINKS: Record<VideoOutput, readonly ("hlsUrl" | "mp4Url")[]> = {
+	all: ["hlsUrl", "mp4Url"],
+	hls: ["hlsUrl"],
+	mp4: ["mp4Url"],
+	any: [],
+};
+
+const megabytes = (bytes: number) => (bytes / MEGABYTE).toFixed(1);
+
+const videoCanPlay = (video: Record<string, unknown>) =>
+	video.ready === true || video.status === "ready";
+
+const videoIsFinal = (video: Record<string, unknown>) =>
+	video.status === "errored" ||
+	video.status === "uploading" ||
+	(videoCanPlay(video) && video.playbackId === null);
 
 const videoId = z.string().min(1).describe("The video id");
 const transcriptId = z.string().min(1).describe("The transcript id");
@@ -160,9 +183,10 @@ export function createTools(deps: ToolDeps): Tool[] {
 		call.announce("transcript_created", { transcriptId: id });
 		if (target === null) return transcript(created);
 
+		let stored = false;
 		try {
 			const stream = createReadStream(file.path);
-			const stored = await storagePut(
+			const put = await storagePut(
 				String(target.url),
 				Readable.toWeb(stream) as ReadableStream<Uint8Array>,
 				{
@@ -176,24 +200,93 @@ export function createTools(deps: ToolDeps): Tool[] {
 					timeoutMs: storageTimeoutMs(file.size),
 				},
 			).finally(() => stream.destroy());
-			if (stored.status < 200 || stored.status >= 300) {
+			if (put.status < 200 || put.status >= 300) {
 				throw new LocalError(
 					"file_upload_failed",
-					`The file could not be stored (status ${stored.status})`,
+					`The file could not be stored (status ${put.status})`,
 					null,
 				);
 			}
-			return transcript(
-				dataOf(
-					await client.call("startTranscript", { id, signal: call.signal }),
-				),
-			);
+			stored = true;
+			for (let attempt = 1; ; attempt++) {
+				try {
+					return transcript(
+						dataOf(
+							await client.call("startTranscript", { id, signal: call.signal }),
+						),
+					);
+				} catch (error) {
+					if (!isUnanswered(error) || attempt >= START_ATTEMPTS) throw error;
+				}
+			}
 		} catch (error) {
-			throw withContext(error, {
-				transcriptId: id,
-				next: "The transcript exists without its file and is not charged. Remove it with transcripts_delete, then create it again.",
-			});
+			const refused = error instanceof ApiError && error.status < 500;
+			throw withContext(
+				error,
+				!stored
+					? {
+							transcriptId: id,
+							transcriptStatus: "uploading",
+							next: "The transcript exists without its file, so it has not started and is not charged. Remove it with transcripts_delete, then create it again.",
+						}
+					: refused
+						? {
+								transcriptId: id,
+								transcriptStatus: "uploading",
+								next: "The file is stored but Cap refused to start the transcript, so it is not charged. Fix what the error says, then remove it with transcripts_delete and create it again.",
+							}
+						: {
+								transcriptId: id,
+								transcriptStatus: "unknown",
+								next: "The file is stored and the transcript may be running, so it may complete and be billed. Check it with transcripts_get or transcripts_wait before anything else. Do not delete it or create it again until you know its status.",
+							},
+			);
 		}
+	};
+
+	const videoTranscriptSource = async (
+		id: string,
+		call: ToolCall,
+	): Promise<{ url: string; name: string | undefined }> => {
+		const outcome = await waitFor({
+			poll: async (deadlineAt) =>
+				dataOf(
+					await client.call("getVideo", {
+						id,
+						signal: call.signal,
+						deadlineAt,
+						once: true,
+					}),
+				),
+			settled: (video) =>
+				typeof video.mp4Url === "string" || videoIsFinal(video),
+			tuning: deps.wait,
+			timeoutMs: deps.wait.mp4WaitMs,
+			signal: call.signal,
+		});
+		const video = outcome.last ?? {};
+		if (typeof video.mp4Url !== "string") {
+			const hint =
+				video.status === "errored"
+					? "The video failed to encode, so it has no MP4. Transcribe the original file with path instead."
+					: video.status === "uploading"
+						? "The video has no file yet. Upload it with videos_upload, or transcribe the original file with path instead."
+						: videoCanPlay(video) && video.playbackId === null
+							? "This video was stored without an MP4. Transcribe the original file with path instead."
+							: "Call videos_wait with output mp4 until it returns the mp4Url, then create the transcript again.";
+			throw withContext(
+				new LocalError(
+					"video_not_ready",
+					"This video has no MP4 to transcribe yet",
+					hint,
+				),
+				{ videoId: id, videoStatus: video.status ?? "unknown" },
+			);
+		}
+		return {
+			url: video.mp4Url,
+			name: typeof video.name === "string" ? video.name : undefined,
+		};
 	};
 
 	return [
@@ -246,8 +339,14 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const uploaded = await uploadVideo(client, deps.upload, args, {
 					signal: call.signal,
 					onVideo: (id) => call.announce("video_created", { videoId: id }),
-					onProgress: (done, total) =>
-						call.progress(done, total, `Uploaded part ${done} of ${total}`),
+					onProgress: call.wantsProgress
+						? (sent, total) =>
+								call.progress(
+									sent,
+									total,
+									`Uploaded ${megabytes(sent)} of ${megabytes(total)} MB`,
+								)
+						: undefined,
 				});
 				return {
 					videoId: uploaded.videoId,
@@ -280,12 +379,25 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_wait",
 			title: "Wait for a video",
 			description:
-				"Wait until a video is ready or has failed, then return its status, length, playback id and HLS, MP4, poster, share and embed links. If the time runs out, the result has timedOut set with the last known status, so call it again. Free to call.",
+				"Wait until a video has the playback links you need, or has failed, then return its status, length, playback id and HLS, MP4, poster, share and embed links. A video is ready when its first link exists and the other follows, so by default this waits for both HLS and MP4; set output to wait for one. If the time runs out, the result has timedOut set with the last known status and what is missing, so call it again. Free to call.",
 			kind: "read",
-			input: { videoId, userId: userScope, timeoutSeconds },
+			input: {
+				videoId,
+				userId: userScope,
+				output: z
+					.enum(VIDEO_OUTPUTS)
+					.optional()
+					.describe(
+						"Which playback link must exist before this returns: all (default, HLS and MP4), hls, mp4, or any (as soon as the video can play)",
+					),
+				timeoutSeconds,
+			},
 			run: async (args, call) => {
+				const needed = OUTPUT_LINKS[args.output ?? "all"];
 				let pages: Record<string, unknown> | null = null;
 				const firstLook = () => pages ?? {};
+				const missing = (video: Record<string, unknown>) =>
+					needed.filter((link) => typeof video[link] !== "string");
 				const outcome = await waitFor({
 					poll: async (deadlineAt) => {
 						const reply = await client.call(
@@ -295,6 +407,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 								query: { userId: args.userId },
 								signal: call.signal,
 								deadlineAt,
+								once: true,
 							},
 						);
 						const video = dataOf(reply);
@@ -302,10 +415,8 @@ export function createTools(deps: ToolDeps): Tool[] {
 						return video;
 					},
 					settled: (video) =>
-						video.ready === true ||
-						video.status === "ready" ||
-						video.status === "errored" ||
-						video.status === "uploading",
+						videoIsFinal(video) ||
+						(videoCanPlay(video) && missing(video).length === 0),
 					tuning: deps.wait,
 					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
 					signal: call.signal,
@@ -317,12 +428,15 @@ export function createTools(deps: ToolDeps): Tool[] {
 						),
 				});
 				const last = outcome.last ?? {};
+				const absent =
+					outcome.settled || !videoCanPlay(last) ? [] : missing(last);
 				return {
 					videoId: args.videoId,
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
 					...videoLinks({ ...firstLook(), ...last }),
+					...(absent.length > 0 ? { missing: absent } : {}),
 					...waitOutcome(outcome, "videos_wait"),
 					...(last.status === "uploading"
 						? {
@@ -467,30 +581,16 @@ export function createTools(deps: ToolDeps): Tool[] {
 					};
 				}
 
-				let url = args.url;
-				let stored: Record<string, unknown> | undefined = args.metadata;
-				let name = args.name;
-				if (args.videoId !== undefined) {
-					const video = dataOf(
-						await client.call("getVideo", {
-							id: args.videoId,
-							signal: call.signal,
-						}),
-					);
-					if (typeof video.mp4Url !== "string") {
-						throw withContext(
-							new LocalError(
-								"video_not_ready",
-								"This video has no MP4 to transcribe yet",
-								"Call videos_wait until its status is ready, then create the transcript again.",
-							),
-							{ videoId: args.videoId, videoStatus: video.status ?? "unknown" },
-						);
-					}
-					url = video.mp4Url;
-					stored = { ...args.metadata, videoId: args.videoId };
-					name ??= typeof video.name === "string" ? video.name : undefined;
-				}
+				const fromVideo =
+					args.videoId === undefined
+						? null
+						: await videoTranscriptSource(args.videoId, call);
+				const url = fromVideo?.url ?? args.url;
+				const name = args.name ?? fromVideo?.name;
+				const stored =
+					args.videoId === undefined
+						? args.metadata
+						: { ...args.metadata, videoId: args.videoId };
 
 				const created = dataOf(
 					await client.call("createTranscript", {
@@ -560,6 +660,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 								id: args.transcriptId,
 								signal: call.signal,
 								deadlineAt,
+								once: true,
 							}),
 						),
 					settled: (found) =>
@@ -671,13 +772,23 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "account_usage",
 			title: "Get usage and balance",
 			description:
-				"Get the app's credit balance, standing, whether it can take an upload, stored minutes, what storage costs per day and the current rates. Free to call. Credit is added in the console, not through this server.",
+				"Get the app's credit balance, standing, whether it can take an upload, stored minutes, what storage costs per day and the current rates. When the app needs credit, the result carries addCreditAt with the console link, because credit cannot be added through this server. Free to call.",
 			kind: "read",
 			input: {},
-			run: async (_args, call) => ({
-				...dataOf(await client.call("getUsage", { signal: call.signal })),
-				addCreditAt: config.consoleUrl,
-			}),
+			run: async (_args, call) => {
+				const usage = dataOf(
+					await client.call("getUsage", { signal: call.signal }),
+				);
+				const standing = asRecord(usage.standing).state;
+				const needsCredit =
+					asRecord(usage.upload).allowed === false ||
+					standing === "grace" ||
+					standing === "paused";
+				return {
+					...usage,
+					...(needsCredit ? { addCreditAt: config.consoleUrl } : {}),
+				};
+			},
 		}),
 		tool({
 			name: "account_transactions",

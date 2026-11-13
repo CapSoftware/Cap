@@ -20,6 +20,7 @@ type StubVideo = {
 	createdAt: string;
 	deleted: boolean;
 	polls: number;
+	readyReads: number;
 	uploadId: string | null;
 	parts: Map<number, { etag: string; bytes: Buffer; secret: string }>;
 	file: Buffer | null;
@@ -56,6 +57,12 @@ export type StubRequest = {
 
 export type CreditRefusal = "out_of_credit" | "insufficient_credits" | null;
 
+export type ScriptedReply = {
+	status: number;
+	retryAfterSeconds?: number;
+	delayMs?: number;
+};
+
 const DOCS = "https://cap.so/docs/api/rest-api";
 const REST = "/api/developer/v1";
 const SDK = "/api/developer/sdk/v1/upload/multipart";
@@ -91,6 +98,11 @@ export async function startStubApi() {
 		completionRetryAfterSeconds: null as number | null,
 		videoListPagination: true,
 		hang: null as ((request: StubRequest) => boolean) | null,
+		dropAnswer: null as ((request: StubRequest) => boolean) | null,
+		intercept: null as ((request: StubRequest) => ScriptedReply | null) | null,
+		hlsAfterReads: 0,
+		mp4AfterReads: 0,
+		refuseTranscriptFile: false,
 		videoOutcome: "ready" as "ready" | "errored",
 		transcriptOutcome: "complete" as "complete" | "insufficient_credits",
 	};
@@ -116,8 +128,14 @@ export async function startStubApi() {
 		const ready = video.status === "ready";
 		const base = `${origin}/api/developer/playback/${video.playbackId}`;
 		return {
-			hlsUrl: ready ? `${base}/master.m3u8` : null,
-			mp4Url: ready ? `${base}/video.mp4` : null,
+			hlsUrl:
+				ready && video.readyReads >= state.hlsAfterReads
+					? `${base}/master.m3u8`
+					: null,
+			mp4Url:
+				ready && video.readyReads >= state.mp4AfterReads
+					? `${base}/video.mp4`
+					: null,
 			posterUrl: ready ? `${base}/poster.jpg` : null,
 		};
 	};
@@ -341,7 +359,9 @@ export async function startStubApi() {
 				(query.userId === undefined || video.externalUserId === query.userId);
 			if (!video || !visible) return send(response, 404, videoNotFound);
 			if (method === "GET" && action === undefined) {
-				return send(response, 200, { data: videoJson(video) });
+				const data = videoJson(video);
+				if (video.status === "ready") video.readyReads++;
+				return send(response, 200, { data });
 			}
 			if (method === "GET" && action === "status") {
 				if (video.status === "processing") {
@@ -350,7 +370,9 @@ export async function startStubApi() {
 						video.status = state.videoOutcome;
 					}
 				}
-				return send(response, 200, { data: statusJson(video) });
+				const data = statusJson(video);
+				if (video.status === "ready") video.readyReads++;
+				return send(response, 200, { data });
 			}
 			if (method === "DELETE" && action === undefined) {
 				video.deleted = true;
@@ -387,6 +409,7 @@ export async function startStubApi() {
 				createdAt: new Date().toISOString(),
 				deleted: false,
 				polls: 0,
+				readyReads: 0,
 				uploadId: null,
 				parts: new Map(),
 				file: null,
@@ -585,13 +608,19 @@ export async function startStubApi() {
 					totalVideos: videos.size,
 					uploadingVideos: 0,
 					totalDurationMinutes: 87.5,
-					standing: { state: "active", pausesAt: null },
+					standing: {
+						state: state.credit === "out_of_credit" ? "grace" : "active",
+						pausesAt: null,
+					},
 					upload: {
-						allowed: true,
-						reason: null,
+						allowed: state.credit === null,
+						reason: state.credit,
 						requiredMicroCredits: 1736,
-						shortfallMicroCredits: 0,
-						message: null,
+						shortfallMicroCredits: state.credit === null ? 0 : 1236,
+						message:
+							state.credit === null
+								? null
+								: "The balance is $0.005, so add at least $0.01236.",
 					},
 					storage: {
 						minutesByTier: { "1080p": 87.5, "1440p": 0, "2160p": 0 },
@@ -861,6 +890,7 @@ export async function startStubApi() {
 			const transcript = transcripts.get(key ?? "");
 			const declared = Number(request.headers["content-length"]);
 			if (
+				state.refuseTranscriptFile ||
 				!transcript ||
 				transcript.secret !== signature ||
 				declared !== transcript.contentLength ||
@@ -893,7 +923,12 @@ export async function startStubApi() {
 		response.writeHead(200, { ETag: etag }).end();
 	};
 
-	const server = createServer((incoming, response) => {
+	const silent = {
+		writeHead: () => silent,
+		end: () => silent,
+	} as unknown as ServerResponse;
+
+	const server = createServer((incoming, answer) => {
 		const chunks: Buffer[] = [];
 		incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
 		incoming.on("end", () => {
@@ -918,6 +953,7 @@ export async function startStubApi() {
 			};
 			requests.push(request);
 			if (state.hang?.(request)) return;
+			const response = state.dropAnswer?.(request) ? silent : answer;
 			if (isStorage) {
 				void storage(request, response, bytes);
 				return;
@@ -936,6 +972,33 @@ export async function startStubApi() {
 							"Send Authorization: Bearer csk_... with a secret key from https://cap.so/dashboard/infra.",
 						),
 					);
+				}
+				const scripted = state.intercept?.(request) ?? null;
+				if (scripted) {
+					const limited = scripted.status === 429;
+					setTimeout(
+						() =>
+							send(
+								response,
+								scripted.status,
+								limited
+									? apiError(
+											"rate_limited",
+											"Rate limit exceeded",
+											"Wait for the Retry-After seconds, then retry. Each key allows 60 requests per minute.",
+										)
+									: apiError(
+											"internal_error",
+											"Internal server error",
+											"Retry with backoff.",
+										),
+								scripted.retryAfterSeconds === undefined
+									? {}
+									: { "Retry-After": String(scripted.retryAfterSeconds) },
+							),
+						scripted.delayMs ?? 0,
+					);
+					return;
 				}
 				if (state.rateLimited > 0) {
 					state.rateLimited--;

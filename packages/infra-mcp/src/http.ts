@@ -11,6 +11,7 @@ export type CallInput = {
 	token?: string;
 	signal?: AbortSignal;
 	deadlineAt?: number;
+	once?: boolean;
 };
 
 export type ClientTuning = {
@@ -136,6 +137,7 @@ export class InfraClient {
 				reply = await this.send(route, url, input, deadlineAt);
 			} catch (error) {
 				const retry =
+					!input.once &&
 					route.method === "GET" &&
 					error instanceof LocalError &&
 					error.code === "network_error" &&
@@ -153,6 +155,7 @@ export class InfraClient {
 				const resumeAt = Date.now() + wait;
 				if (shared) this.pausedUntil = Math.max(this.pausedUntil, resumeAt);
 				if (
+					input.once ||
 					rateLimited >= this.tuning.rateLimitRetries ||
 					resumeAt > deadlineAt
 				) {
@@ -164,6 +167,7 @@ export class InfraClient {
 			}
 
 			if (
+				!input.once &&
 				route.method === "GET" &&
 				TRANSIENT_STATUSES.has(reply.status) &&
 				transient < this.tuning.transientRetries
@@ -213,19 +217,21 @@ export class InfraClient {
 	}
 
 	private async waitForRateLimit(deadlineAt: number, signal?: AbortSignal) {
-		const wait = this.pausedUntil - Date.now();
-		if (wait <= 0) return;
-		if (this.pausedUntil > deadlineAt) {
-			throw new ApiError(
-				429,
-				"rate_limited",
-				"Rate limit exceeded",
-				"Wait for retryAfterSeconds, then run the tool again. Each key allows 60 requests per minute.",
-				{},
-				Math.ceil(wait / 1000),
-			);
+		for (;;) {
+			const wait = this.pausedUntil - Date.now();
+			if (wait <= 0) return;
+			if (this.pausedUntil > deadlineAt) {
+				throw new ApiError(
+					429,
+					"rate_limited",
+					"Rate limit exceeded",
+					"Wait for retryAfterSeconds, then run the tool again. Each key allows 60 requests per minute.",
+					{},
+					Math.ceil(wait / 1000),
+				);
+			}
+			await sleep(wait, signal);
 		}
-		await sleep(wait, signal);
 	}
 
 	private async backOff(

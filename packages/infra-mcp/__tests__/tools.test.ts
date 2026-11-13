@@ -425,7 +425,6 @@ describe("account", () => {
 			availableMicroCredits: 460000,
 			heldMicroCredits: 40000,
 			speech: { seconds: 2262, microCredits: 6283, transcripts: 3 },
-			addCreditAt: `${stub.url}/dashboard/infra`,
 		});
 	});
 

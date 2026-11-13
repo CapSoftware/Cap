@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readConfig } from "../src/config";
 import { DEFAULT_CLIENT_TUNING, InfraClient } from "../src/http";
-import { uploadVideo } from "../src/upload";
+import { DEFAULT_UPLOAD_TUNING, uploadVideo } from "../src/upload";
 import {
 	connect,
 	eventually,
@@ -67,8 +67,10 @@ describe("multipart upload", () => {
 			batches.flat(),
 		);
 		expect(completed.parts.at(-1)?.size).toBe(129_500 - 126 * 1024);
-		expect(progress.at(-1)).toBe(127);
-		expect(progress).toHaveLength(127);
+		expect(progress[0]).toBe(0);
+		expect(progress.at(-1)).toBe(129_500);
+		expect(progress.length).toBeGreaterThanOrEqual(128);
+		expect([...progress].sort((a, b) => a - b)).toEqual(progress);
 
 		expect(restCalls().map((request) => request.path)).toEqual([
 			"/api/developer/v1/uploads",
@@ -267,12 +269,7 @@ describe("cancelling an upload", () => {
 		let created: string | null = null;
 		const pending = uploadVideo(
 			client,
-			{
-				partBytes: 1024,
-				partConcurrency: 4,
-				retryDelayMs: 5,
-				completionRetryMs: 10,
-			},
+			{ ...DEFAULT_UPLOAD_TUNING, ...FAST.upload },
 			{ path: file.path },
 			{
 				signal: controller.signal,

@@ -15,7 +15,7 @@ import {
 	storagePut,
 } from "./http";
 import type { RouteName } from "./routes";
-import { cancelled, sleep } from "./time";
+import { cancelled, sleep, withinDeadline } from "./time";
 
 export const MAX_VIDEO_BYTES = 36_000_000_000;
 export const MAX_PARTS = 10_000;
@@ -23,13 +23,15 @@ export const PART_URL_BATCH = 50;
 const PART_URL_REUSE_MS = 30 * 60 * 1000;
 const PART_ATTEMPTS = 3;
 const COMPLETE_ATTEMPTS = 6;
-const ABORT_BUDGET_MS = 10_000;
+const PROGRESS_CHUNK_BYTES = 64 * 1024;
 
 export type UploadTuning = {
 	partBytes: number;
 	partConcurrency: number;
 	retryDelayMs: number;
 	completionRetryMs: number;
+	abortBudgetMs: number;
+	progressIntervalMs: number;
 };
 
 export const DEFAULT_UPLOAD_TUNING: UploadTuning = {
@@ -37,6 +39,8 @@ export const DEFAULT_UPLOAD_TUNING: UploadTuning = {
 	partConcurrency: 4,
 	retryDelayMs: 1_000,
 	completionRetryMs: 3_000,
+	abortBudgetMs: 10_000,
+	progressIntervalMs: 1_000,
 };
 
 export type VideoUploadInput = {
@@ -52,7 +56,7 @@ export type VideoUploadInput = {
 export type VideoUploadHooks = {
 	signal?: AbortSignal;
 	onVideo?: (videoId: string) => void;
-	onProgress?: (done: number, total: number) => void;
+	onProgress?: (sentBytes: number, totalBytes: number) => void;
 };
 
 export type VideoUploadResult = {
@@ -102,15 +106,18 @@ class UploadSession {
 			const expired =
 				error instanceof ApiError && error.code === "upload_token_expired";
 			if (!expired) throw error;
-			const token = await this.renew(sent, options.signal);
+			const token = await this.renew(sent, options);
 			return this.client.call(name, { body, token, ...options });
 		}
 	}
 
-	private renew(expired: string, signal?: AbortSignal) {
+	private renew(
+		expired: string,
+		options: { signal?: AbortSignal; deadlineAt?: number },
+	) {
 		if (this.token !== expired) return Promise.resolve(this.token);
 		this.renewal ??= this.client
-			.call("renewUploadToken", { id: this.videoId, signal })
+			.call("renewUploadToken", { id: this.videoId, ...options })
 			.then((reply) => {
 				this.token = required(dataOf(reply).token);
 				return this.token;
@@ -118,8 +125,26 @@ class UploadSession {
 			.finally(() => {
 				this.renewal = null;
 			});
-		return this.renewal;
+		return options.deadlineAt === undefined
+			? this.renewal
+			: withinDeadline(this.renewal, options.deadlineAt);
 	}
+}
+
+function countedBody(bytes: Buffer, onSent: (sent: number) => void) {
+	let offset = 0;
+	return new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (offset >= bytes.length) {
+				controller.close();
+				return;
+			}
+			const end = Math.min(offset + PROGRESS_CHUNK_BYTES, bytes.length);
+			controller.enqueue(bytes.subarray(offset, end));
+			offset = end;
+			onSent(offset);
+		},
+	});
 }
 
 async function readPart(file: FileHandle, position: number, length: number) {
@@ -163,6 +188,20 @@ async function sendParts(
 
 	const urls = new Map<number, { url: string; at: number }>();
 	let batches: Promise<void> = Promise.resolve();
+
+	const flowing = new Map<number, number>();
+	let storedBytes = 0;
+	let reported = 0;
+	let reportedAt = 0;
+	const report = (final = false) => {
+		const now = Date.now();
+		if (!final && now - reportedAt < tuning.progressIntervalMs) return;
+		let inFlight = 0;
+		for (const sent of flowing.values()) inFlight += sent;
+		reported = Math.max(reported, Math.min(file.size, storedBytes + inFlight));
+		reportedAt = now;
+		hooks.onProgress?.(reported, file.size);
+	};
 
 	const fresh = (partNumber: number) => {
 		const known = urls.get(partNumber);
@@ -210,13 +249,26 @@ async function sendParts(
 		let failure = "no answer";
 		for (let attempt = 1; attempt <= PART_ATTEMPTS; attempt++) {
 			const url = await urlFor(partNumber);
+			const counted = attempt === 1 && hooks.onProgress !== undefined;
 			try {
-				const stored = await storagePut(url, bytes, {
-					signal: stop.signal,
-					timeoutMs: storageTimeoutMs(size),
-				});
+				const stored = await storagePut(
+					url,
+					counted
+						? countedBody(bytes, (sent) => {
+								flowing.set(partNumber, sent);
+								report();
+							})
+						: bytes,
+					{
+						headers: counted ? { "Content-Length": String(size) } : undefined,
+						signal: stop.signal,
+						timeoutMs: storageTimeoutMs(size),
+					},
+				);
 				const accepted = stored.status >= 200 && stored.status < 300;
 				if (accepted && stored.etag) {
+					flowing.delete(partNumber);
+					storedBytes += size;
 					return { partNumber, etag: stored.etag, size };
 				}
 				failure = accepted ? "no ETag" : `status ${stored.status}`;
@@ -224,6 +276,7 @@ async function sendParts(
 				if (!isUnanswered(error)) throw error;
 				failure = error.code;
 			}
+			flowing.delete(partNumber);
 			urls.delete(partNumber);
 			if (attempt < PART_ATTEMPTS) {
 				await sleep(tuning.retryDelayMs * attempt, stop.signal);
@@ -245,7 +298,7 @@ async function sendParts(
 			const partNumber = next++;
 			if (partNumber > total) return;
 			completed.push(await sendPart(handle, partNumber));
-			hooks.onProgress?.(completed.length, total);
+			report(completed.length === total);
 		}
 	};
 
@@ -308,6 +361,15 @@ export async function uploadVideo(
 		what: "a video",
 	});
 
+	const existing =
+		input.videoId === undefined
+			? null
+			: dataOf(
+					await client.call("getVideo", {
+						id: input.videoId,
+						signal: hooks.signal,
+					}),
+				);
 	const created =
 		input.videoId === undefined
 			? dataOf(
@@ -352,6 +414,7 @@ export async function uploadVideo(
 				),
 			).uploadId,
 		);
+		hooks.onProgress?.(0, file.size);
 		const parts = await sendParts(session, file, uploadId, tuning, hooks);
 		completing = true;
 		await complete(
@@ -362,11 +425,12 @@ export async function uploadVideo(
 			tuning,
 			hooks.signal,
 		);
+		const pages = existing ?? created;
 		return {
 			videoId,
-			playbackId: optional(created.playbackId),
-			shareUrl: optional(created.shareUrl),
-			embedUrl: optional(created.embedUrl),
+			playbackId: optional(pages.playbackId),
+			shareUrl: optional(pages.shareUrl),
+			embedUrl: optional(pages.embedUrl),
 			bytes: file.size,
 			parts: parts.length,
 		};
@@ -378,7 +442,7 @@ export async function uploadVideo(
 				.call(
 					"abortUpload",
 					{ videoId, uploadId },
-					{ deadlineAt: Date.now() + ABORT_BUDGET_MS },
+					{ deadlineAt: Date.now() + tuning.abortBudgetMs },
 				)
 				.catch(() => {});
 		}
