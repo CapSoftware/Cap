@@ -5,7 +5,7 @@ import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import dynamic from "next/dynamic";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -67,6 +67,8 @@ export const Toolbar = ({
 	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
+	const [posting, setPosting] = useState(false);
+	const postingRef = useRef(false);
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
 	const [recordIntent, setRecordIntent] = useState<{
 		kind: RecordIntentKind;
@@ -139,9 +141,11 @@ export const Toolbar = ({
 	};
 
 	const handleCommentSubmit = async () => {
-		if (!canComment || comment.length === 0 || !user) {
+		if (!canComment || comment.length === 0 || !user || postingRef.current) {
 			return;
 		}
+		postingRef.current = true;
+		setPosting(true);
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = data.isScreenshot
 			? null
@@ -183,6 +187,9 @@ export const Toolbar = ({
 		} catch (error) {
 			console.error("Error posting comment:", error);
 			toast.error("Couldn't post your comment. Please try again.");
+		} finally {
+			postingRef.current = false;
+			setPosting(false);
 		}
 	};
 
@@ -291,7 +298,7 @@ export const Toolbar = ({
 									</div>
 								)}
 								<MotionButton
-									disabled={comment.length === 0}
+									disabled={comment.length === 0 || posting}
 									variant="primary"
 									size="sm"
 									layout="position"
