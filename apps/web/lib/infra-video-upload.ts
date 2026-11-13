@@ -771,9 +771,10 @@ function storedUpload(s3Key: string, now: Date): Promise<StoredUpload> {
 }
 
 // A video with no file is retired only after storage is asked again under its
-// row lock. Initiate opens an upload under the same lock, and completion takes
-// its claim (status processing) before it assembles the file, so neither can
-// slip in between that answer and the retirement.
+// row lock. Initiate opens an upload under the same lock, and completion can
+// assemble a file only from an upload that is still open, which storage
+// replaces with the file in one step. A claim left by a completion that died
+// before assembling does not keep the video.
 async function retireUnrecordedVideo(
 	appId: string,
 	videoId: string,
@@ -785,7 +786,6 @@ async function retireUnrecordedVideo(
 
 		const read = tx
 			.select({
-				status: developerVideos.status,
 				duration: developerVideos.duration,
 				deletedAt: developerVideos.deletedAt,
 			})
@@ -799,8 +799,7 @@ async function retireUnrecordedVideo(
 		if (current.deletedAt) return true;
 		if (
 			missingKey !== undefined &&
-			(current.status !== "uploading" ||
-				(await storedUpload(missingKey, now)) !== "missing")
+			(await storedUpload(missingKey, now)) !== "missing"
 		) {
 			return false;
 		}
