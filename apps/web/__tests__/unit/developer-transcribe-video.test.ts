@@ -97,6 +97,9 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	putDeveloperObjectStream: async () => {
 		throw new Error("A video transcript must not copy its source");
 	},
+	removeDeveloperObject: async (key: string) => {
+		context.objects.delete(key);
+	},
 	deleteDeveloperObjects: async (keys: string[]) => {
 		for (const key of keys) context.objects.delete(key);
 	},

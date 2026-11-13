@@ -15,6 +15,9 @@ const context = vi.hoisted(() => ({
 	objects: new Map<string, string>(),
 	puts: [] as { key: string; contentType: string }[],
 	afterPut: null as null | (() => void),
+	afterDelete: null as null | (() => void),
+	failPuts: 0,
+	stuckKeys: new Set<string>(),
 }));
 
 vi.mock("@cap/database", async () => {
@@ -105,6 +108,10 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 		body: string,
 		contentType: string,
 	) => {
+		if (context.failPuts > 0) {
+			context.failPuts -= 1;
+			throw new Error("storage is unavailable");
+		}
 		context.objects.set(key, body);
 		context.puts.push({ key, contentType });
 		const hook = context.afterPut;
@@ -112,7 +119,17 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 		hook?.();
 	},
 	deleteDeveloperObjects: async (keys: string[]) => {
-		for (const key of keys) context.objects.delete(key);
+		for (const key of keys) {
+			if (!context.stuckKeys.has(key)) context.objects.delete(key);
+		}
+	},
+	removeDeveloperObject: async (key: string) => {
+		if (context.stuckKeys.has(key))
+			throw new Error("storage refused the delete");
+		context.objects.delete(key);
+		const hook = context.afterDelete;
+		context.afterDelete = null;
+		hook?.();
 	},
 }));
 
@@ -127,7 +144,9 @@ import {
 	createTranscriptFromUrl,
 	createTranscriptFromVideo,
 	deleteTranscript,
+	deleteTranscriptObjects,
 	listTranscripts,
+	reconcileDeletedVideoCaptions,
 } from "@/lib/developer-transcript-store";
 import {
 	serializeTranscript,
@@ -214,6 +233,9 @@ beforeEach(() => {
 	context.objects = new Map();
 	context.puts = [];
 	context.afterPut = null;
+	context.afterDelete = null;
+	context.failPuts = 0;
+	context.stuckKeys = new Set();
 	fake().seed(users, { id: "owner-1", email: "owner@example.com" });
 	for (const id of ["app-1", "app-2"]) {
 		fake().seed(developerApps, { id, ownerId: "owner-1", deletedAt: null });
@@ -756,5 +778,189 @@ describe("the caption file of a video", () => {
 		await deleteTranscript("app-1", created.transcript.id);
 
 		expect(context.objects.get(MP4_KEY)).toBe("mp4-bytes");
+	});
+
+	it("keeps a file another transcript wrote while the last one was being removed", async () => {
+		seedVideo();
+		seedCompleted("tr-old", "older words");
+		await sync();
+		const old = transcripts().find((row) => row.id === "tr-old");
+		if (old) old.deletedAt = new Date("2026-11-12T11:00:00.000Z");
+		context.afterDelete = () => {
+			seedCompleted("tr-new", "newer words");
+			context.objects.set(EN_KEY, "WEBVTT\n\nwritten by the other run\n");
+		};
+
+		expect(await sync()).toEqual({ state: "written", transcriptId: "tr-new" });
+		expect(context.objects.get(EN_KEY)).toContain("newer words");
+	});
+
+	it("fails when the file cannot be removed, so deleted words are never left behind silently", async () => {
+		seedVideo();
+		seedCompleted("tr-1", "hello there");
+		await sync();
+		context.stuckKeys.add(EN_KEY);
+
+		await expect(deleteTranscript("app-1", "tr-1")).rejects.toThrow(
+			"storage refused the delete",
+		);
+		context.stuckKeys.delete(EN_KEY);
+		expect(await deleteTranscript("app-1", "tr-1")).toMatchObject({
+			status: 404,
+		});
+		expect(context.objects.has(EN_KEY)).toBe(false);
+	});
+
+	it("finishes the caption cleanup when a failed delete is sent again", async () => {
+		seedVideo();
+		seedCompleted("tr-old", "older words");
+		seedCompleted("tr-new", "newer words");
+		await sync();
+		context.failPuts = 1;
+
+		await expect(deleteTranscript("app-1", "tr-new")).rejects.toThrow(
+			"storage is unavailable",
+		);
+		expect(context.objects.get(EN_KEY)).toContain("newer words");
+
+		expect(await deleteTranscript("app-1", "tr-new")).toMatchObject({
+			ok: false,
+			status: 404,
+		});
+		expect(context.objects.get(EN_KEY)).toContain("older words");
+		expect(context.objects.get(EN_KEY)).not.toContain("newer words");
+	});
+
+	it("answers not found without touching captions for a transcript that never existed", async () => {
+		seedVideo();
+		seedCompleted("tr-1", "hello there");
+		await sync();
+		context.puts = [];
+
+		expect(await deleteTranscript("app-1", "tr-unknown")).toMatchObject({
+			ok: false,
+			status: 404,
+		});
+		expect(context.puts).toHaveLength(0);
+		expect(context.objects.get(EN_KEY)).toContain("hello there");
+	});
+
+	it("updates the captions when a transcript is deleted outside the store, as the agent API does", async () => {
+		seedVideo();
+		seedCompleted("tr-old", "older words");
+		const newest = seedCompleted("tr-new", "newer words");
+		await sync();
+
+		newest.deletedAt = new Date("2026-11-12T11:00:00.000Z");
+		newest.text = null;
+		await deleteTranscriptObjects("app-1", "tr-new");
+
+		expect(context.objects.get(EN_KEY)).toContain("older words");
+
+		const old = transcripts().find((row) => row.id === "tr-old");
+		if (old) old.deletedAt = new Date("2026-11-12T11:05:00.000Z");
+		await deleteTranscriptObjects("app-1", "tr-old");
+
+		expect(context.objects.has(EN_KEY)).toBe(false);
+	});
+
+	it("removes the captions of a transcript that completed between the delete's read and its update", async () => {
+		seedVideo();
+		const row = seedCompleted("tr-1", "hello there", {
+			status: "processing",
+			language: null,
+			wordCount: null,
+			text: null,
+		});
+		const database = fake().db as {
+			update: (table: object) => unknown;
+		};
+		const update = database.update;
+		let completed = false;
+		database.update = (table: object) => {
+			if (!completed) {
+				completed = true;
+				row.status = "complete";
+				row.language = "en";
+				row.wordCount = 2;
+				context.objects.set(EN_KEY, "WEBVTT\n\nwritten at completion\n");
+			}
+			return update(table);
+		};
+
+		try {
+			expect(await deleteTranscript("app-1", "tr-1")).toEqual({ ok: true });
+		} finally {
+			database.update = update;
+		}
+
+		expect(completed).toBe(true);
+		expect(context.objects.has(EN_KEY)).toBe(false);
+		expect(await developerVideoCaptions(VIDEO)).toEqual([]);
+	});
+
+	it("is repaired by the hourly cleanup when a delete failed and was never sent again", async () => {
+		seedVideo();
+		seedCompleted("tr-old", "older words");
+		seedCompleted("tr-new", "newer words");
+		await sync();
+		context.failPuts = 1;
+		await expect(deleteTranscript("app-1", "tr-new")).rejects.toThrow();
+		expect(context.objects.get(EN_KEY)).toContain("newer words");
+
+		const deleted = transcripts().find((row) => row.id === "tr-new");
+		expect(
+			await reconcileDeletedVideoCaptions(deleted?.updatedAt as Date),
+		).toEqual({ synced: 1, failed: 0 });
+		expect(context.objects.get(EN_KEY)).toContain("older words");
+	});
+
+	it("only revisits video transcripts deleted in the last three hours", async () => {
+		seedVideo();
+		const now = new Date("2026-11-12T12:00:00.000Z");
+		seedCompleted("tr-recent", "recent words", {
+			deletedAt: new Date("2026-11-12T11:00:00.000Z"),
+			updatedAt: new Date("2026-11-12T11:00:00.000Z"),
+		});
+		seedCompleted("tr-old", "old words", {
+			language: "de",
+			deletedAt: new Date("2026-11-12T08:00:00.000Z"),
+			updatedAt: new Date("2026-11-12T08:00:00.000Z"),
+		});
+		seedCompleted("tr-live", "live words", {
+			language: "fr",
+			updatedAt: new Date("2026-11-12T11:30:00.000Z"),
+		});
+		seedCompleted("tr-not-video", "other words", {
+			language: "es",
+			videoId: null,
+			deletedAt: new Date("2026-11-12T11:00:00.000Z"),
+			updatedAt: new Date("2026-11-12T11:00:00.000Z"),
+		});
+		context.objects.set(EN_KEY, "WEBVTT\n\nstale\n");
+		context.objects.set(DE_KEY, "WEBVTT\n\nstale\n");
+
+		expect(await reconcileDeletedVideoCaptions(now)).toEqual({
+			synced: 1,
+			failed: 0,
+		});
+		expect(context.objects.has(EN_KEY)).toBe(false);
+		expect(context.objects.has(DE_KEY)).toBe(true);
+	});
+
+	it("keeps going when one video cannot be repaired", async () => {
+		seedVideo();
+		seedVideo({ id: "video-2" });
+		seedCompleted("tr-1", "hello there", { deletedAt: new Date() });
+		seedCompleted("tr-2", "other video", {
+			videoId: "video-2",
+			deletedAt: new Date(),
+		});
+		context.stuckKeys.add(EN_KEY);
+		const latest = transcripts().find((row) => row.id === "tr-2");
+
+		expect(
+			await reconcileDeletedVideoCaptions(latest?.updatedAt as Date),
+		).toEqual({ synced: 1, failed: 1 });
 	});
 });

@@ -62,6 +62,9 @@ vi.mock("@/lib/developer-transcript-storage", () => ({
 	putDeveloperObject: async (key: string, body: string) => {
 		fixture.objects.set(key, body);
 	},
+	removeDeveloperObject: async (key: string) => {
+		fixture.objects.delete(key);
+	},
 	deleteDeveloperObjects: async (keys: string[]) => {
 		for (const key of keys) fixture.objects.delete(key);
 	},
@@ -105,6 +108,7 @@ const { developerVideoCaptions, syncVideoCaptions, videoCaptionsKey } =
 	await import("@/lib/developer-video-captions");
 const { serializeTranscript } = await import("@/lib/developer-transcripts");
 const {
+	reconcileDeletedVideoCaptions,
 	createTranscriptFromUrl,
 	createTranscriptFromVideo,
 	createTranscriptUpload,
@@ -1445,5 +1449,32 @@ describe.skipIf(!databaseUrl)("developer transcripts database", () => {
 			).toEqual({ state: "written", transcriptId: second });
 		}
 		expect(first).not.toBe(second);
+	});
+
+	it("repairs captions left by a failed delete from the hourly cleanup, reading through the status index", async () => {
+		const appId = await makeApp(50_000);
+		const videoId = await makeReadyVideo(appId);
+		const key = videoCaptionsKey({ id: videoId, appId }, "en");
+		await makeCaptionSource(appId, videoId, "older words", {
+			createdAt: new Date("2026-11-12T10:00:00.000Z"),
+		});
+		const newer = await makeCaptionSource(appId, videoId, "newer words", {
+			createdAt: new Date("2026-11-12T10:00:05.000Z"),
+		});
+		await syncVideoCaptions({ appId, videoId, language: "en" });
+		await database()
+			.update(developerTranscripts)
+			.set({ deletedAt: new Date() })
+			.where(eq(developerTranscripts.id, newer));
+		expect(fixture.objects.get(key)).toContain("newer words");
+
+		fixture.queries = [];
+		const result = await reconcileDeletedVideoCaptions();
+
+		expect(result.failed).toBe(0);
+		expect(result.synced).toBeGreaterThanOrEqual(1);
+		expect(fixture.objects.get(key)).toContain("older words");
+		const plan = await explainLastQuery("`videoId` is not null");
+		expect(plan[0]?.key).toBe("dev_transcripts_status_updated_idx");
 	});
 });
