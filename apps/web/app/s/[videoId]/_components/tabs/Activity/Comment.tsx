@@ -157,7 +157,7 @@ const CommentComponent: React.FC<{
 								/>
 							</Tooltip>
 						)}
-						{isOwnComment && (
+						{isOwnComment && !comment.sending && (
 							<Tooltip content="Delete comment">
 								<Button
 									onClick={handleDelete}
