@@ -227,7 +227,7 @@ export class InfraClient {
 					429,
 					"rate_limited",
 					"Rate limit exceeded",
-					"Wait for retryAfterSeconds, then run the tool again. Each key allows 60 requests per minute.",
+					"Wait for retryAfterSeconds, then run the tool again.",
 					{},
 					Math.ceil(wait / 1000),
 				);
