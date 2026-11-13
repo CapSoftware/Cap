@@ -98,6 +98,15 @@ function isTimeout(error: unknown): boolean {
 	);
 }
 
+// Errors from reading the source itself rather than parsing it.
+const sourceReadErrors = new WeakSet<object>();
+
+function asSourceReadError(error: unknown): Error {
+	const wrapped = error instanceof Error ? error : new Error(String(error));
+	sourceReadErrors.add(wrapped);
+	return wrapped;
+}
+
 // A parser that gives up on a file (an internal assertion, a field out of
 // range) says the file cannot be read, and asking again gives the same
 // answer. A source that could not be fetched, a refused address and a
@@ -107,6 +116,9 @@ function asUnreadable(
 	input: ReturnType<typeof createMediaInput>,
 ): unknown {
 	if (
+		(typeof error === "object" &&
+			error !== null &&
+			sourceReadErrors.has(error)) ||
 		isUnreadableMediaInput(error) ||
 		error instanceof MediaAddressError ||
 		isTimeout(error) ||
@@ -370,7 +382,9 @@ async function readMediaMetadata(
 			(await audioTrack.getBitrate()) ??
 			0)
 		: 0;
-	const fileSize = await getSourceSize(path);
+	const fileSize = await getSourceSize(path).catch((error: unknown) => {
+		throw asSourceReadError(error);
+	});
 	const bitrateFromSize =
 		duration > 0 && fileSize > 0 ? Math.round((fileSize * 8) / duration) : 0;
 

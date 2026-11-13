@@ -62,6 +62,12 @@ beforeAll(() => {
 				return new Response("Not Found", { status: 404 });
 			if (pathname === "/unavailable.mp4")
 				return new Response("Unavailable", { status: 503 });
+			// Serves every read but the one-byte size request.
+			if (
+				pathname === "/size-fails.mp4" &&
+				request.headers.get("range") === "bytes=0-0"
+			)
+				return new Response("Unavailable", { status: 503 });
 			if (pathname === "/not-video.mp4")
 				return serveFixture(request, Buffer.alloc(4096, 0x78));
 			return serveFixture(request, FIXTURE);
@@ -131,5 +137,30 @@ describe("POST /video/thumbnail with a remote video", () => {
 		const response = await app.fetch(thumbnailRequest(`${origin}/video.mp4`));
 		expect(response.status).toBe(422);
 		expect((await response.json()).code).toBe("input-policy-violation");
+	}, 30_000);
+
+	test("a size request that fails is not taken for an unreadable file", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/video/probe", {
+				method: "POST",
+				headers: {
+					"x-media-server-secret": SECRET,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ videoUrl: `${origin}/size-fails.mp4` }),
+			}),
+		);
+		expect(response.status).toBe(500);
+		const healthy = await app.fetch(
+			new Request("http://localhost/video/probe", {
+				method: "POST",
+				headers: {
+					"x-media-server-secret": SECRET,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ videoUrl: `${origin}/video.mp4` }),
+			}),
+		);
+		expect(healthy.status).toBe(200);
 	}, 30_000);
 });
