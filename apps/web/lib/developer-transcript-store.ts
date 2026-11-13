@@ -52,7 +52,6 @@ import {
 	syncVideoCaptions,
 } from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
-import { lockInfraAccount } from "@/lib/infra-balance";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	assertPublicMediaUrl,
@@ -289,27 +288,17 @@ async function findTranscript(appId: string, transcriptId: string) {
 
 const DISPATCH_RETRY_AFTER_MS = 2 * 60 * 1000;
 
-async function runningTranscripts(
-	executor: Pick<InfraDbExecutor, "select">,
-	appId: string,
-) {
-	const [row] = await executor
-		.select({ running: count() })
-		.from(developerTranscripts)
-		.where(
+const runningInApp = (appId: string) =>
+	and(
+		eq(developerTranscripts.appId, appId),
+		or(
+			eq(developerTranscripts.status, "processing"),
 			and(
-				eq(developerTranscripts.appId, appId),
-				or(
-					eq(developerTranscripts.status, "processing"),
-					and(
-						eq(developerTranscripts.status, "queued"),
-						isNull(developerTranscripts.deletedAt),
-					),
-				),
+				eq(developerTranscripts.status, "queued"),
+				isNull(developerTranscripts.deletedAt),
 			),
-		);
-	return Number(row?.running ?? 0) || 0;
-}
+		),
+	);
 
 async function withTranscriptSlot<T>(
 	appId: string,
@@ -318,21 +307,34 @@ async function withTranscriptSlot<T>(
 	enqueue: (executor: InfraDbExecutor) => Promise<T>,
 ): Promise<{ admitted: true; value: T } | { admitted: false }> {
 	return db().transaction(async (tx) => {
-		await lockInfraAccount(tx, appId);
-		const [row] = await tx
-			.select({ status: developerTranscripts.status })
-			.from(developerTranscripts)
-			.where(
-				and(
-					eq(developerTranscripts.id, transcriptId),
-					eq(developerTranscripts.appId, appId),
-				),
-			)
+		await tx
+			.select({ id: developerApps.id })
+			.from(developerApps)
+			.where(eq(developerApps.id, appId))
+			.for("update");
+		const [slot] = await tx
+			.select({
+				status: sql<DeveloperTranscriptStatus | null>`(${tx
+					.select({ status: developerTranscripts.status })
+					.from(developerTranscripts)
+					.where(
+						and(
+							eq(developerTranscripts.id, transcriptId),
+							eq(developerTranscripts.appId, appId),
+						),
+					)
+					.limit(1)})`,
+				running: sql<string | number | null>`(${tx
+					.select({ running: count() })
+					.from(developerTranscripts)
+					.where(runningInApp(appId))})`,
+			})
+			.from(developerApps)
+			.where(eq(developerApps.id, appId))
 			.limit(1);
-		if (
-			!holdsSlot(row ?? null) &&
-			(await runningTranscripts(tx, appId)) >= TRANSCRIPT_MAX_CONCURRENT
-		) {
+		const row = slot?.status ? { status: slot.status } : null;
+		const running = Number(slot?.running ?? 0) || 0;
+		if (!holdsSlot(row) && running >= TRANSCRIPT_MAX_CONCURRENT) {
 			return { admitted: false as const };
 		}
 		return { admitted: true as const, value: await enqueue(tx) };
