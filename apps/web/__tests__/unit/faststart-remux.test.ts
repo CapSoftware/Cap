@@ -14,7 +14,13 @@ const request = {
 	previewGifPresignedUrl: "https://storage.example/put/gif",
 };
 
-const answer = (status: number, body = "") => new Response(body, { status });
+const answer = (status: number, body = "", headers?: HeadersInit) =>
+	new Response(body, { status, headers });
+
+const unreachable = (code: string) =>
+	new TypeError("fetch failed", {
+		cause: Object.assign(new Error(code), { code }),
+	});
 
 describe("faststart remux dispatch", () => {
 	const fetchMock = vi.fn();
@@ -113,7 +119,7 @@ describe("faststart remux dispatch", () => {
 
 	it("retries when the media server cannot be reached", async () => {
 		fetchMock
-			.mockRejectedValueOnce(new TypeError("fetch failed"))
+			.mockRejectedValueOnce(unreachable("ECONNREFUSED"))
 			.mockResolvedValue(answer(200, "{}"));
 
 		expect(await start()).toBe("retrying");
@@ -172,6 +178,88 @@ describe("faststart remux dispatch", () => {
 		expect(console.warn).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		["a gateway 502", () => answer(502)],
+		["a gateway 504", () => answer(504)],
+	])(
+		"does not retry %s, since the job may have been taken",
+		async (_, reply) => {
+			fetchMock.mockImplementation(async () => reply());
+
+			expect(await start()).toBe("failed");
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(deferred).toHaveLength(0);
+		},
+	);
+
+	it("retries when every address refused the connection", async () => {
+		fetchMock
+			.mockRejectedValueOnce(
+				new TypeError("fetch failed", {
+					cause: new AggregateError([
+						Object.assign(new Error("v6"), { code: "ECONNREFUSED" }),
+						Object.assign(new Error("v4"), { code: "EHOSTUNREACH" }),
+					]),
+				}),
+			)
+			.mockResolvedValue(answer(200, "{}"));
+
+		expect(await start()).toBe("retrying");
+		await deferred[0];
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(settled.mock.calls).toEqual([[true]]);
+	});
+
+	it("does not retry a connection reset, since the job may have been taken", async () => {
+		fetchMock
+			.mockRejectedValueOnce(unreachable("ECONNRESET"))
+			.mockResolvedValue(answer(200, "{}"));
+
+		expect(await start()).toBe("failed");
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(deferred).toHaveLength(0);
+	});
+
+	it("stops after a retry whose connection was reset", async () => {
+		fetchMock
+			.mockResolvedValueOnce(answer(503))
+			.mockRejectedValueOnce(unreachable("ECONNRESET"))
+			.mockResolvedValue(answer(200, "{}"));
+
+		expect(await start()).toBe("retrying");
+		await deferred[0];
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(settled.mock.calls).toEqual([[false]]);
+		expect(console.error).toHaveBeenCalledWith(
+			"[faststart-remux] gave up",
+			expect.objectContaining({ reason: "ECONNRESET" }),
+		);
+	});
+
+	it("waits at least as long as the media server asks before retrying", async () => {
+		fetchMock
+			.mockResolvedValueOnce(answer(503, "SERVER_BUSY", { "Retry-After": "1" }))
+			.mockResolvedValue(answer(200, "{}"));
+
+		const startedAt = Date.now();
+		expect(await start()).toBe("retrying");
+		await deferred[0];
+
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1000);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const [, detail] =
+			vi
+				.mocked(console.warn)
+				.mock.calls.find(([line]) => line === "[faststart-remux] retrying") ??
+			[];
+		expect(detail.waitMs).toBeGreaterThanOrEqual(1000);
+		expect(detail.waitMs).toBeLessThanOrEqual(1250);
+	});
+
 	it("never sends again after a retry that timed out, since it may have been taken", async () => {
 		fetchMock
 			.mockResolvedValueOnce(answer(503, "SERVER_BUSY"))
@@ -221,7 +309,7 @@ describe("faststart remux dispatch", () => {
 
 	it("stops retrying when a later answer is a refusal", async () => {
 		fetchMock
-			.mockResolvedValueOnce(answer(502))
+			.mockResolvedValueOnce(answer(503))
 			.mockResolvedValue(answer(422, "unreadable"));
 
 		expect(await start()).toBe("retrying");
@@ -253,7 +341,7 @@ describe("faststart remux dispatch", () => {
 
 	it("hands the retries to the platform so they outlive the response", async () => {
 		fetchMock
-			.mockResolvedValueOnce(answer(504))
+			.mockResolvedValueOnce(answer(503))
 			.mockResolvedValue(answer(200, "{}"));
 
 		expect(

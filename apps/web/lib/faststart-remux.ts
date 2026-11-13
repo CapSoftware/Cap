@@ -13,14 +13,27 @@ export interface FaststartRemuxRequest {
 const RETRY_DELAYS_MS = [2_000, 6_000, 15_000];
 const RETRY_ATTEMPT_TIMEOUT_MS = 30_000;
 
+const MAX_RETRY_AFTER_MS = 60_000;
+
 class RemuxRefused extends Error {
 	constructor(
 		readonly status: number,
 		detail: string,
+		readonly retryAfterMs: number | null = null,
 	) {
 		super(`Media server remux failed: ${status} ${detail}`);
 	}
 }
+
+const parseRetryAfter = (header: string | null): number | null => {
+	if (!header) return null;
+	const seconds = Number(header);
+	const ms = Number.isFinite(seconds)
+		? seconds * 1000
+		: Date.parse(header) - Date.now();
+	if (!Number.isFinite(ms) || ms <= 0) return null;
+	return Math.min(ms, MAX_RETRY_AFTER_MS);
+};
 
 async function sendFaststartRemux(
 	mediaServerUrl: string,
@@ -46,28 +59,57 @@ async function sendFaststartRemux(
 	});
 	if (!response.ok) {
 		const errorText = await response.text().catch(() => "");
-		throw new RemuxRefused(response.status, errorText);
+		throw new RemuxRefused(
+			response.status,
+			errorText,
+			parseRetryAfter(response.headers.get("retry-after")),
+		);
 	}
 }
 
-// A full or draining media server answers 503 (or 429), and a gateway in
-// front of one that is restarting answers 502 or 504. A media server that
-// cannot be reached makes fetch throw a TypeError. All of these mean the job
-// was not taken. Every other answer is about this request and would be the
-// same again, and an attempt that timed out may have been taken, so neither
-// is sent again.
-const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+// Only answers that prove the job was not taken are sent again, because the
+// media server starts a new job for every request it accepts. A full or
+// draining media server refuses with 503 (or 429). A fetch that failed while
+// connecting never delivered the request. A reset connection, a timeout, a
+// gateway 502 or 504, or any other answer may follow a job that was taken, or
+// would be the same again, so none of them is retried.
+const RETRYABLE_STATUSES = new Set([429, 503]);
+const CONNECT_ERROR_CODES = new Set([
+	"ECONNREFUSED",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"UND_ERR_CONNECT_TIMEOUT",
+]);
+
+const errorCode = (value: unknown) =>
+	typeof value === "object" && value !== null && "code" in value
+		? value.code
+		: undefined;
+
+const failedToConnect = (error: TypeError) => {
+	const cause = error.cause;
+	if (CONNECT_ERROR_CODES.has(String(errorCode(cause)))) return true;
+	return (
+		cause instanceof AggregateError &&
+		cause.errors.length > 0 &&
+		cause.errors.every((inner) =>
+			CONNECT_ERROR_CODES.has(String(errorCode(inner))),
+		)
+	);
+};
 
 const mayClear = (error: unknown) =>
 	error instanceof RemuxRefused
 		? RETRYABLE_STATUSES.has(error.status)
-		: error instanceof TypeError;
+		: error instanceof TypeError && failedToConnect(error);
 
 const reasonOf = (error: unknown) =>
 	error instanceof RemuxRefused
 		? `status ${error.status}`
 		: error instanceof Error
-			? error.name
+			? String(errorCode(error.cause) ?? error.name)
 			: String(error);
 
 const pause = (ms: number) =>
@@ -81,7 +123,15 @@ async function retryFaststartRemux(
 ): Promise<boolean> {
 	let lastError = firstError;
 	for (const [index, delay] of delaysMs.entries()) {
-		const waitMs = Math.round(delay * (0.75 + Math.random() / 2));
+		// Never sooner than the media server asked, with jitter above that.
+		const asked =
+			lastError instanceof RemuxRefused ? (lastError.retryAfterMs ?? 0) : 0;
+		const waitMs = Math.round(
+			Math.max(
+				delay * (0.75 + Math.random() / 2),
+				asked * (1 + Math.random() / 4),
+			),
+		);
 		console.warn("[faststart-remux] retrying", {
 			videoId,
 			attempt: index + 2,
