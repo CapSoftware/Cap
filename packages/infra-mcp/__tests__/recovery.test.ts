@@ -356,7 +356,8 @@ describe("outputs that arrive after the video is ready", () => {
 		expect(waited.body.mp4Url).toMatch(/video\.mp4$/);
 		const created = await session.call("transcripts_create", { videoId });
 		expect(created.isError).toBe(false);
-		expect(created.body.metadata).toEqual({ videoId });
+		expect(created.body.videoId).toBe(videoId);
+		expect(created.body.metadata).toBeNull();
 	});
 
 	it("waits briefly for the MP4 link when creating a transcript from a ready video", async () => {
@@ -366,10 +367,8 @@ describe("outputs that arrive after the video is ready", () => {
 		stub.state.mp4AfterReads = (stub.videos.get(videoId)?.readyReads ?? 0) + 2;
 		const created = await session.call("transcripts_create", { videoId });
 		expect(created.isError).toBe(false);
-		expect(stub.calls("POST", "/transcripts")[0]?.body).toMatchObject({
-			url: `${stub.url}/api/developer/playback/${stub.videos.get(videoId)?.playbackId}/video.mp4`,
-			name: "Interview",
-		});
+		expect(stub.calls("POST", "/transcripts")[0]?.body).toEqual({ videoId });
+		expect(created.body).toMatchObject({ videoId, name: "Interview" });
 		expect(
 			stub.calls("GET", `/videos/${videoId}`).length,
 		).toBeGreaterThanOrEqual(3);
