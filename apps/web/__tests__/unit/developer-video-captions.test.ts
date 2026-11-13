@@ -79,6 +79,7 @@ vi.mock("@cap/database/helpers", () => ({
 vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" },
 	NODE_ENV: "production",
+	serverEnv: () => ({ WEB_URL: "https://web.example" }),
 }));
 
 vi.mock("@/lib/infra-access", () => ({ canUseInfra: () => true }));
@@ -155,7 +156,10 @@ import {
 import {
 	captionLanguage,
 	captionLanguageLabel,
+	captionsFileLanguage,
+	captionsFileName,
 	developerVideoCaptions,
+	developerVideoCaptionTracks,
 	findVideoForTranscript,
 	syncVideoCaptions,
 	videoCaptionsKey,
@@ -647,6 +651,91 @@ describe("caption files for the playback side", () => {
 				key: "developer/app-1/video-1/captions/und.vtt",
 			},
 		]);
+	});
+});
+
+describe("caption tracks for the hosted player", () => {
+	const PLAYBACK = "https://web.example/api/developer/playback/playback-1";
+	const PLAYABLE = { ...VIDEO, playbackId: "playback-1" };
+
+	it("lists nothing for a video without captions", async () => {
+		expect(await developerVideoCaptionTracks(PLAYABLE)).toEqual([]);
+	});
+
+	it("points each language at its file on the playback route", async () => {
+		seedCompleted("tr-1", "hello there");
+		seedCompleted("tr-2", "hallo zusammen", { language: "de" });
+		seedCompleted("tr-3", "olá a todos", { language: "pt_BR" });
+
+		const tracks = await developerVideoCaptionTracks(PLAYABLE);
+
+		expect(tracks).toHaveLength(3);
+		expect(tracks).toContainEqual({
+			language: "en",
+			label: "English",
+			url: `${PLAYBACK}/captions-en.vtt`,
+		});
+		expect(tracks).toContainEqual({
+			language: "de",
+			label: "German",
+			url: `${PLAYBACK}/captions-de.vtt`,
+		});
+		expect(tracks.find((track) => track.language === "pt-br")?.url).toBe(
+			`${PLAYBACK}/captions-pt-br.vtt`,
+		);
+	});
+
+	it("never hands out a storage key or a storage URL", async () => {
+		seedCompleted("tr-1", "hello there");
+
+		const [track] = await developerVideoCaptionTracks(PLAYABLE);
+
+		expect(track).not.toHaveProperty("key");
+		expect(track?.url.startsWith(`${PLAYBACK}/`)).toBe(true);
+		expect(track?.url).not.toContain("developer/app-1");
+	});
+
+	it("lists nothing for a video with no playback id", async () => {
+		seedCompleted("tr-1", "hello there");
+
+		expect(
+			await developerVideoCaptionTracks({ ...VIDEO, playbackId: null }),
+		).toEqual([]);
+	});
+
+	it("leaves the video playing without captions when the lookup fails", async () => {
+		const error = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const broken = { ...PLAYABLE };
+		Object.defineProperty(broken, "appId", {
+			get: () => {
+				throw new Error("database down");
+			},
+		});
+
+		expect(await developerVideoCaptionTracks(broken)).toEqual([]);
+		expect(error).toHaveBeenCalled();
+		error.mockRestore();
+	});
+
+	it("names a file by language and reads the language back", () => {
+		expect(captionsFileName("en")).toBe("captions-en.vtt");
+		expect(captionsFileName("PT_br")).toBe("captions-pt-br.vtt");
+		expect(captionsFileName("../../x")).toBe("captions-und.vtt");
+		expect(captionsFileLanguage("captions-en.vtt")).toBe("en");
+		expect(captionsFileLanguage("captions-pt-br.vtt")).toBe("pt-br");
+		expect(captionsFileLanguage("captions-und.vtt")).toBe("und");
+		for (const file of [
+			"captions-EN.vtt",
+			"captions-.vtt",
+			"en.vtt",
+			"captions-en.m3u8",
+			"master.m3u8",
+			"video.mp4",
+		]) {
+			expect(captionsFileLanguage(file)).toBeNull();
+		}
 	});
 });
 

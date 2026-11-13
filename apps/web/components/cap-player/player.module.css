@@ -5,7 +5,10 @@
 	--cap-player-rail: rgba(244, 246, 250, 0.22);
 	--cap-player-buffered: rgba(244, 246, 250, 0.3);
 	--cap-player-scrim: rgba(0, 0, 0, 0.74);
-	--cap-player-surface: rgba(20, 21, 24, 0.94);
+	/* Opaque: Firefox lets its own Picture-in-Picture button take clicks
+	   through anything over the video it does not count as covering it, and
+	   it does not count a translucent menu. */
+	--cap-player-surface: rgb(20, 21, 24);
 	--cap-player-hover: rgba(244, 246, 250, 0.12);
 	--cap-player-radius: 0px;
 	--cap-player-control: 34px;
@@ -41,6 +44,11 @@
 	height: 100%;
 	object-fit: contain;
 	background: #000;
+}
+
+.video:focus-visible {
+	outline: 2px solid var(--cap-player-ink);
+	outline-offset: -2px;
 }
 
 .spinner {
@@ -85,6 +93,7 @@
 
 .start {
 	position: absolute;
+	z-index: 1;
 	left: 50%;
 	top: 50%;
 	display: grid;
@@ -118,7 +127,8 @@
 	pointer-events: none;
 }
 
-.player[data-waiting="true"] .start {
+.player[data-waiting="true"] .start,
+.player[data-menu] .start {
 	visibility: hidden;
 }
 
@@ -156,6 +166,45 @@
 	display: none;
 }
 
+.video::cue {
+	background: var(--cap-player-scrim);
+	color: var(--cap-player-ink);
+	font-family: var(--cap-player-font);
+}
+
+.captions {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 5%;
+	display: flex;
+	justify-content: center;
+	padding: 0 6%;
+	pointer-events: none;
+	transition: bottom 0.25s;
+}
+
+.player[data-controls="true"][data-idle="false"] .captions {
+	bottom: calc(var(--cap-player-control) + 34px);
+}
+
+.cue {
+	max-width: 100%;
+	padding: 0.12em 0.45em;
+	border-radius: 6px;
+	background: var(--cap-player-scrim);
+	color: var(--cap-player-ink);
+	font-size: clamp(14px, 3.4cqw, 30px);
+	font-weight: 500;
+	line-height: 1.4;
+	letter-spacing: -0.005em;
+	text-align: center;
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+
 .chrome {
 	position: absolute;
 	left: 0;
@@ -173,6 +222,7 @@
 
 .track {
 	position: relative;
+	z-index: 2;
 	height: 18px;
 	margin: 0 4px;
 	border-radius: 6px;
@@ -268,6 +318,8 @@
 }
 
 .row {
+	position: relative;
+	z-index: 2;
 	display: flex;
 	align-items: center;
 	gap: 2px;
@@ -297,6 +349,23 @@
 .control:hover,
 .control[aria-expanded="true"] {
 	background: var(--cap-player-hover);
+}
+
+.control[aria-pressed],
+.control[data-on] {
+	position: relative;
+}
+
+.control[aria-pressed="true"]::after,
+.control[data-on="true"]::after {
+	content: "";
+	position: absolute;
+	left: 10px;
+	right: 10px;
+	bottom: 5px;
+	height: 2px;
+	border-radius: 1px;
+	background: var(--cap-player-accent);
 }
 
 .control:focus-visible,
@@ -331,7 +400,11 @@
 }
 
 .time {
+	flex: 0 1 auto;
+	min-width: 0;
 	padding: 0 8px;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .quality {
@@ -468,7 +541,18 @@
 	}
 }
 
+@media (pointer: coarse) {
+	.player {
+		--cap-player-control: 44px;
+	}
+
+	.item {
+		height: 44px;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
+	.captions,
 	.chrome,
 	.cover,
 	.spinner,

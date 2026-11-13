@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
 	detach: vi.fn(),
 	ensureCustomer: vi.fn(),
+	scheduleAutoTopUp: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -94,7 +95,10 @@ vi.mock("@/lib/infra-auto-top-up", async () => {
 	const settings = await vi.importActual<
 		typeof import("@/lib/infra-auto-top-up")
 	>("@/lib/infra-auto-top-up");
-	return { autoTopUpSettingsError: settings.autoTopUpSettingsError };
+	return {
+		autoTopUpSettingsError: settings.autoTopUpSettingsError,
+		scheduleAutoTopUp: mocks.scheduleAutoTopUp,
+	};
 });
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
@@ -143,6 +147,7 @@ const cardCheckout = () =>
 	});
 
 beforeEach(() => {
+	mocks.scheduleAutoTopUp.mockReset();
 	mocks.user = preview;
 	mocks.selects = [];
 	mocks.sets = [];
@@ -181,6 +186,7 @@ describe("creating an upload", () => {
 		});
 		expect(mocks.admission).toHaveBeenCalledWith("app-1");
 		expect(mocks.inserts).toHaveLength(0);
+		expect(mocks.scheduleAutoTopUp).toHaveBeenCalledWith({ appId: "app-1" });
 	});
 
 	it("creates the video for free when the app is admitted", async () => {
@@ -191,6 +197,7 @@ describe("creating an upload", () => {
 		expect(response.status).toBe(200);
 		const { data } = await response.json();
 		expect(data).toMatchObject({ id: "video-1", videoId: "video-1" });
+		expect(mocks.scheduleAutoTopUp).not.toHaveBeenCalled();
 		expect(Object.keys(data).sort()).toEqual([
 			"corsOrigin",
 			"embedUrl",

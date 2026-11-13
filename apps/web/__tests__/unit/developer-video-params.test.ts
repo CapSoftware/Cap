@@ -6,6 +6,7 @@ const DEFAULTS = {
 	muted: false,
 	loop: false,
 	controls: true,
+	captions: false,
 	startAt: 0,
 };
 
@@ -17,7 +18,14 @@ describe("developerVideoPlayback", () => {
 	it("reads every embed parameter", () => {
 		expect(
 			developerVideoPlayback(
-				{ autoplay: "1", muted: "1", loop: "1", controls: "0", t: "90" },
+				{
+					autoplay: "1",
+					muted: "1",
+					loop: "1",
+					controls: "0",
+					captions: "1",
+					t: "90",
+				},
 				"embed",
 			),
 		).toEqual({
@@ -25,6 +33,7 @@ describe("developerVideoPlayback", () => {
 			muted: true,
 			loop: true,
 			controls: false,
+			captions: true,
 			startAt: 90,
 		});
 	});
@@ -69,12 +78,40 @@ describe("developerVideoPlayback", () => {
 		(value) => {
 			expect(
 				developerVideoPlayback(
-					{ autoplay: value, muted: value, loop: value, controls: value },
+					{
+						autoplay: value,
+						muted: value,
+						loop: value,
+						controls: value,
+						captions: value,
+					},
 					"embed",
 				),
 			).toEqual(DEFAULTS);
 		},
 	);
+
+	it("keeps captions off unless the embed asks for them", () => {
+		expect(developerVideoPlayback({}, "embed").captions).toBe(false);
+		expect(developerVideoPlayback({ captions: "0" }, "embed").captions).toBe(
+			false,
+		);
+		expect(
+			developerVideoPlayback({ captions: "false" }, "embed").captions,
+		).toBe(false);
+		expect(developerVideoPlayback({ captions: "1" }, "embed").captions).toBe(
+			true,
+		);
+		expect(developerVideoPlayback({ captions: "true" }, "embed").captions).toBe(
+			true,
+		);
+		expect(
+			developerVideoPlayback({ captions: ["1", "0"] }, "embed").captions,
+		).toBe(true);
+		expect(developerVideoPlayback({ captions: "en" }, "embed").captions).toBe(
+			false,
+		);
+	});
 
 	it("ignores parameters it does not know", () => {
 		expect(
@@ -97,7 +134,14 @@ describe("developerVideoPlayback", () => {
 	it("takes only the start time on the share page", () => {
 		expect(
 			developerVideoPlayback(
-				{ autoplay: "1", muted: "1", loop: "1", controls: "0", t: "42" },
+				{
+					autoplay: "1",
+					muted: "1",
+					loop: "1",
+					controls: "0",
+					captions: "1",
+					t: "42",
+				},
 				"share",
 			),
 		).toEqual({ ...DEFAULTS, startAt: 42 });

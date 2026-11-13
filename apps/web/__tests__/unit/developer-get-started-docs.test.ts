@@ -70,10 +70,12 @@ describe("the Get Started guide", () => {
 		}
 	});
 
-	it("keeps real credentials, the CLI and the em dash out", () => {
+	it("keeps real credentials, the CLI and the em dash out, and points agents at the hosted MCP server", () => {
 		expect(content).not.toContain("—");
 		expect(content).not.toMatch(/\bcap (guide|record|upload|caps|mcp)\b/);
-		expect(content).not.toMatch(/\bMCP\b/);
+		expect(content.match(/https:\/\/[^\s"`]*\/mcp\b/g) ?? []).toEqual(
+			Array(4).fill("https://cap.so/api/developer/mcp"),
+		);
 		const keys = content.match(/\bc(?:sk|pk|ut)_[A-Za-z0-9._-]+/g) ?? [];
 		expect(keys.every((key) => key === "csk_your_secret_key")).toBe(true);
 	});

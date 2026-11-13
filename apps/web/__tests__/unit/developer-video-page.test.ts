@@ -34,6 +34,13 @@ const playing: DeveloperVideoPlayer = {
 	kind: "playing",
 	source: { hls: `${BASE}/master.m3u8`, mp4: `${BASE}/video.mp4` },
 	poster: `${BASE}/poster.jpg`,
+	captions: null,
+};
+const captioned: DeveloperVideoPlayer = {
+	...playing,
+	captions: [
+		{ language: "en", label: "English", url: `${BASE}/captions-en.vtt` },
+	],
 };
 const processing: DeveloperVideoPlayer = {
 	...frame,
@@ -120,7 +127,8 @@ describe("developer video page states", () => {
 	it("says when the upload has not finished", () => {
 		const html = render({ ...processing, uploading: true });
 
-		expect(html).toContain("Waiting for the upload");
+		expect(html).toContain("This video is being prepared");
+		expect(html).not.toContain("upload");
 		expect(html).not.toContain("<video");
 	});
 
@@ -334,6 +342,44 @@ describe("developer video page parameters", () => {
 			}),
 		).toBe(embed({}));
 		expect(embed({ nope: "1" })).toBe(embed({}));
+	});
+
+	it("offers no captions button for a video without captions", () => {
+		expect(embed({})).not.toContain('aria-label="Captions"');
+		expect(embed({ captions: "1" })).toBe(embed({}));
+	});
+
+	it("offers a captions button, off by default, when the video has captions", () => {
+		const html = render(
+			captioned,
+			"embed",
+			developerVideoPlayback({}, "embed"),
+		);
+
+		expect(html).toContain('aria-pressed="false"');
+		expect(html).toContain('aria-label="Captions"');
+	});
+
+	it("starts with captions on when the embed asks", () => {
+		const on = (captions: string) =>
+			render(captioned, "embed", developerVideoPlayback({ captions }, "embed"));
+
+		expect(on("1")).toContain('aria-pressed="true"');
+		expect(on("0")).toContain('aria-pressed="false"');
+	});
+
+	it("keeps the caption file out of the markup so nothing loads before captions are on", () => {
+		expect(render(captioned)).not.toContain("captions-en.vtt");
+	});
+
+	it("keeps captions off on the share page whatever the query says", () => {
+		expect(
+			render(
+				captioned,
+				"share",
+				developerVideoPlayback({ captions: "1" }, "share"),
+			),
+		).toContain('aria-pressed="false"');
 	});
 
 	it("keeps the embed-only switches off the share page", () => {

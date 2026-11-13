@@ -5,15 +5,17 @@ vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
 import { PRO_CREDIT_COVERS } from "@/components/pages/infra/content";
 import {
 	resolveTopUpAmount,
+	TOP_UP_AMOUNT_PLACEHOLDER,
 	TOP_UP_MAX_CENTS,
 	TOP_UP_MIN_CENTS,
+	TOP_UP_RANGE_TEXT,
 	topUpButtonLabel,
 	topUpCovers,
 	topUpCoversText,
 } from "@/lib/infra-top-up";
 
 const NOT_AN_AMOUNT = "Enter an amount in dollars, for example 25 or 12.50.";
-const OUT_OF_RANGE = "Enter an amount from $5 to $1,000.";
+const OUT_OF_RANGE = "Enter an amount from $5 to $10,000.";
 const PRESET = 2_500;
 
 describe("the amount a top-up will charge", () => {
@@ -31,8 +33,9 @@ describe("the amount a top-up will charge", () => {
 		["1,00", NOT_AN_AMOUNT],
 		["4.99", OUT_OF_RANGE],
 		["0", OUT_OF_RANGE],
-		["1000.01", OUT_OF_RANGE],
-		["1001", OUT_OF_RANGE],
+		["10000.01", OUT_OF_RANGE],
+		["10001", OUT_OF_RANGE],
+		["10,000.01", OUT_OF_RANGE],
 		["99999999999999999999", OUT_OF_RANGE],
 	])(
 		"blocks %j with a reason and never falls back to the preset",
@@ -59,6 +62,10 @@ describe("the amount a top-up will charge", () => {
 		["$20", 2_000, "Add $20"],
 		[" 25 ", 2_500, "Add $25"],
 		["999.99", 99_999, "Add $999.99"],
+		["1000.01", 100_001, "Add $1,000.01"],
+		["10000", 1_000_000, "Add $10,000"],
+		["10,000.00", 1_000_000, "Add $10,000"],
+		["9,999.99", 999_999, "Add $9,999.99"],
 	])("takes %j as a typed amount", (typed, cents, label) => {
 		const amount = resolveTopUpAmount(typed, PRESET);
 		expect(amount).toEqual({ amountCents: cents, error: null, custom: true });
@@ -100,7 +107,9 @@ describe("the amount a top-up will charge", () => {
 
 	it("keeps the limits the checkout enforces", () => {
 		expect(TOP_UP_MIN_CENTS).toBe(500);
-		expect(TOP_UP_MAX_CENTS).toBe(100_000);
+		expect(TOP_UP_MAX_CENTS).toBe(1_000_000);
+		expect(TOP_UP_RANGE_TEXT).toBe("$5 to $10,000");
+		expect(TOP_UP_AMOUNT_PLACEHOLDER).toBe("Other, 5 to 10,000");
 	});
 });
 

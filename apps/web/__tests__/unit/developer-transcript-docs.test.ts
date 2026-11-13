@@ -188,12 +188,14 @@ describe("transcribing a stored video", () => {
 		expect(transcriptDocs).toContain("`videoId`, `contentLength`, `name`");
 	});
 
-	it("says only what ships: no player captions and no captions URL", () => {
+	it("says only what ships: captions in the hosted player and no captions URL", () => {
 		for (const text of [transcriptDocs, specText]) {
-			expect(text).not.toMatch(/captions for the hosted player/i);
 			expect(text).not.toMatch(/\.vtt|captions\//i);
 		}
-		expect(transcriptDocs).not.toMatch(/player/i);
+		expect(transcriptDocs).toContain(
+			"The hosted player and the embed then show a captions button, and the `c` key turns captions on and off. Add `captions=1` to `embedUrl` to start with them on.",
+		);
+		expect(specText).toContain("controls=0 and captions=1");
 	});
 });
 
@@ -251,7 +253,8 @@ describe("transcript docs keep up with the API", () => {
 		expect(JSON.stringify(schemas.TranscriptDetail)).not.toContain(
 			"confidence",
 		);
-		expect(transcriptDocs).toContain("steps of 0.08 seconds");
+		expect(transcriptDocs).not.toContain("steps of 0.08 seconds");
+		expect(JSON.stringify(schemas.TranscriptDetail)).not.toContain("0.08");
 	});
 
 	it("states the download limit and the upload expiry", () => {
