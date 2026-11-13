@@ -7886,19 +7886,11 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
-						// Decided from the video's current state rather than the request,
-						// so an idempotent replay into a failed state is still a rerun and
-						// a replay of a rerun that was already accepted is not charged again.
-						const transcriptionRerun =
-							includesTranscript &&
-							payload.retry === true &&
-							row.transcriptionStatus === "ERROR";
-						const aiRerun =
-							includesAi &&
-							(payload.target === "ai" ||
-								row.transcriptionStatus === "COMPLETE") &&
-							isAiGenerationRerun(normalizeAgentMetadata(row.metadata));
-						if (transcriptionRerun || aiRerun) {
+						// Reruns are decided from the video's current state rather than the
+						// request alone: an idempotent replay into a failed AI state still
+						// starts generation again, while a replay of a rerun that was
+						// already accepted finds the work queued and is not charged again.
+						const limitRerun = Effect.gen(function* () {
 							const request = yield* HttpServerRequest.HttpServerRequest;
 							const headers = new Headers();
 							for (const [name, value] of Object.entries(request.headers)) {
@@ -7914,6 +7906,13 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									PROCESSING_RETRY_WINDOW_MS,
 								);
 							}
+						});
+						if (
+							includesTranscript &&
+							payload.retry === true &&
+							row.transcriptionStatus === "ERROR"
+						) {
+							yield* limitRerun;
 						}
 						const state = yield* runAgentMutation({
 							principal,
@@ -8014,6 +8013,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								return yield* temporarilyUnavailable(requestId, result.message);
 							}
 						} else if (state.target !== "transcript") {
+							if (isAiGenerationRerun(normalizeAgentMetadata(row.metadata))) {
+								yield* limitRerun;
+							}
 							const result = yield* Effect.tryPromise(() =>
 								startAiGeneration(state.id, state.ownerId),
 							);
