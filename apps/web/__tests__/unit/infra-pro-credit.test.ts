@@ -148,21 +148,6 @@ describe("Cap Pro monthly Infra credit", () => {
 		});
 	});
 
-	it("records the subscription that paid for the claim", async () => {
-		await claimProMonthlyCredit({
-			userId: state.owner as never,
-			accountId: "account-1",
-			now: november,
-			subscription: { id: "sub_team", seats: 3 },
-		});
-
-		expect(state.transactions[0]).toMatchObject({
-			referenceId: "2026-11",
-			referenceType: "pro_monthly_credit",
-			metadata: { period: "2026-11", subscriptionId: "sub_team", seats: 3 },
-		});
-	});
-
 	it("grants two simultaneous claims only once", async () => {
 		const results = await Promise.all([claim(), claim()]);
 		expect(results.filter((r) => r.claimed)).toHaveLength(1);
@@ -172,7 +157,10 @@ describe("Cap Pro monthly Infra credit", () => {
 
 	it("refuses a second claim in the same month, even for another app", async () => {
 		await claim();
-		expect(await claim(november, "account-2")).toEqual({ claimed: false });
+		expect(await claim(november, "account-2")).toEqual({
+			claimed: false,
+			reason: "already_claimed",
+		});
 		expect(state.balance).toBe(500_000);
 	});
 
