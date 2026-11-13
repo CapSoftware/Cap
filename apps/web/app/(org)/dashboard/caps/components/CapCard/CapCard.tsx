@@ -297,12 +297,19 @@ export const CapCard = ({
 		setIsDragging(false);
 	};
 
-	const handleCopy = (text: string) => {
-		copyRichVideoLink({
-			url: text,
-			title: cap.name || "Cap Recording",
-			previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
-		});
+	const handleCopy = async (text: string) => {
+		try {
+			await copyRichVideoLink({
+				url: text,
+				title: cap.name || "Cap Recording",
+				previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+			});
+		} catch (error) {
+			console.error("Failed to copy link:", error);
+			toast.error("Couldn't copy the link. Please try again.");
+			return;
+		}
+		toast.success("Link copied to clipboard");
 		setCopyPressed(true);
 		setTimeout(() => {
 			setCopyPressed(false);
@@ -333,7 +340,9 @@ export const CapCard = ({
 	};
 
 	const copyLinkHandler = () => {
-		handleCopy(videoShareUrl(webUrl, cap.id, activeOrganization?.organization));
+		void handleCopy(
+			videoShareUrl(webUrl, cap.id, activeOrganization?.organization),
+		);
 	};
 	const canEditVideo =
 		isOwner &&
@@ -439,7 +448,6 @@ export const CapCard = ({
 						onClick={(e) => {
 							e.stopPropagation();
 							copyLinkHandler();
-							toast.success("Link copied to clipboard");
 						}}
 						className="delay-0"
 						icon={
@@ -532,7 +540,6 @@ export const CapCard = ({
 								onClick={(e) => {
 									e.stopPropagation();
 									copyLinkHandler();
-									toast.success("Link copied to clipboard");
 								}}
 								className="flex gap-2 items-center rounded-lg"
 							>
