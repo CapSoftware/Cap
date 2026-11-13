@@ -19,6 +19,7 @@ COPY capcodec.md ./capcodec.md
 # Files whose tables claim far more than they hold must probe at once, or the image is not built.
 RUN bun test src/__tests__/lib/media-probe-sample-counts.test.ts
 RUN bun test src/__tests__/lib/legacy-codecs.integration.test.ts
+RUN bun test src/__tests__/lib/infra-poster.integration.test.ts
 
 ENV PORT=3456
 # Self-hosted storage usually sits on a private network next to this container.
