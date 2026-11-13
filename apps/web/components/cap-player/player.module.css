@@ -485,6 +485,7 @@
 .menu[data-sheet] {
 	right: auto;
 	bottom: auto;
+	box-sizing: border-box;
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
 	align-content: center;
