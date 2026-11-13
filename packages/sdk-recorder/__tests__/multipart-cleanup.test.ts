@@ -370,6 +370,36 @@ test("signs exactly the parts a file has when it fills whole batches", async () 
 	expect(server.uploaded).toHaveLength(50);
 });
 
+const highestPartWithin = (maxBytes: number) =>
+	Math.max(1, Math.ceil(maxBytes / chunkBytes));
+
+test.each([
+	1,
+	chunkBytes - 1,
+	chunkBytes,
+	chunkBytes + 1,
+	3 * chunkBytes,
+	3 * chunkBytes + 1,
+	50 * chunkBytes,
+	50 * chunkBytes + 1,
+	120 * chunkBytes + 7,
+])(
+	"never asks to sign a part past the last one a size cap of %i bytes allows",
+	async (size) => {
+		const server = batchUploadServer();
+
+		await client().uploadBlob("video", sizedBlob(size));
+
+		const asked = server.signed.flat();
+		expect(Math.min(...asked)).toBe(1);
+		expect(Math.max(...asked)).toBe(highestPartWithin(size));
+		expect(server.uploaded.toSorted((a, b) => a - b)).toEqual(
+			range(1, highestPartWithin(size)),
+		);
+		expect(server.aborted()).toBe(0);
+	},
+);
+
 test("signs the remaining parts again once the signed URLs are 30 minutes old", async () => {
 	const nowDescriptor = Object.getOwnPropertyDescriptor(Date, "now");
 	let now = 1_000_000;

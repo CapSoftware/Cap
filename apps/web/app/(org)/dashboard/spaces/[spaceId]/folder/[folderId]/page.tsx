@@ -115,10 +115,12 @@ const FolderPage = async (props: {
 		return (
 			<div>
 				<div className="flex gap-2 items-center mb-10">
-					<NewSubfolderButton
-						parentFolderId={params.folderId}
-						spaceId={params.spaceId}
-					/>
+					{canManageCollection && (
+						<NewSubfolderButton
+							parentFolderId={params.folderId}
+							spaceId={params.spaceId}
+						/>
+					)}
 					<AddVideosButton
 						folderId={params.folderId}
 						spaceId={params.spaceId}
