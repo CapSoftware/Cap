@@ -90,6 +90,40 @@ export async function purgeDeletedDeveloperVideos(
 	return purgeFiles(rows, () => ({ filesDeletedAt: new Date() }));
 }
 
+const PURGE_ID = /^[A-Za-z0-9_-]+$/;
+const PURGE_NOW_TIMEOUT_MS = 30_000;
+
+export function developerVideoPurgePrefix(row: PurgeRow): string {
+	const prefix = developerVideoPrefix(row);
+	if (
+		!PURGE_ID.test(row.appId) ||
+		!PURGE_ID.test(row.id) ||
+		prefix !== `developer/${row.appId}/${row.id}/`
+	) {
+		throw new Error(`Refusing to purge ${JSON.stringify(prefix)}`);
+	}
+	return prefix;
+}
+
+// Purges one deleted video at once instead of waiting for the cron. It marks
+// the row the same way the cron does, so the late write pass above still
+// picks the video up again once the window has closed. A failure or a
+// deletion that outlasts the timeout leaves the row for the cron.
+export async function purgeDeletedDeveloperVideoNow(
+	row: PurgeRow,
+): Promise<boolean> {
+	developerVideoPurgePrefix(row);
+	const { purged } = await purgeFiles(
+		[row],
+		() => ({ filesDeletedAt: new Date() }),
+		{
+			stopAt: Date.now() + PURGE_NOW_TIMEOUT_MS,
+			perVideoMs: PURGE_NOW_TIMEOUT_MS,
+		},
+	);
+	return purged === 1;
+}
+
 // A failed video is not billed, so its files are kept for a day and then
 // removed. The day is counted from when processing started: that is the one
 // time on the row its owner cannot move (renaming the video moves updatedAt),
