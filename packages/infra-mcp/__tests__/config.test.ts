@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ConfigError, readConfig } from "../src/config";
-import { createRedactor, withoutQuery } from "../src/redact";
+import { createRedactor, redactValue, withoutQuery } from "../src/redact";
 import { SERVER_VERSION } from "../src/version";
 
 const KEY = "csk_0123456789abcdefghjkmnpqrstvwx";
@@ -94,6 +94,33 @@ describe("redaction", () => {
 		).toBe(
 			"https://bucket.example.com/key?X-Amz-Credential=[redacted]&X-Amz-Signature=[redacted]&partNumber=3",
 		);
+	});
+
+	it("keeps a result valid JSON when a value holds a quote after a credential", () => {
+		const body = {
+			metadata: {
+				note: 'https://example.com/?X-Amz-Signature=abc"rest',
+				path: "C:\\clips\\a.mp4",
+				nested: [`token cut_eyJ2IjoxLCJhcHAiOiJhIn0.Jm2cQ9s2Lm8Rt1Xy "quoted"`],
+			},
+			[`key ${KEY}`]: KEY,
+			count: 3,
+			missing: null,
+		};
+
+		const text = JSON.stringify(redactValue(redact, body));
+
+		expect(JSON.parse(text)).toEqual({
+			metadata: {
+				note: 'https://example.com/?X-Amz-Signature=[redacted]"rest',
+				path: "C:\\clips\\a.mp4",
+				nested: ['token cut_[redacted] "quoted"'],
+			},
+			"key csk_[redacted]": "csk_[redacted]",
+			count: 3,
+			missing: null,
+		});
+		expect(text).not.toContain(KEY);
 	});
 
 	it("keeps the documentation placeholder readable", () => {

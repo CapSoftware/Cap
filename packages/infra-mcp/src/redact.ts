@@ -13,6 +13,25 @@ export function createRedactor(secretKey: string) {
 			.replace(URL_CREDENTIAL, "$1[redacted]");
 }
 
+export function redactValue(
+	redact: (text: string) => string,
+	value: unknown,
+): unknown {
+	if (typeof value === "string") return redact(value);
+	if (Array.isArray(value)) {
+		return value.map((entry) => redactValue(redact, entry));
+	}
+	if (typeof value === "object" && value !== null) {
+		return Object.fromEntries(
+			Object.entries(value).map(([name, entry]) => [
+				redact(name),
+				redactValue(redact, entry),
+			]),
+		);
+	}
+	return value;
+}
+
 export function withoutQuery(url: unknown): string | null {
 	if (typeof url !== "string") return null;
 	const cut = url.search(/[?#]/);

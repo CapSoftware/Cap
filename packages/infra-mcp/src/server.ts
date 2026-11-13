@@ -15,7 +15,7 @@ import {
 	toToolError,
 } from "./errors";
 import { type ClientTuning, DEFAULT_CLIENT_TUNING, InfraClient } from "./http";
-import { createRedactor } from "./redact";
+import { createRedactor, redactValue } from "./redact";
 import { createTools, type Tool, type ToolCall, type ToolKind } from "./tools";
 import { DEFAULT_UPLOAD_TUNING, type UploadTuning } from "./upload";
 import { SERVER_NAME, SERVER_VERSION } from "./version";
@@ -85,19 +85,21 @@ export function createInfraServer(config: Config, options: ServerOptions = {}) {
 	});
 
 	const result = (body: unknown, isError: boolean): CallToolResult => ({
-		content: [{ type: "text", text: redact(JSON.stringify(body)) }],
+		content: [
+			{ type: "text", text: JSON.stringify(redactValue(redact, body)) },
+		],
 		...(isError ? { isError: true } : {}),
 	});
 
 	const run = async (tool: Tool, args: unknown, extra: Extra) => {
 		const progressToken = extra._meta?.progressToken;
 		const announce: ToolCall["announce"] = (event, fields) => {
-			log(`${event} ${JSON.stringify(fields)}`);
+			log(`${event} ${JSON.stringify(redactValue(redact, fields))}`);
 			server
 				.sendLoggingMessage({
 					level: "info",
 					logger: SERVER_NAME,
-					data: JSON.parse(redact(JSON.stringify({ event, ...fields }))),
+					data: redactValue(redact, { event, ...fields }),
 				})
 				.catch(() => {});
 		};
