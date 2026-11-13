@@ -12,9 +12,19 @@ app.post("/", withAuth, async (c) => {
 	if (contentLength && parseInt(contentLength, 10) > MAX_PROBE_BYTES) {
 		return c.json({ error: true, code: "payload_too_large" }, 413);
 	}
-	const body = await c.req.arrayBuffer();
-	if (body.byteLength > MAX_PROBE_BYTES) {
-		return c.json({ error: true, code: "payload_too_large" }, 413);
+	if (!c.req.raw.body) {
+		return c.json({ ok: true, received: 0 });
 	}
-	return c.json({ ok: true, received: body.byteLength });
+	const reader = c.req.raw.body.getReader();
+	let bytesReceived = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		bytesReceived += value.byteLength;
+		if (bytesReceived > MAX_PROBE_BYTES) {
+			await reader.cancel();
+			return c.json({ error: true, code: "payload_too_large" }, 413);
+		}
+	}
+	return c.json({ ok: true, received: bytesReceived });
 });

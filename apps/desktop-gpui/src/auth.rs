@@ -451,8 +451,7 @@ pub async fn authed_raw_request(
         )
     };
     let url = format!("{server}{path}");
-    let request = client
-        .request(method, url)
+    let request = apply_desktop_headers(client.request(method, url))
         .header("Content-Type", content_type)
         .body(body)
         .bearer_auth(token);

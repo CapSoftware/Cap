@@ -20,7 +20,7 @@ pub const HEALTH_CHECK_PATH: &str = "/api/desktop/health-check";
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const SPEED_TEST_INTERVAL: Duration = Duration::from_secs(60);
 const SPEED_TEST_TIMEOUT: Duration = Duration::from_secs(20);
-const SPEED_TEST_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+const SPEED_TEST_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 const ULTRA_MIN_MBPS: f64 = 25.0;
 const BALANCED_MIN_MBPS: f64 = 8.0;
@@ -55,8 +55,6 @@ fn snapshot() -> &'static RwLock<NetworkStatus> {
     SNAPSHOT.get_or_init(|| RwLock::new(NetworkStatus::default()))
 }
 
-/// Latest measured upload speed, readable from non-gpui contexts (e.g. the
-/// recording start path).
 pub fn current_upload_mbps() -> Option<f64> {
     snapshot().read().ok()?.upload_mbps
 }
@@ -96,7 +94,6 @@ fn quality_tier(quality: StudioQuality) -> u8 {
     }
 }
 
-/// The quality tier the measured upload speed can sustain.
 pub fn quality_for_upload_speed(upload_mbps: f64) -> StudioQuality {
     if upload_mbps >= ULTRA_MIN_MBPS {
         StudioQuality::Ultra
@@ -107,8 +104,6 @@ pub fn quality_for_upload_speed(upload_mbps: f64) -> StudioQuality {
     }
 }
 
-/// The configured quality capped by what the current upload speed supports.
-/// With no measurement yet, the configured quality stands.
 pub fn effective_studio_quality(
     configured: StudioQuality,
     upload_mbps: Option<f64>,
@@ -181,6 +176,10 @@ async fn measure_upload_speed(status: &Entity<NetworkStatus>, cx: &mut AsyncApp)
         Ok(Ok(elapsed)) => {
             let mbps = SPEED_TEST_PAYLOAD_BYTES as f64 * 8.0 / elapsed.as_secs_f64() / 1_000_000.0;
             (Some(mbps), true)
+        }
+        Ok(Err(AuthApiError::Timeout)) => {
+            tracing::warn!("upload speed test timed out; capping quality to minimum tier");
+            (Some(0.0), true)
         }
         Ok(Err(AuthApiError::InvalidAuthentication)) => return,
         Ok(Err(error)) => {

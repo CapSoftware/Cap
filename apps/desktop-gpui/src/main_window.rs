@@ -3979,11 +3979,11 @@ impl MainWindow {
         let status = NetworkStatus::global(cx).read(cx);
         let failed = status.health == HealthStatus::Failed;
         let label = if failed {
-            "Upload check failed - contact support".to_string()
+            crate::i18n::messages::localize("Upload check failed - contact support")
         } else {
             match status.upload_mbps {
                 Some(mbps) => format!("{mbps:.1} Mbps up"),
-                None => "Checking upload...".to_string(),
+                None => crate::i18n::messages::localize("Checking upload..."),
             }
         };
         div()
