@@ -1505,6 +1505,8 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
 ></iframe>
 ```
 
+`allow="autoplay"` lets a play command your page sends after a click start the video with sound. Firefox does not know that name and logs a harmless warning about it.
+
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
 
 ### Embed Parameters
