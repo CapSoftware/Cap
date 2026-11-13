@@ -20,6 +20,9 @@ export interface DeveloperVideoPlayback {
 export type DeveloperVideoQuery = Record<string, string | string[] | undefined>;
 
 const SECONDS_PATTERN = /^\d{1,6}(\.\d{1,3})?$/;
+const CLOCK_PATTERN =
+	/^(?:(\d{1,3})h)?(?:(\d{1,4})m)?(?:(\d{1,6}(?:\.\d{1,3})?)s)?$/i;
+const MAX_START_SECONDS = 999_999;
 const HEX_COLOR_PATTERN = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const RADIUS_PATTERN = /^\d+$/;
 const QUALITY_PATTERN = /^(\d+)p?$/i;
@@ -37,9 +40,17 @@ const flag = (value: string | string[] | undefined, fallback: boolean) => {
 	return fallback;
 };
 
+// Plain seconds, or a time written the way video links share one, such as
+// 1m30s, 90s or 1h2m3s.
 const seconds = (value: string | string[] | undefined) => {
 	const text = first(value);
-	return text && SECONDS_PATTERN.test(text) ? Number(text) : 0;
+	if (!text) return 0;
+	if (SECONDS_PATTERN.test(text)) return Number(text);
+	const clock = CLOCK_PATTERN.exec(text);
+	if (!clock) return 0;
+	const [, hours = "0", minutes = "0", rest = "0"] = clock;
+	const total = Number(hours) * 3600 + Number(minutes) * 60 + Number(rest);
+	return total <= MAX_START_SECONDS ? Math.round(total * 1000) / 1000 : 0;
 };
 
 export const embedAccentColor = (value: string | string[] | undefined) => {
