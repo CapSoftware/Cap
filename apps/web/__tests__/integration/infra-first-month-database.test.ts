@@ -720,6 +720,29 @@ describe.runIf(Boolean(databaseUrl))(
 				expect((await videoRow(videoId))?.storagePaidUntil).not.toBeNull();
 			});
 
+			it("is charged when deleted while a failed attempt waits for its retry", async () => {
+				const { appId, accountId } = await makeApp(1_000_000);
+				const videoId = await makeVideo(appId, {
+					createdAt: new Date(),
+					status: "processing",
+					duration: 600,
+					processing: {
+						...processing(),
+						probe: null,
+						mp4: { state: "pending" },
+						hls: { state: "pending" },
+						attempts: { hls: 0, mp4: 1 },
+					},
+				});
+				await deleteNow(videoId);
+
+				expect(await settleFirstMonthAtDelete(videoId)).toMatchObject({
+					state: "charged",
+					owedMicroCredits: 850,
+				});
+				expect(await firstMonthRows(accountId)).toHaveLength(1);
+			});
+
 			it("caps the declared length at the 4 hour limit", async () => {
 				const { appId } = await makeApp(1_000_000);
 				const videoId = await makeVideo(appId, {

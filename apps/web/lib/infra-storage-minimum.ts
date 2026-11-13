@@ -73,11 +73,15 @@ export type FirstMonthOptions = {
 };
 
 const encodeDispatched = (processing: DeveloperVideoProcessingState) =>
-	[processing.mp4, processing.hls].some(
-		(part) =>
-			(part.state === "running" && part.jobId !== null) ||
-			part.state === "complete",
-	) || Object.values(processing.lostJobs ?? {}).some((lost) => (lost ?? 0) > 0);
+	(["mp4", "hls"] as const).some((name) => {
+		const part = processing[name];
+		if (part.state === "running") return part.jobId !== null;
+		return (
+			part.state === "complete" ||
+			processing.attempts[name] > 0 ||
+			(processing.lostJobs?.[name] ?? 0) > 0
+		);
+	});
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
