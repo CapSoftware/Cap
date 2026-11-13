@@ -43,6 +43,7 @@ import {
 } from "@/lib/developer-transcript-hold";
 import { TRANSCRIPT_MIN_START_BALANCE_MICRO_CREDITS } from "@/lib/developer-transcripts";
 import {
+	AUTO_TOP_UP_DAILY_LIMIT,
 	AUTO_TOP_UP_MAX_AMOUNT_CENTS,
 	AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS,
 	AUTO_TOP_UP_MIN_AMOUNT_CENTS,
@@ -275,6 +276,12 @@ describe("the Billing page", () => {
 		);
 		expect(billing).toContain(
 			`${INFRA_GRACE_DAYS} days after the app first fell short`,
+		);
+		expect(billing).toContain(
+			"- **When.** As soon as the available balance falls below your threshold.",
+		);
+		expect(billing).toContain(
+			`up to ${AUTO_TOP_UP_DAILY_LIMIT} top-ups in any 24 hours`,
 		);
 		expect(billing).toContain(`${LEDGER_PAGE_SIZE} to a page`);
 		expect(billing).toContain(
