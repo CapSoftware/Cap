@@ -67,12 +67,10 @@ async function answer(query: string, params: unknown[]) {
 	) {
 		const [appId, , since] = params;
 		const sinceTime = new Date(since as Date | string).getTime();
-		const revoked = [...state.keys.entries()].find(
-			([, key]) =>
-				key?.appId === appId &&
-				key.revokedAt !== null &&
-				revokedTime(key.revokedAt) > sinceTime,
-		);
+		const revoked = [...state.keys.entries()].find(([, key]) => {
+			if (!key || key.appId !== appId || key.revokedAt === null) return false;
+			return revokedTime(key.revokedAt) > sinceTime;
+		});
 		return { rows: revoked ? [[revoked[0]]] : [] };
 	}
 	if (query.includes("from `developer_api_keys`")) {
