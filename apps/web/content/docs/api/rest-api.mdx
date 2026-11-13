@@ -1492,7 +1492,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
 
 - `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link.
-- `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
+- `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe, unless you limit it to your own sites with [Allowed Sites](#allowed-sites):
 
 ```html
 <iframe
@@ -1506,6 +1506,15 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
 ```
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+
+### Allowed Sites
+
+Only these sites can embed your player. Add them under Allowed sites in the app's settings, or with `cap developers domains add`. With none added, any site can embed it.
+
+- Each entry is one site, such as `https://myshop.com`. A subdomain is a separate site, so add `https://www.myshop.com` on its own. Wildcards are not supported.
+- Only https sites are accepted, plus `http://localhost` for testing.
+- Once a site is added, `embedUrl` tells browsers that only the listed sites, and Cap's own pages, may show it in a frame. On any other site the browser refuses to show the frame, so the player never loads and sends no `postMessage` events, not even `error`.
+- The list only controls embedding. `shareUrl` and the `hlsUrl`, `mp4Url` and `posterUrl` playback URLs stay open to everyone who has them.
 
 ### Embed Parameters
 
