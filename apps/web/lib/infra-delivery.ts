@@ -1,34 +1,9 @@
 import { db } from "@cap/database";
+import { developerDeliveryDaily } from "@cap/database/schema";
 import { and, eq, gte, lt, ne, sql } from "drizzle-orm";
-import {
-	bigint,
-	boolean,
-	date,
-	int,
-	mysqlTable,
-	primaryKey,
-	timestamp,
-	varchar,
-} from "drizzle-orm/mysql-core";
 import { utcDateKey, utcMonthStart } from "@/lib/infra-usage";
 
-export const developerDeliveryDaily = mysqlTable(
-	"developer_delivery_daily",
-	{
-		appId: varchar("appId", { length: 15 }).notNull(),
-		day: date("day", { mode: "string" }).notNull(),
-		tier: varchar("tier", { length: 8 }).notNull(),
-		seconds: bigint("seconds", { mode: "number" }).notNull(),
-		bytes: bigint("bytes", { mode: "number" }).notNull(),
-		requests: int("requests").notNull(),
-		final: boolean("final").notNull().default(false),
-		finalizedAt: timestamp("finalizedAt"),
-		updatedAt: timestamp("updatedAt").notNull(),
-	},
-	(table) => [primaryKey({ columns: [table.appId, table.day, table.tier] })],
-);
-
-export const DELIVERY_AUDIO_TIER = "audio";
+export const DELIVERY_AUDIO_TIER = "audio" as const;
 
 export const DELIVERY_TIERS = [
 	"360p",
