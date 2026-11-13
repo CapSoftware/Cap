@@ -88,6 +88,11 @@ const POLICY_SENTENCES = [
 	"If a payment is refunded or disputed, the credit it bought is taken back, and a partial refund takes back the same share of it.",
 ];
 
+const DELIVERY_SENTENCE =
+	"**Delivery.** `delivery` is the minutes of video played to your viewers in the same calendar month as `speech`, in total and for each resolution, and it is measured, not billed, so it is `null` until delivery has been measured for the app.";
+
+const DELIVERY_EXAMPLE = /"delivery": \{[\s\S]*?"billed": false\n {4}\},/;
+
 const wholeDollars = (cents: number) =>
 	`$${(cents / 100).toLocaleString("en-US")}`;
 
@@ -429,7 +434,11 @@ describe("the Billing page", () => {
 			expect(unagreed, word).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
 		}
 		expect(billing).not.toContain(String.fromCodePoint(0x2014));
-		expect(rest).not.toMatch(/\bdelivery\b|\bwatched\b/i);
+		expect(rest.split(DELIVERY_SENTENCE)).toHaveLength(2);
+		expect(rest).toMatch(DELIVERY_EXAMPLE);
+		expect(
+			rest.replace(DELIVERY_SENTENCE, "").replace(DELIVERY_EXAMPLE, ""),
+		).not.toMatch(/\bdelivery\b|\bwatched\b/i);
 	});
 });
 
@@ -505,6 +514,19 @@ describe("examples in the REST API reference", () => {
 		);
 		expect(data.rates.speechDollarsPerHour).toBe(SPEECH_DOLLARS_PER_HOUR);
 		expect(data.rates.uploadAdmissionDays).toBe(UPLOAD_ADMISSION_DAYS);
+		expect(data.delivery).toMatchObject({ measured: true, billed: false });
+		expect(
+			Object.values(
+				data.delivery.minutesByTier as Record<string, number>,
+			).reduce((sum, minutes) => sum + minutes, 0),
+		).toBe(data.delivery.minutes);
+		expect(Object.keys(data.delivery.minutesByTier)).toEqual([
+			"360p",
+			"720p",
+			"1080p",
+			"1440p",
+			"2160p",
+		]);
 		expect(rest).toContain(
 			`2,999,901 micro-credits is \`"${creditDollars(2_999_901)}"\``,
 		);
