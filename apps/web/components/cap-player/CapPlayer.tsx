@@ -18,6 +18,7 @@ import {
 	sameCaptionsKey,
 	toggledCaptions,
 } from "./captions";
+import { connectMessages, qualityKey } from "./messages";
 import styles from "./player.module.css";
 import {
 	type Attachment,
@@ -55,6 +56,8 @@ export interface CapPlayerProps {
 	focusOnMount?: boolean;
 	accentColor?: string;
 	hideControls?: readonly CapPlayerControl[];
+	keyboard?: boolean;
+	events?: boolean;
 	speeds?: readonly number[];
 	className?: string;
 	style?: CSSProperties;
@@ -289,6 +292,8 @@ export const CapPlayer = ({
 	focusOnMount = false,
 	accentColor,
 	hideControls = NO_CONTROLS,
+	keyboard = true,
+	events = false,
 	speeds = DEFAULT_SPEEDS,
 	className,
 	style,
@@ -343,8 +348,16 @@ export const CapPlayer = ({
 		return true;
 	};
 
-	const live = useRef({ onFirstPlay, onEnded, speeds, toggleCaptions });
-	live.current = { onFirstPlay, onEnded, speeds, toggleCaptions };
+	const live = useRef({
+		onFirstPlay,
+		onEnded,
+		speeds,
+		toggleCaptions,
+		keyboard,
+		fullscreen: !hideControls.includes("fullscreen"),
+		setQuality: (_quality: string): void => undefined,
+	});
+	const messages = useRef<ReturnType<typeof connectMessages> | null>(null);
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
@@ -656,6 +669,7 @@ export const CapPlayer = ({
 				void document.exitFullscreen();
 				return;
 			}
+			if (!live.current.fullscreen) return;
 			if (root.requestFullscreen) {
 				void root.requestFullscreen().catch(() => undefined);
 				return;
@@ -800,6 +814,7 @@ export const CapPlayer = ({
 		};
 
 		const onKey = (event: KeyboardEvent) => {
+			if (!live.current.keyboard) return;
 			if (event.metaKey || event.ctrlKey || event.altKey) return;
 			const target = event.target instanceof Element ? event.target : null;
 			if (target?.closest('[role="menu"]')) return;
@@ -1003,14 +1018,27 @@ export const CapPlayer = ({
 		closeMenu("speed");
 	};
 
-	const pickQuality = (value: number) => {
+	const applyQuality = (value: number) => {
 		attachmentRef.current?.setLevel(value);
 		setPicked(value);
-		closeMenu("quality");
 		onQualityChange?.({
 			auto: value === AUTO_LEVEL,
 			label: levels.find((level) => level.index === value)?.label ?? resolution,
 		});
+	};
+
+	const pickQuality = (value: number) => {
+		applyQuality(value);
+		closeMenu("quality");
+	};
+
+	const setQualityByName = (name: string) => {
+		const value =
+			name === "auto"
+				? AUTO_LEVEL
+				: levels.find((level) => qualityKey(level.label) === qualityKey(name))
+						?.index;
+		if (value !== undefined && value !== picked) applyQuality(value);
 	};
 
 	const qualityItems: MenuItem[] = [
@@ -1055,6 +1083,43 @@ export const CapPlayer = ({
 	const canPickQuality = levels.length > 1;
 	const pickedLabel = levels.find((level) => level.index === picked)?.label;
 	const quality = pickedLabel ?? resolution;
+	const autoQuality = picked === AUTO_LEVEL;
+
+	live.current = {
+		onFirstPlay,
+		onEnded,
+		speeds,
+		toggleCaptions,
+		keyboard,
+		fullscreen: shows("fullscreen"),
+		setQuality: setQualityByName,
+	};
+
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!events || !video || window.parent === window) return;
+		const connection = connectMessages(window, video, (name) =>
+			live.current.setQuality(name),
+		);
+		messages.current = connection;
+		return () => {
+			messages.current = null;
+			connection.stop();
+		};
+	}, [events]);
+
+	useEffect(() => {
+		if (quality) {
+			messages.current?.send("qualitychange", {
+				quality,
+				auto: autoQuality,
+			});
+		}
+	}, [quality, autoQuality]);
+
+	useEffect(() => {
+		if (failed) messages.current?.send("error", { code: "media" });
+	}, [failed]);
 
 	return (
 		<div
