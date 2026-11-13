@@ -14,6 +14,13 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import {
+	hasOrganizationSlot,
+	ORGANIZATION_LIMIT_MESSAGE,
+	ORGANIZATION_RATE_MESSAGE,
+	organizationCreationLimited,
+	reserveOrganizationSlot,
+} from "@/lib/workspace-creation-limits";
 
 export async function createOrganization(formData: FormData) {
 	const user = await getCurrentUser();
@@ -22,6 +29,10 @@ export async function createOrganization(formData: FormData) {
 	// Extract the name from the FormData
 	const name = formData.get("name") as string;
 	if (!name) throw new Error("Organization name is required");
+
+	if (await organizationCreationLimited(user.id)) {
+		return { success: false as const, error: ORGANIZATION_RATE_MESSAGE };
+	}
 
 	// Check if organization with the same name already exists
 	const existingOrg = await db()
@@ -32,6 +43,10 @@ export async function createOrganization(formData: FormData) {
 
 	if (existingOrg.length > 0) {
 		throw new Error("Organization with this name already exists");
+	}
+
+	if (!(await hasOrganizationSlot(db(), user.id))) {
+		return { success: false as const, error: ORGANIZATION_LIMIT_MESSAGE };
 	}
 
 	const organizationId = Organisation.OrganisationId.make(nanoId());
@@ -85,23 +100,31 @@ export async function createOrganization(formData: FormData) {
 		}
 	}
 
-	// Insert the organization with or without the icon URL
-	await db().insert(organizations).values(orgValues);
+	const created = await db().transaction(async (tx) => {
+		if (!(await reserveOrganizationSlot(tx, user.id))) return false;
 
-	// Add the user as an owner of the organization
-	await db().insert(organizationMembers).values({
-		id: nanoId(),
-		userId: user.id,
-		role: "owner",
-		organizationId,
+		// Insert the organization with or without the icon URL
+		await tx.insert(organizations).values(orgValues);
+
+		// Add the user as an owner of the organization
+		await tx.insert(organizationMembers).values({
+			id: nanoId(),
+			userId: user.id,
+			role: "owner",
+			organizationId,
+		});
+
+		// Set this as the active organization for the user
+		await tx
+			.update(users)
+			.set({ activeOrganizationId: organizationId })
+			.where(eq(users.id, user.id));
+		return true;
 	});
-
-	// Set this as the active organization for the user
-	await db()
-		.update(users)
-		.set({ activeOrganizationId: organizationId })
-		.where(eq(users.id, user.id));
+	if (!created) {
+		return { success: false as const, error: ORGANIZATION_LIMIT_MESSAGE };
+	}
 
 	revalidatePath("/dashboard");
-	return { success: true, organizationId };
+	return { success: true as const, organizationId };
 }
