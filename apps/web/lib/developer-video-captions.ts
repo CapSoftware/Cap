@@ -111,7 +111,7 @@ async function newestCaptionSource(video: VideoRef, language: string) {
 			),
 		)
 		.orderBy(
-			desc(developerTranscripts.createdAt),
+			desc(developerTranscripts.requestedAt),
 			desc(developerTranscripts.id),
 		)
 		.limit(1);
