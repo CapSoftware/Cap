@@ -5,9 +5,13 @@ import { asc, inArray, sql } from "drizzle-orm";
 
 export const MAX_MEDIA_OBJECTS_PER_VIDEO = 400;
 
-// Matches the comment media upload token lifetime, so every upload that can
-// still land was reserved in the current or the previous window.
+// Matches the comment media upload token lifetime. A reservation counts in its
+// own window and the two after it, so it outlives its token by at least one
+// full window. That margin covers the bucket listing taken before the
+// reservation and the token minted after it falling on either side of a window
+// boundary.
 export const COMMENT_MEDIA_RESERVATION_WINDOW_MS = 6 * 60 * 60 * 1000;
+const COUNTED_WINDOWS = 3;
 
 const reservationKey = (videoId: string, windowIndex: number) =>
 	createHash("sha256")
@@ -23,13 +27,10 @@ export async function reserveCommentMediaObjects(input: {
 	const now = (input.now ?? new Date()).getTime();
 	const windowIndex = Math.floor(now / COMMENT_MEDIA_RESERVATION_WINDOW_MS);
 	const currentKey = reservationKey(input.videoId, windowIndex);
-	const windows = [
-		{ id: currentKey, index: windowIndex },
-		{
-			id: reservationKey(input.videoId, windowIndex - 1),
-			index: windowIndex - 1,
-		},
-	].sort((left, right) => left.id.localeCompare(right.id));
+	const windows = Array.from({ length: COUNTED_WINDOWS }, (_, age) => ({
+		id: reservationKey(input.videoId, windowIndex - age),
+		index: windowIndex - age,
+	})).sort((left, right) => left.id.localeCompare(right.id));
 
 	return db().transaction(async (tx) => {
 		await tx
@@ -39,7 +40,8 @@ export async function reserveCommentMediaObjects(input: {
 					id: window.id,
 					limitBytes: MAX_MEDIA_OBJECTS_PER_VIDEO,
 					expiresAt: new Date(
-						(window.index + 2) * COMMENT_MEDIA_RESERVATION_WINDOW_MS,
+						(window.index + COUNTED_WINDOWS) *
+							COMMENT_MEDIA_RESERVATION_WINDOW_MS,
 					),
 				})),
 			)
