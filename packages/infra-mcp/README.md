@@ -4,18 +4,15 @@ An MCP server for [Cap Infra](https://cap.so/docs/api/rest-api), the video and s
 
 It runs over stdio, needs Node 20 or newer and one environment variable, and talks only to the documented REST API. It does not need Cap Desktop or a Cap login.
 
-This package is a draft. It is not on npm and not listed in any marketplace yet.
+Cap Infra also has a [hosted MCP server](https://cap.so/docs/api/get-started#10-use-with-agents-mcp) that needs no install. Use this one when the agent should upload a file from your disk in one call.
 
-## Install from the repo
+## Install
 
 ```bash
-git clone https://github.com/CapSoftware/Cap.git
-cd Cap
-bun install
-bun run --cwd packages/infra-mcp build
+npx -y @cap.so/infra-mcp
 ```
 
-That writes one self-contained file, `packages/infra-mcp/dist/bin.js`.
+The package is one self-contained file with no dependencies.
 
 ## Configure
 
@@ -29,15 +26,15 @@ The server stops at startup with a message on stderr when the key is missing or 
 Claude Code:
 
 ```bash
-claude mcp add cap-infra --env CAP_SECRET_KEY=csk_your_secret_key_here -- node /absolute/path/to/Cap/packages/infra-mcp/dist/bin.js
+claude mcp add cap-infra --env CAP_SECRET_KEY=csk_your_secret_key_here -- npx -y @cap.so/infra-mcp
 ```
 
 Codex, in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.cap-infra]
-command = "node"
-args = ["/absolute/path/to/Cap/packages/infra-mcp/dist/bin.js"]
+command = "npx"
+args = ["-y", "@cap.so/infra-mcp"]
 env = { CAP_SECRET_KEY = "csk_your_secret_key_here" }
 tool_timeout_sec = 900
 ```
@@ -82,6 +79,10 @@ There is no tool that adds credit. Buying credit needs a signed-in browser, so w
 ## Develop
 
 ```bash
+git clone https://github.com/CapSoftware/Cap.git
+cd Cap
+bun install
+bun run --cwd packages/infra-mcp build
 bun run --cwd packages/infra-mcp typecheck
 bun run --cwd packages/infra-mcp test
 ```
@@ -89,3 +90,12 @@ bun run --cwd packages/infra-mcp test
 The tests build the server, then drive it with a real MCP client against a stub of the API on localhost. They make no request to Cap. One test checks every method, path, query parameter and body field the server sends against the OpenAPI description in `apps/web/lib/developer-openapi.ts`, so the server cannot drift from the documented API.
 
 `skill/SKILL.md` is a draft of the instructions an agent would get from a plugin or skill listing.
+
+To publish, bump `version` in `package.json`, then:
+
+```bash
+bun run --cwd packages/infra-mcp pack:npm
+npm publish packages/infra-mcp/npm --access public
+```
+
+`pack:npm` builds the server and writes the npm package to `packages/infra-mcp/npm` as `@cap.so/infra-mcp`. The workspace name stays `@cap/infra-mcp`, because the web app imports the hosted tools from it.
