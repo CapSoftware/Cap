@@ -27,6 +27,7 @@ import {
 import { useCopyCollectionLink } from "@/lib/public-collection-client";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
+import { libraryDoodleStyles } from "../../_components/library-doodles";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { FoldersDropdown } from "./FoldersDropdown";
@@ -445,11 +446,25 @@ const FolderCard = ({
 			className={clsx(
 				"flex relative justify-between items-center w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
 				isList ? "gap-3 px-3 py-2" : "px-4 py-4",
-				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
+				isDragOver ? "border-transparent bg-gray-4" : "border-gray-5",
 				isMovingVideo && "opacity-70",
 				isDraggingSelf && "opacity-50",
 			)}
 		>
+			{isDragOver && (
+				<svg className={libraryDoodleStyles.dropZone} aria-hidden="true">
+					<rect
+						x="1"
+						y="1"
+						rx="8"
+						className={clsx(
+							libraryDoodleStyles.accent,
+							libraryDoodleStyles.march,
+						)}
+						strokeWidth={2}
+					/>
+				</svg>
+			)}
 			{!isRenaming && (
 				<Link
 					href={folderHref}

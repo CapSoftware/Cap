@@ -1,6 +1,7 @@
 "use client";
 
 import type { Folder, Video } from "@cap/web-domain";
+import clsx from "clsx";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
@@ -9,6 +10,10 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import {
+	EmptyFolderDoodle,
+	libraryDoodleHost,
+} from "../../../_components/library-doodles";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { DragHint } from "../../../caps/components/DragHint";
@@ -149,10 +154,24 @@ export default function FolderVideosSection({
 			</div>
 			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{visibleVideos.length === 0 && !isUploading ? (
-					<p className="col-span-full text-gray-9">
-						No videos or screenshots in this folder yet. Drag and drop into the
-						folder or upload.
-					</p>
+					<div
+						className={clsx(
+							libraryDoodleHost,
+							"flex flex-col col-span-full gap-3 items-center px-6 py-12 text-center rounded-2xl border border-dashed border-gray-5 bg-gray-1",
+						)}
+					>
+						<EmptyFolderDoodle />
+						<div className="flex flex-col gap-1 items-center">
+							<p className="text-base font-medium text-gray-12">
+								This folder is empty
+							</p>
+							<p className="max-w-sm text-sm text-gray-10 text-pretty">
+								{canMove
+									? "Drag Caps onto this folder from My Caps, use Move on any Cap, or upload one here."
+									: "Caps added to this folder will show up here."}
+							</p>
+						</div>
+					</div>
 				) : (
 					<>
 						{isUploading && (

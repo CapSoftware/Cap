@@ -60,12 +60,19 @@ export const SelectedCapsBar = ({
 							scale: { type: "spring", damping: 15, stiffness: 300 },
 						}}
 					>
-						<div className="flex gap-1 text-sm font-medium text-gray-10">
-							<NumberFlow
-								value={selectedCaps.length}
-								className="tabular-nums text-md text-gray-12"
-							/>
-							cap{selectedCaps.length !== 1 ? "s" : ""} selected
+						<div className="flex flex-col min-w-0">
+							<div className="flex gap-1 text-sm font-medium text-gray-10">
+								<NumberFlow
+									value={selectedCaps.length}
+									className="tabular-nums text-md text-gray-12"
+								/>
+								cap{selectedCaps.length !== 1 ? "s" : ""} selected
+							</div>
+							{moveLocation && moveRootLabel && (
+								<p className="hidden text-xs truncate sm:block text-gray-9">
+									Drag them onto a folder, or use Move
+								</p>
+							)}
 						</div>
 						<div className="flex gap-2 ml-4">
 							{moveLocation && moveRootLabel && (
