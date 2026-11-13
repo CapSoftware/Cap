@@ -153,6 +153,26 @@ function autoTopUpWaits() {
 		limit:
 			topUps.filter((row) => row.createdAt.getTime() > now - 24 * HOUR_MS)
 				.length >= 10,
+		owner:
+			ledger.rows
+				.filter(
+					(row) =>
+						row.createdAt.getTime() > now - 24 * HOUR_MS &&
+						((row.type === "topup" && row.referenceType === "auto_top_up") ||
+							(row.type === "topup_pending" &&
+								row.referenceType === "auto_top_up_pending" &&
+								!settledIds.has(row.referenceId))),
+				)
+				.reduce(
+					(total, row) =>
+						total +
+						(row.type === "topup"
+							? row.amountMicroCredits
+							: Number(row.metadata?.amountCents ?? 0) * 1000),
+					0,
+				) +
+				ledger.account.autoTopUpAmountCents * 1000 >
+			100_000_000,
 	};
 }
 
@@ -165,7 +185,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	if (query.table === developerCreditAccounts) {
 		const { exists, ...account } = ledger.account;
 		if (!exists) return [];
-		if (keys === "declineWait,id,limitWait,pendingWait") {
+		if (keys === "declineWait,id,limitWait,ownerWait,pendingWait") {
 			if (rendered.params.at(-1) !== account.id) return [];
 			const waits = autoTopUpWaits();
 			return [
@@ -174,6 +194,7 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					pendingWait: Number(waits.pending),
 					declineWait: Number(waits.decline),
 					limitWait: Number(waits.limit),
+					ownerWait: Number(waits.owner),
 				},
 			];
 		}
@@ -194,7 +215,8 @@ function runSelect(query: Query): Record<string, unknown>[] {
 					account.autoTopUpThresholdMicroCredits + ledger.heldMicroCredits &&
 				!waits.pending &&
 				!waits.decline &&
-				!waits.limit;
+				!waits.limit &&
+				!waits.owner;
 			return due
 				? [
 						{

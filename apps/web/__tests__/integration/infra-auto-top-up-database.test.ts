@@ -105,16 +105,29 @@ describe.runIf(Boolean(databaseUrl))(
 	() => {
 		let pool: Pool;
 		const accounts: string[] = [];
+		const owners: string[] = [];
 
-		const makeAccount = async (balanceMicroCredits: number) => {
+		const makeOwner = async () => {
 			const userId = id();
-			const appId = id();
-			const accountId = id();
-			accounts.push(accountId);
+			owners.push(userId);
 			await pool.query(
 				"INSERT INTO users (id, email, activeOrganizationId) VALUES (?, ?, '')",
 				[userId, `${userId}@example.com`],
 			);
+			return userId;
+		};
+
+		const makeAccount = async (
+			balanceMicroCredits: number,
+			{
+				ownerId,
+				amountCents = 500,
+			}: { ownerId?: string; amountCents?: number } = {},
+		) => {
+			const userId = ownerId ?? (await makeOwner());
+			const appId = id();
+			const accountId = id();
+			accounts.push(accountId);
 			await pool.query(
 				"INSERT INTO developer_apps (id, ownerId, name, environment) VALUES (?, ?, 'Top-up test', 'production')",
 				[appId, userId],
@@ -123,10 +136,10 @@ describe.runIf(Boolean(databaseUrl))(
 				`INSERT INTO developer_credit_accounts
 					(id, appId, ownerId, balanceMicroCredits, stripeCustomerId, stripePaymentMethodId,
 					 autoTopUpEnabled, autoTopUpThresholdMicroCredits, autoTopUpAmountCents)
-				 VALUES (?, ?, ?, ?, 'cus_test', 'pm_test', 1, 500000, 500)`,
-				[accountId, appId, userId, balanceMicroCredits],
+				 VALUES (?, ?, ?, ?, 'cus_test', 'pm_test', 1, 500000, ?)`,
+				[accountId, appId, userId, balanceMicroCredits, amountCents],
 			);
-			return { accountId, appId };
+			return { accountId, appId, ownerId: userId };
 		};
 
 		const balanceOf = async (accountId: string) => {
@@ -165,9 +178,12 @@ describe.runIf(Boolean(databaseUrl))(
 					[accountId],
 				);
 				await pool.query(
-					"DELETE a, c, u FROM developer_credit_accounts c JOIN developer_apps a ON a.id = c.appId JOIN users u ON u.id = c.ownerId WHERE c.id = ?",
+					"DELETE a, c FROM developer_credit_accounts c JOIN developer_apps a ON a.id = c.appId WHERE c.id = ?",
 					[accountId],
 				);
+			}
+			for (const ownerId of owners) {
+				await pool.query("DELETE FROM users WHERE id = ?", [ownerId]);
 			}
 			await pool.end();
 		});
@@ -371,6 +387,82 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(charged).not.toContain(stale.accountId);
 			expect(charged).not.toContain(young.accountId);
 			expect(charged).not.toContain(declined.accountId);
+		});
+
+		it("stops an owner's automatic top-ups at $1,000 a day across all their apps", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const first = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const second = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const before = fixture.created.length;
+
+			expect((await runAutoTopUp(first.accountId)).state).toBe("succeeded");
+			expect(await runAutoTopUp(second.accountId)).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+
+			expect(fixture.created.length - before).toBe(1);
+			const [[enabled]] = (await pool.query(
+				"SELECT autoTopUpEnabled AS on_ FROM developer_credit_accounts WHERE id = ?",
+				[second.accountId],
+			)) as unknown as [[{ on_: number }]];
+			expect(enabled.on_).toBe(1);
+			expect(warn).toHaveBeenCalledWith(
+				"[infra-billing] Auto top-up waits for its daily limit",
+				{ accountId: second.accountId, reason: "owner_daily_limit" },
+			);
+			warn.mockRestore();
+		});
+
+		it("lets two apps of one owner racing near the ceiling make one charge", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const ownerId = await makeOwner();
+			const first = await makeAccount(30_000, { ownerId, amountCents: 60_000 });
+			const second = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			const before = fixture.created.length;
+
+			const results = await Promise.all([
+				runAutoTopUp(first.accountId),
+				runAutoTopUp(second.accountId),
+			]);
+
+			expect(fixture.created.length - before).toBe(1);
+			expect(results.map((result) => result.state).sort()).toEqual([
+				"skipped",
+				"succeeded",
+			]);
+			expect(results).toContainEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+			warn.mockRestore();
+		});
+
+		it("leaves credit bought by hand out of the owner's ceiling", async () => {
+			const { runAutoTopUp } = await import("@/lib/infra-auto-top-up");
+			const ownerId = await makeOwner();
+			const bought = await makeAccount(30_000, { ownerId });
+			const automatic = await makeAccount(30_000, {
+				ownerId,
+				amountCents: 60_000,
+			});
+			await pool.query(
+				`INSERT INTO developer_credit_transactions (id, accountId, type, amountMicroCredits,
+					balanceAfterMicroCredits, referenceId, referenceType, metadata)
+				 VALUES (?, ?, 'topup', 90000000, 90030000, ?, 'stripe_payment_intent', '{}')`,
+				[id(), bought.accountId, `pi_manual_${bought.accountId}`],
+			);
+
+			expect((await runAutoTopUp(automatic.accountId)).state).toBe("succeeded");
 		});
 
 		it("tops up again the same day with a new key once the balance is low again", async () => {

@@ -306,6 +306,7 @@ describe("auto top-up charge", () => {
 				declines: 0,
 			}),
 			timeout: AUTO_TOP_UP_STRIPE_TIMEOUT_MS,
+			maxNetworkRetries: 0,
 		});
 		expect(ledger.account.balanceMicroCredits).toBe(530_000);
 		expect(topUps()).toEqual([
@@ -383,7 +384,7 @@ describe("auto top-up charge", () => {
 		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 		mocks.createPaymentIntent.mockRejectedValueOnce(
 			Object.assign(
-				new Error("Request aborted due to timeout being reached (20000ms)"),
+				new Error("Request aborted due to timeout being reached (15000ms)"),
 				{ type: "StripeConnectionError" },
 			),
 		);
@@ -401,7 +402,7 @@ describe("auto top-up charge", () => {
 			state: "succeeded",
 		});
 		const [timedOut, retry] = mocks.createPaymentIntent.mock.calls;
-		expect(timedOut?.[1].timeout).toBe(20_000);
+		expect(timedOut?.[1].timeout).toBe(15_000);
 		expect(retry?.[1].idempotencyKey).toBe(timedOut?.[1].idempotencyKey);
 		errors.mockRestore();
 	});
@@ -521,6 +522,65 @@ describe("auto top-up charge", () => {
 		expect(await runAutoTopUp("account-1", now())).toMatchObject({
 			state: "succeeded",
 			paymentIntentId: "pi_2",
+		});
+	});
+
+	describe("the owner's daily ceiling", () => {
+		it("waits once automatic top-ups would pass $1,000 in 24 hours, without switching anything off", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			ledger.account.autoTopUpAmountCents = 60_000;
+			mocks.createPaymentIntent.mockResolvedValue(
+				intent("pi_1", "succeeded", { amount_received: 60_000 }),
+			);
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				state: "succeeded",
+			});
+
+			ledger.account.balanceMicroCredits = 10;
+			later(1);
+			expect(await runAutoTopUp("account-1", now())).toEqual({
+				state: "skipped",
+				reason: "owner_daily_limit",
+			});
+			expect(mocks.createPaymentIntent).toHaveBeenCalledTimes(1);
+			expect(ledger.account.autoTopUpEnabled).toBe(true);
+			expect(failures()).toHaveLength(0);
+			expect(mocks.sendEmail).not.toHaveBeenCalled();
+			expect(warn).toHaveBeenCalledWith(
+				"[infra-billing] Auto top-up waits for its daily limit",
+				{ accountId: "account-1", reason: "owner_daily_limit" },
+			);
+
+			later(23.1);
+			mocks.createPaymentIntent.mockResolvedValue(
+				intent("pi_2", "succeeded", { amount_received: 60_000 }),
+			);
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				state: "succeeded",
+				paymentIntentId: "pi_2",
+			});
+			warn.mockRestore();
+		});
+
+		it("does not count credit bought by hand", async () => {
+			ledger.rows.push({
+				id: "manual",
+				accountId: "account-1",
+				type: "topup",
+				amountMicroCredits: 90_000_000,
+				balanceAfterMicroCredits: 90_030_000,
+				referenceId: "pi_manual",
+				referenceType: "stripe_payment_intent",
+				createdAt: new Date(ledger.now),
+			});
+			ledger.account.autoTopUpAmountCents = 60_000;
+			mocks.createPaymentIntent.mockResolvedValue(
+				intent("pi_1", "succeeded", { amount_received: 60_000 }),
+			);
+
+			expect(await runAutoTopUp("account-1", now())).toMatchObject({
+				state: "succeeded",
+			});
 		});
 	});
 
