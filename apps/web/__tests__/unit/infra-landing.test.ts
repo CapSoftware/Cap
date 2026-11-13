@@ -146,18 +146,18 @@ describe("the Cap Infra landing page", () => {
 		expect(text).not.toContain(String.fromCodePoint(0x2014));
 	});
 
-	it("asks for access while Cap Infra is in preview", async () => {
+	it("lets anyone start building on Cap's own deployment", async () => {
 		const content = await load("true");
 
-		expect(content.OPEN_ACCESS).toBe(false);
-		expect(content.START.label).toBe("Request access");
-		expect(content.START.href).toBe(
-			"mailto:hello@cap.so?subject=Cap%20Infra%20access",
-		);
-		expect(content.PREVIEW_NOTE).toBe(
-			"Cap Infra is in preview. Email hello@cap.so for access.",
-		);
-		expect(content.infraFaqs[0]?.answer).toBe(content.PREVIEW_NOTE);
+		expect(content.OPEN_ACCESS).toBe(true);
+		expect(content.START).toEqual({
+			label: "Start building",
+			href: "/dashboard/infra",
+		});
+		expect(content.PREVIEW_NOTE).toBeNull();
+		expect(
+			content.infraFaqs.some((faq) => faq.answer.includes("preview")),
+		).toBe(false);
 	});
 
 	it("opens the console where anyone can use it", async () => {
@@ -227,8 +227,9 @@ describe("the rendered page", () => {
 		const embed = content.PLAYER.find((entry) => entry.id === "embed")?.code;
 		expect(embed).toContain('loading="lazy"');
 		expect(text).toContain(embed);
-		expect(text).toContain("Request access");
-		expect(text).not.toContain("Start building");
+		expect(text).toContain("Start building");
+		expect(text).not.toContain("Request access");
+		expect(text).not.toContain("in preview");
 		for (const image of page.querySelectorAll("img")) {
 			expect(image.hasAttribute("alt")).toBe(true);
 			const eager =
@@ -354,7 +355,7 @@ describe("the agent section", () => {
 		expect(text).toContain(rest.join("\n").trim());
 		expect(text).toContain(CAP_INFRA_POINTER_PROMPT);
 		expect(text).toContain("Copy prompt");
-		expect(text).toContain("Cap Infra is in preview.");
+		expect(text).not.toContain("Cap Infra is in preview.");
 		expect(text).not.toMatch(CLI);
 		const hrefs = [...page.querySelectorAll("a")].map((link) =>
 			link.getAttribute("href"),

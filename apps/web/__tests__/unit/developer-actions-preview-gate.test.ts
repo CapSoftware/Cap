@@ -103,20 +103,10 @@ const actions: [string, () => Promise<unknown>][] = [
 	],
 ];
 
-describe("Cap Infra console actions and the preview list", () => {
+describe("Cap Infra console actions and sign-in", () => {
 	beforeEach(() => {
 		mocks.touched = [];
 	});
-
-	it.each(actions)(
-		"does not let an account outside the preview %s",
-		async (_name, run) => {
-			mocks.user = { id: "user-1", email: "someone@example.com" };
-
-			await expect(run()).rejects.toThrow("Unauthorized");
-			expect(mocks.touched).toEqual([]);
-		},
-	);
 
 	it.each(actions)(
 		"does not let a signed-out visitor %s",
@@ -129,9 +119,9 @@ describe("Cap Infra console actions and the preview list", () => {
 	);
 
 	it.each(actions)(
-		"lets an account on the preview list through to %s",
+		"lets any signed-in account through to %s",
 		async (_name, run) => {
-			mocks.user = { id: "user-1", email: "richie@cap.so" };
+			mocks.user = { id: "user-1", email: "someone@example.com" };
 
 			const outcome = await run().then(
 				() => "returned",
