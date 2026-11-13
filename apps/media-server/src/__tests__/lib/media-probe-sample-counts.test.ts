@@ -174,24 +174,18 @@ describe.skipIf(!patched)("sample counts a file only declares", () => {
 	}
 
 	// The parser walks a sound track's chunk runs one chunk at a time without
-	// yielding, so a timeout cannot stop it. The small gap fails in well under a
-	// second when the runs are not bounded; the largest gap only runs once that
-	// has passed, so a missing bound cannot hang the image build.
-	let chunkRunsBounded = false;
-
-	test("a sound track's chunk runs end at the last chunk the file lists", async () => {
+	// yielding, so a timeout cannot stop it. The small gap is probed first: it
+	// fails in well under a second when the runs are not bounded, which stops
+	// the test before the largest gap could hang the image build.
+	test("a sound track's chunk runs end at the last chunk the file lists, even at the largest possible gap", async () => {
 		const started = performance.now();
-		const spans = await probeTrackSpans(
+		const small = await probeTrackSpans(
 			withChunkGap(20_000_000, "pcm-chunk-gap-20m.mov"),
 		);
 		expect(performance.now() - started).toBeLessThan(200);
-		expect(spans.video).toBeCloseTo(1, 1);
-		expect(spans.audio as number).toBeLessThan(2);
-		chunkRunsBounded = true;
-	});
+		expect(small.video).toBeCloseTo(1, 1);
+		expect(small.audio as number).toBeLessThan(2);
 
-	test("a sound track claiming the largest possible chunk gap probes at once", async () => {
-		expect(chunkRunsBounded).toBe(true);
 		const path = withChunkGap(MAX - 1, "pcm-chunk-gap-max.mov");
 		const result = await probeWithin(path);
 		const spans = await probeTrackSpans(path);
