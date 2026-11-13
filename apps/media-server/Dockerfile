@@ -10,7 +10,8 @@ COPY apps/media-server/package.json apps/media-server/bun.lock ./
 COPY apps/media-server/patches ./patches
 RUN bun install --frozen-lockfile --production
 # The build stops here if the parser limits in patches/ were not applied.
-RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
+RUN grep -q MAX_DECLARED_SAMPLES node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js \
+	&& grep -q PCM_CHUNK_SPAN_LIMIT node_modules/mediabunny/dist/modules/src/isobmff/isobmff-demuxer.js
 
 COPY apps/media-server/bunfig.toml ./bunfig.toml
 COPY apps/media-server/src ./src
