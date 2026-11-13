@@ -1999,6 +1999,65 @@ describe("a deleted developer video", () => {
 		expect(mocks.store.updates).toHaveLength(0);
 	});
 
+	// The callback reads the video while it is live, and `change` commits just
+	// before the callback's own write takes its row lock.
+	const progressBeforeConfirm = async (change: () => void) => {
+		mocks.store.video = developerVideo({
+			processing: processingState({
+				hls: {
+					state: "running",
+					token: "t-hls",
+					jobId: null,
+					startedAt: 2_000,
+				},
+			}),
+		});
+		const { db } = await import("@cap/database");
+		const database = db();
+		const transaction = database.transaction.bind(database);
+		const spy = vi.spyOn(database, "transaction").mockImplementationOnce(((
+			run: Parameters<typeof transaction>[0],
+		) => {
+			change();
+			return transaction(run);
+		}) as typeof transaction);
+		try {
+			return await applyDeveloperVideoProgress(
+				{ videoId: "video-1", jobId: "job-7", phase: "downloading" },
+				"hls",
+				"t-hls",
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	};
+
+	it("cancels a job whose first progress lost its job id write to the delete", async () => {
+		const result = await progressBeforeConfirm(() => {
+			mocks.store.video = { ...video(), deletedAt: new Date() };
+		});
+
+		expect(result).toEqual({ success: true, applied: false });
+		expect(mocks.cancelJob).toHaveBeenCalledExactlyOnceWith("job-7");
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
+	it("does not cancel a job whose first progress lost its write on a live video", async () => {
+		await progressBeforeConfirm(() => {
+			const current = video();
+			mocks.store.video = {
+				...current,
+				processing: current.processing && {
+					...current.processing,
+					hls: runningPart("newer"),
+				},
+			};
+		});
+
+		expect(mocks.cancelJob).not.toHaveBeenCalled();
+		expect(mocks.store.updates).toHaveLength(0);
+	});
+
 	it("does not cancel on progress from another attempt or without a job id", async () => {
 		mocks.store.video = deletedVideo();
 

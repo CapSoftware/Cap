@@ -988,10 +988,15 @@ export async function applyDeveloperVideoProgress(
 	if (!finished) {
 		const jobId = payload.jobId;
 		if (current.jobId === null && typeof jobId === "string" && jobId) {
-			await mutateEncode(video.id, encodeId, (latest) => {
+			const recorded = await mutateEncode(video.id, encodeId, (latest) => {
 				const confirmed = markPartDispatched(latest, part, { token, jobId });
 				return confirmed ? { processing: confirmed } : null;
 			});
+			// A delete that committed after this callback read the video found
+			// no job id to cancel, so the job would run to the end.
+			if (!recorded && (await findDeveloperVideo(video.id))?.deletedAt) {
+				await cancelDeveloperVideoJobs(video.id, [jobId]);
+			}
 		}
 		return ignored;
 	}
