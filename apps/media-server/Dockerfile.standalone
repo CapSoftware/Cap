@@ -18,7 +18,6 @@ COPY src ./src
 COPY capcodec.md ./capcodec.md
 # Files whose tables claim far more than they hold must probe at once, or the image is not built.
 RUN bun test src/__tests__/lib/media-probe-sample-counts.test.ts
-# The older formats regular imports carry must probe and transcode with this image's FFmpeg.
 RUN bun test src/__tests__/lib/legacy-codecs.integration.test.ts
 
 ENV PORT=3456

@@ -122,9 +122,8 @@ export function getSafeDemuxerWhitelist(): string {
 	return safeDemuxerWhitelist;
 }
 
-// Older video formats a regular Cap import can still carry: DVD and broadcast
-// MPEG, Windows Media, Flash, early MPEG-4 and Ogg video. FFmpeg's decoders
-// for them are mature. Named as ffprobe names the codec.
+// Regular Cap imports still carry these, and FFmpeg's decoders for them are
+// mature. Exotic codecs (Cinepak, DV, Indeo, raw video) stay refused.
 const LEGACY_VIDEO_CODECS = [
 	"mpeg1video",
 	"mpeg2video",
@@ -142,11 +141,10 @@ const LEGACY_VIDEO_CODECS = [
 	"theora",
 ];
 
-// Decoders for those formats whose name differs from the codec name.
+// FFmpeg opens these codecs with decoders of another name, and the decoder
+// list is matched by decoder name.
 const LEGACY_VIDEO_DECODERS = ["msmpeg4", "flv"];
 
-// Audio in those older files: MPEG audio layer 2, Windows Media audio, AMR
-// from phones, and ADPCM in AVI and WAV.
 const LEGACY_AUDIO_DECODERS = [
 	"mp2",
 	"mp2float",
