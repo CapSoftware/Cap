@@ -115,7 +115,7 @@ describe("over stdio", () => {
 		expect(tools).toHaveLength(14);
 		expect(client.getServerVersion()).toMatchObject({
 			name: "cap-infra",
-			version: "0.1.0",
+			version: "0.2.0",
 		});
 	});
 
