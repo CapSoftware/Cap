@@ -10,6 +10,7 @@ import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { Effect } from "effect";
 import { createPool, type Pool } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { firstMonthStorageMicroCredits } from "@/lib/developer-pricing";
 
 const fixture = vi.hoisted(() => ({
 	database: undefined as unknown,
@@ -151,12 +152,21 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.database = undefined;
 		});
 
-		it("lets exactly one of six videos measured at once take the one allowance", async () => {
+		const firstMonthAt1080p = (durationSeconds: number) =>
+			firstMonthStorageMicroCredits({ durationSeconds, tier: "1080p" });
+
+		// Every processing video reserves its own first month of storage, so
+		// the allowance that fits exactly one measured video is that video's
+		// first month at its measured length plus the others' at the length
+		// they declared. Without the account lock every video passes.
+		const measureAtOnce = async (count: number) => {
 			const { prepareDeveloperVideoProcessing } = await import(
 				"@/lib/developer-video-processing"
 			);
-			const { appId } = await makeApp(1_500);
-			const videos = Array.from({ length: 6 }, () => ({
+			const { appId } = await makeApp(
+				firstMonthAt1080p(3600) + (count - 1) * firstMonthAt1080p(60),
+			);
+			const videos = Array.from({ length: count }, () => ({
 				id: id(),
 				encodeId: id(),
 			}));
@@ -206,7 +216,7 @@ describe.runIf(Boolean(databaseUrl))(
 			);
 			const refused = results.filter((result) => result.status === "rejected");
 			expect(admitted).toHaveLength(1);
-			expect(refused).toHaveLength(5);
+			expect(refused).toHaveLength(count - 1);
 			for (const result of refused) {
 				expect(String((result as PromiseRejectedResult).reason)).toMatch(
 					/Not enough credit.*Add at least \$\d+\.\d\d/,
@@ -220,8 +230,16 @@ describe.runIf(Boolean(databaseUrl))(
 				.from(developerVideos)
 				.where(eq(developerVideos.appId, appId));
 			expect(rows.filter((row) => row.duration === 3600)).toHaveLength(1);
-			expect(rows.filter((row) => row.duration === 60)).toHaveLength(5);
+			expect(rows.filter((row) => row.duration === 60)).toHaveLength(count - 1);
 			expect(rows.filter((row) => row.processing?.probe)).toHaveLength(1);
+		};
+
+		it("lets exactly one of six videos measured at once take the one allowance", async () => {
+			await measureAtOnce(6);
+		});
+
+		it("lets exactly one of twenty videos measured at once take the one allowance", async () => {
+			await measureAtOnce(20);
 		});
 
 		it("sweeps every unfinished video across pages and removes by the file's age only", async () => {
