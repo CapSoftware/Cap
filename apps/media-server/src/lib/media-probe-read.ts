@@ -11,6 +11,7 @@ import {
 	WEBM,
 } from "mediabunny";
 import type { VideoMetadata } from "./job-manager";
+import { matroskaEndFromTail } from "./matroska-tail";
 import { MediaAddressError } from "./media-address-guard";
 import {
 	createGuardedMediaFetch,
@@ -267,6 +268,9 @@ export interface ProbedMedia {
 	// The bitrate the tracks report, 0 when they report none and
 	// metadata.bitrate was worked out from the file size and duration.
 	trackBitrate: number;
+	// Whether the container can hide trimmed media behind an edit list, as
+	// MP4 and QuickTime can, so a longer span may be real trimming.
+	mayTrim: boolean;
 }
 
 export async function probeMedia(path: string): Promise<ProbedMedia> {
@@ -320,11 +324,12 @@ const MEASURE_BUDGET_MS = 3_000;
 // held to anyway.
 async function measureWithinBudget(
 	input: ReturnType<typeof createMediaInput>,
+	budgetMs: number,
 ): Promise<number | null> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const measured = measureLength(input).catch(() => null);
 	const budget = new Promise<null>((resolve) => {
-		timer = setTimeout(() => resolve(null), MEASURE_BUDGET_MS);
+		timer = setTimeout(() => resolve(null), budgetMs);
 	});
 	try {
 		const length = await Promise.race([measured, budget]);
@@ -334,6 +339,74 @@ async function measureWithinBudget(
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+export const NO_VIDEO_STREAM_MESSAGE = "No video stream found";
+
+export const UNFINISHED_RECORDING_MESSAGE =
+	"This recording was not finished properly. Remux or export it, then upload it again.";
+
+const UNDECLARED_MEASURE_BUDGET_MS = 5_000;
+
+function isMatroskaFamily(format: InputFormat): boolean {
+	return format === MATROSKA || format === WEBM;
+}
+
+// The length of a Matroska or WebM file from its last cluster, counted from
+// its first timestamp. Null when its tail holds no cluster, undefined when
+// the source cannot be read by range.
+async function matroskaLengthFromTail(
+	input: ReturnType<typeof createMediaInput>,
+	path: string,
+): Promise<number | null | undefined> {
+	const [end, start] = await Promise.all([
+		matroskaEndFromTail(path).catch((error: unknown) => {
+			throw asSourceReadError(error);
+		}),
+		input.getFirstTimestamp(),
+	]);
+	if (end === undefined || end === null) return end;
+	if (!Number.isFinite(end) || end <= 0) return null;
+	return Math.max(0, end - (Number.isFinite(start) && start > 0 ? start : 0));
+}
+
+// The length of a file whose container declares none. Matroska and WebM
+// are measured by reading every cluster from the start, which for a large
+// unfinalised recording takes as long as fetching the whole file, so the
+// last cluster is read from the tail first. The full measure is still used
+// when it finishes quickly, so a short recording keeps the length it has
+// always had. A file with no cluster in its tail was not finished and is
+// refused, without a read of the whole file.
+async function measureUndeclaredLength(
+	input: ReturnType<typeof createMediaInput>,
+	path: string,
+): Promise<number> {
+	if (!isMatroskaFamily(await input.getFormat())) {
+		return await measureLength(input);
+	}
+	const fromTail = await matroskaLengthFromTail(input, path);
+	if (fromTail === undefined) return await measureLength(input);
+	if (fromTail === null || fromTail <= 0) {
+		throw new UnreadableMediaInputError(UNFINISHED_RECORDING_MESSAGE);
+	}
+	return (
+		(await measureWithinBudget(input, UNDECLARED_MEASURE_BUDGET_MS)) ?? fromTail
+	);
+}
+
+// What the timestamps of a file that declares a length span. A Matroska or
+// WebM file that cannot be measured within the budget is measured from its
+// tail instead.
+async function measureDeclaredLength(
+	input: ReturnType<typeof createMediaInput>,
+	path: string,
+): Promise<number | null> {
+	const measured = await measureWithinBudget(input, MEASURE_BUDGET_MS);
+	if (measured !== null || !isMatroskaFamily(await input.getFormat())) {
+		return measured;
+	}
+	const fromTail = await matroskaLengthFromTail(input, path).catch(() => null);
+	return typeof fromTail === "number" && fromTail > 0 ? fromTail : null;
 }
 
 async function readMediaMetadata(
@@ -347,7 +420,7 @@ async function readMediaMetadata(
 
 	const videoTrack = await input.getPrimaryVideoTrack();
 	if (!videoTrack) {
-		throw new UnreadableMediaInputError("No video stream found");
+		throw new UnreadableMediaInputError(NO_VIDEO_STREAM_MESSAGE);
 	}
 	if (
 		exceedsSourceFrameLimit(
@@ -367,8 +440,9 @@ async function readMediaMetadata(
 		skipLiveWait: true,
 	});
 	const measuredDuration =
-		declaredDuration === null ? null : await measureWithinBudget(input);
-	const duration = declaredDuration ?? (await measureLength(input));
+		declaredDuration === null ? null : await measureDeclaredLength(input, path);
+	const duration =
+		declaredDuration ?? (await measureUndeclaredLength(input, path));
 	const packetStats = await videoTrack
 		.computePacketStats(120, { skipLiveWait: true })
 		.catch(() => null);
@@ -408,6 +482,7 @@ async function readMediaMetadata(
 		declaredDuration,
 		measuredDuration,
 		trackBitrate: Math.round(videoBitrate + audioBitrate),
+		mayTrim: [MP4, QTFF].includes(await input.getFormat()),
 	};
 }
 
