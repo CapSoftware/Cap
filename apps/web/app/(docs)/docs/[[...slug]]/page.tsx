@@ -43,7 +43,10 @@ export async function generateMetadata(
 	return {
 		title: pageTitle,
 		description,
-		alternates: { canonical: `https://cap.so${docPath}` },
+		alternates: {
+			canonical: `https://cap.so${docPath}`,
+			types: { "text/markdown": `https://cap.so${docPath}.md` },
+		},
 		openGraph: {
 			title: pageTitle,
 			description,
