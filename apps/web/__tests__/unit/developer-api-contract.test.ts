@@ -38,7 +38,11 @@ vi.mock("@cap/database", async () => {
 					limit: async () => rowsFor(table, fields),
 					groupBy: async () => rowsFor(table, fields),
 				});
-			const query = { innerJoin: () => query, where };
+			const query = {
+				innerJoin: () => query,
+				leftJoin: () => query,
+				where,
+			};
 			return query;
 		},
 	});
@@ -115,6 +119,7 @@ import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
+import { getAppStorage } from "@/lib/infra-storage";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
@@ -127,6 +132,7 @@ const freshKey = (prefix: "csk" | "cpk" | "cut") =>
 				videoId: `video-${++keySerial}`,
 				expiresAt: Date.now() + 60_000,
 				corsOrigin: null,
+				keyId: "key-contract",
 			})
 		: `${prefix}_key_${++keySerial}`;
 
@@ -157,6 +163,11 @@ const rateLimit = (response: Response) => ({
 	retryAfter: response.headers.get("Retry-After"),
 });
 
+const billingOf = async (billing: Record<string, unknown>) => ({
+	...billing,
+	stored: (await getAppStorage("app-1")).stored,
+});
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
@@ -183,7 +194,9 @@ beforeEach(() => {
 		},
 	];
 	mocks.selected = [];
-	mocks.billing.mockResolvedValue({ standing: { state: "active" } });
+	mocks.billing.mockImplementation(() =>
+		billingOf({ standing: { state: "active" } }),
+	);
 	mocks.createVideo.mockResolvedValue({
 		status: 200,
 		body: { videoId: "video-1" },
@@ -898,7 +911,9 @@ describe("usage", () => {
 	});
 
 	it("returns the fields the OpenAPI description requires", async () => {
-		mocks.billing.mockResolvedValue({ standing: {}, upload: {}, storage: {} });
+		mocks.billing.mockImplementation(() =>
+			billingOf({ standing: {}, upload: {}, storage: {} }),
+		);
 		const schema = developerOpenApiSpec(ORIGIN).components.schemas.Usage;
 
 		const data = await usage();

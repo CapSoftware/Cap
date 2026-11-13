@@ -46,8 +46,17 @@ const { createDeveloperUploadToken } = await import(
 	"@/lib/developer-upload-token"
 );
 
-const { state, post, secretKey, videoWrites, storageCalls, UPLOAD_ROUTES } =
-	harness;
+const {
+	state,
+	post,
+	secretKey,
+	keyIdOf,
+	revokeKey,
+	removeKey,
+	videoWrites,
+	storageCalls,
+	UPLOAD_ROUTES,
+} = harness;
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
 const PAGE = "https://app.example.com";
@@ -74,6 +83,19 @@ async function created(body: Record<string, unknown> = {}, appId = "app1") {
 	expect(response.status).toBe(200);
 	return (await response.json()).data as Created;
 }
+
+async function createdWith(key: string, body: Record<string, unknown> = {}) {
+	const response = await post(rest, "/api/developer/v1/uploads", key, body);
+	expect(response.status).toBe(200);
+	return (await response.json()).data as Created;
+}
+
+const payloadOf = (token: string) =>
+	JSON.parse(
+		Buffer.from(token.slice(4).split(".")[0] ?? "", "base64url").toString(
+			"utf8",
+		),
+	) as Record<string, unknown>;
 
 const upload = (
 	route: string,
@@ -419,17 +441,40 @@ describe("uploading with the token", () => {
 		await refusedEverywhere(token, 404, "video_not_found");
 	});
 
-	it("looks the video up by its id and app, in an app that is not deleted", async () => {
-		const { token, videoId } = await created();
+	it("looks the video up by its id and app, in an app that is not deleted, with the key that made the token", async () => {
+		const key = secretKey("app1");
+		const { token, videoId } = await createdWith(key);
 		state.query.mockClear();
 
 		await upload("initiate", token);
 
 		const [query, params] = state.query.mock.calls[0] ?? [];
 		expect(String(query)).toBe(
-			"select `developer_videos`.`duration`, `developer_videos`.`deletedAt` from `developer_videos` inner join `developer_apps` on (`developer_videos`.`appId` = `developer_apps`.`id` and `developer_apps`.`deletedAt` is null) where (`developer_videos`.`id` = ? and `developer_videos`.`appId` = ?) limit ?",
+			"select `developer_videos`.`duration`, `developer_videos`.`deletedAt`, `developer_api_keys`.`id`, `developer_api_keys`.`revokedAt` from `developer_videos` inner join `developer_apps` on (`developer_videos`.`appId` = `developer_apps`.`id` and `developer_apps`.`deletedAt` is null) left join `developer_api_keys` on (`developer_api_keys`.`id` = ? and `developer_api_keys`.`appId` = `developer_videos`.`appId` and `developer_api_keys`.`keyType` = ?) where (`developer_videos`.`id` = ? and `developer_videos`.`appId` = ?) limit ?",
 		);
-		expect(params).toEqual([videoId, "app1", 1]);
+		expect(params).toEqual([keyIdOf(key), "secret", videoId, "app1", 1]);
+	});
+
+	it("checks the token, its video, app and key with one query on every route", async () => {
+		const { token } = await created();
+		const queries = () =>
+			state.query.mock.calls.map(([query]) => String(query));
+
+		for (const [route, body] of UPLOAD_ROUTES) {
+			state.query.mockClear();
+
+			await upload(route, token, body);
+
+			const tokenChecks = queries().filter((query) =>
+				query.includes("from `developer_videos` inner join `developer_apps`"),
+			);
+			const keyReads = queries().filter((query) =>
+				query.includes("from `developer_api_keys`"),
+			);
+			expect([route, tokenChecks.length]).toEqual([route, 1]);
+			expect([route, keyReads.length]).toEqual([route, 0]);
+			expect(queries()[0]).toBe(tokenChecks[0]);
+		}
 	});
 
 	it("stops working once the app is deleted", async () => {
@@ -797,6 +842,287 @@ describe("renewing the token of an open upload", () => {
 		expect(body.hint).toBe(
 			"This request accepts corsOrigin, timeoutSeconds, maxBytes. Field names are case-sensitive.",
 		);
+	});
+});
+
+describe("a token after its secret key is rotated", () => {
+	const ROTATED = {
+		code: "invalid_upload_token",
+		error: "Upload token is not valid",
+		hint: expect.stringContaining("was rotated or revoked"),
+	};
+
+	it("names the key that made it", async () => {
+		const key = secretKey("app1");
+
+		const { token } = await createdWith(key);
+
+		expect(payloadOf(token)).toMatchObject({ key: keyIdOf(key) });
+	});
+
+	it("works while the key is live", async () => {
+		const { token } = await createdWith(secretKey("app1"));
+
+		expect((await upload("initiate", token)).status).toBe(200);
+		expect(
+			(
+				await upload("presign-part", token, {
+					uploadId: "upload-1",
+					partNumber: 1,
+				})
+			).status,
+		).toBe(200);
+		expect((await upload("complete", token, completeBody)).status).toBe(200);
+	});
+
+	it("is refused on every route once the key is revoked", async () => {
+		const key = secretKey("app1");
+		const { token } = await createdWith(key);
+		revokeKey(key);
+
+		await refusedEverywhere(token, 401, "invalid_upload_token");
+		const response = await upload("initiate", token);
+		expect(await response.json()).toMatchObject({
+			...ROTATED,
+			hint: expect.stringMatching(
+				/was rotated or revoked.*POST \/api\/developer\/v1\/uploads\/\{videoId\}\/token/,
+			),
+		});
+	});
+
+	it("is refused once the key no longer exists", async () => {
+		const key = secretKey("app1");
+		const { token } = await createdWith(key);
+		removeKey(key);
+
+		await refusedEverywhere(token, 401, "invalid_upload_token");
+	});
+
+	it("stops an upload that was already open", async () => {
+		const key = secretKey("app1");
+		const { token } = await createdWith(key);
+		expect((await upload("initiate", token)).status).toBe(200);
+		revokeKey(key);
+		const storageBefore = storageCalls();
+
+		const response = await upload("complete", token, completeBody);
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject(ROTATED);
+		expect(storageCalls()).toBe(storageBefore);
+		expect(durationWrites()).toHaveLength(0);
+	});
+
+	it("keeps working when another key of the app is revoked", async () => {
+		const other = secretKey("app1");
+		await createdWith(other);
+		const { token } = await createdWith(secretKey("app1"));
+		revokeKey(other);
+
+		expect((await upload("initiate", token)).status).toBe(200);
+	});
+
+	it("is refused when the key it names belongs to another app", async () => {
+		const foreign = secretKey("app2");
+		await createdWith(foreign);
+		const { videoId } = await created();
+		const crossed = createDeveloperUploadToken({
+			appId: "app1",
+			videoId,
+			expiresAt: NOW + 60_000,
+			corsOrigin: null,
+			keyId: keyIdOf(foreign),
+		});
+
+		await refusedEverywhere(crossed, 401, "invalid_upload_token");
+	});
+
+	it("answers a deleted video before it looks at the key", async () => {
+		const key = secretKey("app1");
+		const { token, videoId } = await createdWith(key);
+		revokeKey(key);
+		const video = state.videos.get(videoId);
+		if (video) video.deletedAt = "2026-11-12 10:00:01";
+
+		await refusedEverywhere(token, 404, "video_not_found");
+	});
+
+	it("still accepts a token made before tokens named their key while no key of the app was revoked, until it expires", async () => {
+		const { videoId } = await createdWith(secretKey("app1"));
+		expect(videoId).toBe("video-1");
+		const issuedBeforeKeyIds =
+			"cut_eyJ2IjoxLCJhcHAiOiJhcHAxIiwidmlkZW8iOiJ2aWRlby0xIiwiZXhwIjoxNzk0NDgxMjAwMDAwLCJvcmlnaW4iOm51bGx9.fMI6nUNp1BF0VWSS3A5xA1jeK3ghEPavCqVE4uW0xNI";
+		expect(payloadOf(issuedBeforeKeyIds)).not.toHaveProperty("key");
+
+		const initiated = await upload("initiate", issuedBeforeKeyIds);
+		const completed = await upload(
+			"complete",
+			issuedBeforeKeyIds,
+			completeBody,
+		);
+
+		expect(initiated.status).toBe(200);
+		expect(completed.status).toBe(200);
+		expect(durationWrites()).toHaveLength(1);
+		vi.setSystemTime(Date.parse("2026-11-12T11:00:00Z"));
+		expect((await upload("initiate", issuedBeforeKeyIds)).status).toBe(401);
+	});
+
+	it("refuses a token made before tokens named their key once a secret key of the app was revoked in its lifetime", async () => {
+		const key = secretKey("app1");
+		await createdWith(key);
+		const issuedBeforeKeyIds =
+			"cut_eyJ2IjoxLCJhcHAiOiJhcHAxIiwidmlkZW8iOiJ2aWRlby0xIiwiZXhwIjoxNzk0NDgxMjAwMDAwLCJvcmlnaW4iOm51bGx9.fMI6nUNp1BF0VWSS3A5xA1jeK3ghEPavCqVE4uW0xNI";
+		revokeKey(key);
+		const storageBefore = storageCalls();
+
+		await refusedEverywhere(issuedBeforeKeyIds, 401, "invalid_upload_token");
+		const response = await upload("initiate", issuedBeforeKeyIds);
+		expect(await response.json()).toMatchObject(ROTATED);
+		expect(storageCalls()).toBe(storageBefore);
+		expect(durationWrites()).toHaveLength(0);
+	});
+
+	it("gives a renewed token the key that renewed it", async () => {
+		const first = secretKey("app1");
+		const second = secretKey("app1");
+		const original = await createdWith(first);
+
+		const response = await renew(original.videoId, {}, second);
+		expect(response.status).toBe(200);
+		const next = (await response.json()).data as Created;
+
+		expect(payloadOf(original.token)).toMatchObject({ key: keyIdOf(first) });
+		expect(payloadOf(next.token)).toMatchObject({ key: keyIdOf(second) });
+
+		revokeKey(first);
+		expect((await upload("initiate", original.token)).status).toBe(401);
+		expect((await upload("initiate", next.token)).status).toBe(200);
+
+		revokeKey(second);
+		const refused = await upload("initiate", next.token);
+		expect(refused.status).toBe(401);
+		expect(await refused.json()).toMatchObject(ROTATED);
+	});
+
+	it("cannot be renewed with the revoked key", async () => {
+		const key = secretKey("app1");
+		const { videoId } = await createdWith(key);
+		revokeKey(key);
+
+		const response = await renew(videoId, {}, key);
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({ code: "invalid_secret_key" });
+	});
+});
+
+describe("the part numbers a token can sign", () => {
+	const PART = 5 * 1024 * 1024;
+	const presign = (token: string, body: Record<string, unknown>) =>
+		upload("presign-part", token, { uploadId: "upload-1", ...body });
+
+	it.each([
+		["a cap of one byte", 1, 1],
+		["a cap under one part", 1, PART - 1],
+		["a cap of exactly one part", 1, PART],
+		["a cap one byte over one part", 2, PART + 1],
+		["a cap of exactly ten parts", 10, 10 * PART],
+		["a cap of 250 MB", 48, 250_000_000],
+		["the largest cap", 6867, 36_000_000_000],
+	])("with %s, signs up to part %i", async (_label, highest, maxBytes) => {
+		const { token } = await created({ maxBytes });
+
+		const allowed = await presign(token, { partNumber: highest });
+		const refused = await presign(token, { partNumber: highest + 1 });
+
+		expect(allowed.status).toBe(200);
+		expect(state.presign).toHaveBeenCalledExactlyOnceWith(
+			expect.any(String),
+			"upload-1",
+			highest,
+		);
+		expect(refused.status).toBe(400);
+		expect(await refused.json()).toMatchObject({
+			code: "part_number_too_large",
+			error: `Part number ${highest + 1} is over ${highest}, the highest part number this upload can use`,
+		});
+		expect(state.presign).toHaveBeenCalledTimes(1);
+	});
+
+	it("names the cap and how to raise it", async () => {
+		const { token } = await created({ maxBytes: 250_000_000 });
+
+		const response = await presign(token, { partNumber: 49 });
+
+		expect(await response.json()).toMatchObject({
+			code: "part_number_too_large",
+			error:
+				"Part number 49 is over 48, the highest part number this upload can use",
+			hint: "Every part except the last is at least 5 MB, so a file within the 250000000 byte limit set for this upload never needs a part number above 48. No part in this request was signed. Number the parts from 1 with no gaps and ask again, or get a token with a larger maxBytes from your server.",
+		});
+	});
+
+	it("holds a token with no cap to what the upload limit allows", async () => {
+		const { token } = await created();
+
+		const allowed = await presign(token, { partNumber: 6867 });
+		const refused = await presign(token, { partNumber: 6868 });
+
+		expect(allowed.status).toBe(200);
+		expect(refused.status).toBe(400);
+		expect(await refused.json()).toMatchObject({
+			code: "part_number_too_large",
+			error:
+				"Part number 6868 is over 6867, the highest part number this upload can use",
+			hint: "Every part except the last is at least 5 MB, so a file within the 36 GB upload limit never needs a part number above 6867. No part in this request was signed. Number the parts from 1 with no gaps and ask again.",
+		});
+		expect(state.presign).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses a whole batch when one number in it is over", async () => {
+		const { token } = await created({ maxBytes: 3 * PART });
+
+		const response = await presign(token, { partNumbers: [1, 2, 3, 4] });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "part_number_too_large",
+			error:
+				"Part number 4 is over 3, the highest part number this upload can use",
+		});
+		expect(state.presign).not.toHaveBeenCalled();
+
+		const within = await presign(token, { partNumbers: [1, 2, 3] });
+		expect(within.status).toBe(200);
+		expect(state.presign).toHaveBeenCalledTimes(3);
+	});
+
+	it("refuses an over number wherever it sits in the batch", async () => {
+		const { token } = await created({ maxBytes: 3 * PART });
+
+		const response = await presign(token, { partNumbers: [9, 1, 2] });
+
+		expect(response.status).toBe(400);
+		expect(state.presign).not.toHaveBeenCalled();
+	});
+
+	it("applies the cap of a renewed token", async () => {
+		const first = await created({ maxBytes: PART });
+		const next = await renewed(first.videoId, { maxBytes: 4 * PART });
+
+		expect((await presign(first.token, { partNumber: 2 })).status).toBe(400);
+		expect((await presign(next.token, { partNumber: 4 })).status).toBe(200);
+		expect((await presign(next.token, { partNumber: 5 })).status).toBe(400);
+	});
+
+	it("still answers a number past 10000 as a malformed request", async () => {
+		const { token } = await created();
+
+		const response = await presign(token, { partNumber: 10_001 });
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ code: "invalid_request" });
 	});
 });
 
