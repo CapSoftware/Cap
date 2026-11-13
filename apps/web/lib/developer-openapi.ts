@@ -1547,7 +1547,7 @@ export const developerOpenApiSpec = (baseUrl: string) => ({
 					description: {
 						type: "string",
 						description:
-							'The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Transcription or Adjustment. A delivery row reads Delivery and its day, such as "Delivery, Nov 13, 2026".',
+							"The name the console shows for the row, for example Top-up, Code redeemed, Auto top-up, Storage, Delivery, Transcription or Adjustment.",
 					},
 					note: {
 						type: ["string", "null"],

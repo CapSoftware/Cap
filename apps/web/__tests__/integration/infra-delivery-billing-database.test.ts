@@ -274,9 +274,8 @@ describe.runIf(Boolean(databaseUrl))(
 						minutesByTier: { "1080p": 50, "720p": 20.57 },
 						microCreditsPer1000Minutes: 95_000,
 					});
-					const day = new Date(`${row.referenceId}T00:00:00Z`);
 					expect(describeLedgerRow(row)).toEqual({
-						label: `Delivery, ${day.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}`,
+						label: "Delivery",
 						note: "70.57 minutes delivered (1080p 50, 720p 20.57).",
 						reference: { kind: "Day", value: row.referenceId },
 					});

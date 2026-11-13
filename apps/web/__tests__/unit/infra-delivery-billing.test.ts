@@ -204,12 +204,12 @@ describe("delivery ledger rows", () => {
 
 	it("names the day and lists the minutes by tier, highest first", () => {
 		expect(describeLedgerRow(row())).toEqual({
-			label: "Delivery, Nov 20, 2026",
+			label: "Delivery",
 			note: "70.57 minutes delivered (1080p 50, 720p 20.57).",
 			reference: { kind: "Day", value: "2026-11-20" },
 		});
 		expect(ledgerCsvLine(row())).toBe(
-			'row-1,2026-11-22T00:41:05Z,"Delivery, Nov 20, 2026","70.57 minutes delivered (1080p 50, 720p 20.57).",Day,2026-11-20,-0.06703,-6703,9.93297,993297\r\n',
+			'row-1,2026-11-22T00:41:05Z,Delivery,"70.57 minutes delivered (1080p 50, 720p 20.57).",Day,2026-11-20,-0.06703,-6703,9.93297,993297\r\n',
 		);
 	});
 
@@ -233,7 +233,7 @@ describe("delivery ledger rows", () => {
 				}),
 			),
 		).toMatchObject({
-			label: "Delivery, Nov 20, 2026",
+			label: "Delivery, unpaid",
 			note: "70.57 minutes delivered (1080p 50, 720p 20.57). The balance could not pay for this day. It is not charged later.",
 		});
 	});

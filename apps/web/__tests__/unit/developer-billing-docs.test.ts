@@ -474,7 +474,7 @@ describe("the Billing page", () => {
 		expect(billing).not.toMatch(/abandon/i);
 		expect(billing).toContain("| Delivery | The UTC day it charges |");
 		expect(rest).toContain(
-			`| \`${DELIVERY_DAY_TRANSACTION_TYPE}\` | Delivery and the day, for example "Delivery, Nov 13, 2026" | \`${DELIVERY_DAY_REFERENCE_TYPE}\` | The UTC day, as \`YYYY-MM-DD\` |`,
+			`| \`${DELIVERY_DAY_TRANSACTION_TYPE}\` | Delivery | \`${DELIVERY_DAY_REFERENCE_TYPE}\` | The UTC day, as \`YYYY-MM-DD\` |`,
 		);
 		expect(transaction.type.description).toContain(
 			`${DELIVERY_DAY_TRANSACTION_TYPE} (one row per app per delivered day)`,

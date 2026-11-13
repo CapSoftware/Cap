@@ -28,6 +28,7 @@ const TYPE_LABELS: Record<string, string> = {
 	topup: "Top-up",
 	video_create: "Storage, first month",
 	storage_daily: "Storage",
+	delivery_daily: "Delivery",
 	transcription: "Transcription",
 	refund: "Refund",
 	adjustment: "Adjustment",
@@ -93,30 +94,17 @@ function ledgerLabel(row: LedgerRow) {
 			? "Storage, unpaid"
 			: "Storage, part paid";
 	}
-	if (row.type === "delivery_daily") return deliveryLabel(row);
+	if (row.type === "delivery_daily" && parseStorageCharge(row).shortSince) {
+		return row.amountMicroCredits === 0
+			? "Delivery, unpaid"
+			: "Delivery, part paid";
+	}
 	if (row.type === "video_create" && firstMonthFellShort(row)) {
 		return row.amountMicroCredits === 0
 			? "Storage, first month, unpaid"
 			: "Storage, first month, part paid";
 	}
 	return TYPE_LABELS[row.type] ?? row.type;
-}
-
-const deliveryDayFormat = new Intl.DateTimeFormat("en-US", {
-	month: "short",
-	day: "numeric",
-	year: "numeric",
-	timeZone: "UTC",
-});
-
-function deliveryLabel(row: LedgerRow) {
-	const day = row.referenceId ?? "";
-	const date = /^\d{4}-\d{2}-\d{2}$/.test(day)
-		? new Date(`${day}T00:00:00.000Z`)
-		: null;
-	return date && !Number.isNaN(date.getTime())
-		? `Delivery, ${deliveryDayFormat.format(date)}`
-		: "Delivery";
 }
 
 const minutesFormat = new Intl.NumberFormat("en-US", {
