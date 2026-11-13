@@ -158,9 +158,10 @@ function autoTopUpWaits() {
 			ledger.rows
 				.filter(
 					(row) =>
-						row.createdAt.getTime() > now - 24 * HOUR_MS &&
 						!String(row.referenceId).startsWith("infra-auto-top-up:") &&
-						((row.type === "topup" && row.referenceType === "auto_top_up") ||
+						((row.type === "topup" &&
+							row.referenceType === "auto_top_up" &&
+							row.createdAt.getTime() > now - 24 * HOUR_MS) ||
 							(row.type === "topup_pending" &&
 								row.referenceType === "auto_top_up_pending" &&
 								!settledIds.has(row.referenceId))),
