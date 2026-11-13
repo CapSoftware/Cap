@@ -1,5 +1,7 @@
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
+export const PROCESSING_RETRY_WINDOW_MS = 60 * 60 * 1000;
+
 export const PROCESSING_RETRY_RATE_MESSAGE =
 	"Too many processing retries. Try again in an hour.";
 

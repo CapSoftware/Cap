@@ -160,7 +160,7 @@ import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
 } from "@/lib/developer-video-upload";
-import { startAiGeneration } from "@/lib/generate-ai";
+import { isAiGenerationRerun, startAiGeneration } from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
 import {
@@ -179,7 +179,10 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
-import { processingRetryLimited } from "@/lib/processing-retry-limit";
+import {
+	PROCESSING_RETRY_WINDOW_MS,
+	processingRetryLimited,
+} from "@/lib/processing-retry-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
@@ -427,12 +430,12 @@ const temporarilyUnavailable = (
 		requestId,
 	});
 
-const rateLimited = (requestId: string) =>
+const rateLimited = (requestId: string, retryAfterMs = 60_000) =>
 	new Agent.AgentRateLimitedError({
 		message: "Too many requests. Try again later",
 		code: "RATE_LIMITED",
 		retryable: true,
-		retryAfterMs: 60_000,
+		retryAfterMs,
 		requestId,
 	});
 
@@ -7853,20 +7856,6 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (row.ownerId !== principal.id) {
 							return yield* forbidden(requestId);
 						}
-						if (payload.retry === true) {
-							const request = yield* HttpServerRequest.HttpServerRequest;
-							const headers = new Headers();
-							for (const [name, value] of Object.entries(request.headers)) {
-								headers.set(name, value);
-							}
-							if (
-								yield* Effect.promise(() =>
-									processingRetryLimited(principal.id, headers),
-								)
-							) {
-								return yield* rateLimited(requestId);
-							}
-						}
 						const includesTranscript = payload.target !== "ai";
 						const includesAi = payload.target !== "transcript";
 						if (includesTranscript && rules.settings.disableTranscript) {
@@ -7894,6 +7883,35 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								return yield* forbidden(
 									requestId,
 									"AI generation is not available for this account",
+								);
+							}
+						}
+						// Decided from the video's current state rather than the request,
+						// so an idempotent replay into a failed state is still a rerun and
+						// a replay of a rerun that was already accepted is not charged again.
+						const transcriptionRerun =
+							includesTranscript &&
+							payload.retry === true &&
+							row.transcriptionStatus === "ERROR";
+						const aiRerun =
+							includesAi &&
+							(payload.target === "ai" ||
+								row.transcriptionStatus === "COMPLETE") &&
+							isAiGenerationRerun(normalizeAgentMetadata(row.metadata));
+						if (transcriptionRerun || aiRerun) {
+							const request = yield* HttpServerRequest.HttpServerRequest;
+							const headers = new Headers();
+							for (const [name, value] of Object.entries(request.headers)) {
+								headers.set(name, value);
+							}
+							if (
+								yield* Effect.promise(() =>
+									processingRetryLimited(principal.id, headers),
+								)
+							) {
+								return yield* rateLimited(
+									requestId,
+									PROCESSING_RETRY_WINDOW_MS,
 								);
 							}
 						}
