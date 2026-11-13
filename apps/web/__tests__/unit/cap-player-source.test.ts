@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	AUTO_LEVEL,
 	attachSource,
 	isSharper,
 	listLevels,
+	parseMasterLevels,
 	pickPlaybackMode,
 	pickStartingLevel,
 	playAllowingMuted,
+	renditionSource,
 	SECONDS_AHEAD_BEFORE_PLAY,
 	SECONDS_TO_SHARPEN,
 	startingEstimate,
@@ -134,6 +137,13 @@ const browser = (options: {
 		...(options.managedOnly ? { ManagedMediaSource: class {} } : {}),
 	});
 };
+
+beforeEach(() => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(() => Promise.reject(new Error("offline"))),
+	);
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -290,6 +300,7 @@ describe("pickPlaybackMode", () => {
 });
 
 class FakeVideo extends EventTarget {
+	playbackRate = 1;
 	preload = "none";
 	src = "";
 	paused = true;
@@ -1253,5 +1264,341 @@ describe("attachSource switching to the rendition that fits", () => {
 		void video.play();
 
 		expect(hls.currentLevel).toBe(2);
+	});
+});
+
+const MASTER = [
+	"#EXTM3U",
+	"#EXT-X-VERSION:7",
+	'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_aud",NAME="audio",DEFAULT=YES,URI="audio.m3u8"',
+	'#EXT-X-STREAM-INF:BANDWIDTH=2501452,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2",AUDIO="group_aud"',
+	"720p.m3u8",
+	'#EXT-X-STREAM-INF:BANDWIDTH=4573338,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2",AUDIO="group_aud"',
+	"1080p.m3u8",
+	'#EXT-X-STREAM-INF:BANDWIDTH=739748,RESOLUTION=640x360,CODECS="avc1.64001e,mp4a.40.2",AUDIO="group_aud"',
+	"360p.m3u8",
+	"",
+].join("\n");
+
+describe("native HLS renditions", () => {
+	it("reads Cap's renditions from a master playlist", () => {
+		expect(parseMasterLevels(MASTER)).toEqual([
+			{ width: 1280, height: 720, bitrate: 2501452, uri: "720p.m3u8" },
+			{ width: 1920, height: 1080, bitrate: 4573338, uri: "1080p.m3u8" },
+			{ width: 640, height: 360, bitrate: 739748, uri: "360p.m3u8" },
+		]);
+		expect(
+			listLevels(parseMasterLevels(MASTER)).map((level) => level.label),
+		).toEqual(["1080p", "720p", "360p"]);
+	});
+
+	it("orders the menu by height when bandwidth does not rise with it", () => {
+		iphone(true);
+		const uneven = [
+			"#EXTM3U",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=3840x2160,AUDIO="aud"',
+			"2160p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1920x1080,AUDIO="aud"',
+			"1080p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1900000,RESOLUTION=1280x720,AUDIO="aud"',
+			"720p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO="aud"',
+			"360p.m3u8",
+		].join("\n");
+		const levels = parseMasterLevels(uneven);
+		const menu = listLevels(levels);
+
+		expect(menu.map((level) => level.label)).toEqual([
+			"4K",
+			"1080p",
+			"720p",
+			"360p",
+		]);
+		const picked = menu.find((level) => level.label === "1080p");
+		expect(renditionSource(HLS, levels[picked?.index ?? -1]?.uri)).toBe(
+			`${HLS}?rendition=1080p`,
+		);
+	});
+
+	it("lists native renditions in the same order and labels as hls.js does", () => {
+		iphone(true);
+		const uneven = [
+			"#EXTM3U",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1900000,RESOLUTION=1280x720,AUDIO="aud"',
+			"720p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1920x1080,AUDIO="aud"',
+			"1080p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO="aud"',
+			"360p.m3u8",
+			'#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=3840x2160,AUDIO="aud"',
+			"2160p.m3u8",
+		].join("\n");
+		const native = listLevels(parseMasterLevels(uneven));
+		const hlsJs = listLevels(
+			[...parseMasterLevels(uneven)]
+				.sort((a, b) => a.bitrate - b.bitrate)
+				.map(({ width, height, bitrate, uri }) => ({
+					width,
+					height,
+					bitrate,
+					name: uri.replace(".m3u8", ""),
+				})),
+		);
+
+		expect(native.map((level) => level.label)).toEqual([
+			"4K",
+			"1080p",
+			"720p",
+			"360p",
+		]);
+		expect(native.map((level) => level.label)).toEqual(
+			hlsJs.map((level) => level.label),
+		);
+	});
+
+	it("skips variants that are not Cap renditions", () => {
+		const odd = [
+			"#EXTM3U",
+			"#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720",
+			"https://elsewhere.example/720p.m3u8",
+			"#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720",
+			"../720p.m3u8",
+			"#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720",
+			"#EXT-X-ENDLIST",
+		].join("\n");
+
+		expect(parseMasterLevels(odd)).toEqual([]);
+		expect(parseMasterLevels("")).toEqual([]);
+	});
+
+	it("points a picked rendition at a master that lists only it", () => {
+		iphone(true);
+		expect(renditionSource(HLS, "720p.m3u8")).toBe(`${HLS}?rendition=720p`);
+		expect(renditionSource(`${HLS}?max=1080`, "720p.m3u8")).toBe(
+			`${HLS}?max=1080&rendition=720p`,
+		);
+		expect(renditionSource(HLS, "720p.m3u8?segments=short")).toBe(
+			`${HLS}?rendition=720p`,
+		);
+		expect(renditionSource(HLS, "audio.m3u8")).toBeNull();
+		expect(renditionSource(HLS, undefined)).toBeNull();
+	});
+
+	const nativePlayer = async () => {
+		iphone(true);
+		const fetchMaster = vi.fn(async (_url: string) => new Response(MASTER));
+		vi.stubGlobal("fetch", fetchMaster);
+		const video = new FakeVideo(true);
+		const attached = attach(video, { hls: HLS, mp4: MP4 });
+		expect(fetchMaster).not.toHaveBeenCalled();
+		video.reach(30);
+		await vi.waitFor(() => expect(attached.onLevels).toHaveBeenCalledTimes(2));
+		const levels = attached.onLevels.mock.calls[1]?.[0] as ReturnType<
+			typeof listLevels
+		>;
+		const index = (label: string) => {
+			const level = levels.find((entry) => entry.label === label);
+			if (!level) throw new Error(`no ${label}`);
+			return level.index;
+		};
+		return { video, fetchMaster, index, ...attached };
+	};
+
+	it("lists the renditions once the metadata is in, from the same master", async () => {
+		const { fetchMaster, onLevels } = await nativePlayer();
+
+		expect(fetchMaster).toHaveBeenCalledTimes(1);
+		expect(fetchMaster.mock.calls[0]?.[0]).toBe(HLS);
+		expect(
+			(onLevels.mock.calls[1]?.[0] as { label: string }[]).map(
+				(level) => level.label,
+			),
+		).toEqual(["1080p", "720p", "360p"]);
+	});
+
+	it("switches to a picked rendition and keeps the time and play state", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("720p"));
+
+		expect(video.src).toBe(`${HLS}?rendition=720p`);
+		expect(video.plays).toBe(2);
+		video.currentTime = 0;
+		video.reach(30);
+		expect(video.currentTime).toBe(12.5);
+	});
+
+	it("keeps a paused video paused when it switches", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		video.currentTime = 4;
+
+		setLevel(index("360p"));
+
+		expect(video.src).toBe(`${HLS}?rendition=360p`);
+		expect(video.plays).toBe(0);
+	});
+
+	it("goes back to the full master for Auto, and does nothing for the same pick", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+
+		setLevel(AUTO_LEVEL);
+		expect(video.src).toBe(HLS);
+
+		setLevel(index("1080p"));
+		expect(video.src).toBe(`${HLS}?rendition=1080p`);
+		video.src = "changed-elsewhere";
+		setLevel(index("1080p"));
+		expect(video.src).toBe("changed-elsewhere");
+
+		setLevel(AUTO_LEVEL);
+		expect(video.src).toBe(HLS);
+	});
+
+	it("does not carry a switch's time over to a source attached after it stops", async () => {
+		const { video, setLevel, index, stop } = await nativePlayer();
+		video.currentTime = 9;
+
+		setLevel(index("360p"));
+		stop();
+		video.currentTime = 0;
+		video.reach(30);
+
+		expect(video.currentTime).toBe(0);
+	});
+
+	it("keeps the place across picks made before the first switch has loaded", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("360p"));
+		video.currentTime = 0;
+		setLevel(index("1080p"));
+
+		expect(video.src).toBe(`${HLS}?rendition=1080p`);
+		expect(video.plays).toBe(3);
+		video.reach(30);
+		expect(video.currentTime).toBe(12.5);
+
+		video.currentTime = 20;
+		setLevel(AUTO_LEVEL);
+		video.currentTime = 0;
+		video.reach(30);
+		expect(video.currentTime).toBe(20);
+	});
+
+	it("keeps a pause made while a switch loads through the next pick", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("360p"));
+		expect(video.plays).toBe(2);
+		video.currentTime = 0;
+		video.paused = true;
+		setLevel(index("1080p"));
+
+		expect(video.plays).toBe(2);
+		video.reach(30);
+		expect(video.currentTime).toBe(12.5);
+		expect(video.paused).toBe(true);
+	});
+
+	it("resumes a switch at a seek asked for while it loads", async () => {
+		const { video, setLevel, index, seekDuringSwitch } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		expect(seekDuringSwitch(3)).toBe(false);
+		setLevel(index("360p"));
+		expect(seekDuringSwitch(18)).toBe(true);
+		video.currentTime = 0;
+		video.reach(30);
+
+		expect(video.currentTime).toBe(18);
+		expect(seekDuringSwitch(5)).toBe(false);
+	});
+
+	it("keeps a switch's place, and a seek asked for during it, when it falls back to the MP4", async () => {
+		const { video, setLevel, index, seekDuringSwitch } = await nativePlayer();
+		await video.play();
+		video.currentTime = 12.5;
+
+		setLevel(index("360p"));
+		expect(seekDuringSwitch(18)).toBe(true);
+		video.currentTime = 0;
+		video.dispatchEvent(new Event("error"));
+
+		expect(video.src).toBe(MP4);
+		expect(video.currentTime).toBe(18);
+		expect(seekDuringSwitch(5)).toBe(false);
+	});
+
+	it("keeps the playback speed across a quality switch", async () => {
+		const { video, setLevel, index } = await nativePlayer();
+		video.playbackRate = 1.5;
+		const reset = Object.getOwnPropertyDescriptor(video, "src");
+		let src = video.src;
+		Object.defineProperty(video, "src", {
+			get: () => src,
+			set: (value: string) => {
+				src = value;
+				video.playbackRate = 1;
+			},
+			configurable: true,
+		});
+
+		setLevel(index("360p"));
+		expect(video.playbackRate).toBe(1.5);
+		video.playbackRate = 1;
+		video.reach(30);
+		expect(video.playbackRate).toBe(1.5);
+		if (reset) Object.defineProperty(video, "src", reset);
+	});
+
+	it("ignores a pick it has no rendition for", async () => {
+		const { video, setLevel } = await nativePlayer();
+
+		setLevel(42);
+
+		expect(video.src).toBe(HLS);
+	});
+
+	it("offers no menu when the master cannot be read", async () => {
+		iphone(true);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status: 404 })),
+		);
+		const video = new FakeVideo(true);
+		const { onLevels } = attach(video, { hls: HLS });
+		video.reach(30);
+		await vi.waitFor(() => expect(onLevels).toHaveBeenCalledTimes(2));
+
+		expect(onLevels.mock.calls[1]?.[0]).toEqual([]);
+	});
+
+	it("stops listing once detached", async () => {
+		iphone(true);
+		let release: (response: Response) => void = () => undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				() =>
+					new Promise<Response>((resolve) => {
+						release = resolve;
+					}),
+			),
+		);
+		const video = new FakeVideo(true);
+		const { onLevels, stop } = attach(video, { hls: HLS });
+		video.reach(30);
+		stop();
+		release(new Response(MASTER));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onLevels).toHaveBeenCalledTimes(1);
 	});
 });

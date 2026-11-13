@@ -2,9 +2,13 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 import { preload } from "react-dom";
-import { CapPlayer } from "@/components/cap-player/CapPlayer";
+import {
+	CapPlayer,
+	type CapPlayerControl,
+} from "@/components/cap-player/CapPlayer";
 import { Lockup } from "@/components/infra/Lockup";
 import {
+	cappedPlaylistUrl,
 	type DeveloperVideoPlayback,
 	type DeveloperVideoQuery,
 	developerVideoPlayback,
@@ -18,6 +22,7 @@ import {
 	developerVideoReportHref,
 } from "@/lib/developer-video-takedown";
 import { INFRA_VIDEO_PUBLIC_FAILURE } from "@/lib/infra-video-view";
+import { EmbedError } from "./EmbedError";
 import { RefreshUntilReady } from "./RefreshUntilReady";
 
 export type DeveloperVideoPageVariant = "share" | "embed";
@@ -81,6 +86,15 @@ function Notice({
 	);
 }
 
+const hiddenControls = (playback: DeveloperVideoPlayback) => {
+	const hidden: CapPlayerControl[] = [];
+	if (!playback.qualityMenu) hidden.push("quality");
+	if (!playback.speedMenu) hidden.push("speed");
+	if (!playback.pip) hidden.push("pip");
+	if (!playback.fullscreen) hidden.push("fullscreen");
+	return hidden;
+};
+
 function Stage({
 	player,
 	playback,
@@ -89,13 +103,18 @@ function Stage({
 	playback: DeveloperVideoPlayback;
 }) {
 	if (player.kind === "playing") {
-		if (player.poster) {
-			preload(player.poster, { as: "image", fetchPriority: "high" });
+		const poster = playback.poster ? player.poster : null;
+		if (poster) {
+			preload(poster, { as: "image", fetchPriority: "high" });
 		}
+		const { hls, mp4 } = player.source;
 		return (
 			<CapPlayer
-				source={player.source}
-				poster={player.poster ?? undefined}
+				source={{
+					hls: hls ? cappedPlaylistUrl(hls, playback.maxQuality) : undefined,
+					mp4,
+				}}
+				poster={poster ?? undefined}
 				title={player.name}
 				aspectRatio="auto"
 				className="h-full"
@@ -106,22 +125,39 @@ function Stage({
 				startAt={playback.startAt}
 				captions={player.captions ?? undefined}
 				showCaptions={playback.captions}
+				accentColor={playback.accentColor ?? undefined}
+				hideControls={hiddenControls(playback)}
+				keyboard={playback.keyboard}
+				events={playback.events}
 			/>
 		);
 	}
 	if (player.kind === "paused") {
 		return (
-			<Notice
-				title="Playback is paused"
-				detail="This video will play again when its owner resumes playback."
-			/>
+			<>
+				<Notice
+					title="Playback is paused"
+					detail="This video will play again when its owner resumes playback."
+				/>
+				{playback.events && <EmbedError code="paused" />}
+			</>
 		);
 	}
 	if (player.kind === "failed") {
-		return <Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />;
+		return (
+			<>
+				<Notice title={INFRA_VIDEO_PUBLIC_FAILURE} />
+				{playback.events && <EmbedError code="unavailable" />}
+			</>
+		);
 	}
 	if (player.kind === "taken_down") {
-		return <Notice title={DEVELOPER_VIDEO_UNAVAILABLE} />;
+		return (
+			<>
+				<Notice title={DEVELOPER_VIDEO_UNAVAILABLE} />
+				{playback.events && <EmbedError code="unavailable" />}
+			</>
+		);
 	}
 	return (
 		<>
@@ -168,6 +204,7 @@ export function DeveloperVideoView({
 				<h1 className="m-0 text-[15px] font-medium leading-[1.3] tracking-[-0.01em] text-[#E8ECF4]">
 					{DEVELOPER_VIDEO_UNAVAILABLE}
 				</h1>
+				{variant === "embed" && <EmbedError code="unavailable" />}
 			</div>
 		);
 	}
@@ -175,9 +212,21 @@ export function DeveloperVideoView({
 	const reportHref = developerVideoReportHref(playbackId);
 
 	if (variant === "embed") {
+		const rounded = playback.radius > 0 && player.kind === "playing";
 		return (
-			<div className="group fixed inset-0 bg-black">
-				<style>{"html,body{background:#000}"}</style>
+			<div
+				className={
+					rounded
+						? "group fixed inset-0 overflow-hidden bg-black"
+						: "group fixed inset-0 bg-black"
+				}
+				style={rounded ? { borderRadius: playback.radius } : undefined}
+			>
+				<style>
+					{rounded
+						? "html,body{background:transparent}"
+						: "html,body{background:#000}"}
+				</style>
 				<h1 className="sr-only">{player.name}</h1>
 				<Stage player={player} playback={playback} />
 				<a
