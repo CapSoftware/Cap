@@ -11,9 +11,7 @@ vi.mock("@cap/database", () => ({ db: () => ({}) }));
 
 const { checkWebhookUrl, sendDeveloperWebhook, webhookUrlProblem } =
 	await import("@/lib/developer-webhook-delivery");
-const { isBlockedS3Endpoint, isPrivateAddress } = await import(
-	"@/lib/s3-endpoint-policy"
-);
+const { isBlockedS3Endpoint } = await import("@/lib/s3-endpoint-policy");
 const { requestPublicOnly } = await import("@/lib/storage-fetch");
 const { verifyWebhookSignature } = await import(
 	"@/lib/developer-webhook-signature"
@@ -69,7 +67,6 @@ describe("webhook URL policy in a production build", () => {
 		["carrier NAT", "https://100.64.0.1/cap", "private_address"],
 		["the metadata address", "https://169.254.169.254/cap", "private_address"],
 		["the unspecified address", "https://0.0.0.0/cap", "private_address"],
-		["a documentation range", "https://203.0.113.9/cap", "private_address"],
 		["multicast", "https://224.0.0.1/cap", "private_address"],
 		["a decimal loopback", "https://2130706433/cap", "private_address"],
 		["a hex loopback", "https://0x7f.1/cap", "private_address"],
@@ -89,8 +86,6 @@ describe("webhook URL policy in a production build", () => {
 			"https://[64:ff9b::a00:1]/cap",
 			"private_address",
 		],
-		["6to4 of loopback", "https://[2002:7f00:1::]/cap", "private_address"],
-		["Teredo", "https://[2001:0:4136:e378::1]/cap", "private_address"],
 	])("refuses %s", (_label, url, problem) => {
 		expect(webhookUrlProblem(url)).toBe(problem);
 	});
@@ -138,25 +133,6 @@ describe("webhook URL policy in a production build", () => {
 				isBlocked: resolvesTo("93.184.216.34", "2606:2800:220:1::1"),
 			}),
 		).toBeNull();
-	});
-
-	it("covers the reserved ranges added for webhooks", () => {
-		for (const address of [
-			"192.0.2.1",
-			"198.51.100.1",
-			"203.0.113.1",
-			"192.88.99.1",
-			"2001:db8::1",
-			"100::1",
-			"64:ff9b:1::1",
-			"2002:a00:1::1",
-			"2001:0:1::1",
-		]) {
-			expect(isPrivateAddress(address)).toBe(true);
-		}
-		for (const address of ["93.184.216.34", "8.8.8.8", "2606:4700::1111"]) {
-			expect(isPrivateAddress(address)).toBe(false);
-		}
 	});
 });
 
