@@ -166,6 +166,25 @@ function runSelect(query: Query): Record<string, unknown>[] {
 				),
 			).slice(0, 1);
 		}
+		if (keys === "createdAt,referenceId,type") {
+			const [, ...rest] = rendered.params;
+			const since = asTime(rest.at(-1));
+			const types = rest.slice(0, -1);
+			return ledger.rows.filter(
+				(row) =>
+					types.includes(row.referenceType) && row.createdAt.getTime() >= since,
+			);
+		}
+		if (keys === "settledAttempts") {
+			const types = rendered.params.slice(1);
+			return [
+				{
+					settledAttempts: ledger.rows.filter((row) =>
+						types.includes(row.referenceType),
+					).length,
+				},
+			];
+		}
 		if (keys === "createdAt,metadata,type") {
 			const types = rendered.params.slice(1);
 			return newestFirst(

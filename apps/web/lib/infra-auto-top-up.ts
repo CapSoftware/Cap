@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import {
@@ -7,7 +8,17 @@ import {
 	users,
 } from "@cap/database/schema";
 import { stripe } from "@cap/utils";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import {
+	and,
+	desc,
+	eq,
+	gte,
+	inArray,
+	isNotNull,
+	isNull,
+	sql,
+} from "drizzle-orm";
+import { after } from "next/server";
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { developerCreditsProductId } from "@/lib/developer-credits-product";
@@ -15,7 +26,7 @@ import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 import { canUseInfra } from "@/lib/infra-access";
 import { availableBalance } from "@/lib/infra-balance";
 import { sendInfraTopUpFailedEmail } from "@/lib/infra-billing-emails";
-import { disputedSince } from "@/lib/infra-standing";
+import { disputedSince, type InfraDbExecutor } from "@/lib/infra-standing";
 import { utcDateKey } from "@/lib/infra-usage";
 
 export const AUTO_TOP_UP_REFERENCE_TYPE = "auto_top_up" as const;
@@ -29,7 +40,8 @@ export const AUTO_TOP_UP_MIN_THRESHOLD_MICRO_CREDITS = MICRO_CREDITS_PER_DOLLAR;
 export const AUTO_TOP_UP_MAX_THRESHOLD_MICRO_CREDITS =
 	1_000 * MICRO_CREDITS_PER_DOLLAR;
 
-const ATTEMPT_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const AUTO_TOP_UP_DAILY_LIMIT = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type AutoTopUpResult =
 	| {
@@ -42,7 +54,10 @@ export type AutoTopUpResult =
 				| "invalid_settings"
 				| "above_threshold"
 				| "disputed"
-				| "recent_attempt";
+				| "awaiting_payment"
+				| "recent_decline"
+				| "daily_limit"
+				| "in_progress";
 	  }
 	| { state: "succeeded"; paymentIntentId: string; balanceMicroCredits: number }
 	| { state: "pending"; paymentIntentId: string }
@@ -79,8 +94,16 @@ export function autoTopUpSettingsError({
 	return null;
 }
 
-export function autoTopUpIdempotencyKey(accountId: string, period: string) {
-	return `infra-auto-top-up:${accountId}:${period}`;
+export function autoTopUpIdempotencyKey(
+	accountId: string,
+	sequence: number,
+	request: unknown,
+) {
+	const digest = createHash("sha256")
+		.update(JSON.stringify(request))
+		.digest("hex")
+		.slice(0, 24);
+	return `infra-auto-top-up:${accountId}:${sequence}:${digest}`;
 }
 
 export function autoTopUpFailureText(reason: string | null | undefined) {
@@ -94,6 +117,12 @@ export function autoTopUpFailureText(reason: string | null | undefined) {
 		default:
 			return "the card was declined";
 	}
+}
+
+function isKeyInUse(error: unknown) {
+	if (typeof error !== "object" || error === null) return false;
+	const fields = error as { code?: unknown; statusCode?: unknown };
+	return fields.code === "idempotency_key_in_use" || fields.statusCode === 409;
 }
 
 function declineFrom(error: unknown) {
@@ -152,6 +181,67 @@ async function lastAttempt(
 		.orderBy(desc(developerCreditTransactions.createdAt))
 		.limit(1);
 	return row ?? null;
+}
+
+async function attemptHistory(
+	executor: InfraDbExecutor,
+	accountId: string,
+	now: Date,
+) {
+	const recent = await executor
+		.select({
+			type: developerCreditTransactions.type,
+			referenceId: developerCreditTransactions.referenceId,
+			createdAt: developerCreditTransactions.createdAt,
+		})
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				inArray(
+					developerCreditTransactions.referenceType,
+					ATTEMPT_REFERENCE_TYPES,
+				),
+				gte(
+					developerCreditTransactions.createdAt,
+					new Date(now.getTime() - DAY_MS),
+				),
+			),
+		);
+	const [settled] = await executor
+		.select({ settledAttempts: sql<number | string>`COUNT(*)` })
+		.from(developerCreditTransactions)
+		.where(
+			and(
+				eq(developerCreditTransactions.accountId, accountId),
+				inArray(
+					developerCreditTransactions.referenceType,
+					SETTLED_REFERENCE_TYPES,
+				),
+			),
+		);
+
+	const settledIds = new Set(
+		recent
+			.filter((row) => row.type !== "topup_pending")
+			.map((row) => row.referenceId),
+	);
+	const latest = (type: string) =>
+		Math.max(
+			0,
+			...recent
+				.filter((row) => row.type === type)
+				.map((row) => new Date(row.createdAt).getTime()),
+		);
+	const lastDecline = latest("topup_failed");
+	return {
+		sequence: Number(settled?.settledAttempts ?? 0),
+		awaitingPayment: recent.some(
+			(row) => row.type === "topup_pending" && !settledIds.has(row.referenceId),
+		),
+		declinedRecently: lastDecline > 0 && lastDecline >= latest("topup"),
+		recentTopUps: recent.filter((row) => row.type === "topup").length,
+	};
 }
 
 export async function getAutoTopUpFailure(accountId: string) {
@@ -353,50 +443,71 @@ export async function runAutoTopUp(
 	) {
 		return { state: "skipped", reason: "invalid_settings" };
 	}
-	const available = (await availableBalance(account.appId)) ?? 0;
-	if (available >= account.autoTopUpThresholdMicroCredits) {
+	const snapshot = await db().transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ id: developerCreditAccounts.id })
+			.from(developerCreditAccounts)
+			.where(eq(developerCreditAccounts.id, accountId))
+			.limit(1)
+			.for("update");
+		if (!locked) return null;
+		return {
+			available: (await availableBalance(account.appId, tx)) ?? 0,
+			disputed: Boolean(await disputedSince(tx, accountId)),
+			...(await attemptHistory(tx, accountId, now)),
+		};
+	});
+	if (!snapshot) return { state: "skipped", reason: "not_found" };
+	if (snapshot.available >= account.autoTopUpThresholdMicroCredits) {
 		return { state: "skipped", reason: "above_threshold" };
 	}
-
-	if (await disputedSince(db(), accountId)) {
-		return { state: "skipped", reason: "disputed" };
+	if (snapshot.disputed) return { state: "skipped", reason: "disputed" };
+	if (snapshot.awaitingPayment) {
+		return { state: "skipped", reason: "awaiting_payment" };
 	}
-
-	const previous = await lastAttempt(accountId);
-	if (
-		previous &&
-		now.getTime() - new Date(previous.createdAt).getTime() < ATTEMPT_INTERVAL_MS
-	) {
-		return { state: "skipped", reason: "recent_attempt" };
+	if (snapshot.declinedRecently) {
+		return { state: "skipped", reason: "recent_decline" };
+	}
+	if (snapshot.recentTopUps >= AUTO_TOP_UP_DAILY_LIMIT) {
+		console.warn(
+			"[infra-billing] Auto top-up waits: the daily limit of automatic top-ups is reached",
+			{ accountId, limit: AUTO_TOP_UP_DAILY_LIMIT },
+		);
+		return { state: "skipped", reason: "daily_limit" };
 	}
 
 	const period = utcDateKey(now);
 	const productId = developerCreditsProductId();
+	const request = {
+		amount: amountCents,
+		currency: "usd",
+		customer: account.stripeCustomerId,
+		payment_method: account.stripePaymentMethodId,
+		payment_method_types: ["card"],
+		off_session: true,
+		confirm: true,
+		description: "Cap Infra credits, auto top-up",
+		receipt_email: account.email,
+		metadata: {
+			type: AUTO_TOP_UP_METADATA_TYPE,
+			accountId,
+			appId: account.appId,
+			amountCents: String(amountCents),
+			sequence: String(snapshot.sequence),
+			...(productId ? { productId } : {}),
+		},
+	} satisfies Stripe.PaymentIntentCreateParams;
 	let paymentIntent: Stripe.PaymentIntent;
 	try {
-		paymentIntent = await stripe().paymentIntents.create(
-			{
-				amount: amountCents,
-				currency: "usd",
-				customer: account.stripeCustomerId,
-				payment_method: account.stripePaymentMethodId,
-				payment_method_types: ["card"],
-				off_session: true,
-				confirm: true,
-				description: "Cap Infra credits, auto top-up",
-				receipt_email: account.email,
-				metadata: {
-					type: AUTO_TOP_UP_METADATA_TYPE,
-					accountId,
-					appId: account.appId,
-					amountCents: String(amountCents),
-					period,
-					...(productId ? { productId } : {}),
-				},
-			},
-			{ idempotencyKey: autoTopUpIdempotencyKey(accountId, period) },
-		);
+		paymentIntent = await stripe().paymentIntents.create(request, {
+			idempotencyKey: autoTopUpIdempotencyKey(
+				accountId,
+				snapshot.sequence,
+				request,
+			),
+		});
 	} catch (error) {
+		if (isKeyInUse(error)) return { state: "skipped", reason: "in_progress" };
 		const decline = declineFrom(error);
 		if (!decline) {
 			console.error("[infra-billing] Auto top-up could not be attempted", {
@@ -475,6 +586,44 @@ export async function runDueAutoTopUps(now: Date = new Date()) {
 		}
 	}
 	return summary;
+}
+
+async function creditAccountOf(target: AutoTopUpTarget) {
+	if ("accountId" in target) return target.accountId;
+	const [account] = await db()
+		.select({ id: developerCreditAccounts.id })
+		.from(developerCreditAccounts)
+		.where(eq(developerCreditAccounts.appId, target.appId))
+		.limit(1);
+	return account?.id ?? null;
+}
+
+export type AutoTopUpTarget = { accountId: string } | { appId: string };
+
+export function scheduleAutoTopUp(target: AutoTopUpTarget) {
+	const task = async () => {
+		try {
+			const accountId = await creditAccountOf(target);
+			if (!accountId) return;
+			const result = await runAutoTopUp(accountId);
+			if (result.state !== "skipped") {
+				console.log("[infra-billing] Auto top-up after a charge", {
+					accountId,
+					state: result.state,
+				});
+			}
+		} catch (error) {
+			console.error("[infra-billing] Auto top-up after a charge failed", {
+				target,
+				error,
+			});
+		}
+	};
+	try {
+		after(task);
+	} catch {
+		void task();
+	}
 }
 
 export async function settleAutoTopUpPaymentIntent(
