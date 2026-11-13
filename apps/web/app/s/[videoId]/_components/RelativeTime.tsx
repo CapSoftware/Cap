@@ -80,7 +80,7 @@ export function RelativeTime({
 	const now = useNow();
 	const valid = !Number.isNaN(date.getTime());
 	let text = "";
-	if (now !== null) text = format(date, new Date(now));
-	else if (valid) text = utcDate.format(date);
+	if (valid)
+		text = now === null ? utcDate.format(date) : format(date, new Date(now));
 	return <time dateTime={valid ? date.toISOString() : undefined}>{text}</time>;
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, createElement, type ReactElement, type ReactNode } from "react";
-import { hydrateRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -183,6 +183,21 @@ describe("share page relative times hydrate without a mismatch", () => {
 		expect(timeText(result.container)).toBe("1h ago");
 	});
 
+	it("keeps an invalid date empty with a provider and after hydration", async () => {
+		const invalid = new Date("not a date");
+		const tree = () =>
+			createElement(
+				ShareNowProvider,
+				{ now: SERVER_NOW },
+				createElement(RelativeTime, { date: invalid, format: formatTimeAgo }),
+			);
+		const result = await serverThenClient(tree, SERVER_NOW, SKEWED_CLIENT_NOW);
+		cleanup = result.unmount;
+		expect(result.recoverableErrors).toEqual([]);
+		expect(result.html).toBe("<time></time>");
+		expect(timeText(result.container)).toBe("");
+	});
+
 	it("renders an invalid date without throwing", () => {
 		vi.setSystemTime(SERVER_NOW);
 		const html = renderToString(
@@ -199,5 +214,76 @@ describe("share page relative times hydrate without a mismatch", () => {
 		expect(formatTimeAgo(CREATED_AT, new Date(SERVER_NOW))).toBe(
 			formatTimeAgo(CREATED_AT),
 		);
+	});
+});
+
+describe("share page relative times keep updating", () => {
+	beforeEach(() => {
+		(
+			globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+		).IS_REACT_ACT_ENVIRONMENT = true;
+		vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+		vi.setSystemTime(CREATED_AT.getTime() + 30_000);
+	});
+
+	afterEach(() => {
+		document.body.innerHTML = "";
+		vi.useRealTimers();
+	});
+
+	const mount = async (count: number) => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+		const render = async (visible: number) => {
+			await act(async () => {
+				root.render(
+					createElement(
+						"div",
+						null,
+						Array.from({ length: visible }, (_, index) =>
+							createElement(RelativeTime, {
+								key: index,
+								date: CREATED_AT,
+								format: formatTimeAgo,
+							}),
+						),
+					),
+				);
+			});
+		};
+		await render(count);
+		return { container, root, render };
+	};
+
+	const texts = (container: HTMLElement) =>
+		[...container.querySelectorAll("time")].map((time) => time.textContent);
+
+	it("advances every timestamp once a minute from one shared timer", async () => {
+		const { container, root } = await mount(2);
+		expect(texts(container)).toEqual(["now", "now"]);
+		expect(vi.getTimerCount()).toBe(1);
+		await act(async () => {
+			vi.advanceTimersByTime(60_000);
+		});
+		expect(texts(container)).toEqual(["1m ago", "1m ago"]);
+		await act(async () => {
+			vi.advanceTimersByTime(60_000);
+		});
+		expect(texts(container)).toEqual(["2m ago", "2m ago"]);
+		await act(async () => root.unmount());
+	});
+
+	it("stops the timer only after the last timestamp unmounts", async () => {
+		const { root, render } = await mount(2);
+		expect(vi.getTimerCount()).toBe(1);
+		await render(1);
+		expect(vi.getTimerCount()).toBe(1);
+		await render(0);
+		expect(vi.getTimerCount()).toBe(0);
+		await render(1);
+		expect(vi.getTimerCount()).toBe(1);
+		await act(async () => root.unmount());
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
