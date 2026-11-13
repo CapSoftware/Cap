@@ -248,7 +248,8 @@ describe("the rendered page", () => {
 		expect(table?.textContent).not.toContain(speech);
 
 		const row = [...page.querySelectorAll("dl")].find(
-			(list) => list.querySelector("dt")?.textContent?.trim() === "Speech to text",
+			(list) =>
+				list.querySelector("dt")?.textContent?.trim() === "Speech to text",
 		);
 		expect(row).toBeDefined();
 		expect(row?.closest("table")).toBeNull();
