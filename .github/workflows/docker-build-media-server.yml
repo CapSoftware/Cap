@@ -151,7 +151,8 @@ jobs:
             src/__tests__/lib/isolated-worker-pool.test.ts \
             src/__tests__/lib/media-probe-hardening.test.ts \
             src/__tests__/lib/colour-probe-fallback.test.ts \
-            src/__tests__/lib/encode-length-limit.test.ts
+            src/__tests__/lib/encode-length-limit.test.ts \
+            src/__tests__/lib/matroska-length.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/routes/thumbnail-remote.test.ts \
             src/__tests__/routes/health.test.ts \
