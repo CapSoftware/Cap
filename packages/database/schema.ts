@@ -1926,7 +1926,7 @@ export type DeveloperTranscriptStatus =
 	| "complete"
 	| "error";
 
-export type DeveloperTranscriptSourceType = "upload" | "url";
+export type DeveloperTranscriptSourceType = "upload" | "url" | "video";
 
 export const developerTranscripts = mysqlTable(
 	"developer_transcripts",
@@ -1945,11 +1945,12 @@ export const developerTranscripts = mysqlTable(
 			.$type<DeveloperTranscriptStatus>(),
 		sourceType: varchar("sourceType", {
 			length: 8,
-			enum: ["upload", "url"],
+			enum: ["upload", "url", "video"],
 		})
 			.notNull()
 			.$type<DeveloperTranscriptSourceType>(),
 		sourceUrl: varchar("sourceUrl", { length: 2048 }),
+		videoId: nanoIdNullable("videoId"),
 		s3Key: varchar("s3Key", { length: 512 }),
 		resultKey: varchar("resultKey", { length: 512 }),
 		sourceBytes: bigint("sourceBytes", { mode: "number", unsigned: true }),
@@ -2001,6 +2002,12 @@ export const developerTranscripts = mysqlTable(
 		index("dev_transcripts_status_updated_idx").on(
 			table.status,
 			table.updatedAt,
+		),
+		index("dev_transcripts_app_video_idx").on(
+			table.appId,
+			table.videoId,
+			table.createdAt,
+			table.id,
 		),
 	],
 );
