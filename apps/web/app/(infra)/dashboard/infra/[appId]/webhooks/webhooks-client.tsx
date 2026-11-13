@@ -44,7 +44,12 @@ export type InfraWebhookEndpoint = {
 	consecutiveFailures: number;
 };
 
-type Revealed = { url: string; secret: string; rotated: boolean };
+type Revealed = {
+	endpointId: string;
+	url: string;
+	secret: string;
+	rotated: boolean;
+};
 
 type TestOutcome = {
 	delivered: boolean;
@@ -180,9 +185,9 @@ export function WebhooksClient({
 								appId={appId}
 								eventTypes={eventTypes}
 								onCancel={() => setAdding(false)}
-								onCreated={(url, secret) => {
+								onCreated={(endpointId, url, secret) => {
 									setAdding(false);
-									setRevealed({ url, secret, rotated: false });
+									setRevealed({ endpointId, url, secret, rotated: false });
 									router.refresh();
 								}}
 							/>
@@ -217,9 +222,19 @@ export function WebhooksClient({
 									key={endpoint.id}
 									appId={appId}
 									endpoint={endpoint}
+									onDeleted={() =>
+										setRevealed((current) =>
+											current?.endpointId === endpoint.id ? null : current,
+										)
+									}
 									onRotated={(secret) => {
 										setAdding(false);
-										setRevealed({ url: endpoint.url, secret, rotated: true });
+										setRevealed({
+											endpointId: endpoint.id,
+											url: endpoint.url,
+											secret,
+											rotated: true,
+										});
 									}}
 								/>
 							))}
@@ -284,7 +299,7 @@ function AddEndpointForm({
 	appId: string;
 	eventTypes: readonly string[];
 	onCancel: () => void;
-	onCreated: (url: string, secret: string) => void;
+	onCreated: (endpointId: string, url: string, secret: string) => void;
 }) {
 	const urlId = useId();
 	const errorId = useId();
@@ -300,7 +315,7 @@ function AddEndpointForm({
 				return;
 			}
 			toast.success("Endpoint added");
-			onCreated(result.endpoint.url, result.secret);
+			onCreated(result.endpoint.id, result.endpoint.url, result.secret);
 		},
 		onError: () =>
 			setError({ message: "Could not add the endpoint", hint: "Try again." }),
@@ -425,10 +440,12 @@ function EndpointRow({
 	appId,
 	endpoint,
 	onRotated,
+	onDeleted,
 }: {
 	appId: string;
 	endpoint: InfraWebhookEndpoint;
 	onRotated: (secret: string) => void;
+	onDeleted: () => void;
 }) {
 	const router = useRouter();
 	const [test, setTest] = useState<TestOutcome | null>(null);
@@ -481,6 +498,7 @@ function EndpointRow({
 			setConfirm(null);
 			if (isFailure(result)) return refuse(result);
 			toast.success("Endpoint deleted");
+			onDeleted();
 			router.refresh();
 		},
 		onError: () => toast.error("Could not delete the endpoint"),
