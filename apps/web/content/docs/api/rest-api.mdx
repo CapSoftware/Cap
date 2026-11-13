@@ -1031,8 +1031,7 @@ curl https://cap.so/api/developer/v1/usage \
     "delivery": {
       "minutes": 1248.5,
       "minutesByTier": { "360p": 12.5, "720p": 336, "1080p": 900, "1440p": 0, "2160p": 0 },
-      "measured": true,
-      "billed": false
+      "finalThrough": "2026-11-18"
     },
     "totalVideos": 23,
     "uploadingVideos": 1,
@@ -1065,7 +1064,7 @@ Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). `balanc
 
 **Speech.** `speech` is what speech to text has cost in the current calendar month, counted in UTC from `periodStart`: the measured audio seconds of completed transcripts, the micro-credits charged for them and how many there were. Each transcript is charged on its length rounded to a whole second and then down to a whole micro-credit, so `seconds` times the rate can differ slightly from `microCredits`: for the exact charge use `microCredits`, or each transcript's `costMicroCredits`. Deleted transcripts stay counted, so the figure reconciles with the balance. `heldMicroCredits` is credit held by transcripts that are running now, and `availableMicroCredits` is the balance minus those holds, which is what a new transcript or upload is checked against.
 
-**Delivery.** `delivery` is the minutes of video played to your viewers in the same calendar month as `speech`, in total and for each resolution, and it is measured, not billed, so it is `null` until delivery has been measured for the app.
+**Delivery.** `delivery` is the minutes of video delivered to your viewers in the same calendar month as `speech`, in total and for each rendition tier, and it is `null` until delivery has been measured for the app. For HLS it counts the exact seconds of the segments served, and for MP4 downloads the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. A day's figures are final from 02:00 UTC two days later, and `finalThrough` is the latest final day in the period, so today and yesterday may still change.
 
 **Totals.** `totalVideos` counts videos that are stored and ready to play, and `totalDurationMinutes` is their combined length, equal to the sum of `storage.minutesByTier`. `uploadingVideos` counts videos that were created and have not completed an upload. A video that is still encoding, or that failed or was refused, is in neither count. [List Videos](/docs/api/rest-api#list-videos) returns it with its status.
 

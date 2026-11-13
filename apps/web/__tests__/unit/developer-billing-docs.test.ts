@@ -89,9 +89,10 @@ const POLICY_SENTENCES = [
 ];
 
 const DELIVERY_SENTENCE =
-	"**Delivery.** `delivery` is the minutes of video played to your viewers in the same calendar month as `speech`, in total and for each resolution, and it is measured, not billed, so it is `null` until delivery has been measured for the app.";
+	"**Delivery.** `delivery` is the minutes of video delivered to your viewers in the same calendar month as `speech`, in total and for each rendition tier, and it is `null` until delivery has been measured for the app. For HLS it counts the exact seconds of the segments served, and for MP4 downloads the bytes served divided by the file's average bytes per second. Playlists, posters, `HEAD` requests, responses other than `200` or `206` and empty responses are never counted. A day's figures are final from 02:00 UTC two days later, and `finalThrough` is the latest final day in the period, so today and yesterday may still change.";
 
-const DELIVERY_EXAMPLE = /"delivery": \{[\s\S]*?"billed": false\n {4}\},/;
+const DELIVERY_EXAMPLE =
+	/"delivery": \{[\s\S]*?"finalThrough": "\d{4}-\d{2}-\d{2}"\n {4}\},/;
 
 const wholeDollars = (cents: number) =>
 	`$${(cents / 100).toLocaleString("en-US")}`;
@@ -435,6 +436,7 @@ describe("the Billing page", () => {
 		}
 		expect(billing).not.toContain(String.fromCodePoint(0x2014));
 		expect(rest.split(DELIVERY_SENTENCE)).toHaveLength(2);
+		expect(DELIVERY_SENTENCE).not.toMatch(/bill|price|charge|cost|credit|\$/i);
 		expect(rest).toMatch(DELIVERY_EXAMPLE);
 		expect(
 			rest.replace(DELIVERY_SENTENCE, "").replace(DELIVERY_EXAMPLE, ""),
@@ -514,7 +516,12 @@ describe("examples in the REST API reference", () => {
 		);
 		expect(data.rates.speechDollarsPerHour).toBe(SPEECH_DOLLARS_PER_HOUR);
 		expect(data.rates.uploadAdmissionDays).toBe(UPLOAD_ADMISSION_DAYS);
-		expect(data.delivery).toMatchObject({ measured: true, billed: false });
+		expect(Object.keys(data.delivery)).toEqual([
+			"minutes",
+			"minutesByTier",
+			"finalThrough",
+		]);
+		expect(data.delivery.finalThrough).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		expect(
 			Object.values(
 				data.delivery.minutesByTier as Record<string, number>,
