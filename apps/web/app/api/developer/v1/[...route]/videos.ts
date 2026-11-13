@@ -1,8 +1,16 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
+import { DEVELOPER_VIDEO_RESOLUTION_TIERS } from "@cap/database/types";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
+import { start } from "workflow/api";
+import { z } from "zod";
 import { apiErrorBody } from "@/lib/api-errors";
+import {
+	developerVideoIdForIdempotencyKey,
+	invalidIdempotencyKey,
+	readIdempotencyKey,
+} from "@/lib/developer-ids";
 import { parseDeveloperListQuery } from "@/lib/developer-pagination";
 import {
 	exactUserIdMatch,
@@ -18,6 +26,14 @@ import { developerVideosCaptionLinks } from "@/lib/developer-video-captions";
 import { markDeveloperVideoDeleted } from "@/lib/developer-video-delete";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
+import {
+	createInfraVideoImport,
+	developerVideoImportView,
+	IMPORT_URL_MAX_LENGTH,
+	newImportVideoId,
+} from "@/lib/infra-video-import";
+import { developerZValidator } from "@/utils/zod-validator";
+import { importDeveloperVideoWorkflow } from "@/workflows/import-developer-video";
 import { withDeveloperSecretAuth } from "../../../utils";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
@@ -82,9 +98,74 @@ const videoNotFound = (userId: string | undefined) =>
 export const app = new Hono<{
 	Variables: {
 		developerAppId: string;
+		developerKeyId: string;
 		developerKeyType: "secret";
 	};
 }>().use(withDeveloperSecretAuth);
+
+app.post(
+	"/",
+	developerZValidator(
+		"json",
+		z.strictObject({
+			url: z.string().min(1).max(IMPORT_URL_MAX_LENGTH),
+			name: z.string().max(255).optional(),
+			userId: z.string().max(255).optional(),
+			maxResolutionTier: z.enum(DEVELOPER_VIDEO_RESOLUTION_TIERS).optional(),
+			metadata: z
+				.record(z.string(), z.unknown())
+				.optional()
+				.refine(
+					(val) => val === undefined || JSON.stringify(val).length <= 8192,
+					{ message: "Metadata must be under 8KB" },
+				),
+		}),
+	),
+	async (c) => {
+		const idempotency = readIdempotencyKey(c.req.header("idempotency-key"));
+		if (!idempotency.ok) return c.json(invalidIdempotencyKey(), 400);
+		const appId = c.get("developerAppId");
+		const body = c.req.valid("json");
+		const result = await createInfraVideoImport(
+			{
+				...body,
+				appId,
+				keyId: c.get("developerKeyId"),
+				idempotencyKey: idempotency.key,
+				videoId: idempotency.key
+					? developerVideoIdForIdempotencyKey(appId, idempotency.key)
+					: newImportVideoId(),
+			},
+			{
+				startImport: async (videoId) => {
+					await start(importDeveloperVideoWorkflow, [{ videoId }]);
+				},
+			},
+		);
+		if (result.status !== 202) {
+			return c.json(result.body, result.status, result.headers);
+		}
+		const [video, imported] = await Promise.all([
+			findAppVideo(appId, result.videoId, undefined),
+			developerVideoImportView(result.videoId),
+		]);
+		if (!video) return c.json(videoNotFound(undefined), 404);
+		const [data] = await withCaptions(appId, [video]);
+		return c.json(
+			{
+				data: {
+					...data,
+					import: imported && {
+						sourceUrl: imported.sourceUrl,
+						state: imported.state,
+						errorCode: imported.errorCode,
+					},
+				},
+			},
+			202,
+		);
+	},
+);
 
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
