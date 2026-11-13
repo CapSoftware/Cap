@@ -60,7 +60,7 @@ import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
-import { CapCardAnalytics } from "./CapCardAnalytics";
+import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
 
@@ -508,7 +508,7 @@ export const CapCard = ({
 									<DropdownMenuItem
 										onClick={(e) => {
 											e.stopPropagation();
-											router.push(`/dashboard/analytics/s/${cap.id}`);
+											router.push(capAnalyticsHref(cap.id));
 										}}
 										className="flex gap-2 items-center rounded-lg"
 									>
