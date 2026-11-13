@@ -106,12 +106,17 @@ export async function removeVideosFromOrganization(
 				),
 			);
 
-		// Clear folderId for videos that are being removed from the organization and are currently in folders within that organization
-		// First, get all folder IDs that belong to this organization
+		// Clear folderId for videos that are being removed from the organization and are currently in the organization's own folders.
+		// Personal folders (spaceId null) also carry the organizationId, and a Cap's place in My Caps must survive unsharing it.
 		const organizationFolders = await db()
 			.select({ id: folders.id })
 			.from(folders)
-			.where(eq(folders.organizationId, organizationId));
+			.where(
+				and(
+					eq(folders.organizationId, organizationId),
+					eq(folders.spaceId, organizationId),
+				),
+			);
 
 		const organizationFolderIds = organizationFolders.map((f) => f.id);
 
