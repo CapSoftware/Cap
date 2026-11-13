@@ -353,6 +353,10 @@ jobs:
           cargo test --locked -p cap --test cli caps_json_errors_include_the_standard_error_field
           cargo test --locked -p cap --bin cap caps::tests::cap_operations_validate_wait_timeouts_before_submitting
           cargo test --locked -p cap --test cli organization_operations_validate_wait_timeouts_before_submitting
+          cargo test --locked -p cap --bin cap developer_media::tests
+          cargo test --locked -p cap --test cli developer_ids_that_begin_with_a_dash_are_read_as_values
+          cargo test --locked -p cap --test cli developer_dry_runs_show_the_target_and_change_nothing
+          cargo test --locked -p cap --test cli commands_without_their_own_json_errors_still_print_one
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p scap-targets --lib --test linux_targets
