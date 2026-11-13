@@ -169,7 +169,10 @@ import {
 	creditCheckoutSessionParams,
 } from "@/lib/infra-credit-checkout";
 import { normalizeAllowedOrigin } from "@/lib/infra-domain";
-import { settleFirstMonthAtDelete } from "@/lib/infra-storage-minimum";
+import {
+	settleFirstMonthAtDelete,
+	settleFirstMonthsForDeletedApp,
+} from "@/lib/infra-storage-minimum";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -4174,6 +4177,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						});
 						if (deletedAt) {
 							const appDeletedAt = deletedAt;
+							yield* Effect.promise(() =>
+								settleFirstMonthsForDeletedApp(path.appId, appDeletedAt),
+							);
 							yield* Effect.promise(() =>
 								cancelDeveloperVideoEncodes({
 									appId: path.appId,
