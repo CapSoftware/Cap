@@ -104,6 +104,7 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,
+		storagePaidUntil: _storagePaidUntil,
 		filesDeletedAt: _filesDeletedAt,
 		s3Key: _s3Key,
 		...fields

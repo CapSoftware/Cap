@@ -138,7 +138,10 @@ export async function chargeStorageDay({
 				? lastCharge.shortSince
 				: null;
 
-		if (usage.dailyMicroCredits <= 0 && !unresolvedShortSince) {
+		if (
+			usage.dailyMicroCredits <= 0 &&
+			(!unresolvedShortSince || lastCharge?.firstMonth)
+		) {
 			return { state: "skipped" as const };
 		}
 

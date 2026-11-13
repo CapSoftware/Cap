@@ -8,7 +8,7 @@ import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
+import { getAppStorage } from "@/lib/infra-storage";
 import {
 	formatCharge,
 	formatMinutes,
@@ -68,14 +68,15 @@ export default async function InfraUsagePage({
 	const { app } = await requireInfraApp(appId);
 	const now = new Date();
 
-	const [usage, snapshots, transcription] = await Promise.all([
-		getAppStorageUsage(app.id),
+	const [storage, snapshots, transcription] = await Promise.all([
+		getAppStorage(app.id),
 		getInfraStorageSnapshots(app.id, utcDaysAgoKey(now, HISTORY_DAYS)),
 		getTranscriptionUsageSince(app.id, utcMonthStart(now)).catch((error) => {
 			console.error("[infra-usage] Transcription usage unavailable", error);
 			return null;
 		}),
 	]);
+	const usage = storage.stored;
 	const audioHours = (transcription?.audioSeconds ?? 0) / 3600;
 	const storedTiers = INFRA_RESOLUTION_TIERS.filter(
 		(tier) => usage.minutesByTier[tier] > 0,
@@ -92,7 +93,7 @@ export default async function InfraUsagePage({
 		<>
 			<PageHeader
 				title="Usage"
-				description="Storage is billed once a day, for each video at its resolution. Uploads and encoding are free."
+				description="Each video is charged one month of storage when it becomes ready, then once a day at its resolution. Uploads and encoding are free."
 			/>
 
 			<Figures>
@@ -107,8 +108,8 @@ export default async function InfraUsagePage({
 				/>
 				<Figure
 					label="Storage per day"
-					hint="at what is stored now"
-					value={formatCharge(usage.dailyMicroCredits)}
+					hint="for videos past their first month"
+					value={formatCharge(storage.dailyCharge.dailyMicroCredits)}
 				/>
 				<Figure
 					label={`Storage in ${monthName}`}

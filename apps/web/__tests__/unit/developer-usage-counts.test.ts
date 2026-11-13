@@ -16,43 +16,29 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@cap/database", async () => {
 	const schema = await import("@cap/database/schema");
-	const rowsFor = (table: unknown, fields?: Record<string, unknown>) => {
+	const rowsFor = (table: unknown) => {
 		if (table === schema.developerApiKeys) return [{ appId: "app-1" }];
 		if (table === schema.developerCreditAccounts) {
 			return [{ balanceMicroCredits: mocks.balanceMicroCredits }];
 		}
 		if (table !== schema.developerVideos) return [];
-		if (fields && "createdVideos" in fields) {
-			return [
-				{
-					createdVideos: mocks.videos.length,
-					uploadedVideos: mocks.videos.filter(
-						(video) => video.duration !== null,
-					).length,
-					totalDurationMinutes:
-						mocks.videos.reduce(
-							(sum, video) => sum + (video.duration ?? 0),
-							0,
-						) / 60,
-				},
-			];
-		}
-		return mocks.videos
-			.filter((video) => video.duration !== null)
-			.map((video) => ({
-				appId: "app-1",
-				width: video.width ?? 1920,
-				height: video.height ?? 1080,
-				status: video.status,
-				maxResolutionTier: video.maxResolutionTier ?? "1080p",
-				seconds: video.duration,
-				count: 1,
-			}));
+		return mocks.videos.map((video) => ({
+			appId: "app-1",
+			width: video.width ?? 1920,
+			height: video.height ?? 1080,
+			status: video.status,
+			maxResolutionTier: video.maxResolutionTier ?? "1080p",
+			seconds: video.duration ?? 0,
+			count: video.duration === null ? 0 : 1,
+			rows: 1,
+			dailySeconds: video.duration ?? 0,
+			dailyCount: video.duration === null ? 0 : 1,
+		}));
 	};
-	const select = (fields?: Record<string, unknown>) => ({
+	const select = () => ({
 		from: (table: unknown) => {
 			const where = () => {
-				const rows = Promise.resolve(rowsFor(table, fields));
+				const rows = Promise.resolve(rowsFor(table));
 				const result = Object.assign(rows, {
 					limit: () => result,
 					groupBy: () => result,
@@ -86,7 +72,7 @@ vi.mock("@/lib/infra-standing", async (original) => ({
 }));
 
 import { app } from "@/app/api/developer/v1/[...route]/usage";
-import { storageUsage } from "@/lib/developer-pricing";
+import { getAppStorage } from "@/lib/infra-storage";
 
 const usage = async () => {
 	const response = await app.request("/", {
@@ -99,16 +85,20 @@ const usage = async () => {
 beforeEach(() => {
 	mocks.balanceMicroCredits = 2_999_901;
 	mocks.videos = [];
-	mocks.billing.mockResolvedValue({
-		standing: { state: "active", pausesAt: null },
-		usage: storageUsage([]),
-		admission: {
-			allowed: true,
-			reason: null,
-			requiredMicroCredits: 1,
-			shortfallMicroCredits: 0,
-			message: null,
-		},
+	mocks.billing.mockImplementation(async (appId: string) => {
+		const storage = await getAppStorage(appId);
+		return {
+			standing: { state: "active", pausesAt: null },
+			storage,
+			stored: storage.stored,
+			admission: {
+				allowed: true,
+				reason: null,
+				requiredMicroCredits: 1,
+				shortfallMicroCredits: 0,
+				message: null,
+			},
+		};
 	});
 });
 

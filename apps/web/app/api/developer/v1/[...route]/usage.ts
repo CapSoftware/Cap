@@ -1,6 +1,3 @@
-import { db } from "@cap/database";
-import { developerVideos } from "@cap/database/schema";
-import { and, count, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -14,7 +11,6 @@ import {
 	infraBillingJson,
 	infraStorageJson,
 } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
 import { creditDollars } from "@/lib/infra-usage";
 import { withDeveloperSecretAuth } from "../../../utils";
 
@@ -28,23 +24,11 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[videoStats], billing, stored, credit] = await Promise.all([
-		db()
-			.select({
-				createdVideos: count(),
-				uploadedVideos: count(developerVideos.duration),
-			})
-			.from(developerVideos)
-			.where(
-				and(
-					eq(developerVideos.appId, appId),
-					isNull(developerVideos.deletedAt),
-				),
-			),
+	const [billing, credit] = await Promise.all([
 		getInfraBilling(appId),
-		getAppStorageUsage(appId),
 		getSpeechUsage(appId),
 	]);
+	const { stored, storage } = billing;
 
 	const { balanceMicroCredits, ...speech } = credit;
 	const { standing, upload } = infraBillingJson(billing);
@@ -54,14 +38,11 @@ app.get("/", async (c) => {
 			balanceMicroCredits,
 			balanceDollars: creditDollars(balanceMicroCredits),
 			totalVideos: stored.videoCount,
-			uploadingVideos: Math.max(
-				0,
-				(videoStats?.createdVideos ?? 0) - (videoStats?.uploadedVideos ?? 0),
-			),
+			uploadingVideos: storage.uploadingVideos,
 			totalDurationMinutes: stored.totalMinutes,
 			standing,
 			upload,
-			storage: infraStorageJson(stored),
+			storage: infraStorageJson(storage),
 			...speech,
 			rates: {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,

@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	keyRows: [] as { appId: string; environment?: string }[],
 	accounts: [] as { balanceMicroCredits: number }[],
-	videoStats: [] as Record<string, unknown>[],
 	storedVideos: [] as Record<string, unknown>[],
 	selected: [] as Record<string, unknown>[],
 	createVideo: vi.fn(),
@@ -20,23 +19,19 @@ vi.mock("@vercel/firewall", () => ({ checkRateLimit: mocks.firewall }));
 
 vi.mock("@cap/database", async () => {
 	const schema = await import("@cap/database/schema");
-	const rowsFor = (table: unknown, fields?: Record<string, unknown>) => {
+	const rowsFor = (table: unknown) => {
 		if (table === schema.developerApiKeys) return mocks.keyRows;
 		if (table === schema.developerCreditAccounts) return mocks.accounts;
-		if (table === schema.developerVideos) {
-			return fields && "createdVideos" in fields
-				? mocks.videoStats
-				: mocks.storedVideos;
-		}
+		if (table === schema.developerVideos) return mocks.storedVideos;
 		return [];
 	};
 	const select = (fields?: Record<string, unknown>) => ({
 		from: (table: unknown) => {
 			if (fields) mocks.selected.push(fields);
 			const where = () =>
-				Object.assign(Promise.resolve(rowsFor(table, fields)), {
-					limit: async () => rowsFor(table, fields),
-					groupBy: async () => rowsFor(table, fields),
+				Object.assign(Promise.resolve(rowsFor(table)), {
+					limit: async () => rowsFor(table),
+					groupBy: async () => rowsFor(table),
 				});
 			const query = { innerJoin: () => query, where };
 			return query;
@@ -115,6 +110,7 @@ import {
 	INFRA_RESOLUTION_TIERS,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
 } from "@/lib/infra-pricing";
+import { getAppStorage } from "@/lib/infra-storage";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 
@@ -161,7 +157,6 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.keyRows = [{ appId: "app-1", environment: "development" }];
 	mocks.accounts = [{ balanceMicroCredits: 4_532_000 }];
-	mocks.videoStats = [{ createdVideos: 5, uploadedVideos: 4 }];
 	mocks.storedVideos = [
 		{
 			appId: "app-1",
@@ -171,6 +166,9 @@ beforeEach(() => {
 			maxResolutionTier: "1080p",
 			seconds: 750,
 			count: 3,
+			rows: 3,
+			dailySeconds: 750,
+			dailyCount: 3,
 		},
 		{
 			appId: "app-1",
@@ -180,10 +178,28 @@ beforeEach(() => {
 			maxResolutionTier: "1080p",
 			seconds: 345.21,
 			count: 1,
+			rows: 1,
+			dailySeconds: 345.21,
+			dailyCount: 1,
+		},
+		{
+			appId: "app-1",
+			width: null,
+			height: null,
+			status: "uploading",
+			maxResolutionTier: "1080p",
+			seconds: 0,
+			count: 0,
+			rows: 1,
+			dailySeconds: 0,
+			dailyCount: 0,
 		},
 	];
 	mocks.selected = [];
-	mocks.billing.mockResolvedValue({ standing: { state: "active" } });
+	mocks.billing.mockImplementation(async (appId: string) => {
+		const storage = await getAppStorage(appId);
+		return { standing: { state: "active" }, storage, stored: storage.stored };
+	});
 	mocks.createVideo.mockResolvedValue({
 		status: 200,
 		body: { videoId: "video-1" },
@@ -854,20 +870,18 @@ describe("usage", () => {
 			},
 		});
 
-		const stats = mocks.selected.find((fields) => "uploadedVideos" in fields);
+		const aggregate = mocks.selected.filter((fields) => "rows" in fields);
+		expect(aggregate).toHaveLength(1);
 		const dialect = new MySqlDialect();
 		const sqlOf = (name: string) =>
 			dialect.sqlToQuery(
-				stats?.[name] as Parameters<typeof dialect.sqlToQuery>[0],
+				aggregate[0]?.[name] as Parameters<typeof dialect.sqlToQuery>[0],
 			).sql;
-		expect(sqlOf("uploadedVideos")).toBe(
-			"count(`developer_videos`.`duration`)",
-		);
-		expect(sqlOf("createdVideos")).toBe("count(*)");
+		expect(sqlOf("count")).toBe("COUNT(`developer_videos`.`duration`)");
+		expect(sqlOf("rows")).toBe("COUNT(*)");
 	});
 
 	it("reports zero for an app with no videos", async () => {
-		mocks.videoStats = [];
 		mocks.storedVideos = [];
 		mocks.accounts = [];
 
@@ -898,7 +912,13 @@ describe("usage", () => {
 	});
 
 	it("returns the fields the OpenAPI description requires", async () => {
-		mocks.billing.mockResolvedValue({ standing: {}, upload: {}, storage: {} });
+		const storage = await getAppStorage("app-1");
+		mocks.billing.mockResolvedValue({
+			standing: {},
+			upload: {},
+			storage,
+			stored: storage.stored,
+		});
 		const schema = developerOpenApiSpec(ORIGIN).components.schemas.Usage;
 
 		const data = await usage();

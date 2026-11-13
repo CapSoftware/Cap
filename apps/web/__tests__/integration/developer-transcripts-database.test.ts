@@ -91,7 +91,7 @@ const { availableBalance } = await import("@/lib/infra-balance");
 const { getInfraAppStanding, getInfraUploadAdmission } = await import(
 	"@/lib/infra-standing"
 );
-const { getAppStorageUsage } = await import("@/lib/infra-storage");
+const { getAppStorage } = await import("@/lib/infra-storage");
 const { chargeStorageDay } = await import("@/lib/infra-storage-billing");
 const {
 	createTranscriptFromUrl,
@@ -222,7 +222,7 @@ const chargeStorage = async (appId: string, day: string) =>
 	chargeStorageDay({
 		appId,
 		accountId: await accountOf(appId),
-		usage: await getAppStorageUsage(appId),
+		usage: (await getAppStorage(appId)).dailyCharge,
 		dateKey: day,
 		now: new Date(),
 	});

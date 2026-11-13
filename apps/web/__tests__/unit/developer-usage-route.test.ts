@@ -33,15 +33,15 @@ vi.mock("@/lib/developer-key-hash", () => ({
 	hashKey: async (key: string) => `hash:${key}`,
 }));
 vi.mock("@/lib/infra-standing", () => ({
-	getInfraBilling: async () => ({}),
+	getInfraBilling: async () => ({
+		stored: { videoCount: 2, totalMinutes: 12.5 },
+		storage: { uploadingVideos: 1 },
+	}),
 	infraBillingJson: () => ({
 		standing: { state: "active", pausesAt: null },
 		upload: { allowed: true },
 	}),
 	infraStorageJson: () => ({ dailyMicroCredits: 0 }),
-}));
-vi.mock("@/lib/infra-storage", () => ({
-	getAppStorageUsage: async () => ({ videoCount: 2, totalMinutes: 12.5 }),
 }));
 vi.mock("@/lib/developer-transcript-usage", () => ({
 	getSpeechUsage: mocks.speech,

@@ -2,7 +2,6 @@ import clsx from "clsx";
 import Link from "next/link";
 import { infraAppPath } from "@/lib/infra-routes";
 import { getInfraBilling } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
 import {
 	formatCharge,
 	formatCredits,
@@ -56,9 +55,8 @@ export default async function InfraOverviewPage({
 	const { app } = await requireInfraApp(appId);
 	const monthStart = utcMonthStart(new Date());
 
-	const [usage, monthStorageCharges, recentVideos, proCredit, billing] =
+	const [monthStorageCharges, recentVideos, proCredit, billing] =
 		await Promise.all([
-			getAppStorageUsage(app.id),
 			app.creditAccount
 				? getInfraStorageChargesSince(app.creditAccount.id, monthStart)
 				: Promise.resolve(0),
@@ -67,6 +65,7 @@ export default async function InfraOverviewPage({
 			getInfraBilling(app.id),
 		]);
 
+	const usage = billing.stored;
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
 	const secretKey = app.apiKeys.find((k) => k.keyType === "secret");
 	const empty = recentVideos.length === 0;

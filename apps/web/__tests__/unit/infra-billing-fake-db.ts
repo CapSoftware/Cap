@@ -39,6 +39,8 @@ export type VideoGroup = {
 	count: number;
 	status?: string;
 	maxResolutionTier?: string | null;
+	dailySeconds?: number;
+	dailyCount?: number;
 };
 
 const freshAccount = () => ({
@@ -127,7 +129,11 @@ function runSelect(query: Query): Record<string, unknown>[] {
 
 	if (query.table === developerCreditTransactions) {
 		if (keys === "createdAt,metadata") {
-			return newestFirst(storageRows()).slice(0, 1);
+			const type = rendered.params.at(-1);
+			return newestFirst(ledger.rows.filter((row) => row.type === type)).slice(
+				0,
+				1,
+			);
 		}
 		if (keys === "metadata") {
 			const since = asTime(rendered.params.at(-1));
@@ -177,11 +183,17 @@ function runSelect(query: Query): Record<string, unknown>[] {
 	}
 
 	if (query.table === developerVideos) {
-		return rendered.sql.includes("<> ?")
+		const videos = rendered.sql.includes("<> ?")
 			? ledger.videos.filter(
 					(video) => !video.videoId || !rendered.params.includes(video.videoId),
 				)
 			: ledger.videos;
+		return videos.map((video) => ({
+			...video,
+			status: video.status ?? "ready",
+			dailySeconds: video.dailySeconds ?? video.seconds,
+			dailyCount: video.dailyCount ?? video.count,
+		}));
 	}
 
 	throw new Error(`Unexpected select: ${keys}`);

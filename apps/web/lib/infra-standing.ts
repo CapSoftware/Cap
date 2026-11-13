@@ -7,16 +7,17 @@ import { and, desc, eq, gt, gte } from "drizzle-orm";
 import { cache } from "react";
 import {
 	type BillableVideo,
-	type StorageUsage,
 	UPLOAD_ADMISSION_DAYS,
 	uploadAdmissionMicroCredits,
 } from "@/lib/developer-pricing";
 import { availableBalance } from "@/lib/infra-balance";
-import { getAppStorageUsage } from "@/lib/infra-storage";
+import { type AppStorage, getAppStorage } from "@/lib/infra-storage";
 import { formatCredits, formatNeed } from "@/lib/infra-usage";
 
 export const INFRA_GRACE_DAYS = 7;
 export const STORAGE_DAY_REFERENCE_TYPE = "storage_day" as const;
+export const FIRST_MONTH_TRANSACTION_TYPE = "video_create" as const;
+export const FIRST_MONTH_REFERENCE_TYPE = "developer_video" as const;
 
 const GRACE_MS = INFRA_GRACE_DAYS * 24 * 60 * 60 * 1000;
 
@@ -31,6 +32,7 @@ export type StorageCharge = {
 	createdAt: Date;
 	owedMicroCredits: number;
 	shortSince: Date | null;
+	firstMonth?: boolean;
 };
 
 export type InfraUploadAdmission = {
@@ -106,9 +108,10 @@ export function resolveStanding({
 	};
 }
 
-export async function latestStorageCharge(
+async function latestChargeOfType(
 	executor: InfraDbExecutor,
 	accountId: string,
+	type: "storage_daily" | typeof FIRST_MONTH_TRANSACTION_TYPE,
 ) {
 	const [row] = await executor
 		.select({
@@ -119,12 +122,31 @@ export async function latestStorageCharge(
 		.where(
 			and(
 				eq(developerCreditTransactions.accountId, accountId),
-				eq(developerCreditTransactions.type, "storage_daily"),
+				eq(developerCreditTransactions.type, type),
 			),
 		)
 		.orderBy(desc(developerCreditTransactions.createdAt))
 		.limit(1);
 	return row ? parseStorageCharge(row) : null;
+}
+
+export async function latestStorageCharge(
+	executor: InfraDbExecutor,
+	accountId: string,
+): Promise<StorageCharge | null> {
+	const daily = await latestChargeOfType(executor, accountId, "storage_daily");
+	const firstMonth = await latestChargeOfType(
+		executor,
+		accountId,
+		FIRST_MONTH_TRANSACTION_TYPE,
+	);
+	if (
+		firstMonth?.shortSince &&
+		(!daily || firstMonth.createdAt.getTime() >= daily.createdAt.getTime())
+	) {
+		return { ...firstMonth, firstMonth: true };
+	}
+	return daily;
 }
 
 export async function restoredSinceCharge(
@@ -207,16 +229,22 @@ export function uploadAdmission({
 	balanceMicroCredits,
 	standing,
 	lastOwedMicroCredits,
-	usage,
+	storage,
 }: {
 	balanceMicroCredits: number;
 	standing: InfraAppStanding;
 	lastOwedMicroCredits: number;
-	usage: Pick<StorageUsage, "monthlyMicroCredits">;
+	storage: {
+		dailyCharge: Pick<AppStorage["dailyCharge"], "monthlyMicroCredits">;
+		firstMonthDue: Pick<AppStorage["firstMonthDue"], "monthlyMicroCredits">;
+	};
 }): InfraUploadAdmission {
 	const inGoodStanding = standing.state === "active";
 	const requiredMicroCredits = Math.max(
-		uploadAdmissionMicroCredits(usage.monthlyMicroCredits),
+		uploadAdmissionMicroCredits(
+			storage.dailyCharge.monthlyMicroCredits,
+			storage.firstMonthDue.monthlyMicroCredits,
+		),
 		inGoodStanding ? 0 : lastOwedMicroCredits,
 	);
 	const shortfallMicroCredits = Math.max(
@@ -229,6 +257,7 @@ export function uploadAdmission({
 		requiredMicroCredits,
 		shortfallMicroCredits,
 	};
+	const covers = uploadCreditCovers(storage);
 	if (!inGoodStanding) {
 		return {
 			...base,
@@ -242,10 +271,9 @@ export function uploadAdmission({
 			...base,
 			allowed: false,
 			reason: "insufficient_credits",
-			message:
-				usage.monthlyMicroCredits > 0
-					? `This app has no credit. Add at least ${formatNeed(shortfallMicroCredits)} to upload, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything it stores.`
-					: "This app has no credit. Add credits to start uploading.",
+			message: covers
+				? `Not enough credit to upload. Add at least ${formatNeed(shortfallMicroCredits)}, enough for ${covers}.`
+				: "Not enough credit to upload. Add credits to start uploading.",
 		};
 	}
 	if (shortfallMicroCredits > 0) {
@@ -253,10 +281,24 @@ export function uploadAdmission({
 			...base,
 			allowed: false,
 			reason: "insufficient_credits",
-			message: `Uploading needs ${formatNeed(requiredMicroCredits)} of credit, enough for ${UPLOAD_ADMISSION_DAYS} days of storage for everything this app stores. The balance is ${formatCredits(balanceMicroCredits)}, so add at least ${formatNeed(shortfallMicroCredits)}.`,
+			message: `Not enough credit to upload. Uploading needs ${formatNeed(requiredMicroCredits)}, enough for ${covers ?? "one video"}. The balance is ${formatCredits(balanceMicroCredits)}, so add at least ${formatNeed(shortfallMicroCredits)}.`,
 		};
 	}
 	return { ...base, allowed: true, reason: null, message: null };
+}
+
+function uploadCreditCovers(storage: {
+	dailyCharge: { monthlyMicroCredits: number };
+	firstMonthDue: { monthlyMicroCredits: number };
+}) {
+	const firstMonth = storage.firstMonthDue.monthlyMicroCredits > 0;
+	const daily = storage.dailyCharge.monthlyMicroCredits > 0;
+	const firstMonthText =
+		"the first month of storage for each video being uploaded or encoded";
+	const dailyText = `${UPLOAD_ADMISSION_DAYS} days of storage for the videos past their first month`;
+	if (firstMonth && daily) return `${firstMonthText} and ${dailyText}`;
+	if (firstMonth) return firstMonthText;
+	return daily ? dailyText : null;
 }
 
 export async function getInfraBilling(
@@ -266,25 +308,26 @@ export async function getInfraBilling(
 	executor?: InfraDbExecutor,
 	options: { excludeVideoId?: string } = {},
 ) {
-	const counted = { ...options, includeProcessing: true };
-	const [{ account, lastCharge, standing }, usage] = executor
+	const counted = { ...options, now };
+	const [{ account, lastCharge, standing }, storage] = executor
 		? [
 				await appStanding(appId, now, executor),
-				await getAppStorageUsage(appId, newVideo, executor, counted),
+				await getAppStorage(appId, newVideo, executor, counted),
 			]
 		: await Promise.all([
 				appStanding(appId, now),
-				getAppStorageUsage(appId, newVideo, undefined, counted),
+				getAppStorage(appId, newVideo, undefined, counted),
 			]);
 	const admission = uploadAdmission({
 		balanceMicroCredits: account?.balanceMicroCredits ?? 0,
 		standing,
 		lastOwedMicroCredits: lastCharge?.owedMicroCredits ?? 0,
-		usage,
+		storage,
 	});
 	return {
 		standing,
-		usage,
+		storage,
+		stored: storage.stored,
 		admission: account
 			? admission
 			: {
@@ -306,22 +349,18 @@ export async function getInfraUploadAdmission(
 		.admission;
 }
 
-export function infraStorageJson(
-	usage: Pick<
-		StorageUsage,
-		"minutesByTier" | "dailyMicroCredits" | "monthlyMicroCredits"
-	>,
-) {
+export function infraStorageJson(storage: AppStorage) {
 	return {
-		minutesByTier: usage.minutesByTier,
-		dailyMicroCredits: usage.dailyMicroCredits,
-		monthlyMicroCredits: Math.round(usage.monthlyMicroCredits),
+		minutesByTier: storage.stored.minutesByTier,
+		dailyChargeMinutesByTier: storage.dailyCharge.minutesByTier,
+		dailyMicroCredits: storage.dailyCharge.dailyMicroCredits,
+		monthlyMicroCredits: Math.round(storage.dailyCharge.monthlyMicroCredits),
 	};
 }
 
 export function infraBillingJson({
 	standing,
-	usage,
+	storage,
 	admission,
 }: Awaited<ReturnType<typeof getInfraBilling>>) {
 	return {
@@ -336,7 +375,7 @@ export function infraBillingJson({
 			shortfallMicroCredits: admission.shortfallMicroCredits,
 			message: admission.message,
 		},
-		storage: infraStorageJson(usage),
+		storage: infraStorageJson(storage),
 	};
 }
 
