@@ -120,7 +120,8 @@ describe("developer video page states", () => {
 	it("says when the upload has not finished", () => {
 		const html = render({ ...processing, uploading: true });
 
-		expect(html).toContain("Waiting for the upload");
+		expect(html).toContain("This video is being prepared");
+		expect(html).not.toContain("upload");
 		expect(html).not.toContain("<video");
 	});
 
