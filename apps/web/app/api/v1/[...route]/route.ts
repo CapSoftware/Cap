@@ -160,7 +160,11 @@ import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
 } from "@/lib/developer-video-upload";
-import { isAiGenerationRerun, startAiGeneration } from "@/lib/generate-ai";
+import {
+	chargesProcessingRerun,
+	isAiGenerationRerun,
+	startAiGeneration,
+} from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
 import {
@@ -7886,35 +7890,34 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
-						// Reruns are decided from the video's current state rather than the
-						// request alone: an idempotent replay into a failed AI state still
-						// starts generation again, while a replay of a rerun that was
-						// already accepted finds the work queued and is not charged again.
-						const limitRerun = Effect.gen(function* () {
-							const request = yield* HttpServerRequest.HttpServerRequest;
-							const headers = new Headers();
-							for (const [name, value] of Object.entries(request.headers)) {
-								headers.set(name, value);
-							}
-							if (
-								yield* Effect.promise(() =>
-									processingRetryLimited(principal.id, headers),
-								)
-							) {
-								return yield* rateLimited(
-									requestId,
-									PROCESSING_RETRY_WINDOW_MS,
-								);
-							}
+						// Reruns are judged from the video's current state. A new request is
+						// charged before the mutation, mirroring its conflict rules, so a
+						// refused request stores nothing. A replay of a saved request is not
+						// charged and never starts generation again on a failed video.
+						const metadata = normalizeAgentMetadata(row.metadata);
+						const chargesRerun = chargesProcessingRerun({
+							target: payload.target,
+							retry: payload.retry,
+							transcriptionStatus: row.transcriptionStatus,
+							metadata,
 						});
-						if (
-							includesTranscript &&
-							payload.retry === true &&
-							row.transcriptionStatus === "ERROR"
-						) {
-							yield* limitRerun;
-						}
+						const headers = yield* requestHeaders;
+						let newRequest = false;
 						const state = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								newRequest = true;
+								if (
+									chargesRerun &&
+									(yield* Effect.promise(() =>
+										processingRetryLimited(principal.id, headers),
+									))
+								) {
+									return yield* rateLimited(
+										requestId,
+										PROCESSING_RETRY_WINDOW_MS,
+									);
+								}
+							}),
 							principal,
 							operation: "process_cap",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -8012,10 +8015,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							if (!result.success) {
 								return yield* temporarilyUnavailable(requestId, result.message);
 							}
-						} else if (state.target !== "transcript") {
-							if (isAiGenerationRerun(normalizeAgentMetadata(row.metadata))) {
-								yield* limitRerun;
-							}
+						} else if (
+							state.target !== "transcript" &&
+							(newRequest || !isAiGenerationRerun(metadata))
+						) {
 							const result = yield* Effect.tryPromise(() =>
 								startAiGeneration(state.id, state.ownerId),
 							);
