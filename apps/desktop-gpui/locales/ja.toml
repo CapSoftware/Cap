@@ -971,6 +971,12 @@ description = "共有リンクをSlack、Discord、または独自のWebhookに�
 name = "共有したらSlackに知らせる"
 
 [main]
+
+[main.network]
+upload_check_failed = "アップロードチェックに失敗しました - サポートにお問い合わせください"
+checking_upload = "アップロードを確認中..."
+upload_speed = "{speed} Mbps アップロード"
+
 delete_recording_confirm = "この録画を削除してもよろしいですか？"
 delete_screenshot_confirm = "このスクリーンショットを削除してもよろしいですか？"
 

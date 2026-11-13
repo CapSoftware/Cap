@@ -971,6 +971,12 @@ description = "将分享链接发送到 Slack、Discord 或你自己的 Webhook�
 name = "分享内容时通知 Slack"
 
 [main]
+
+[main.network]
+upload_check_failed = "上传检查失败 - 请联系支持"
+checking_upload = "正在检查上传..."
+upload_speed = "{speed} Mbps 上传"
+
 delete_recording_confirm = "确定要删除这段录制吗？"
 delete_screenshot_confirm = "确定要删除这张截图吗？"
 

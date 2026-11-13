@@ -971,6 +971,12 @@ description = "Envía el enlace para compartir a Slack, Discord o tu propio webh
 name = "Avisar a Slack cuando compartas algo"
 
 [main]
+
+[main.network]
+upload_check_failed = "Error en la comprobación de subida - contacte con soporte"
+checking_upload = "Comprobando subida..."
+upload_speed = "{speed} Mbps de subida"
+
 delete_recording_confirm = "¿Seguro que quieres eliminar esta grabación?"
 delete_screenshot_confirm = "¿Seguro que quieres eliminar esta captura de pantalla?"
 

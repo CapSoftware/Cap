@@ -1,10 +1,3 @@
-//! Upload speed test and startup health check.
-//!
-//! On startup the app uploads a small probe payload to the web app's
-//! `/api/desktop/health-check` endpoint; a failure means uploading is broken
-//! and the main window shows a warning. While idle (never during an active
-//! recording) a periodic speed test measures the current upload bandwidth and
-//! caps the studio recording quality to what the connection can sustain.
 
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
@@ -179,7 +172,7 @@ async fn measure_upload_speed(status: &Entity<NetworkStatus>, cx: &mut AsyncApp)
         }
         Ok(Err(AuthApiError::Timeout)) => {
             tracing::warn!("upload speed test timed out; capping quality to minimum tier");
-            (Some(0.0), true)
+            (Some(0.0), false)
         }
         Ok(Err(AuthApiError::InvalidAuthentication)) => return,
         Ok(Err(error)) => {
@@ -208,9 +201,6 @@ fn recording_active(cx: &mut AsyncApp) -> bool {
     cx.update(|cx| RecordingSession::global(cx).read(cx).phase != Phase::Idle)
 }
 
-/// Runs the startup health check once, then measures upload speed on an
-/// interval. Speed tests are skipped while a recording is active so the
-/// probe never competes with a real upload.
 pub fn spawn_monitor(cx: &mut App) {
     let status = NetworkStatus::global(cx);
     cx.spawn(async move |cx| {
