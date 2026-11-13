@@ -967,7 +967,9 @@ describe("a token after its secret key is rotated", () => {
 		expect(initiated.status).toBe(401);
 		expect(await initiated.json()).toMatchObject({
 			code: "upload_token_expired",
-			hint: expect.stringContaining("POST /api/developer/v1/uploads/{videoId}/token"),
+			hint: expect.stringContaining(
+				"POST /api/developer/v1/uploads/{videoId}/token",
+			),
 		});
 		expect(completed.status).toBe(401);
 		expect(storageCalls()).toBe(storageBefore);
