@@ -9,6 +9,7 @@ const context = vi.hoisted(() => ({
 			row: Record<string, unknown>,
 		) => Record<string, unknown>;
 		reset: () => void;
+		failNextCommit: () => void;
 	},
 	objects: new Map<string, Uint8Array>(),
 	ledgerIds: 0,
