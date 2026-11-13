@@ -1637,7 +1637,7 @@ The full video object returned by list and get endpoints:
 | `outputs` | object | `hls` and `mp4`, each `processing`, `ready`, `failed` or `none`, so you can tell an output that is still coming from one that will not come |
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
-| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its `url` can briefly answer `404`. Not in webhook payloads |
+| `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its `url` answers as soon as it appears. Not in webhook payloads |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |

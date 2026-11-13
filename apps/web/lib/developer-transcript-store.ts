@@ -40,6 +40,7 @@ import {
 } from "@/lib/developer-transcript-storage";
 import {
 	publicTranscriptWords,
+	TRANSCRIPT_CAPTIONS_WRITTEN_KEY,
 	TRANSCRIPT_MAX_CONCURRENT,
 	TRANSCRIPT_MAX_METADATA_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
@@ -48,6 +49,7 @@ import {
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptPublicMetadata,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
 import {
@@ -137,7 +139,8 @@ function replayedWithDifferent(
 		return "userId";
 	}
 	if (
-		canonicalJson(existing.metadata ?? null) !== canonicalJson(request.metadata)
+		canonicalJson(transcriptPublicMetadata(existing.metadata)) !==
+		canonicalJson(request.metadata)
 	) {
 		return "metadata";
 	}
@@ -246,7 +249,9 @@ export function validateTranscriptOptions(input: TranscriptOptionsInput):
 				"Send a JSON object smaller than 8KB.",
 			);
 		}
-		metadata = input.metadata as Record<string, unknown>;
+		const { [TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: _reserved, ...client } =
+			input.metadata as Record<string, unknown>;
+		metadata = client;
 	}
 	return {
 		ok: true,

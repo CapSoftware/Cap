@@ -473,7 +473,7 @@ const developerVideoSchema = {
 		captions: {
 			type: "array",
 			description:
-				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its url can briefly answer 404. Returned by Get Video and List Videos, not in webhook payloads.",
+				"Caption tracks made from this video's complete transcripts, one per language, each a WebVTT file the player and embed also use. Empty until a transcript created with this video's videoId completes with speech. A track is listed once its WebVTT file is written, usually a few seconds after the transcript completes, so its url answers as soon as it appears. Returned by Get Video and List Videos, not in webhook payloads.",
 			items: {
 				type: "object",
 				required: ["language", "url"],

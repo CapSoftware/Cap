@@ -160,6 +160,7 @@ import {
 	captionsFileName,
 	developerVideoCaptions,
 	developerVideoCaptionTracks,
+	developerVideosCaptionLinks,
 	findVideoForTranscript,
 	syncVideoCaptions,
 	videoCaptionsKey,
@@ -809,6 +810,171 @@ describe("caption files for the playback side", () => {
 				key: "developer/app-1/video-1/captions/und.vtt",
 			},
 		]);
+	});
+});
+
+describe("listing a caption track only once its file is in storage", () => {
+	const PLAYABLE = { ...VIDEO, playbackId: "playback-1" };
+	const fresh = (id: string, row: Record<string, unknown> = {}) =>
+		seedCompleted(id, "fresh words here", {
+			completedAt: new Date(),
+			updatedAt: new Date("2026-11-13T10:00:00.000Z"),
+			...row,
+		});
+	const listedEverywhere = async () => ({
+		player: (await developerVideoCaptionTracks(PLAYABLE)).map(
+			(track) => track.language,
+		),
+		api: (
+			(await developerVideosCaptionLinks("app-1", [PLAYABLE])).get("video-1") ??
+			[]
+		).map((link) => link.language),
+		console: (await developerVideoCaptions(VIDEO)).map(
+			(caption) => caption.language,
+		),
+	});
+
+	it("leaves out a just-completed transcript until its file is written, then lists it", async () => {
+		seedVideo();
+		fresh("t-fresh");
+
+		expect(await listedEverywhere()).toEqual({
+			player: [],
+			api: [],
+			console: [],
+		});
+
+		await syncVideoCaptions({
+			appId: "app-1",
+			videoId: "video-1",
+			language: "en",
+		});
+
+		expect(context.objects.has(EN_KEY)).toBe(true);
+		expect(await listedEverywhere()).toEqual({
+			player: ["en"],
+			api: ["en"],
+			console: ["en"],
+		});
+	});
+
+	it("records the write only after storage took the file", async () => {
+		seedVideo();
+		fresh("t-fresh");
+		let recordedAtPut: unknown = "not called";
+		context.afterPut = () => {
+			recordedAtPut = transcripts()[0]?.metadata ?? null;
+		};
+
+		await syncVideoCaptions({
+			appId: "app-1",
+			videoId: "video-1",
+			language: "en",
+		});
+
+		expect(recordedAtPut).toBeNull();
+		expect(transcripts()[0]?.metadata).toMatchObject({
+			__capCaptionsWritten: { metadataWasNull: true },
+		});
+	});
+
+	it("keeps a track out when the upload fails", async () => {
+		seedVideo();
+		fresh("t-fresh");
+		context.failPuts = 1;
+
+		await expect(
+			syncVideoCaptions({ appId: "app-1", videoId: "video-1", language: "en" }),
+		).rejects.toThrow("storage is unavailable");
+
+		expect(context.objects.has(EN_KEY)).toBe(false);
+		expect(await listedEverywhere()).toEqual({
+			player: [],
+			api: [],
+			console: [],
+		});
+	});
+
+	it("still lists a transcript that completed before writes were recorded", async () => {
+		seedVideo();
+		seedCompleted("t-old", "older words here", {
+			completedAt: new Date(Date.now() - 11 * 60 * 1000),
+		});
+
+		expect((await listedEverywhere()).api).toEqual(["en"]);
+	});
+
+	it("hides the record from the client and keeps metadata and updatedAt as they were", async () => {
+		seedVideo();
+		const withNone = fresh("t-none", { metadata: null });
+		const withSome = fresh("t-some", {
+			language: "de",
+			metadata: { ticket: 42 },
+		});
+		const before = {
+			none: serializeTranscript(withNone as never),
+			some: serializeTranscript(withSome as never),
+		};
+
+		for (const language of ["en", "de"]) {
+			await syncVideoCaptions({ appId: "app-1", videoId: "video-1", language });
+		}
+
+		const rows = transcripts();
+		const none = rows.find((row) => row.id === "t-none");
+		const some = rows.find((row) => row.id === "t-some");
+		expect(none?.metadata).toMatchObject({
+			__capCaptionsWritten: { metadataWasNull: true },
+		});
+		expect(some?.metadata).toMatchObject({
+			ticket: 42,
+			__capCaptionsWritten: { metadataWasNull: false },
+		});
+		expect(serializeTranscript(none as never)).toEqual(before.none);
+		expect(serializeTranscript(some as never)).toEqual(before.some);
+	});
+});
+
+describe("Cap's caption record in a transcript's metadata", () => {
+	it("cannot be set by a client", async () => {
+		const created = await createTranscriptFromUrl(
+			"app-1",
+			{
+				url: "https://media.example.com/a.mp3",
+				metadata: { ticket: 1, __capCaptionsWritten: { at: "x" } },
+			},
+			{ isBlocked: async () => false },
+		);
+
+		expect(created.ok).toBe(true);
+		expect(transcripts()[0]?.metadata).toEqual({ ticket: 1 });
+	});
+
+	it("does not turn a repeat of the same request into a conflict", async () => {
+		seedVideo();
+		const first = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "captions-meta-01",
+			metadata: { ticket: 7 },
+		});
+		if (!first.ok) throw new Error("create failed");
+		const row = transcripts()[0];
+		if (!row) throw new Error("missing row");
+		row.metadata = {
+			ticket: 7,
+			__capCaptionsWritten: {
+				at: "2026-11-13T10:00:00.000Z",
+				metadataWasNull: false,
+			},
+		};
+
+		const repeat = await createTranscriptFromVideo("app-1", {
+			videoId: "video-1",
+			idempotencyKey: "captions-meta-01",
+			metadata: { ticket: 7 },
+		});
+
+		expect(repeat.ok).toBe(true);
 	});
 });
 
