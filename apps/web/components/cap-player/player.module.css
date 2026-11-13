@@ -183,6 +183,7 @@
 
 .track {
 	position: relative;
+	z-index: 2;
 	height: 18px;
 	margin: 0 4px;
 	border-radius: 6px;
@@ -278,6 +279,8 @@
 }
 
 .row {
+	position: relative;
+	z-index: 2;
 	display: flex;
 	align-items: center;
 	gap: 2px;
