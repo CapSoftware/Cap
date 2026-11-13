@@ -50,6 +50,11 @@ vi.mock("@cap/database/crypto", () => ({
 	encrypt: vi.fn(async (value: string) => `encrypted:${value}`),
 }));
 
+vi.mock("@/lib/infra-balance", async (original) => ({
+	...(await original<typeof import("@/lib/infra-balance")>()),
+	heldTranscriptMicroCredits: async () => 0,
+}));
+
 vi.mock("@cap/database/schema", () => ({
 	developerApps: {
 		id: "id",
@@ -519,6 +524,18 @@ describe("addDeveloperDomain", () => {
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
 		const result = await addDeveloperDomain("app-456", "http://localhost:3000");
 		expect(result).toEqual({ success: true, domain: "http://localhost:3000" });
+	});
+
+	it("refuses a plain http site, which cannot embed the player", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		const result = await addDeveloperDomain("app-456", "http://myshop.com");
+		expect(result).toEqual({
+			success: false,
+			message:
+				"Only https sites can embed your player. Enter one like https://myshop.com.",
+		});
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("normalizes to lowercase", async () => {

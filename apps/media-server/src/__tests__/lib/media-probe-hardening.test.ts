@@ -64,7 +64,7 @@ beforeAll(async () => {
 	dir = await mkdtemp(join(tmpdir(), "probe-hardening-"));
 	const source = ["-f", "lavfi", "-i", "testsrc=d=1:s=128x96:r=10"];
 	await ffmpeg([...source, "-c:v", "mpeg4", join(dir, "part2.mp4")]);
-	await ffmpeg([...source, "-c:v", "mpeg2video", join(dir, "mpeg2.mkv")]);
+	await ffmpeg([...source, "-c:v", "cinepak", join(dir, "cinepak.mkv")]);
 	await ffmpeg([
 		...source,
 		"-f",
@@ -175,7 +175,7 @@ describe("probe input checks", () => {
 	}, 30_000);
 
 	test("a video codec outside the allowed list is refused", async () => {
-		const error = await probeError("mpeg2.mkv");
+		const error = await probeError("cinepak.mkv");
 		expect(error).toBeInstanceOf(UnreadableMediaInputError);
 		expect((error as Error).message).toContain("not supported");
 	}, 30_000);

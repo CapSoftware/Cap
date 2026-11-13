@@ -36,7 +36,7 @@ export const HOSTED_WAIT_TUNING: WaitTuning = {
 
 export const HOSTED_INSTRUCTIONS = [
 	"Cap Infra hosts video and turns speech into text, billed from the app's prepaid credit.",
-	"Video: videos_create_upload with the file size, upload the parts to the signed links it returns from the machine that holds the file, videos_complete_upload, then videos_wait until it is ready and use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
+	"Video: videos_import for a file at a public https link, or videos_create_upload with the file size, upload the parts to the signed links it returns from the machine that holds the file, videos_complete_upload, then videos_wait until it is ready and use the hlsUrl, mp4Url, posterUrl, shareUrl or embedUrl it returns.",
 	"Speech: transcripts_create from a public url or a ready videoId, transcripts_wait, then transcripts_text.",
 	`Wait tools return within ${HOSTED_MAX_WAIT_SECONDS} seconds; when a result has timedOut, call the same tool again.`,
 	"Stored video is billed one month when it becomes ready, then daily until deleted, and transcripts are billed per audio hour. Check account_usage before large jobs.",

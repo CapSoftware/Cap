@@ -334,6 +334,75 @@ Renewing does not cancel earlier tokens. Each works until its own `expiresAt`.
 | `404` | `video_not_found` | The video was deleted, or does not belong to this app |
 | `409` | `upload_already_completed` | The upload already completed. There is nothing left to upload |
 
+### Import from a URL
+
+Create a video from a file at a public https URL. Cap downloads the file itself, then encodes it exactly as it would an upload, so there is nothing to upload from your side.
+
+```
+POST /api/developer/v1/videos
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | Public https URL of the video file itself, up to 2,048 characters. A page that plays the video is not the file |
+| `name` | string | No | Video name, up to 255 characters (defaults to "Untitled") |
+| `userId` | string | No | Your external user ID for filtering, up to 255 characters. Videos return it as `externalUserId` |
+| `maxResolutionTier` | string | No | Highest resolution to encode: `1080p` (default), `1440p` or `2160p` |
+| `metadata` | object | No | Your own JSON object to store with the video, under 8KB |
+
+**Example request:**
+
+```bash
+curl -X POST https://cap.so/api/developer/v1/videos \
+  -H "Authorization: Bearer csk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: import-product-tour-1" \
+  -d '{"url": "https://cdn.example.com/videos/product-tour.mp4", "name": "Product tour"}'
+```
+
+The answer is the video, in the status `uploading` while the file downloads, with an `import` object:
+
+```json
+{
+  "data": {
+    "id": "abc123def456",
+    "status": "uploading",
+    "name": "Product tour",
+    "playbackId": "Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "shareUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G",
+    "embedUrl": "https://cap.so/dev/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/embed",
+    "import": {
+      "sourceUrl": "https://cdn.example.com/videos/product-tour.mp4",
+      "state": "downloading",
+      "errorCode": null
+    }
+  }
+}
+```
+
+The example leaves out the other [video fields](/docs/api/rest-api#video-object-reference). Then poll [Get Video Status](/docs/api/rest-api#get-video-status) every 3 seconds, or wait for the `video.ready` [webhook](/docs/api/webhooks). `import.state` is `downloading`, then `complete` once the file is stored and encoding starts, or `failed`.
+
+Before it answers, Cap opens the URL and reads the first bytes, so the common mistakes come back on the request itself:
+
+| Status | `code` | Meaning |
+|--------|--------|---------|
+| `400` | `url_not_allowed` | The URL is not public https on the default port, has a username or password, or points to a private, loopback, link-local or cloud metadata address, directly, through its DNS name or through a redirect |
+| `422` | `url_unreachable` | The URL answered with an error status, sent nothing, redirected more than 3 times or refused the connection |
+| `422` | `unsupported_format` | The URL is a web page, a playlist, an image, a document or audio, not a video file |
+| `413` | `too_large` | The file declares a size over the 36 GB limit |
+| `422` | `timeout` | The host did not answer in time |
+| `402` | `insufficient_credits` | The balance does not cover the file at its declared size, as for an upload |
+| `429` | `too_many_imports` | The app already has 2 imports downloading. Wait for `Retry-After` seconds |
+| `429` | `import_rate_limited` | This key started 30 imports in the last hour. `Retry-After` says when the next one is allowed |
+
+The download must finish within 12 minutes and stops if the host sends nothing for 30 seconds. A file that turns out larger than the limit while it streams is stopped too. If the download fails after the request answered, the video moves to `errored`, `errorReason` starts with `Import failed:`, and `import.errorCode` gives the code. Use [Create Upload](/docs/api/rest-api#create-upload) for files on your own machine, and for files too large or too slow to fetch in that time.
+
+Billing is the same as for an upload: the video is admitted again on its measured length before it is encoded, and storage is billed once it is ready. A failed import costs nothing.
+
+Send an `Idempotency-Key` header so a retried request returns the same video instead of downloading the file twice. A repeat must send the same `url`, `name`, `userId`, `maxResolutionTier` and `metadata`, otherwise it is refused with `409 idempotency_conflict`.
+
 ### List Videos
 
 Retrieve videos created by your app, newest first. Deleted videos are not returned. Videos created in the same second always come back in the same order.
@@ -1492,7 +1561,7 @@ Every video has a hosted player, returned as `shareUrl` and `embedUrl` when you 
 The player sets no cookies. Each time a page with the player loads, Cap records one anonymous view with the page's address, so plays can be counted.
 
 - `shareUrl` is a page with the player and the video's name. Send it to a viewer as a link. Pasted into a chat or a page builder, it previews as the video: the page carries `og:video` tags for the MP4 and an oEmbed link to `https://cap.so/api/developer/oembed?url=SHARE_URL`, which answers with the embed's iframe.
-- `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe:
+- `embedUrl` is the player alone, filling whatever frame you give it. Any site can load it in an iframe, unless you limit it to your own sites with [Allowed Sites](#allowed-sites):
 
 ```html
 <iframe
@@ -1508,6 +1577,16 @@ The player sets no cookies. Each time a page with the player loads, Cap records 
 `allow="autoplay"` lets a play command your page sends after a click start the video with sound. Firefox does not know that name and logs a harmless warning about it.
 
 Set the iframe's `aspect-ratio` from the video's `width` and `height`. The links work as soon as the video is created: until it is `ready` the page says the video is processing and switches to the player by itself, and if processing failed it tells the viewer only that the video is not available. The reason is shown only to you, in `errorReason` and in the console. A deleted video returns `404`, and a video in an app whose playback is paused says so.
+
+### Allowed Sites
+
+Only these sites can embed your player. Add them under Allowed sites in the app's settings, or with `cap developers domains add`. With none added, any site can embed it.
+
+- Each entry is one site, such as `https://myshop.com`. A subdomain is a separate site, so add `https://www.myshop.com` on its own. Wildcards are not supported.
+- Only https sites are accepted, plus `http://localhost` for testing.
+- Once a site is added, `embedUrl` tells browsers that only the listed sites, and Cap's own pages, may show it in a frame. On any other site the browser refuses to show the frame, so the player never loads and sends no `postMessage` events, not even `error`.
+- A change to the list reaches every embed within a minute.
+- The list only controls embedding. `shareUrl` and the `hlsUrl`, `mp4Url` and `posterUrl` playback URLs stay open to everyone who has them.
 
 ### Embed Parameters
 
@@ -1629,6 +1708,7 @@ The full video object returned by list and get endpoints:
 | `shareUrl` | string \| null | Hosted player page for the video (null only for a video with no `playbackId`) |
 | `embedUrl` | string \| null | The same player with nothing around it, for an iframe (null only for a video with no `playbackId`) |
 | `captions` | array | Caption tracks from this video's complete transcripts, each with `language` and the `url` of its WebVTT file. The player and embed show the same tracks. Empty until a transcript created with this video's `videoId` completes with speech. A track is listed when its transcript completes and its file is written a few seconds later, so its `url` can briefly answer `404`. Not in webhook payloads |
+| `import` | object | Only on a video made with [Import from a URL](/docs/api/rest-api#import-from-a-url), and only from Get Video and Get Video Status: `sourceUrl`, `state` (`downloading`, `complete` or `failed`) and `errorCode`. Not in List Videos or webhook payloads |
 | `deletedAt` | string \| null | Deletion timestamp (null for active videos) |
 | `createdAt` | string | Creation timestamp (ISO 8601) |
 | `updatedAt` | string | Last update timestamp (ISO 8601) |

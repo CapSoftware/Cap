@@ -102,15 +102,21 @@ describe("decoder whitelist", () => {
 			"prores",
 			"mpeg4",
 			"mjpeg",
+			"mpeg1video",
+			"mpeg2video",
+			"wmv1",
+			"wmv2",
+			"wmv3",
+			"vc1",
+			"msmpeg4v1",
+			"msmpeg4v2",
+			"msmpeg4v3",
+			"flv1",
+			"h263",
+			"theora",
 		])
 			expect(isAllowedVideoCodec(codec)).toBe(true);
-		for (const codec of [
-			"mpeg2video",
-			"theora",
-			"dvvideo",
-			"cinepak",
-			"unknown",
-		])
+		for (const codec of ["dvvideo", "cinepak", "unknown"])
 			expect(isAllowedVideoCodec(codec)).toBe(false);
 		const decoders = new Set(DECODER_WHITELIST.split(","));
 		for (const name of [
@@ -123,16 +129,23 @@ describe("decoder whitelist", () => {
 			"mov_text",
 			"h264_cuvid",
 			"libdav1d",
+			"mpeg2video",
+			"msmpeg4",
+			"flv",
+			"mp2",
+			"wmav2",
+			"amrnb",
+			"adpcm_ms",
 		])
 			expect(decoders.has(name)).toBe(true);
-		for (const name of ["mpeg2video", "wmav2", "cinepak", "rawvideo"])
+		for (const name of ["cinepak", "rawvideo", "dvvideo", "indeo5"])
 			expect(decoders.has(name)).toBe(false);
 	});
 
 	test("FFmpeg refuses to decode a stream outside the list", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "codec-whitelist-"));
 		try {
-			const path = join(dir, "mpeg2.mkv");
+			const path = join(dir, "cinepak.avi");
 			const make = spawn({
 				cmd: [
 					"ffmpeg",
@@ -143,7 +156,7 @@ describe("decoder whitelist", () => {
 					"-i",
 					"testsrc=d=0.2:s=64x64",
 					"-c:v",
-					"mpeg2video",
+					"cinepak",
 					"-y",
 					path,
 				],

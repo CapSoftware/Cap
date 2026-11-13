@@ -236,18 +236,6 @@ describe("auto top-up settings", () => {
 });
 
 describe("auto top-up charge", () => {
-	it("never charges an account outside the preview list", async () => {
-		ledger.account.email = "someone@example.com";
-
-		expect(await runAutoTopUp("account-1", now())).toEqual({
-			state: "skipped",
-			reason: "not_allowed",
-		});
-		expect(mocks.createPaymentIntent).not.toHaveBeenCalled();
-		expect(ledger.rows).toHaveLength(0);
-		expect(ledger.account.autoTopUpEnabled).toBe(true);
-	});
-
 	it("does nothing when switched off, without a card, misconfigured or above the threshold", async () => {
 		ledger.account.autoTopUpEnabled = false;
 		expect(await runAutoTopUp("account-1", now())).toMatchObject({
@@ -1447,12 +1435,15 @@ describe("billing emails", () => {
 		expect(mocks.sendEmail).toHaveBeenCalledTimes(1);
 	});
 
-	it("never emails an account outside the preview list", async () => {
+	it("emails any account owner when the switch is on", async () => {
 		mocks.emailsEnabled = true;
 		ledger.account.email = "someone@example.com";
 
-		expect(await outOfCredit()).toBe(false);
-		expect(await topUpFailed()).toBe(false);
-		expect(mocks.sendEmail).not.toHaveBeenCalled();
+		expect(await outOfCredit()).toBe(true);
+		expect(await topUpFailed()).toBe(true);
+		expect(mocks.sendEmail).toHaveBeenCalledTimes(2);
+		expect(mocks.sendEmail.mock.calls[0]?.[0]).toMatchObject({
+			email: "someone@example.com",
+		});
 	});
 });

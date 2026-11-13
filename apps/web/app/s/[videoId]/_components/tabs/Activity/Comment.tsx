@@ -15,6 +15,7 @@ import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import { MediaCommentBody } from "../../media-comment/MediaCommentBody";
 import { isMediaComment } from "../../media-comment/media-comment-types";
+import { RelativeTime } from "../../RelativeTime";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
@@ -111,7 +112,7 @@ const CommentComponent: React.FC<{
 						<div className="flex gap-2 items-center text-nowrap min-w-fit">
 							<Tooltip content={formatTimestamp(commentDate)}>
 								<p className="text-xs text-gray-8">
-									{formatTimeAgo(commentDate)}
+									<RelativeTime date={commentDate} format={formatTimeAgo} />
 								</p>
 							</Tooltip>
 							{comment.timestamp !== null && (

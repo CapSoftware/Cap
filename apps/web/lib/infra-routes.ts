@@ -9,6 +9,7 @@ export const INFRA_SECTIONS = [
 	{ slug: "usage", name: "Usage" },
 	{ slug: "billing", name: "Billing" },
 	{ slug: "keys", name: "API keys" },
+	{ slug: "webhooks", name: "Webhooks" },
 	{ slug: "settings", name: "Settings" },
 ] as const;
 
